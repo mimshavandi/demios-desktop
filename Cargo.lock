@@ -650,6 +650,7 @@ name = "dn-artifacts"
 version = "0.1.0"
 dependencies = [
  "dn-core",
+ "dn-store",
  "rusqlite",
  "serde",
  "serde_json",
