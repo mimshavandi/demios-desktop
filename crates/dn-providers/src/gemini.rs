@@ -160,13 +160,14 @@ async fn run(inner: Arc<Inner>, req: ChatRequest, tx: Emit) {
             body: Some(body(&inner, &model, &req)),
             optional: OPTIONAL.to_vec(),
             secret: inner.key(),
+            first_byte: inner.cfg.first_byte_timeout,
         })
         .await?;
         let mut usage = Usage::default();
         let mut finish = FinishReason::Stop;
         let mut n_calls = 0u32;
         let mut finished = false;
-        let mut sse = http::SseReader::new(&id, resp);
+        let mut sse = http::SseReader::new(&id, resp, &inner.cfg);
         while let Some(ev) = sse.next().await? {
             let v: Value = serde_json::from_str(&ev.data).map_err(|e| bad_response(&id, e))?;
             if let Some(err) = v.get("error") {
@@ -274,6 +275,7 @@ impl ProviderAdapter for Gemini {
                 body: None,
                 optional: vec![],
                 secret: self.0.key(),
+                first_byte: self.0.cfg.first_byte_timeout,
             })
             .await?;
             let v = http::json(id, resp).await?;

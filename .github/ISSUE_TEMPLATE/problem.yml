@@ -1,0 +1,31 @@
+name: Report a problem
+description: Something in Demios Desktop doesn't work or looks wrong.
+labels: ["bug", "from-app"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. This issue is **public**: don't paste API keys, tokens, or private chat content.
+        Security problems go through the Security tab ("Report a vulnerability") instead.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: "1. Open Settings › Models\n2. …"
+  - type: input
+    id: version
+    attributes:
+      label: App version
+      description: Filled in by the app.
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      description: Filled in by the app.

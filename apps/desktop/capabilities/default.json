@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The main window may call the app's own chat, history and settings commands and drag the window by its title bar; nothing else (no fs, shell, http or opener plugins).",
+  "description": "The main window may call the app's own chat, history and settings commands and drag the window by its title bar; nothing else (no fs, shell or http plugins; the opener plugin is present for Rust-side use but not granted to the webview).",
   "windows": [
     "main"
   ],
@@ -9,6 +9,7 @@
     "allow-app-info",
     "allow-delete-all-local-data",
     "allow-local-data-summary",
+    "allow-report-problem",
     "allow-list-conversations",
     "allow-create-conversation",
     "allow-rename-conversation",
