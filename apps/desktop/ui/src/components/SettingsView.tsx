@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Api } from "../ipc/commands";
 import {
   errorMessage,
+  type AddModelLink,
   type AppInfo,
   type LocalDataSummary,
   type McpServerStatus,
@@ -29,11 +30,14 @@ interface Props {
   onCatalog: (c: ModelCatalog) => void;
   /** MCP tool servers and their connection state. */
   servers: McpServerStatus[];
+  /** A demios:// link waiting for confirmation (T-INF-12). */
+  addLink?: AddModelLink | null;
+  onAddLinkClosed?: () => void;
 }
 
 type Load = { kind: "loading" } | { kind: "error"; message: string } | { kind: "ready"; catalog: ModelCatalog };
 
-export function SettingsView({ api, info, section, onSection, onCatalog, servers }: Props) {
+export function SettingsView({ api, info, section, onSection, onCatalog, servers, addLink = null, onAddLinkClosed }: Props) {
   const toast = useToast();
   const [load, setLoad] = useState<Load>({ kind: "loading" });
   const headingRef = useRef<HTMLHeadingElement>(null);
@@ -138,6 +142,8 @@ export function SettingsView({ api, info, section, onSection, onCatalog, servers
             catalog={load.catalog}
             onCatalog={set}
             onSave={(next, what) => void save(load.catalog, next, what)}
+            addLink={addLink}
+            {...(onAddLinkClosed !== undefined ? { onAddLinkClosed } : {})}
           />
         )}
         {load.kind === "ready" && section === "general" && (
@@ -156,7 +162,11 @@ function ModelsPage({
   catalog,
   onCatalog,
   onSave,
+  addLink,
+  onAddLinkClosed,
 }: {
+  addLink: AddModelLink | null;
+  onAddLinkClosed?: () => void;
   api: Api;
   info: AppInfo | null;
   servers: McpServerStatus[];
@@ -210,7 +220,13 @@ function ModelsPage({
         </section>
       )}
 
-      <LocalModelsCard api={api} initial={catalog.local_models} onReady={refreshCatalog} />
+      <LocalModelsCard
+        api={api}
+        initial={catalog.local_models}
+        onReady={refreshCatalog}
+        link={addLink}
+        {...(onAddLinkClosed !== undefined ? { onLinkClosed: onAddLinkClosed } : {})}
+      />
 
       <McpServersCard api={api} live={servers} />
 

@@ -755,7 +755,18 @@ mod tests {
         let conv = st.create_conversation().unwrap();
         let (events, sink) = sink();
         send(&st, conv.id, "stop me".into(), sink).unwrap();
-        tokio::time::sleep(Duration::from_millis(90)).await;
+        // Stop once text has started to stream (not after a guessed delay): the reply is then
+        // certainly partial, however slow the machine.
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|e| matches!(e, ChatEvent::TextDelta { .. }))
+        {
+            assert!(std::time::Instant::now() < deadline, "no text streamed");
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
         assert!(stop(&st, conv.id));
         wait_idle(&st, conv.id).await;
         let db = st.db().unwrap();

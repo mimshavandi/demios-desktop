@@ -15,6 +15,7 @@ import {
   type McpServerStatus,
   type ModelCatalog,
   type ReportKind,
+  type AddModelLink,
   type Settings,
   type UnknownOutcome,
 } from "../ipc/types";
@@ -103,6 +104,36 @@ function Shell({ api }: { api: Api }) {
     },
     [api, toast],
   );
+
+  // The composer's draft survives a switch to Settings (a link, ⌘,) and back.
+  const [draft, setDraft] = useState("");
+
+  // demios://models/add links from the OS open the add-model confirmation (T-INF-12).
+  const [addLink, setAddLink] = useState<AddModelLink | null>(null);
+  const addLinkRef = useRef<AddModelLink | null>(null);
+  addLinkRef.current = addLink;
+  useEffect(() => {
+    let alive = true;
+    const show = (l: AddModelLink) => {
+      if (!alive) return;
+      addLinkRef.current = l;
+      setAddLink(l);
+      setView({ kind: "settings", section: "models" });
+    };
+    void api
+      .watchAddLinks(show)
+      .then((pending) => {
+        if (pending !== null) show(pending);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [api]);
+  const closeAddLink = useCallback(() => {
+    setAddLink(null);
+    void api.addLinkDone().catch(() => {});
+  }, [api]);
 
   const openLink = useCallback(
     (href: string) => {
@@ -286,6 +317,8 @@ function Shell({ api }: { api: Api }) {
         setConversations(list);
         setListState({ kind: "ready" });
         await open(list[0]?.id ?? null);
+        // A link that started the app wins over opening the last chat.
+        if (addLinkRef.current !== null) setView({ kind: "settings", section: "models" });
       } catch (e) {
         setListState({ kind: "error", message: errorMessage(e) });
       }
@@ -607,6 +640,8 @@ function Shell({ api }: { api: Api }) {
             artifactCards={artifactCards}
             onOpenArtifact={openArtifactById}
             onReportAnswer={(m) => void report("answer", m)}
+            draft={draft}
+            onDraft={setDraft}
             onOpenLink={openLink}
             aiNotice={showAiNotice}
             onDismissAiNotice={() => void dismissAiNotice()}
@@ -619,6 +654,8 @@ function Shell({ api }: { api: Api }) {
             onSection={goSettings}
             onCatalog={setCatalog}
             servers={servers}
+            addLink={addLink}
+            onAddLinkClosed={closeAddLink}
           />
         )}
       </main>

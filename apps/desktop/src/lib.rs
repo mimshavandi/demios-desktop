@@ -9,6 +9,7 @@ pub mod agent;
 pub mod artifacts;
 pub mod chat;
 pub mod commands;
+pub mod deeplink;
 pub mod error;
 #[cfg(any(fake_model, test))]
 pub mod fake;
@@ -66,6 +67,46 @@ fn navigation_guard<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
         .build()
 }
 
+/// Routes `demios://` links from the OS to the add-model confirmation screen, as data
+/// (`deeplink::AddLinks::receive` parses them; nothing downloads from a link).
+fn install_add_links(app: &tauri::AppHandle, state: &std::sync::Arc<state::AppState>) {
+    use tauri_plugin_deep_link::DeepLinkExt;
+    // Installers (.app, MSI/NSIS, .deb/.rpm, Flatpak) register the scheme. Only dev builds and
+    // an AppImage (no installer) register it at run time, so a packaged release never
+    // rewrites a .desktop file or the registry on each launch.
+    #[cfg(any(target_os = "linux", windows))]
+    if register_scheme_at_runtime(
+        cfg!(debug_assertions),
+        std::env::var_os("APPIMAGE").is_some(),
+    ) && let Err(e) = app.deep_link().register_all()
+    {
+        eprintln!("could not register demios:// links: {e}");
+    }
+    let receive = {
+        let state = std::sync::Arc::clone(state);
+        move |url: &str| {
+            if let Err(why) = state.add_links.receive(url) {
+                eprintln!("ignored a demios:// link: {why:?}");
+            }
+        }
+    };
+    if let Ok(Some(urls)) = app.deep_link().get_current() {
+        for u in urls {
+            receive(u.as_str());
+        }
+    }
+    app.deep_link().on_open_url(move |ev| {
+        for u in ev.urls() {
+            receive(u.as_str());
+        }
+    });
+}
+
+/// Whether the app registers `demios://` itself: dev builds, and an AppImage on Linux.
+pub fn register_scheme_at_runtime(debug: bool, appimage: bool) -> bool {
+    debug || (cfg!(target_os = "linux") && appimage)
+}
+
 /// Asks with a native dialog (outside the webview) before a local MCP server starts.
 struct NativeLaunchApprover(tauri::AppHandle);
 
@@ -97,6 +138,18 @@ impl mcp::LaunchApprover for NativeLaunchApprover {
 
 pub fn run() {
     tauri::Builder::default()
+        // First: a second launch (e.g. from a demios:// link) hands over to this one. With
+        // the `deep-link` feature the link is forwarded to the deep-link plugin below; the
+        // second launch's command line is otherwise ignored.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            use tauri::Manager;
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.unminimize();
+                let _ = w.set_focus();
+            }
+        }))
+        // demios://models/add links, from Rust only (no JS commands granted).
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(navigation_guard())
         // The artifact frame origin (T-ART-06): serves only the sandbox frame shell.
         .register_uri_scheme_protocol(artifacts::SCHEME, |_ctx, request| {
@@ -130,6 +183,7 @@ pub fn run() {
                     dir.display()
                 )
             })?;
+            install_add_links(app.handle(), &state);
             app.manage(state);
             Ok(())
         })
@@ -150,6 +204,9 @@ pub fn run() {
             commands::hub_pull,
             commands::hub_cancel,
             commands::hub_pull_status,
+            commands::watch_add_links,
+            commands::add_link_done,
+            commands::hub_resolve_link,
             commands::hf_token_status,
             commands::set_hf_token,
             commands::delete_hf_token,
@@ -268,5 +325,19 @@ mod tests {
                 "unexpected permission: {id}"
             );
         }
+    }
+
+    #[test]
+    fn only_dev_builds_and_appimages_register_the_scheme_themselves() {
+        assert!(super::register_scheme_at_runtime(true, false));
+        assert!(
+            !super::register_scheme_at_runtime(false, false),
+            "installed releases don't"
+        );
+        assert_eq!(
+            super::register_scheme_at_runtime(false, true),
+            cfg!(target_os = "linux"),
+            "an AppImage on Linux does"
+        );
     }
 }
