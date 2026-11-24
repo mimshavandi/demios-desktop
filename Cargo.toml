@@ -16,7 +16,9 @@ serde_json = "1"
 thiserror = "2"
 uuid = { version = "1", features = ["v7", "serde"] }
 futures-core = "0.3"
+rusqlite = { version = "0.43", features = ["bundled"] }
 dn-core = { path = "crates/dn-core" }
+dn-store = { path = "crates/dn-store" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
