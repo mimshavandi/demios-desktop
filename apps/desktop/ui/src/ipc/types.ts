@@ -143,6 +143,8 @@ export interface Settings {
   /** slot id → ModelRef string (`local:…`, `byok:…:…`, `remote:…:…`). */
   slots: Record<string, string>;
   telemetry_enabled: boolean;
+  /** First-run AI notice dismissed (T-STORE-09). Missing in older saves = not seen. */
+  ai_notice_seen?: boolean;
   /** Passed through untouched (no screen edits MCP servers yet). */
   mcp_servers?: unknown[];
 }

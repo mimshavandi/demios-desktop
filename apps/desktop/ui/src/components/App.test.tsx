@@ -201,6 +201,50 @@ describe("App", () => {
     expect(screen.getAllByText(/On this device/).length).toBeGreaterThan(0);
   });
 
+  it("discloses AI answers: first-run notice, composer line, labelled answers", async () => {
+    const { api, emit } = fakeApi();
+    let saved: Settings | null = null;
+    const update = api.updateSettings;
+    api.updateSettings = async (s) => {
+      saved = s;
+      return update(s);
+    };
+    render(<App api={api} />);
+    expect(await screen.findByText(/Demios lets you chat with AI models you choose/)).toBeTruthy();
+    // The persistent line is part of the composer's description for screen readers.
+    const box = screen.getByLabelText("Message");
+    expect(box.getAttribute("aria-describedby")).toContain("composer-disclosure");
+    expect(document.getElementById("composer-disclosure")?.textContent).toContain("can be wrong");
+
+    fireEvent.click(screen.getByRole("button", { name: "Got it" }));
+    await waitFor(() => expect(screen.queryByText(/Demios lets you chat with AI models you choose/)).toBeNull());
+    expect(document.activeElement).toBe(box);
+    expect(saved).toMatchObject({ ai_notice_seen: true });
+    // The line by the composer stays.
+    expect(document.getElementById("composer-disclosure")).toBeTruthy();
+
+    fireEvent.change(box, { target: { value: "Hello" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    await screen.findByRole("button", { name: "Stop answer" });
+    act(() => {
+      emit({ type: "text_delta", message_id: "id-3", offset: 0, text: "Hi" });
+      emit({ type: "done", message_id: "id-3", finish_reason: "stop", usage: { input_tokens: 1, output_tokens: 1 } });
+    });
+    const answer = await screen.findByTestId("message-assistant");
+    expect(answer.getAttribute("data-ai-generated")).toBe("true");
+    expect(answer.getAttribute("data-generator")).toBe("local:dev-fake");
+    expect(answer.getAttribute("aria-label")).toMatch(/^AI answer from /);
+  });
+
+  it("does not show the first-run notice once seen", async () => {
+    const { api } = fakeApi();
+    await api.updateSettings({ slots: {}, telemetry_enabled: false, ai_notice_seen: true });
+    render(<App api={api} />);
+    expect(await screen.findByText("What can I help with?")).toBeTruthy();
+    expect(screen.queryByText(/Demios lets you chat with AI models you choose/)).toBeNull();
+    expect(document.getElementById("composer-disclosure")).toBeTruthy();
+  });
+
   it("keeps the prompt when sending fails", async () => {
     const { api } = fakeApi();
     api.sendMessage = async () => {
