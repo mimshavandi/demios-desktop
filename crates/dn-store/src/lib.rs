@@ -85,11 +85,36 @@ pub fn open_in_memory(sets: &[MigrationSet]) -> Result<Connection> {
     Ok(conn)
 }
 
-fn prepare(conn: &mut Connection, sets: &[MigrationSet]) -> Result<()> {
+/// Opens another connection to a database that [`open`] already created and migrated,
+/// e.g. a dedicated connection for the dn-tools ledger. Same pragmas (WAL, foreign keys,
+/// busy timeout); migrations are **not** run, so call [`open`] first. Fails if the file
+/// does not exist rather than creating an empty database.
+pub fn open_connection(path: &std::path::Path) -> Result<Connection> {
+    use rusqlite::OpenFlags;
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE
+            | OpenFlags::SQLITE_OPEN_URI
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    apply_pragmas(&conn)?;
+    Ok(conn)
+}
+
+/// How long a connection waits for another connection's write lock before `SQLITE_BUSY`.
+pub const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+fn apply_pragmas(conn: &Connection) -> Result<()> {
     conn.pragma_update(None, "foreign_keys", true)?;
-    // WAL is ignored by in-memory databases, which is fine.
+    // WAL lets readers and one writer on separate connections proceed together.
+    // In-memory databases ignore it, which is fine.
     conn.pragma_update(None, "journal_mode", "WAL")?;
-    conn.busy_timeout(std::time::Duration::from_secs(5))?;
+    conn.busy_timeout(BUSY_TIMEOUT)?;
+    Ok(())
+}
+
+fn prepare(conn: &mut Connection, sets: &[MigrationSet]) -> Result<()> {
+    apply_pragmas(conn)?;
     let mut all = vec![MigrationSet::new("store", migrations())];
     all.extend_from_slice(sets);
     run_migrations(conn, &all)
@@ -101,4 +126,68 @@ pub fn now_ms() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct TempDir(std::path::PathBuf);
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn temp() -> TempDir {
+        TempDir(std::env::temp_dir().join(format!("dn-store-conn-{}", dn_core::Id::new())))
+    }
+
+    #[test]
+    fn extra_connection_shares_the_file_in_wal_mode() {
+        const LEDGER: &[&str] = &["CREATE TABLE tool_ledger_entries (id TEXT PRIMARY KEY)"];
+        let dir = temp();
+        let path = dir.0.join("db.sqlite3");
+        let main = open(&path, &[MigrationSet::new("tool_ledger", LEDGER)]).unwrap();
+        let extra = open_connection(&path).unwrap();
+
+        for c in [&main, &extra] {
+            let mode: String = c
+                .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(mode, "wal");
+            let fk: i64 = c
+                .query_row("PRAGMA foreign_keys", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(fk, 1);
+        }
+        // Writes on one connection are visible on the other; migrations ran once.
+        extra
+            .execute("INSERT INTO tool_ledger_entries (id) VALUES ('a')", [])
+            .unwrap();
+        let n: i64 = main
+            .query_row("SELECT COUNT(*) FROM tool_ledger_entries", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 1);
+        let runs: i64 = main
+            .query_row("SELECT COUNT(*) FROM store_migrations", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(runs, 2);
+        // A reader on one connection does not block a writer on the other.
+        let tx = main.unchecked_transaction().unwrap();
+        let _: i64 = tx
+            .query_row("SELECT COUNT(*) FROM tool_ledger_entries", [], |r| r.get(0))
+            .unwrap();
+        extra
+            .execute("INSERT INTO tool_ledger_entries (id) VALUES ('b')", [])
+            .unwrap();
+        drop(tx);
+    }
+
+    #[test]
+    fn extra_connection_does_not_create_a_database() {
+        let dir = temp();
+        assert!(open_connection(&dir.0.join("missing.sqlite3")).is_err());
+        assert!(!dir.0.join("missing.sqlite3").exists());
+    }
 }
