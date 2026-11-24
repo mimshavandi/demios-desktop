@@ -202,7 +202,9 @@ pub fn stop(state: &AppState, conversation_id: Id) -> bool {
 fn model_unavailable(model: &ModelRef) -> impl FnOnce() -> IpcError + '_ {
     move || IpcError {
         code: "model_unavailable",
-        message: format!("`{model}` is not available in this build yet. Choose another model in Settings → Models."),
+        message: format!(
+            "`{model}` is not available in this build yet. Choose another model in Settings → Models."
+        ),
         recovery: vec![RecoveryAction::ChooseModelForSlot {
             agent_id: "chat".into(),
             slot_id: "chat".into(),
@@ -354,10 +356,9 @@ async fn drive(
 
 fn user_message(e: &CoreError) -> (String, Vec<RecoveryAction>) {
     match e {
-        CoreError::ModelSourceRequired { recovery, .. } => (
-            "No model is set up for this chat.".into(),
-            recovery.clone(),
-        ),
+        CoreError::ModelSourceRequired { recovery, .. } => {
+            ("No model is set up for this chat.".into(), recovery.clone())
+        }
         CoreError::ModelUnavailable {
             user_message,
             recovery,

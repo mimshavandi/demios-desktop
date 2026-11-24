@@ -45,6 +45,25 @@ jobs:
         with:
           node-version: 22
       - run: node ui/design-tokens/scripts/build.mjs --check
+  ui:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      # The UI imports dn-core's generated TS types; fail if they are stale.
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p dn-core --features ts ts_bindings
   supply-chain:
     runs-on: ubuntu-latest
     steps:

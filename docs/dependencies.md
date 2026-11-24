@@ -22,6 +22,8 @@ Every direct dependency is listed here with why and its licence (ADR-0009). Appr
 | marked | markdown → HTML for chat messages | MIT | T-SHELL-01 |
 | dompurify | sanitises rendered model output | MPL-2.0 OR Apache-2.0 | T-SHELL-01 |
 | highlight.js (core + 13 languages) | code highlighting | BSD-3-Clause | T-SHELL-01 |
-| dev: typescript 7, vite 8, @vitejs/plugin-react, vitest, @testing-library/react, jsdom, @types/react(-dom), @tauri-apps/cli ~2.11 | strict typecheck, build, unit tests, `tauri dev/build` | MIT / Apache-2.0 | T-SHELL-01 |
+| @radix-ui/react-{tooltip,switch,select,toast} | headless primitives required by the design standard (D-014, §4) | MIT | T-SHELL-01 |
+| lucide-react | icons, 16 px / 1.5 stroke (design standard §4) | ISC | T-SHELL-01 |
+| dev: typescript 7, vite 8, @vitejs/plugin-react, vitest, @testing-library/react, jsdom, @types/react(-dom), @types/node 22, @tauri-apps/cli ~2.11 | strict typecheck, build, unit tests, `tauri dev/build` | MIT / Apache-2.0 | T-SHELL-01 |
 
 Approved for wave 1 (D-012), add a row when first used: tauri 2, tokio, serde_yaml (or a maintained successor), llama-cpp-2, rmcp, rusqlite (chosen over sqlx: sync, SQLCipher + sqlite-vec support), keyring, reqwest, axum (team server).

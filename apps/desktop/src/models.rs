@@ -118,11 +118,7 @@ pub struct ModelCatalog {
     pub settings: Settings,
 }
 
-pub fn catalog(
-    registry: &ModelRegistry,
-    keys: &dyn KeyStore,
-    settings: &Settings,
-) -> ModelCatalog {
+pub fn catalog(registry: &ModelRegistry, keys: &dyn KeyStore, settings: &Settings) -> ModelCatalog {
     let mut models = vec![];
     if registry.contains("local:dev-fake") {
         models.push(ModelOption {
@@ -206,11 +202,7 @@ mod tests {
             .collect();
         assert!(!byok.is_empty());
         assert!(byok.iter().all(|m| !m.available && m.note.is_some()));
-        assert!(
-            c.providers
-                .iter()
-                .any(|p| p.id == "anthropic" && p.has_key)
-        );
+        assert!(c.providers.iter().any(|p| p.id == "anthropic" && p.has_key));
     }
 
     #[cfg(feature = "dev-fake-model")]

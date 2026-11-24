@@ -25,8 +25,12 @@ pub fn data_dir() -> Option<PathBuf> {
 
 pub fn run() {
     let dir = data_dir().expect("no home directory to keep app data in");
-    let state = state::AppState::open(&dir.join(dn_store::paths::DB_FILE))
-        .unwrap_or_else(|e| panic!("could not open the local database in {}: {e}", dir.display()));
+    let state = state::AppState::open(&dir.join(dn_store::paths::DB_FILE)).unwrap_or_else(|e| {
+        panic!(
+            "could not open the local database in {}: {e}",
+            dir.display()
+        )
+    });
 
     tauri::Builder::default()
         .manage(Arc::new(state))

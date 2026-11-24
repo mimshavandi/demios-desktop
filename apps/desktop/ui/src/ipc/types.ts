@@ -1,42 +1,19 @@
-// IPC contract types. `dn-core` types are mirrored by hand until the TS export
-// (ts-rs or specta, lead's call) lands; then the `dn-core` half of this file is replaced
-// by generated bindings. Keep every field in step with the Rust serde shapes:
-//   dn-core:   crates/dn-core/src/{chat,error,model}.rs
+// IPC contract types. `dn-core` types come from the ts-rs bindings generated from Rust
+// (crates/dn-core/bindings, T-CORE-04); never redeclare them here. The dn-store and app
+// shapes below mirror serde output by hand and must stay in step with:
 //   dn-store:  crates/dn-store/src/chat.rs
 //   app:       apps/desktop/src/{chat,commands,models,settings,error}.rs
 
-/** UUIDv7, serialised as a string (`dn_core::Id`). */
-export type Id = string;
+import type { Capability } from "@dn-core/Capability";
+import type { ContentPart } from "@dn-core/ContentPart";
+import type { FinishReason } from "@dn-core/FinishReason";
+import type { Id } from "@dn-core/Id";
+import type { RecoveryAction } from "@dn-core/RecoveryAction";
+import type { Role } from "@dn-core/Role";
+import type { ToolCall } from "@dn-core/ToolCall";
+import type { Usage } from "@dn-core/Usage";
 
-// ---- dn-core ----
-
-export type Role = "system" | "user" | "assistant" | "tool";
-
-export type ContentPart =
-  | { type: "text"; text: string }
-  | { type: "image"; attachment_id: string; mime_type: string };
-
-export interface ToolCall {
-  id: string;
-  name: string;
-  arguments: unknown;
-}
-
-export type FinishReason = "stop" | "length" | "tool_calls" | "cancelled" | "error";
-
-export interface Usage {
-  input_tokens: number;
-  output_tokens: number;
-}
-
-export type Capability = "chat" | "vision" | "embedding" | "stt" | "tts" | "image";
-
-export type RecoveryAction =
-  | { action: "download_model"; capability: Capability }
-  | { action: "add_provider_key" }
-  | { action: "choose_model_for_slot"; agent_id: string; slot_id: string }
-  | { action: "reconnect_server"; server_id: string }
-  | { action: "retry"; after_seconds: number | null };
+export type { Capability, ContentPart, FinishReason, Id, RecoveryAction, Role, ToolCall, Usage };
 
 // ---- dn-store ----
 

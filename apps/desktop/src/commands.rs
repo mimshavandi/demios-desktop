@@ -122,7 +122,11 @@ pub async fn update_settings(state: AppStateRef<'_>, settings: Settings) -> IpcR
 #[tauri::command]
 pub async fn list_models(state: AppStateRef<'_>) -> IpcResult<ModelCatalog> {
     let settings = state.settings()?;
-    Ok(models::catalog(&state.models, state.keys.as_ref(), &settings))
+    Ok(models::catalog(
+        &state.models,
+        state.keys.as_ref(),
+        &settings,
+    ))
 }
 
 #[tauri::command]

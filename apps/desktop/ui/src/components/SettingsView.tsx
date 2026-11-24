@@ -1,3 +1,4 @@
+import { Cpu, KeyRound } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import type { Api } from "../ipc/commands";
 import {
@@ -8,253 +9,381 @@ import {
   type Settings,
   type SlotInfo,
 } from "../ipc/types";
+import { Badge, Button, ICON, InlineMessage, Select, Skeleton, Switch, TextField, type SelectGroup } from "./primitives";
+import { useToast } from "./toast";
+
+export type SettingsSection = "models" | "general";
 
 interface Props {
   api: Api;
   info: AppInfo | null;
-  onClose: () => void;
+  section: SettingsSection;
+  onSection: (s: SettingsSection) => void;
+  /** Keeps the shell's copy of the catalog (model badge, composer state) current. */
+  onCatalog: (c: ModelCatalog) => void;
 }
 
-export function SettingsView({ api, info, onClose }: Props) {
-  const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState<string | null>(null);
+type Load = { kind: "loading" } | { kind: "error"; message: string } | { kind: "ready"; catalog: ModelCatalog };
 
-  const load = useCallback(async () => {
+export function SettingsView({ api, info, section, onSection, onCatalog }: Props) {
+  const toast = useToast();
+  const [load, setLoad] = useState<Load>({ kind: "loading" });
+
+  const set = useCallback(
+    (catalog: ModelCatalog) => {
+      setLoad({ kind: "ready", catalog });
+      onCatalog(catalog);
+    },
+    [onCatalog],
+  );
+
+  const fetch = useCallback(async () => {
+    setLoad({ kind: "loading" });
     try {
-      setCatalog(await api.listModels());
+      set(await api.listModels());
     } catch (e) {
-      setError(errorMessage(e));
+      setLoad({ kind: "error", message: errorMessage(e) });
     }
-  }, [api]);
+  }, [api, set]);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    void fetch();
+  }, [fetch]);
 
-  const save = async (next: Settings, what: string) => {
-    setError(null);
+  const save = async (catalog: ModelCatalog, next: Settings, what: string) => {
     try {
       const settings = await api.updateSettings(next);
-      setCatalog((c) => (c === null ? c : { ...c, settings }));
-      setSaved(what);
+      set({ ...catalog, settings });
+      toast({ tone: "success", title: `${what} saved` });
     } catch (e) {
-      setError(errorMessage(e));
+      toast({ tone: "error", title: `Couldn't save ${what.toLowerCase()}. ${errorMessage(e)}` });
     }
   };
 
-  if (catalog === null) {
-    return (
-      <section className="settings" aria-label="Settings">
-        <p>{error ?? "Loading settings…"}</p>
-      </section>
-    );
-  }
-  const s = catalog.settings;
-
   return (
-    <section className="settings" aria-label="Settings">
-      <header className="settings-head">
-        <h1>Settings</h1>
-        <button type="button" className="btn btn-ghost" onClick={onClose}>
-          Back to chat
-        </button>
-      </header>
-      {error !== null && (
-        <div className="banner banner-error" role="alert">
-          {error}
+    <section className="settings" aria-labelledby="settings-h">
+      <div className="settings-column">
+        <h1 id="settings-h">Settings</h1>
+        <div
+          className="tabs"
+          role="tablist"
+          aria-label="Settings sections"
+          onKeyDown={(e) => {
+            if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+            e.preventDefault();
+            const next = section === "models" ? "general" : "models";
+            onSection(next);
+            e.currentTarget.querySelector<HTMLButtonElement>(`[data-section="${next}"]`)?.focus();
+          }}
+        >
+          {(["models", "general"] as const).map((s) => (
+            <button
+              key={s}
+              type="button"
+              role="tab"
+              aria-selected={section === s}
+              tabIndex={section === s ? 0 : -1}
+              data-section={s}
+              className={section === s ? "tab selected" : "tab"}
+              onClick={() => onSection(s)}
+            >
+              {s === "models" ? "Models" : "General"}
+            </button>
+          ))}
         </div>
-      )}
-      {saved !== null && error === null && (
-        <div className="banner banner-ok" role="status">
-          {saved} saved.
-        </div>
-      )}
 
-      <h2>Models</h2>
+        {load.kind === "loading" && (
+          <div className="card" aria-busy="true" aria-label="Loading settings">
+            <Skeleton width="30%" />
+            <Skeleton kind="block" />
+            <Skeleton kind="block" />
+          </div>
+        )}
+        {load.kind === "error" && (
+          <InlineMessage
+            tone="error"
+            action={
+              <Button size="sm" onClick={() => void fetch()}>
+                Retry
+              </Button>
+            }
+          >
+            Couldn't load settings. {load.message}
+          </InlineMessage>
+        )}
+        {load.kind === "ready" && section === "models" && (
+          <ModelsPage
+            api={api}
+            info={info}
+            catalog={load.catalog}
+            onCatalog={set}
+            onSave={(next, what) => void save(load.catalog, next, what)}
+          />
+        )}
+        {load.kind === "ready" && section === "general" && (
+          <GeneralPage
+            info={info}
+            settings={load.catalog.settings}
+            onSave={(next, what) => void save(load.catalog, next, what)}
+          />
+        )}
+      </div>
+    </section>
+  );
+}
+
+function ModelsPage({
+  api,
+  info,
+  catalog,
+  onCatalog,
+  onSave,
+}: {
+  api: Api;
+  info: AppInfo | null;
+  catalog: ModelCatalog;
+  onCatalog: (c: ModelCatalog) => void;
+  onSave: (s: Settings, what: string) => void;
+}) {
+  const s = catalog.settings;
+  const hasAnyModel = catalog.models.length > 0;
+  return (
+    <>
       <section className="card" aria-labelledby="slots-h">
-        <h3 id="slots-h">Model for each task</h3>
-        <p className="hint">
-          A task without a model shows an error instead of silently using another model.
-        </p>
+        <h2 id="slots-h">Model for each task</h2>
+        <p className="dn-help">A task without a model shows a message instead of quietly using another one.</p>
         {catalog.slots.map((slot) => (
           <SlotRow
             key={slot.slot_id}
             slot={slot}
             catalog={catalog}
+            devFake={info?.dev_fake_model ?? false}
             onChange={(model) => {
               const slots = { ...s.slots };
               if (model === "") delete slots[slot.slot_id];
               else slots[slot.slot_id] = model;
-              void save({ ...s, slots }, `${slot.label} model`);
+              onSave({ ...s, slots }, `${slot.label} model`);
             }}
           />
         ))}
       </section>
 
       <section className="card" aria-labelledby="local-h">
-        <h3 id="local-h">Local models</h3>
+        <h2 id="local-h">On this device</h2>
+        {!hasAnyModel && catalog.local_models.length === 0 && (
+          <p className="dn-help">Download a model or add a key.</p>
+        )}
         {info?.dev_fake_model === true && (
-          <div className="model-row">
-            <div>
-              <strong>Dev fake model</strong>
-              <div className="hint">
-                Canned, streamed replies for development. Used for chat when no model is
-                chosen. Built with the <code>dev-fake-model</code> feature.
-              </div>
+          <div className="row">
+            <div className="row-main">
+              <span className="row-title">Dev fake model</span>
+              <span className="dn-help">
+                Streams a canned reply so the app works before real models are connected. Development builds only.
+              </span>
             </div>
-            <span className="badge badge-ok">Ready</span>
+            <Badge tone="local" icon={<Cpu size={12} strokeWidth={1.5} aria-hidden="true" />}>
+              Ready
+            </Badge>
           </div>
         )}
         {catalog.local_models.map((m) => (
-          <div className="model-row" key={m.model_id}>
-            <div>
-              <strong>{m.label}</strong> <span className="hint">{m.size}</span>
-              <div className="hint">{m.note}</div>
+          <div className="row" key={m.model_id}>
+            <div className="row-main">
+              <span className="row-title">
+                {m.label} <span className="dn-help">{m.size}</span>
+              </span>
+              <span className="dn-help">{m.note}</span>
             </div>
-            <button type="button" className="btn btn-ghost" disabled title={m.note}>
-              Download
-            </button>
+            <Badge>Coming soon</Badge>
           </div>
         ))}
       </section>
 
       <section className="card" aria-labelledby="keys-h">
-        <h3 id="keys-h">Provider keys (bring your own key)</h3>
-        <p className="hint">Stored: {catalog.key_store}. Keys are never shown again after saving.</p>
+        <h2 id="keys-h">Provider keys</h2>
+        <p className="dn-help">
+          Bring your own key. Keys are never shown again after you save them. Storage: {catalog.key_store}.
+        </p>
         {catalog.providers.map((p) => (
-          <ProviderRow
-            key={p.id}
-            provider={p}
-            onSave={async (key) => {
-              setError(null);
-              try {
-                setCatalog(await api.setProviderKey(p.id, key));
-                setSaved(`${p.name} key`);
-                return true;
-              } catch (e) {
-                setError(errorMessage(e));
-                return false;
-              }
-            }}
-            onRemove={async () => {
-              setError(null);
-              try {
-                setCatalog(await api.deleteProviderKey(p.id));
-                setSaved(`Removal of the ${p.name} key`);
-              } catch (e) {
-                setError(errorMessage(e));
-              }
-            }}
-          />
+          <ProviderRow key={p.id} api={api} provider={p} onCatalog={onCatalog} />
         ))}
       </section>
-
-      <h2>Privacy</h2>
-      <section className="card">
-        <label className="toggle">
-          <input
-            type="checkbox"
-            checked={s.telemetry_enabled}
-            onChange={(e) =>
-              void save({ ...s, telemetry_enabled: e.target.checked }, "Telemetry setting")
-            }
-          />
-          <span>
-            Share anonymous usage statistics
-            <span className="hint block">
-              Off by default. This build collects nothing either way.
-            </span>
-          </span>
-        </label>
-      </section>
-
-      <p className="hint about">
-        Demios Desktop {info?.version ?? ""} · data in {info?.data_dir ?? "the app-data folder"}
-      </p>
-    </section>
+    </>
   );
 }
 
 function SlotRow({
   slot,
   catalog,
+  devFake,
   onChange,
 }: {
   slot: SlotInfo;
   catalog: ModelCatalog;
+  devFake: boolean;
   onChange: (model: string) => void;
 }) {
   const current = catalog.settings.slots[slot.slot_id] ?? "";
-  const options = catalog.models.filter((m) => m.capabilities.includes(slot.capability));
+  const usable = catalog.models.filter((m) => m.capabilities.includes(slot.capability));
+  const groups: SelectGroup[] = [
+    {
+      label: "On this device",
+      options: usable
+        .filter((m) => m.source === "local" || m.source === "dev")
+        .map((m) => ({ value: m.model_ref, label: m.label })),
+    },
+    ...catalog.providers.map((p) => ({
+      label: p.name,
+      options: usable
+        .filter((m) => m.model_ref.startsWith(`byok:${p.id}:`))
+        .map((m) => ({
+          value: m.model_ref,
+          label: m.label.replace(`${p.name} · `, ""),
+          disabled: !m.available,
+          ...(m.available ? {} : { hint: "Not in this build yet" }),
+        })),
+    })),
+  ];
   const id = `slot-${slot.slot_id}`;
-  const known = current === "" || options.some((o) => o.model_ref === current);
+  const fallback = slot.slot_id === "chat" && devFake ? "Not set (uses the dev fake model)" : "Not set";
   return (
-    <div className="model-row">
-      <div>
-        <label htmlFor={id}>
-          <strong>{slot.label}</strong>
+    <div className="row">
+      <div className="row-main">
+        <label htmlFor={id} className="row-title">
+          {slot.label}
         </label>
-        <div className="hint">{slot.description}</div>
+        <span id={`${id}-d`} className="dn-help">
+          {slot.description}
+        </span>
       </div>
-      <select id={id} value={current} onChange={(e) => onChange(e.target.value)}>
-        <option value="">Not set</option>
-        {!known && <option value={current}>{current} (unavailable)</option>}
-        {options.map((o) => (
-          <option key={o.model_ref} value={o.model_ref} disabled={!o.available}>
-            {o.label}
-            {o.available ? "" : " — not in this build yet"}
-          </option>
-        ))}
-      </select>
+      <Select
+        id={id}
+        value={current}
+        groups={groups}
+        placeholder={fallback}
+        emptyText="No models yet. Add a provider key below."
+        aria-describedby={`${id}-d`}
+        onValueChange={onChange}
+      />
     </div>
   );
 }
 
 function ProviderRow({
+  api,
   provider,
-  onSave,
-  onRemove,
+  onCatalog,
 }: {
+  api: Api;
   provider: ProviderInfo;
-  onSave: (key: string) => Promise<boolean>;
-  onRemove: () => Promise<void>;
+  onCatalog: (c: ModelCatalog) => void;
 }) {
+  const toast = useToast();
   const [key, setKey] = useState("");
-  const id = `key-${provider.id}`;
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<"save" | "remove" | null>(null);
+
+  const saveKey = async () => {
+    if (key.trim() === "") {
+      setError("Paste the key first.");
+      return;
+    }
+    setBusy("save");
+    setError(null);
+    try {
+      onCatalog(await api.setProviderKey(provider.id, key));
+      setKey("");
+      toast({ tone: "success", title: `${provider.name} key saved` });
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const removeKey = async () => {
+    setBusy("remove");
+    try {
+      onCatalog(await api.deleteProviderKey(provider.id));
+      toast({ tone: "info", title: `${provider.name} key removed` });
+    } catch (e) {
+      toast({ tone: "error", title: `Couldn't remove the key. ${errorMessage(e)}` });
+    } finally {
+      setBusy(null);
+    }
+  };
+
   return (
     <form
-      className="model-row"
+      className="row row-form"
       onSubmit={(e) => {
         e.preventDefault();
-        void onSave(key).then((ok) => ok && setKey(""));
+        void saveKey();
       }}
     >
-      <div>
-        <label htmlFor={id}>
-          <strong>{provider.name}</strong>
-        </label>
-        <div className="hint">{provider.has_key ? "Key saved." : "No key."}</div>
-      </div>
-      <div className="key-input">
-        <input
-          id={id}
-          type="password"
-          autoComplete="off"
-          spellCheck={false}
-          placeholder={provider.has_key ? "Replace key" : "Paste API key"}
-          value={key}
-          onChange={(e) => setKey(e.target.value)}
-        />
-        <button type="submit" className="btn btn-primary" disabled={key.trim() === ""}>
-          Save
-        </button>
+      <TextField
+        className="row-main"
+        label={provider.name}
+        type="password"
+        autoComplete="off"
+        spellCheck={false}
+        placeholder={provider.has_key ? "Paste a new key to replace it" : "Paste API key"}
+        value={key}
+        error={error}
+        help={provider.has_key ? "Key saved" : "No key yet"}
+        onChange={(e) => {
+          setKey(e.target.value);
+          if (error !== null) setError(null);
+        }}
+      />
+      <div className="row-actions">
+        <Button
+          type="submit"
+          variant="secondary"
+          loading={busy === "save"}
+          icon={<KeyRound {...ICON} aria-hidden="true" />}
+        >
+          Save key
+        </Button>
         {provider.has_key && (
-          <button type="button" className="btn btn-ghost" onClick={() => void onRemove()}>
-            Remove
-          </button>
+          <Button variant="ghost" loading={busy === "remove"} onClick={() => void removeKey()}>
+            Remove key
+          </Button>
         )}
       </div>
     </form>
+  );
+}
+
+function GeneralPage({
+  info,
+  settings,
+  onSave,
+}: {
+  info: AppInfo | null;
+  settings: Settings;
+  onSave: (s: Settings, what: string) => void;
+}) {
+  return (
+    <>
+      <section className="card" aria-labelledby="privacy-h">
+        <h2 id="privacy-h">Privacy</h2>
+        <Switch
+          label="Share anonymous usage statistics"
+          description="Off by default. This build collects nothing either way."
+          checked={settings.telemetry_enabled}
+          onCheckedChange={(v) => onSave({ ...settings, telemetry_enabled: v }, "Usage statistics setting")}
+        />
+      </section>
+      <section className="card" aria-labelledby="about-h">
+        <h2 id="about-h">About</h2>
+        <div className="row">
+          <div className="row-main">
+            <span className="row-title">Demios Desktop {info?.version ?? ""}</span>
+            <span className="dn-help">Your chats are stored in {info?.data_dir ?? "the app data folder"}</span>
+          </div>
+        </div>
+      </section>
+    </>
   );
 }

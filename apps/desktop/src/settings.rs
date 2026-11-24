@@ -77,9 +77,11 @@ const KEY: &str = "settings";
 
 pub fn load(conn: &Connection) -> Result<Settings> {
     let raw: Option<String> = conn
-        .query_row("SELECT value FROM app_settings WHERE key = ?1", [KEY], |r| {
-            r.get(0)
-        })
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = ?1",
+            [KEY],
+            |r| r.get(0),
+        )
         .optional()?;
     match raw {
         None => Ok(Settings::default()),
