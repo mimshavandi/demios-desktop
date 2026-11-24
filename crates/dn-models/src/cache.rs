@@ -120,7 +120,9 @@ pub fn discover_default() -> Vec<CachedModel> {
     hf_cache_dir().map(|d| discover(&d)).unwrap_or_default()
 }
 
-/// Models Demios downloaded into `models_dir/hf/…` (each has `<file>.source.json`).
+/// Models Demios downloaded into `models_dir/hf/…`: each has `<first part>.source.json`, and
+/// only complete, verified downloads are returned (every part present with its size and a
+/// `.sha256` marker matching the manifest, i.e. it passed the hash check when downloaded).
 pub fn list_downloaded(models_dir: &Path) -> Vec<DownloadedModel> {
     let mut out = vec![];
     let mut stack = vec![(models_dir.join("hf"), 0usize)];
@@ -142,6 +144,7 @@ pub fn list_downloaded(models_dir: &Path) -> Vec<DownloadedModel> {
                 .map(PathBuf::from)
                 && let Some(manifest) = SourceManifest::read(&model)
                 && model.is_file()
+                && verified(models_dir, &manifest)
             {
                 out.push(DownloadedModel {
                     path: model,
@@ -152,6 +155,17 @@ pub fn list_downloaded(models_dir: &Path) -> Vec<DownloadedModel> {
     }
     out.sort_by(|a, b| a.path.cmp(&b.path));
     out
+}
+
+fn verified(models_dir: &Path, m: &SourceManifest) -> bool {
+    !m.files.is_empty()
+        && m.files.iter().all(|f| {
+            let Some(sha) = f.sha256.as_deref() else {
+                return false;
+            };
+            crate::hub::HubClient::local_path(models_dir, &m.repo, &f.path)
+                .is_ok_and(|p| crate::download::is_verified_blocking(&p, f.size, sha))
+        })
 }
 
 /// `refs/<name>` files: (ref name, commit). Nested refs (`refs/pr/1`) included.
@@ -338,13 +352,21 @@ mod tests {
         let d = dir.join("hf/o--n");
         std::fs::create_dir_all(&d).unwrap();
         std::fs::write(d.join("m.gguf"), b"x").unwrap();
+        std::fs::write(d.join("m.gguf.sha256"), "a".repeat(64)).unwrap();
         std::fs::write(d.join("other.gguf"), b"x").unwrap();
+        // Downloaded but its marker doesn't match: not listed.
+        std::fs::write(d.join("bad.gguf"), b"x").unwrap();
+        std::fs::write(d.join("bad.gguf.sha256"), "b".repeat(64)).unwrap();
         let m = SourceManifest {
             source: "huggingface".into(),
             endpoint: "https://huggingface.co".into(),
             repo: "o/n".into(),
             revision: REV.into(),
-            files: vec![],
+            files: vec![RepoFile {
+                path: "m.gguf".into(),
+                size: 1,
+                sha256: Some("a".repeat(64)),
+            }],
             license: crate::hub::LicenseInfo::classify(Some("mit"), None, None),
             card_url: "https://huggingface.co/o/n".into(),
             downloaded_at: 1,
@@ -352,6 +374,13 @@ mod tests {
         std::fs::write(
             SourceManifest::path_for(&d.join("m.gguf")),
             serde_json::to_vec(&m).unwrap(),
+        )
+        .unwrap();
+        let mut bad = m.clone();
+        bad.files[0].path = "bad.gguf".into();
+        std::fs::write(
+            SourceManifest::path_for(&d.join("bad.gguf")),
+            serde_json::to_vec(&bad).unwrap(),
         )
         .unwrap();
         // A manifest whose model file is gone is ignored.
