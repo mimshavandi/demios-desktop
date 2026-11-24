@@ -5,9 +5,10 @@ Real-app tests: WebdriverIO drives the built app through
 WebDriver (WebKitWebDriver on Linux, msedgedriver on Windows).
 
 - CI job **`e2e`** (required): `ubuntu-latest`, WebKitGTK.
-- CI job **`e2e-windows`** (`continue-on-error`): `windows-latest`, WebView2. It doesn't
-  create a session yet; see [T-SHELL-06](#t-shell-06-windows-webview2-session) below. Its
-  msedgedriver log is uploaded as the `msedgedriver-log` artifact.
+- CI job **`e2e-windows`** (`continue-on-error` until it has been green three runs in a
+  row): `windows-latest`, WebView2. Its e2e build turns on WebView2 remote debugging through
+  the window config; see [Windows WebView2 session](#t-shell-06-windows-webview2-session).
+  Its msedgedriver log is uploaded as the `msedgedriver-log` artifact.
 
 ## Scenario (`specs/chat.e2e.mjs`)
 1. Launch, new chat, send. Assert the answer streams (`data-status="streaming"`), completes and quotes the prompt.
@@ -28,47 +29,40 @@ cd apps/desktop/e2e && npm ci && npm test        # Linux headless: xvfb-run -a n
 - Windows needs an msedgedriver whose major version matches the installed WebView2 runtime; set `MSEDGEDRIVER=<path>`.
 
 ## T-SHELL-06: Windows WebView2 session
-**Symptom.** Every `POST /session` fails with `session not created: DevToolsActivePort file
-doesn't exist` (4 retries, 60 s each). Seen on `windows-latest` with WebView2 runtime
-157.0.4341.46 and msedgedriver 157.0.4341.60 (runner copy, same major).
+**Symptom (fixed).** Every `POST /session` failed with `session not created:
+DevToolsActivePort file doesn't exist` (60 s per try).
 
-**Ruled out**
-- *App crashes at start:* launched directly, it is still running after 8 s, with no output
-  and no panic.
-- *Driver/runtime mismatch:* same major version. The job also downloads the exact runtime
-  version from Microsoft when the majors differ.
-- *App pre-started:* the driver launches it. msedgedriver's log shows
-  `Launching Microsoft Edge: "…\target\debug\demios-desktop.exe"` with `browserName:
-  webview2` and `binary` set by tauri-driver.
-- *Linux-specific setup:* the same suite, binary features and data-dir env pass on Linux.
+**Cause.** msedgedriver turns on WebView2 remote debugging only through the
+`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` environment variable (`--remote-debugging-port=0
+--enable-automation …`). wry always sets `AdditionalBrowserArguments` through the WebView2
+API (at least `--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection`), and on this
+runtime the API value wins: the environment variable's switches never arrive, no DevTools
+port opens, and no `DevToolsActivePort` file is written.
 
-**What the verbose msedgedriver log shows.** It sets
-`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` (including `--remote-debugging-port=0` and
-`--enable-automation`, with no `--user-data-dir`), launches the binary, waits 60 s, then logs
-`Failed to connect to msedge`. So the WebView2 browser process never reports a DevTools port
-where the driver looks for it.
+Evidence from CI:
+- Launched by hand with `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9333`,
+  nothing listens on 9333.
+- `WEBVIEW2_USER_DATA_FOLDER` *is* honoured: the profile lands there, not in
+  `%LOCALAPPDATA%\io.demios.app\EBWebView`. So it was never a user-data-folder mismatch.
+- `ms:edgeOptions.args` (`tauri:options.args`) are passed to the app's command line, not to
+  WebView2, so they can't carry the switches either.
 
-**Hypotheses, most likely first**
-1. *User-data folder mismatch.* msedgedriver points WebView2 at its own temp profile
-   (probably via `WEBVIEW2_USER_DATA_FOLDER`) and reads `DevToolsActivePort` from there.
-   Tauri passes its own data directory (`…\io.demios.desktop\EBWebView`) through the
-   WebView2 API, which may win, so the file is written elsewhere.
-   Try: in e2e builds (`fake_model`), if `WEBVIEW2_USER_DATA_FOLDER` is set, create the
-   main window in `setup` with `.data_directory(that)` (window config `create: false`).
-   Or list `%LOCALAPPDATA%\io.demios.desktop\EBWebView` after a failed run to see
-   whether a `DevToolsActivePort` file landed there.
-2. *Browser-args precedence.* wry/Tauri pass their own `AdditionalBrowserArguments`
-   (`--disable-features=msWebOOUI,…`). If the API value replaces the env var on this runtime,
-   `--remote-debugging-port` never arrives. Try: window config `additionalBrowserArgs`
-   that includes the env var's content, or set `browserArgs` from the env in e2e builds.
-3. *Port vs pipe.* The log suggests `--remote-debugging-pipe`; not controllable through
-   tauri-driver 2.0.6. Try tauri-driver 3.x when it is stable.
-4. *Alternative driver.* `tauri-plugin-wdio-webdriver` (an embedded WebDriver, no
-   msedgedriver) would avoid the handshake. It is a new dependency, so it needs the lead's
-   OK.
+**Fix.** The e2e-windows job builds the app with the debugging switches in the window's
+`additionalBrowserArgs`. It generates `TAURI_CONFIG` from `tauri.conf.json` at build time:
+each window gets its own value (or wry's default) plus `--remote-debugging-port=0
+--enable-automation`. WebView2 then writes `DevToolsActivePort` into the profile folder
+msedgedriver chose, and the session starts. Only the CI e2e build is affected; the app's
+config and release builds are unchanged.
 
-Done-check for T-SHELL-06: `e2e-windows` green three runs in a row, then drop
-`continue-on-error` and make it required.
+To reproduce locally on Windows, build the same way:
+```powershell
+$env:TAURI_CONFIG = '{"app":{"windows":[{"label":"main","title":"Demios","width":1280,"height":820,"minWidth":900,"minHeight":560,"additionalBrowserArgs":"--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port=0 --enable-automation"}]}}'
+cargo build -p demios-desktop --features dev-fake-model,custom-protocol
+```
+(The CI step derives this from `tauri.conf.json`, so keep the two in step if you copy it.)
+
+Done-check: `e2e-windows` green three runs in a row, then drop `continue-on-error` and make
+it required.
 
 ## macOS: manual release checklist
 macOS has no WebDriver for WKWebView, so run this before every release, on a signed build where possible.

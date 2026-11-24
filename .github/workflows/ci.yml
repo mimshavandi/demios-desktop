@@ -106,35 +106,7 @@ jobs:
           npm ci
           npm run build
       - name: Build the app (debug, dev fake model, embedded UI)
-        shell: pwsh
-        run: |
-          if ('${{ matrix.devtools }}' -eq 'config') {
-            # Same window as tauri.conf.json, plus wry's default switches and the DevTools
-            # switches msedgedriver needs (only in this e2e build).
-            $env:TAURI_CONFIG = '{"app":{"windows":[{"label":"main","title":"Demios","width":1280,"height":820,"minWidth":900,"minHeight":560,"additionalBrowserArgs":"--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port=0 --enable-automation"}]}}'
-          }
-          cargo build -p demios-desktop --features dev-fake-model,custom-protocol
-      - name: Probe WebView2 debugging (launch the app by hand)
-        shell: pwsh
-        run: |
-          $probe = Join-Path $env:RUNNER_TEMP 'wv2probe'
-          New-Item -ItemType Directory -Force -Path $probe | Out-Null
-          $env:WEBVIEW2_USER_DATA_FOLDER = $probe
-          $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--remote-debugging-port=9333 --enable-automation'
-          $env:DEMIOS_DATA_DIR = Join-Path $env:RUNNER_TEMP 'wv2probe-data'
-          $p = Start-Process -FilePath 'target\debug\demios-desktop.exe' -PassThru
-          Start-Sleep -Seconds 20
-          Write-Host "app running: $(-not $p.HasExited)"
-          try { (Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 http://127.0.0.1:9333/json/version).Content | Write-Host }
-          catch { Write-Host "no DevTools on 9333: $($_.Exception.Message)" }
-          Get-ChildItem -Recurse -Filter DevToolsActivePort -Path $probe, "$env:LOCALAPPDATA\io.demios.app" -ErrorAction SilentlyContinue |
-            ForEach-Object { Write-Host "$($_.FullName): $((Get-Content $_.FullName) -join ' | ')" }
-          Write-Host "profile in probe folder: $(Test-Path (Join-Path $probe 'EBWebView'))  $((Get-ChildItem $probe -ErrorAction SilentlyContinue).Name -join ', ')"
-          Write-Host "profile in app folder: $(Test-Path "$env:LOCALAPPDATA\io.demios.app\EBWebView")"
-          Get-Process | Where-Object { $_.ProcessName -match 'msedgewebview2|demios' } | ForEach-Object { Write-Host "proc $($_.ProcessName) $($_.Id)" }
-          Get-CimInstance Win32_Process -Filter "Name='msedgewebview2.exe'" | Select-Object -First 1 | ForEach-Object { Write-Host "cmdline: $($_.CommandLine)" }
-          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
-          Get-Process msedgewebview2 -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        run: cargo build -p demios-desktop --features dev-fake-model,custom-protocol
       - name: Install e2e deps
         working-directory: apps/desktop/e2e
         run: npm ci
@@ -149,14 +121,6 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 25
     continue-on-error: true
-    # T-SHELL-06 (temporary matrix): msedgedriver enables remote debugging through
-    # WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS, but wry also passes AdditionalBrowserArguments
-    # through the WebView2 API. `config` bakes the debugging switches into the e2e build's
-    # window config (TAURI_CONFIG at build time) to see whether the API value wins.
-    strategy:
-      fail-fast: false
-      matrix:
-        devtools: [env, config]
     env:
       TAURI_DRIVER_VERSION: 2.0.6
     steps:
@@ -208,60 +172,37 @@ jobs:
         run: |
           npm ci
           npm run build
-      - name: Build the app (debug, dev fake model, embedded UI)
+      # msedgedriver turns on WebView2 remote debugging through the
+      # WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS env var, but wry always sets
+      # AdditionalBrowserArguments through the WebView2 API, and the API value wins: the
+      # port never opens and session creation fails with "DevToolsActivePort file doesn't
+      # exist" (T-SHELL-06, see apps/desktop/e2e/README.md). So this e2e build gets the
+      # switches in its window config, generated from tauri.conf.json at build time
+      # (TAURI_CONFIG); the app's real config and release builds are unchanged.
+      - name: Build the app (debug, dev fake model, embedded UI, WebView2 DevTools on)
         shell: pwsh
         run: |
-          if ('${{ matrix.devtools }}' -eq 'config') {
-            # Same window as tauri.conf.json, plus wry's default switches and the DevTools
-            # switches msedgedriver needs (only in this e2e build).
-            $env:TAURI_CONFIG = '{"app":{"windows":[{"label":"main","title":"Demios","width":1280,"height":820,"minWidth":900,"minHeight":560,"additionalBrowserArgs":"--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port=0 --enable-automation"}]}}'
-          }
+          $debug = '--remote-debugging-port=0 --enable-automation'
+          $wryDefault = '--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection'
+          $conf = Get-Content apps/desktop/tauri.conf.json -Raw | ConvertFrom-Json
+          $windows = @($conf.app.windows | ForEach-Object {
+            $base = if ($_.additionalBrowserArgs) { $_.additionalBrowserArgs } else { $wryDefault }
+            $_ | Add-Member -NotePropertyName additionalBrowserArgs -NotePropertyValue "$base $debug" -Force -PassThru
+          })
+          $env:TAURI_CONFIG = @{ app = @{ windows = $windows } } | ConvertTo-Json -Depth 10 -Compress
+          Write-Host "TAURI_CONFIG=$env:TAURI_CONFIG"
           cargo build -p demios-desktop --features dev-fake-model,custom-protocol
-      - name: Probe WebView2 debugging (launch the app by hand)
-        shell: pwsh
-        run: |
-          $probe = Join-Path $env:RUNNER_TEMP 'wv2probe'
-          New-Item -ItemType Directory -Force -Path $probe | Out-Null
-          $env:WEBVIEW2_USER_DATA_FOLDER = $probe
-          $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--remote-debugging-port=9333 --enable-automation'
-          $env:DEMIOS_DATA_DIR = Join-Path $env:RUNNER_TEMP 'wv2probe-data'
-          $p = Start-Process -FilePath 'target\debug\demios-desktop.exe' -PassThru
-          Start-Sleep -Seconds 20
-          Write-Host "app running: $(-not $p.HasExited)"
-          try { (Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 http://127.0.0.1:9333/json/version).Content | Write-Host }
-          catch { Write-Host "no DevTools on 9333: $($_.Exception.Message)" }
-          Get-ChildItem -Recurse -Filter DevToolsActivePort -Path $probe, "$env:LOCALAPPDATA\io.demios.app" -ErrorAction SilentlyContinue |
-            ForEach-Object { Write-Host "$($_.FullName): $((Get-Content $_.FullName) -join ' | ')" }
-          Write-Host "profile in probe folder: $(Test-Path (Join-Path $probe 'EBWebView'))  $((Get-ChildItem $probe -ErrorAction SilentlyContinue).Name -join ', ')"
-          Write-Host "profile in app folder: $(Test-Path "$env:LOCALAPPDATA\io.demios.app\EBWebView")"
-          Get-Process | Where-Object { $_.ProcessName -match 'msedgewebview2|demios' } | ForEach-Object { Write-Host "proc $($_.ProcessName) $($_.Id)" }
-          Get-CimInstance Win32_Process -Filter "Name='msedgewebview2.exe'" | Select-Object -First 1 | ForEach-Object { Write-Host "cmdline: $($_.CommandLine)" }
-          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
-          Get-Process msedgewebview2 -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
       - name: Install e2e deps
         working-directory: apps/desktop/e2e
         run: npm ci
       - name: e2e
         working-directory: apps/desktop/e2e
         run: npm test
-      - name: Where did DevToolsActivePort land?
-        if: always()
-        shell: pwsh
-        run: |
-          foreach ($root in @("$env:LOCALAPPDATA\io.demios.app", "$env:LOCALAPPDATA\io.demios.desktop", $env:TEMP)) {
-            if (Test-Path $root) {
-              Get-ChildItem -Path $root -Recurse -Filter DevToolsActivePort -ErrorAction SilentlyContinue |
-                ForEach-Object { Write-Host "$($_.FullName): $((Get-Content $_.FullName) -join ' | ')" }
-            }
-          }
-          if (Test-Path "$env:LOCALAPPDATA\io.demios.app\EBWebView") {
-            Get-ChildItem "$env:LOCALAPPDATA\io.demios.app\EBWebView" | Select-Object -First 20 | ForEach-Object { Write-Host $_.Name }
-          }
       - name: Upload msedgedriver log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: msedgedriver-log-${{ strategy.job-index }}
+          name: msedgedriver-log
           path: ${{ env.MSEDGEDRIVER_LOG }}
           if-no-files-found: warn
   # Open-source licences screen (T-STORE-07): every shipped Rust crate, npm package and
