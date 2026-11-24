@@ -18,6 +18,7 @@ export function ConfirmDialog({
   children,
   confirmLabel,
   busy = false,
+  ready = true,
   error = null,
   onConfirm,
   returnFocusTo,
@@ -28,6 +29,8 @@ export function ConfirmDialog({
   children: ReactNode;
   confirmLabel: string;
   busy?: boolean;
+  /** False while the body is still loading what will be deleted: confirm stays disabled. */
+  ready?: boolean;
   error?: string | null;
   onConfirm: () => void;
   returnFocusTo?: RefObject<HTMLElement | null>;
@@ -81,7 +84,7 @@ export function ConfirmDialog({
               </Button>
             </AlertDialog.Cancel>
             {/* Not AlertDialog.Action: that closes at once; this stays open until the work ends. */}
-            <Button variant="danger" loading={busy} disabled={!armed || busy} onClick={onConfirm}>
+            <Button variant="danger" loading={busy} disabled={!armed || !ready || busy} onClick={onConfirm}>
               {confirmLabel}
             </Button>
           </div>

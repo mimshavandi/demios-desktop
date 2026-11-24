@@ -223,6 +223,29 @@ impl Executor {
         self.reindex_names();
     }
 
+    /// Removes every server and stops it ("Delete all local data"): no tool can run, connect
+    /// or refresh a token afterwards. Concurrent, each bounded by `per_server`; returns how
+    /// many did not stop in time (they are removed either way).
+    pub async fn remove_all_servers(&self, per_server: std::time::Duration) -> usize {
+        let clients: Vec<Arc<McpClient>> = self
+            .clients
+            .write()
+            .map(|mut c| c.drain().map(|(_, v)| v).collect())
+            .unwrap_or_default();
+        if let Ok(mut caps) = self.capabilities.write() {
+            caps.clear();
+        }
+        self.reindex_names();
+        shutdown_concurrently(
+            clients
+                .into_iter()
+                .map(|c| async move { c.shutdown().await })
+                .collect(),
+            per_server,
+        )
+        .await
+    }
+
     /// Stops every server (app exit) concurrently, each bounded by `per_server`, so one
     /// stuck server can't keep the others (and their process trees) alive. Returns how
     /// many servers did not stop in time.

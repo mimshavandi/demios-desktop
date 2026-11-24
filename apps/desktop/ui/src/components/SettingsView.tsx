@@ -482,8 +482,9 @@ function GeneralPage({ api, info }: { api: Api; info: AppInfo | null }) {
           <li>
             <span className="row-title">Tool servers (MCP)</span>
             <span className="dn-help">
-              A tool server you add receives what its tools are asked to do, which can include text from your chat. Each
-              call asks for your approval first unless you allowed it.
+              A tool server you add receives what its tools are asked to do, which can include text from your chat.
+              Read-only tools run without asking. Tools that change something ask for your approval first, unless you
+              allowed that tool for the chat.
             </span>
           </li>
         </ul>
@@ -528,6 +529,7 @@ function GeneralPage({ api, info }: { api: Api; info: AppInfo | null }) {
         title="Delete all local data?"
         confirmLabel="Delete all data"
         busy={deleting}
+        ready={summary !== null}
         error={deleteError}
         onConfirm={() => void deleteAll()}
         returnFocusTo={triggerRef}

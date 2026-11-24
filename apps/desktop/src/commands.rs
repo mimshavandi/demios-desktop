@@ -92,15 +92,7 @@ pub async fn delete_all_local_data(
     state: AppStateRef<'_>,
     webview: tauri::Webview,
 ) -> IpcResult<()> {
-    state.stop_all();
-    let mut failed: Vec<&'static str> = Vec::new();
-    if let Some(local) = state.models.local.clone()
-        && let Err(e) = local.delete_all().await
-    {
-        eprintln!("could not delete the models folder: {e}");
-        failed.push("downloaded models");
-    }
-    failed.extend(blocking(&state, |s| Ok(s.wipe_local_data())).await?);
+    let mut failed = state.delete_all_local_data().await;
     if let Err(e) = webview.clear_all_browsing_data() {
         eprintln!("could not clear webview storage: {e}");
         failed.push("window storage");

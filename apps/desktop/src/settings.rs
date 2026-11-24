@@ -10,11 +10,43 @@ use std::collections::BTreeMap;
 
 /// The app's migration set (name `app`), composed by `dn_store::open`.
 pub fn migrations() -> &'static [&'static str] {
-    &["CREATE TABLE app_settings (
+    &[
+        "CREATE TABLE app_settings (
         key        TEXT    PRIMARY KEY NOT NULL,
         value      TEXT    NOT NULL,
         updated_at INTEGER NOT NULL
-    );"]
+    );",
+        // T-STORE-11: every keychain id dn-tools stored for an MCP server, so "Delete all
+        // local data" also finds secrets of servers no longer in settings (the keychain
+        // can't be listed).
+        "CREATE TABLE app_mcp_secret_ids (
+        id         TEXT    PRIMARY KEY NOT NULL,
+        created_at INTEGER NOT NULL
+    );",
+    ]
+}
+
+/// Remembers that an MCP secret id was written to the keychain.
+pub fn record_mcp_secret_id(conn: &Connection, id: &str) -> Result<()> {
+    conn.execute(
+        "INSERT OR IGNORE INTO app_mcp_secret_ids (id, created_at) VALUES (?1, ?2)",
+        params![id, now_ms()],
+    )?;
+    Ok(())
+}
+
+/// Every MCP secret id ever written (and not yet forgotten).
+pub fn known_mcp_secret_ids(conn: &Connection) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare("SELECT id FROM app_mcp_secret_ids ORDER BY id")?;
+    let ids = stmt
+        .query_map([], |r| r.get(0))?
+        .collect::<rusqlite::Result<Vec<String>>>()?;
+    Ok(ids)
+}
+
+pub fn forget_mcp_secret_id(conn: &Connection, id: &str) -> Result<()> {
+    conn.execute("DELETE FROM app_mcp_secret_ids WHERE id = ?1", [id])?;
+    Ok(())
 }
 
 /// A model slot the shell exposes in settings.
@@ -114,6 +146,7 @@ pub fn save(conn: &Connection, s: &Settings) -> Result<()> {
 /// Deletes the saved settings ("Delete all local data").
 pub fn delete_all(conn: &Connection) -> Result<()> {
     conn.execute("DELETE FROM app_settings", [])?;
+    conn.execute("DELETE FROM app_mcp_secret_ids", [])?;
     Ok(())
 }
 

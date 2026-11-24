@@ -343,6 +343,9 @@ pub fn purge_deleted(conn: &Connection, before_ms: i64) -> Result<Vec<Id>> {
         [before_ms],
     )?;
     tx.commit()?;
+    if !ids.is_empty() {
+        crate::checkpoint(conn);
+    }
     Ok(ids)
 }
 
@@ -377,6 +380,7 @@ pub fn delete_all(conn: &Connection) -> Result<()> {
     tx.execute("DELETE FROM store_conversations", [])?;
     tx.execute("DELETE FROM store_tombstones", [])?;
     tx.commit()?;
+    crate::checkpoint(conn);
     Ok(())
 }
 
@@ -667,6 +671,57 @@ mod tests {
         assert!(is_purged(&c, &conv.id.to_string()).unwrap());
         assert!(!is_purged(&c, &other.id.to_string()).unwrap());
         assert!(get_conversation(&c, other.id).is_ok());
+    }
+
+    /// Raw bytes of the database file and its WAL/SHM, for "is the text really gone".
+    fn file_bytes(path: &std::path::Path) -> Vec<u8> {
+        let mut out = Vec::new();
+        for suffix in ["", "-wal", "-shm"] {
+            let mut p = path.as_os_str().to_owned();
+            p.push(suffix);
+            if let Ok(b) = std::fs::read(std::path::PathBuf::from(p)) {
+                out.extend(b);
+            }
+        }
+        out
+    }
+
+    fn contains(hay: &[u8], needle: &str) -> bool {
+        hay.windows(needle.len()).any(|w| w == needle.as_bytes())
+    }
+
+    #[test]
+    fn purged_and_wiped_text_is_not_left_in_the_file() {
+        let dir = std::env::temp_dir().join(format!("dn-store-scrub-{}", Id::new()));
+        let path = dir.join("db.sqlite3");
+        let c = crate::open(&path, &[]).unwrap();
+        let gone = create_conversation(&c, "TITLE-gone-7f3a").unwrap();
+        add_message(&c, gone.id, NewMessage::user_text("BODY-gone-9c1e")).unwrap();
+        let kept = create_conversation(&c, "TITLE-kept-41bd").unwrap();
+        add_message(&c, kept.id, NewMessage::user_text("BODY-kept-c0de")).unwrap();
+        // As in real use: some content has already been checkpointed into the main file.
+        crate::checkpoint(&c);
+        assert!(contains(&file_bytes(&path), "BODY-gone-9c1e"));
+
+        delete_conversation(&c, gone.id).unwrap();
+        purge_deleted(&c, now_ms()).unwrap();
+        let bytes = file_bytes(&path);
+        assert!(
+            !contains(&bytes, "TITLE-gone-7f3a"),
+            "title left in the file"
+        );
+        assert!(
+            !contains(&bytes, "BODY-gone-9c1e"),
+            "message left in the file"
+        );
+        assert!(contains(&bytes, "BODY-kept-c0de"));
+
+        delete_all(&c).unwrap();
+        let bytes = file_bytes(&path);
+        assert!(!contains(&bytes, "TITLE-kept-41bd"));
+        assert!(!contains(&bytes, "BODY-kept-c0de"));
+        drop(c);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

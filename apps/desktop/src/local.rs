@@ -183,6 +183,9 @@ pub struct LocalModels<B: InferenceBackend = LlamaCppBackend> {
     fetch: FetchFn,
     sink: Mutex<Option<Sink>>,
     backend: Arc<B>,
+    /// Whether `dir` is the app's own default folder. A folder the user chose
+    /// (`$DN_MODELS_DIR`) is never removed: "Delete all" deletes only our files in it.
+    owns_dir: bool,
     /// The one local model the app holds (others may live on briefly in running replies).
     loaded: tokio::sync::Mutex<Option<(String, Arc<Resident<B>>)>>,
 }
@@ -315,11 +318,13 @@ impl LocalModels {
     /// The app's instance: built-in catalogue, shared models dir, this machine. Exact fits
     /// (GGUF header reads) are computed in the background, off the setup thread.
     pub fn open() -> Arc<Self> {
-        let lm = Arc::new(Self::new(
+        let mut lm = Self::new(
             dn_models::download::default_models_dir(),
             Catalog::builtin(),
             dn_models::detect_machine(),
-        ));
+        );
+        lm.owns_dir = std::env::var_os("DN_MODELS_DIR").is_none();
+        let lm = Arc::new(lm);
         let bg = Arc::clone(&lm);
         tauri::async_runtime::spawn_blocking(move || bg.refresh_exact_fits());
         lm
@@ -346,6 +351,7 @@ impl<B: InferenceBackend> LocalModels<B> {
             fetch,
             sink: Mutex::new(None),
             backend,
+            owns_dir: false,
             loaded: tokio::sync::Mutex::new(None),
         };
         lm.scan();
@@ -676,14 +682,49 @@ impl<B: InferenceBackend> LocalModels<B> {
         &self.dir
     }
 
-    /// Bytes under the models folder (downloads, partial files, Hub downloads). Blocking.
+    /// Marks `dir` as the app's own folder (removed whole by [`Self::delete_all`]).
+    pub fn set_owns_dir(&mut self, owns: bool) {
+        self.owns_dir = owns;
+    }
+
+    /// What the app wrote under the models folder: catalogue files with their partial,
+    /// checksum and lock files, and the `hf/` tree of Hub downloads (with sidecar
+    /// manifests). Anything else in a user-chosen folder is not ours.
+    fn our_paths(&self) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        for e in &self.catalog.models {
+            if !e.has_plain_file_name() {
+                continue;
+            }
+            let p = self.path(e);
+            for suffix in [".part", ".sha256", ".lock"] {
+                out.push(suffixed(&p, suffix));
+            }
+            out.push(p);
+        }
+        out.push(self.dir.join("hf"));
+        out
+    }
+
+    /// Bytes "Delete all" would free: the whole folder when it is ours, else our files in
+    /// it. Blocking.
     pub fn disk_usage(&self) -> u64 {
-        dir_size(&self.dir)
+        if self.owns_dir {
+            return dir_size(&self.dir);
+        }
+        self.our_paths()
+            .iter()
+            .map(|p| match std::fs::symlink_metadata(p) {
+                Ok(m) if m.is_dir() => dir_size(p),
+                Ok(m) if m.is_file() => m.len(),
+                _ => 0,
+            })
+            .sum()
     }
 
     /// "Delete all local data": stops every download (waiting until each has let go of its
-    /// files), lets go of the loaded model, deletes the models folder and resets every row
-    /// to "not downloaded". A reply still streaming keeps its model until it ends; the
+    /// files), lets go of the loaded model, deletes the models folder (only our files in it
+    /// when the user chose the folder) and resets every row to "not downloaded". A reply still streaming keeps its model until it ends; the
     /// caller cancels replies first.
     pub async fn delete_all(&self) -> std::io::Result<()> {
         self.pause_all();
@@ -697,10 +738,20 @@ impl<B: InferenceBackend> LocalModels<B> {
                 Err(in_use) => drop(in_use),
             }
         }
-        match std::fs::remove_dir_all(&self.dir) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e),
+        let ignore_missing = |r: std::io::Result<()>| match r {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+            _ => Ok(()),
+        };
+        if self.owns_dir {
+            ignore_missing(std::fs::remove_dir_all(&self.dir))?;
+        } else {
+            for p in self.our_paths() {
+                match std::fs::symlink_metadata(&p) {
+                    Ok(m) if m.is_dir() => ignore_missing(std::fs::remove_dir_all(&p))?,
+                    Ok(_) => ignore_missing(std::fs::remove_file(&p))?,
+                    Err(_) => {}
+                }
+            }
         }
         self.scan();
         for e in &self.catalog.models {
@@ -1231,7 +1282,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn delete_all_unloads_and_removes_the_models_folder() {
-        let (d, rec, lm) = two_ready_models();
+        let (d, rec, mut lm) = two_ready_models();
+        lm.set_owns_dir(true);
         std::fs::create_dir_all(d.0.join("hf")).unwrap();
         std::fs::write(d.0.join("hf").join("x.gguf"), b"123").unwrap();
         assert_eq!(lm.disk_usage(), 5 + 2 + 5 + 2 + 3);
@@ -1247,6 +1299,33 @@ mod tests {
         );
         // Deleting again (nothing there) is fine.
         lm.delete_all().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn delete_all_in_a_user_chosen_folder_keeps_their_files() {
+        // `$DN_MODELS_DIR`: the folder is the user's, not ours.
+        let (d, _rec, lm) = two_ready_models();
+        std::fs::write(d.0.join("a.gguf.part"), b"12").unwrap();
+        std::fs::create_dir_all(d.0.join("hf").join("org--m")).unwrap();
+        std::fs::write(d.0.join("hf").join("org--m").join("m.gguf"), b"123").unwrap();
+        std::fs::write(d.0.join("my-notes.txt"), b"keep me").unwrap();
+        std::fs::create_dir_all(d.0.join("other")).unwrap();
+        std::fs::write(d.0.join("other").join("x.gguf"), b"keep").unwrap();
+        // Ours: a, b (5 each) + 2 checksum files (2 each) + a.part (2) + hf (3).
+        assert_eq!(lm.disk_usage(), 5 + 5 + 2 + 2 + 2 + 3);
+
+        lm.delete_all().await.unwrap();
+        assert!(d.0.join("my-notes.txt").exists());
+        assert!(d.0.join("other").join("x.gguf").exists());
+        for gone in ["a.gguf", "a.gguf.sha256", "a.gguf.part", "b.gguf", "hf"] {
+            assert!(!d.0.join(gone).exists(), "{gone}");
+        }
+        assert_eq!(lm.disk_usage(), 0);
+        assert!(
+            lm.rows()
+                .iter()
+                .all(|r| r.state == DownloadState::NotDownloaded)
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
