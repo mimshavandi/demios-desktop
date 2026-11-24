@@ -22,6 +22,7 @@ The lead session plans, writes briefs, reviews every PR against its done-check, 
 | T-SHELL-04 (wire real backends + approval cards) | W-shell | #22 | done |
 | T-SHELL-05 (real-app e2e, Linux + Windows) | W-shell | #23 | Linux green; Windows split out |
 | T-SHELL-06 (Windows e2e: WebView2 driver handshake) | W-shell | – | follow-up |
+| T-INF-08..12 (HF Hub source, fit preview, add-model UI, HF cache, deep links — ADR-0011) | W-inference | – | after #12 |
 | T-STORE-01 (app-store-compliance audit + verdict) | W-store | – | in progress |
 | T-PRV-04 (SSE idle timeout; thinking switch for local OpenAI-compatible servers) | – | – | follow-up |
 | T-INF-07 (fit estimator drives `dn run` defaults) | W-inference | – | follow-up |
