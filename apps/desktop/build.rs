@@ -2,6 +2,8 @@
 // for it; only the ones granted in `capabilities/default.json` are callable (ADR-0009).
 const COMMANDS: &[&str] = &[
     "app_info",
+    "delete_all_local_data",
+    "local_data_summary",
     "list_conversations",
     "create_conversation",
     "rename_conversation",

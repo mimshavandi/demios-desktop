@@ -244,3 +244,18 @@ async fn cancel_during_approval_wait_returns_cancelled() {
         .unwrap();
     assert_eq!(r.unwrap_err(), CoreError::Cancelled);
 }
+
+#[tokio::test]
+async fn remove_all_servers_stops_and_forgets_them() {
+    let (ex, _rx) = executor();
+    let c = client(stdio_cfg());
+    ex.add_server(c).await.unwrap();
+    let live = ex.client("fixture").unwrap();
+    assert!(!ex.tool_specs().is_empty());
+
+    assert_eq!(ex.remove_all_servers(Duration::from_secs(5)).await, 0);
+    assert!(ex.client("fixture").is_none());
+    assert!(ex.tool_specs().is_empty());
+    assert!(ex.resolve("mcp__fixture__echo").is_none());
+    assert_eq!(live.status(), dn_tools::ConnectionStatus::Disconnected);
+}

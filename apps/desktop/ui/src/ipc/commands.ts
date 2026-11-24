@@ -19,10 +19,13 @@ import type {
   Settings,
   StoredMessage,
   TurnStarted,
+  LocalDataSummary,
 } from "./types";
 
 interface Commands {
   app_info: { args: Record<string, never>; ret: AppInfo };
+  delete_all_local_data: { args: Record<string, never>; ret: null };
+  local_data_summary: { args: Record<string, never>; ret: LocalDataSummary };
   list_conversations: { args: Record<string, never>; ret: Conversation[] };
   create_conversation: { args: Record<string, never>; ret: Conversation };
   rename_conversation: { args: { conversationId: Id; title: string }; ret: null };
@@ -70,6 +73,9 @@ function channel<T>(onEvent: (ev: T) => void): Channel<T> {
 
 export const api = {
   appInfo: () => call("app_info", {}),
+  /** Deletes chats, settings, tool history, models, keychain entries and window storage. */
+  deleteAllLocalData: () => call("delete_all_local_data", {}),
+  localDataSummary: () => call("local_data_summary", {}),
   listConversations: () => call("list_conversations", {}),
   createConversation: () => call("create_conversation", {}),
   renameConversation: (conversationId: Id, title: string) =>

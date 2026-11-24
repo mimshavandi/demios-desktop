@@ -974,6 +974,41 @@ async fn models_cmd(cmd: ModelsCmd) -> Result<(), String> {
                 );
             }
             println!("\nmodels dir: {}", dir.display());
+            let ours = dn_models::cache::list_downloaded(&dir);
+            if !ours.is_empty() {
+                println!("\ndownloaded from Hugging Face:");
+                for m in &ours {
+                    println!(
+                        "  {}@{}  {}",
+                        m.manifest.repo,
+                        &m.manifest.revision[..m.manifest.revision.len().min(12)],
+                        m.path.display()
+                    );
+                }
+            }
+            let cached = dn_models::cache::discover_default();
+            if !cached.is_empty() {
+                println!(
+                    "\nfound in the Hugging Face cache ({}; read-only, never deleted by dn):",
+                    dn_models::cache::hf_cache_dir()
+                        .map(|d| d.display().to_string())
+                        .unwrap_or_default()
+                );
+                for m in &cached {
+                    println!(
+                        "  {:<44} {:<10} {:>9}  {}{}",
+                        m.repo,
+                        m.variant.quant.as_deref().unwrap_or("-"),
+                        format!("{:.2} GB", m.variant.total_size as f64 / 1e9),
+                        m.path.display(),
+                        if m.variant.kind == VariantKind::Projector {
+                            "  (vision projector)"
+                        } else {
+                            ""
+                        }
+                    );
+                }
+            }
             Ok(())
         }
         ModelsCmd::Pull {
