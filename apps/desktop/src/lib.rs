@@ -13,10 +13,12 @@ pub mod error;
 #[cfg(any(fake_model, test))]
 pub mod fake;
 pub mod local;
+pub mod mcp;
 pub mod models;
 pub mod secrets;
 pub mod settings;
 pub mod state;
+pub mod support;
 
 use std::path::PathBuf;
 
@@ -62,6 +64,32 @@ fn navigation_guard<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
         .build()
 }
 
+/// Asks with a native dialog (outside the webview) before a local MCP server starts.
+struct NativeLaunchApprover(tauri::AppHandle);
+
+impl mcp::LaunchApprover for NativeLaunchApprover {
+    fn ask(
+        &self,
+        request: mcp::LaunchRequest,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>> {
+        use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.0
+            .dialog()
+            .message(request.dialog_text())
+            .title("Start a tool server?")
+            .kind(MessageDialogKind::Warning)
+            .buttons(MessageDialogButtons::OkCancelCustom(
+                "Allow and start".into(),
+                "Don't start".into(),
+            ))
+            .show(move |allowed| {
+                let _ = tx.send(allowed);
+            });
+        Box::pin(async move { rx.await.unwrap_or(false) })
+    }
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(navigation_guard())
@@ -69,19 +97,34 @@ pub fn run() {
         .register_uri_scheme_protocol(artifacts::SCHEME, |_ctx, request| {
             artifacts::frame_response(&request)
         })
+        // Used from Rust only (`commands::report_problem`): no link-click handler is injected
+        // into the webview, and none of its JS commands are granted (see capabilities).
+        .plugin(
+            tauri_plugin_opener::Builder::new()
+                .open_js_links_on_click(false)
+                .build(),
+        )
+        // Native "start this program?" confirm for local MCP servers, shown from Rust only;
+        // none of the dialog plugin's JS commands are granted (see capabilities).
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             use tauri::Manager;
             let dir = data_dir().ok_or("no home directory to keep app data in")?;
             let resources = app.path().resource_dir().ok();
             let skills = agent::skills_dir(resources.as_deref());
-            let state =
-                state::AppState::open(&dir.join(dn_store::paths::DB_FILE), skills.as_deref())
-                    .map_err(|e| {
-                        format!(
-                            "could not open the local database in {}: {e}",
-                            dir.display()
-                        )
-                    })?;
+            let state = state::AppState::open_with(
+                &dir.join(dn_store::paths::DB_FILE),
+                skills.as_deref(),
+                Some(std::sync::Arc::new(NativeLaunchApprover(
+                    app.handle().clone(),
+                ))),
+            )
+            .map_err(|e| {
+                format!(
+                    "could not open the local database in {}: {e}",
+                    dir.display()
+                )
+            })?;
             app.manage(state);
             Ok(())
         })
@@ -89,6 +132,13 @@ pub fn run() {
             commands::app_info,
             commands::delete_all_local_data,
             commands::local_data_summary,
+            commands::report_problem,
+            commands::list_mcp_servers,
+            commands::save_mcp_server,
+            commands::remove_mcp_server,
+            commands::reconnect_mcp_server,
+            commands::sign_in_mcp_server,
+            commands::sign_out_mcp_server,
             commands::list_conversations,
             commands::create_conversation,
             commands::rename_conversation,
@@ -180,5 +230,29 @@ mod tests {
             allowed_navigation(&"http://localhost:1420/".parse().unwrap()),
             cfg!(debug_assertions)
         );
+    }
+
+    /// The webview gets only the app's own commands: no plugin permission at all, in
+    /// particular none of the opener's (it is used from Rust only).
+    #[test]
+    fn capabilities_grant_no_plugin_permissions() {
+        let caps: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
+        let perms = caps["permissions"].as_array().unwrap();
+        assert!(!perms.is_empty());
+        for p in perms {
+            let id = p
+                .as_str()
+                .or_else(|| p["identifier"].as_str())
+                .unwrap_or_default();
+            assert!(
+                !id.starts_with("opener:"),
+                "opener permission granted: {id}"
+            );
+            assert!(
+                id.starts_with("allow-") || id.starts_with("core:window:allow-start-dragging"),
+                "unexpected permission: {id}"
+            );
+        }
     }
 }

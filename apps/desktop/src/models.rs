@@ -359,7 +359,7 @@ pub fn catalog(registry: &ModelRegistry, keys: &Keys, settings: &Settings) -> Mo
         .map(|l| l.rows())
         .unwrap_or_default();
     ModelCatalog {
-        slots: SLOTS.to_vec(),
+        slots: SLOTS.iter().filter(|s| s.shown).cloned().collect(),
         models,
         providers,
         local_models,
@@ -381,7 +381,9 @@ mod tests {
         let c = catalog(&reg, &keys, &Settings::default());
         assert!(c.models.iter().all(|m| m.source != ModelSource::Byok));
         assert!(c.providers.iter().all(|p| !p.has_key));
-        assert_eq!(c.slots.len(), 3);
+        // "fast" is valid but hidden until something reads it.
+        let ids: Vec<_> = c.slots.iter().map(|s| s.slot_id).collect();
+        assert_eq!(ids, ["chat", "embed"]);
 
         keys.set("anthropic", &Secret::new("x")).unwrap();
         let c = catalog(&reg, &keys, &Settings::default());

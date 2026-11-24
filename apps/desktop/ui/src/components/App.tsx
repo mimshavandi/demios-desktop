@@ -14,8 +14,11 @@ import {
   type Id,
   type McpServerStatus,
   type ModelCatalog,
+  type ReportKind,
+  type Settings,
   type UnknownOutcome,
 } from "../ipc/types";
+import { markArtifact } from "../artifactMarks";
 import { chatModel, chatModelReady, describeModel, modelName } from "../models";
 import { artifactFrameUrl, isMac, mod } from "../platform";
 import { chatReducer, initialChat } from "../state/chat";
@@ -86,6 +89,33 @@ function Shell({ api }: { api: Api }) {
   const devFake = info?.dev_fake_model ?? false;
   const ready = chatModelReady(catalog, devFake);
   const activeConversation = conversations.find((c) => c.id === chat.conversationId);
+  // First-run AI notice (T-STORE-09): shown until dismissed; the dismissal is a setting, so
+  // "Delete all local data" brings it back.
+  const showAiNotice = catalog !== null && catalog.settings.ai_notice_seen !== true;
+  const report = useCallback(
+    async (kind: ReportKind, messageId: Id | null) => {
+      try {
+        await api.reportProblem(kind, messageId);
+        toast({ tone: "info", title: "Opened the report form in your browser" });
+      } catch (e) {
+        toast({ tone: "error", title: errorMessage(e) });
+      }
+    },
+    [api, toast],
+  );
+
+  const dismissAiNotice = useCallback(async () => {
+    const hide = (settings: Settings) =>
+      setCatalog((c) => (c === null ? c : { ...c, settings: { ...settings, ai_notice_seen: true } }));
+    try {
+      // Start from the stored settings, not this render's copy (another screen may have saved).
+      const current = await api.getSettings();
+      hide(await api.updateSettings({ ...current, ai_notice_seen: true }));
+    } catch {
+      // Hide it for this session anyway; it comes back next start if saving failed.
+      setCatalog((c) => (c === null ? c : { ...c, settings: { ...c.settings, ai_notice_seen: true } }));
+    }
+  }, [api]);
 
   const refreshConversations = useCallback(async () => {
     try {
@@ -210,6 +240,8 @@ function Shell({ api }: { api: Api }) {
             toast({ tone: "warning", title: "An approval request expired, so the tool didn't run" });
           }
           setApprovals((a) => a.filter((x) => x.request_id !== ev.request_id));
+        } else if (ev.type === "mcp_server_removed") {
+          setServers((list) => list.filter((x) => x.server_id !== ev.server_id));
         } else {
           setServers((list) => [...list.filter((x) => x.server_id !== ev.status.server_id), ev.status]);
           if (ev.status.state === "failed") {
@@ -555,6 +587,9 @@ function Shell({ api }: { api: Api }) {
             onResolveUnknown={resolveUnknown}
             artifactCards={artifactCards}
             onOpenArtifact={openArtifactById}
+            onReportAnswer={(m) => void report("answer", m)}
+            aiNotice={showAiNotice}
+            onDismissAiNotice={() => void dismissAiNotice()}
           />
         ) : (
           <SettingsView
@@ -576,6 +611,7 @@ function Shell({ api }: { api: Api }) {
           onRestore={(aid, n) => void restoreArtifact(aid, n)}
           onFix={(prompt) => void send(prompt)}
           modelName={(ref) => modelName(ref, catalog)}
+          mark={(type, v) => markArtifact(type, v.content, v.model, v.created_at)}
           onClose={toggleArtifacts}
         />
       )}

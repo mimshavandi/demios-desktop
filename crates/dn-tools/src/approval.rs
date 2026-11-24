@@ -134,6 +134,14 @@ impl ApprovalGate {
         }
     }
 
+    /// Forget "allow for this chat" grants for capabilities starting with `prefix` (e.g.
+    /// `mcp.<server>.` when a server is removed or points somewhere new).
+    pub fn clear_capability_prefix(&self, prefix: &str) {
+        if let Ok(mut g) = self.grants.lock() {
+            g.retain(|(_, cap)| !cap.starts_with(prefix));
+        }
+    }
+
     /// Forget every "allow for this chat" grant ("Delete all local data").
     pub fn clear_all(&self) {
         if let Ok(mut g) = self.grants.lock() {
@@ -239,6 +247,25 @@ mod tests {
             "mcp.fs.write_file",
             ApprovalPolicy::AskOncePerConversation
         ));
+    }
+
+    #[test]
+    fn clearing_a_server_prefix_keeps_other_grants() {
+        let (gate, _rx) = ApprovalGate::new(1);
+        {
+            let mut g = gate.grants.lock().unwrap();
+            g.insert(("c1".into(), "mcp.fs.write_file".into()));
+            g.insert(("c2".into(), "mcp.fs.delete".into()));
+            g.insert(("c1".into(), "mcp.fsx.write".into()));
+        }
+        gate.clear_capability_prefix("mcp.fs.");
+        let ask = ApprovalPolicy::AskOncePerConversation;
+        assert!(!gate.is_satisfied("c1", "mcp.fs.write_file", ask));
+        assert!(!gate.is_satisfied("c2", "mcp.fs.delete", ask));
+        assert!(
+            gate.is_satisfied("c1", "mcp.fsx.write", ask),
+            "other server kept"
+        );
     }
 
     #[tokio::test(start_paused = true)]

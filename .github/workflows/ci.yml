@@ -67,7 +67,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test -p dn-core --features ts ts_bindings
-  # Real-app e2e (D-015, T-SHELL-05): tauri-driver + WebdriverIO against a debug build with
+  # Real-app e2e (T-SHELL-05): tauri-driver + WebdriverIO against a debug build with
   # the dev fake model. macOS has no WKWebView WebDriver; see apps/desktop/e2e/README.md.
   e2e:
     runs-on: ubuntu-latest
@@ -99,7 +99,9 @@ jobs:
           key: tauri-driver-${{ env.TAURI_DRIVER_VERSION }}-${{ runner.os }}
       - name: Install tauri-driver
         if: steps.tauri-driver-cache.outputs.cache-hit != 'true'
-        run: cargo install tauri-driver --version ${{ env.TAURI_DRIVER_VERSION }} --locked
+        # --force: rust-cache may already have restored ~/.cargo/bin with the binary in it
+        # when this cache entry has been evicted ("binary already exists in destination").
+        run: cargo install tauri-driver --version ${{ env.TAURI_DRIVER_VERSION }} --locked --force
       - name: Build the UI
         working-directory: apps/desktop
         run: |
@@ -120,7 +122,6 @@ jobs:
   e2e-windows:
     runs-on: windows-latest
     timeout-minutes: 25
-    continue-on-error: true
     env:
       TAURI_DRIVER_VERSION: 2.0.6
     steps:
@@ -144,7 +145,9 @@ jobs:
           key: tauri-driver-${{ env.TAURI_DRIVER_VERSION }}-${{ runner.os }}
       - name: Install tauri-driver
         if: steps.tauri-driver-cache.outputs.cache-hit != 'true'
-        run: cargo install tauri-driver --version ${{ env.TAURI_DRIVER_VERSION }} --locked
+        # --force: rust-cache may already have restored ~/.cargo/bin with the binary in it
+        # when this cache entry has been evicted ("binary already exists in destination").
+        run: cargo install tauri-driver --version ${{ env.TAURI_DRIVER_VERSION }} --locked --force
       - name: msedgedriver matching WebView2 (verbose log)
         shell: pwsh
         run: |
@@ -172,8 +175,26 @@ jobs:
         run: |
           npm ci
           npm run build
-      - name: Build the app (debug, dev fake model, embedded UI)
-        run: cargo build -p demios-desktop --features dev-fake-model,custom-protocol
+      # msedgedriver turns on WebView2 remote debugging through the
+      # WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS env var, but wry always sets
+      # AdditionalBrowserArguments through the WebView2 API, and the API value wins: the
+      # port never opens and session creation fails with "DevToolsActivePort file doesn't
+      # exist" (T-SHELL-06, see apps/desktop/e2e/README.md). So this e2e build gets the
+      # switches in its window config, generated from tauri.conf.json at build time
+      # (TAURI_CONFIG); the app's real config and release builds are unchanged.
+      - name: Build the app (debug, dev fake model, embedded UI, WebView2 DevTools on)
+        shell: pwsh
+        run: |
+          $debug = '--remote-debugging-port=0 --enable-automation'
+          $wryDefault = '--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection'
+          $conf = Get-Content apps/desktop/tauri.conf.json -Raw | ConvertFrom-Json
+          $windows = @($conf.app.windows | ForEach-Object {
+            $base = if ($_.additionalBrowserArgs) { $_.additionalBrowserArgs } else { $wryDefault }
+            $_ | Add-Member -NotePropertyName additionalBrowserArgs -NotePropertyValue "$base $debug" -Force -PassThru
+          })
+          $env:TAURI_CONFIG = @{ app = @{ windows = $windows } } | ConvertTo-Json -Depth 10 -Compress
+          Write-Host "TAURI_CONFIG=$env:TAURI_CONFIG"
+          cargo build -p demios-desktop --features dev-fake-model,custom-protocol
       - name: Install e2e deps
         working-directory: apps/desktop/e2e
         run: npm ci
@@ -187,6 +208,44 @@ jobs:
           name: msedgedriver-log
           path: ${{ env.MSEDGEDRIVER_LOG }}
           if-no-files-found: warn
+  # Open-source licences screen (T-STORE-07): every shipped Rust crate, npm package and
+  # bundled C/C++ library has an accepted licence (about.toml mirrors deny.toml) and its text.
+  licences:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CARGO_ABOUT_VERSION: 0.9.3
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            apps/desktop/package-lock.json
+            ui/artifact-sandbox/package-lock.json
+      - run: npm ci
+      # The artifact sandbox's build ships inside the app (npm_roots in licenses-extra.json).
+      - run: npm ci --ignore-scripts
+        working-directory: ui/artifact-sandbox
+      - run: npm run test:scripts
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo-about
+        id: cargo-about-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-about
+          key: cargo-about-${{ env.CARGO_ABOUT_VERSION }}-${{ runner.os }}
+      - name: Install cargo-about
+        if: steps.cargo-about-cache.outputs.cache-hit != 'true'
+        run: cargo install cargo-about --version ${{ env.CARGO_ABOUT_VERSION }} --locked --features cli
+      # cargo-about runs --offline: fetch crate sources first (no build needed).
+      - run: cargo fetch --locked
+        working-directory: .
+      - run: npm run licenses -- --check
   supply-chain:
     runs-on: ubuntu-latest
     steps:

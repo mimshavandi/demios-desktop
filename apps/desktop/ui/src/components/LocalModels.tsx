@@ -2,7 +2,7 @@
 // fit status. Download row states follow design-system §4: queued, downloading (progress
 // bar with size + ETA, Pause), paused, verifying, ready, failed (reason + Retry). Licence and
 // model card are shown before download, with a warning for missing / non-commercial /
-// custom licences (D-020).
+// custom licences (any licence is allowed).
 
 import { Copy, Cpu, Download, Pause, Play, RotateCcw, TriangleAlert } from "lucide-react";
 import { useEffect, useRef, useState } from "react";

@@ -466,6 +466,23 @@ fn bump_conversation(conn: &Connection, id: Id, now: i64) -> Result<()> {
 }
 
 /// Messages of a conversation in order (UUIDv7 ids sort by creation time).
+/// One stored message by id (any conversation that is not purged).
+pub fn get_message(conn: &Connection, message_id: Id) -> Result<StoredMessage> {
+    let conversation: Option<String> = conn
+        .query_row(
+            "SELECT conversation_id FROM store_messages WHERE id = ?1",
+            [message_id.to_string()],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let conversation =
+        conversation.ok_or_else(|| StoreError::NotFound(format!("message {message_id}")))?;
+    list_messages(conn, parse_id(&conversation)?)?
+        .into_iter()
+        .find(|m| m.id == message_id)
+        .ok_or_else(|| StoreError::NotFound(format!("message {message_id}")))
+}
+
 pub fn list_messages(conn: &Connection, conversation_id: Id) -> Result<Vec<StoredMessage>> {
     let mut stmt = conn.prepare(
         "SELECT id, conversation_id, role, content, tool_calls, tool_call_id, model, status,
@@ -774,6 +791,18 @@ mod tests {
             .unwrap();
         assert_eq!(id, "0190a000-0000-7000-8000-000000000001");
         assert_eq!(at, 3);
+    }
+
+    #[test]
+    fn get_message_by_id() {
+        let c = open_in_memory(&[]).unwrap();
+        let conv = create_conversation(&c, "t").unwrap();
+        let m = add_message(&c, conv.id, NewMessage::user_text("hi")).unwrap();
+        assert_eq!(get_message(&c, m.id).unwrap().text(), "hi");
+        assert!(matches!(
+            get_message(&c, Id::new()),
+            Err(StoreError::NotFound(_))
+        ));
     }
 
     #[test]

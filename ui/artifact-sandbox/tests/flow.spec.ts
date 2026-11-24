@@ -201,11 +201,12 @@ test.describe("every v1 type renders", () => {
 test("markdown front matter (the host's AI marker) is not shown", async ({ page }) => {
   await openDemo(page);
   await page.evaluate(() =>
-    window.dnDemo.show({ kind: "markdown" }, "---\ngenerator: Demios\nai_generated: true\n---\n# Notes\n\nBody text.\n"),
+    window.dnDemo.show({ kind: "markdown" }, "---\ngenerator: Demios\nai_generated: true\n---\n---\ntitle: model_own_meta\n---\n# Notes\n\nBody text.\n"),
   );
   const f = frame(page);
   await expect(f.locator("h1")).toHaveText("Notes");
   await expect(f.locator("body")).not.toContainText("ai_generated");
+  await expect(f.locator("body")).not.toContainText("model_own_meta");
 });
 
 test("the frame shell opened as a top-level page stays inert", async ({ page }) => {

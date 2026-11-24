@@ -20,6 +20,8 @@ use std::time::{Duration, Instant};
 struct TrackedMcpSecrets {
     inner: dn_tools::DnSecrets,
     state: std::sync::Weak<AppState>,
+    /// `AppState::mcp_epoch` when made; writes are refused once it changes.
+    epoch: u64,
 }
 
 impl dn_tools::SecretStore for TrackedMcpSecrets {
@@ -29,6 +31,11 @@ impl dn_tools::SecretStore for TrackedMcpSecrets {
     fn set(&self, id: &str, value: &str) -> Result<(), dn_tools::secrets::SecretError> {
         // Record first: an id we fail to record could outlive a wipe.
         if let Some(st) = self.state.upgrade() {
+            if st.mcp_epoch.load(Ordering::SeqCst) != self.epoch {
+                return Err(dn_tools::secrets::SecretError(
+                    "local data was deleted; not storing tool-server credentials".into(),
+                ));
+            }
             let db = st
                 .db()
                 .map_err(|e| dn_tools::secrets::SecretError(e.message))?;
@@ -41,6 +48,13 @@ impl dn_tools::SecretStore for TrackedMcpSecrets {
         self.inner.delete(id)
     }
 }
+
+/// How long "Delete all local data" waits for cancelled replies to end (shorter in tests).
+const REPLY_STOP_TIMEOUT: Duration = if cfg!(test) {
+    Duration::from_secs(1)
+} else {
+    Duration::from_secs(5)
+};
 
 /// Key-store id of the Hugging Face token (`dn_models::hub::hf_token_secret()`).
 pub const HF_TOKEN_PROVIDER_ID: &str = "huggingface";
@@ -97,6 +111,10 @@ pub enum ToolEvent {
     McpServer {
         status: McpServerStatus,
     },
+    /// The server was removed from settings.
+    McpServerRemoved {
+        server_id: String,
+    },
 }
 
 /// Connection state of one configured MCP server, for toasts and the Models page.
@@ -104,9 +122,10 @@ pub enum ToolEvent {
 pub struct McpServerStatus {
     pub server_id: String,
     pub name: String,
-    /// `connecting`, `connected` or `failed`.
+    /// `connecting`, `connected`, `needs_auth` (an OAuth server without a valid sign-in),
+    /// `signing_in` (waiting for the browser) or `failed`.
     pub state: &'static str,
-    /// User-facing reason when `failed`.
+    /// User-facing reason when `failed` or `needs_auth`.
     pub message: Option<String>,
     pub tools: usize,
 }
@@ -163,6 +182,10 @@ pub struct AppState {
     /// Bumped by "Delete all local data": a background MCP connect started before it must
     /// not add its server afterwards.
     mcp_epoch: AtomicU64,
+    /// Whether this build may start local (stdio) MCP servers (not in Flatpak).
+    pub local_servers: bool,
+    /// Asks before a local MCP server starts (native dialog in the app; tests set a fake).
+    pub launch_approver: std::sync::OnceLock<Arc<dyn crate::mcp::LaunchApprover>>,
 }
 
 /// A reserved generation slot. Dropping it without [`Reservation::into_parts`] releases
@@ -214,6 +237,8 @@ impl AppState {
             removed_keys: Mutex::new(HashMap::new()),
             next_token: AtomicU64::new(1),
             mcp_epoch: AtomicU64::new(0),
+            local_servers: crate::mcp::local_servers_allowed(),
+            launch_approver: std::sync::OnceLock::new(),
         }
     }
 
@@ -224,6 +249,16 @@ impl AppState {
     pub fn open(
         path: &std::path::Path,
         skills: Option<&std::path::Path>,
+    ) -> dn_store::Result<Arc<Self>> {
+        Self::open_with(path, skills, None)
+    }
+
+    /// [`Self::open`] with the launch approver for local MCP servers, set before the saved
+    /// servers start connecting.
+    pub fn open_with(
+        path: &std::path::Path,
+        skills: Option<&std::path::Path>,
+        launch_approver: Option<Arc<dyn crate::mcp::LaunchApprover>>,
     ) -> dn_store::Result<Arc<Self>> {
         let conn = dn_store::open(path, &migration_sets())?;
         let n = store::recover_interrupted(&conn)?;
@@ -270,6 +305,9 @@ impl AppState {
         state.agent = agent;
         state.tools = tools;
         state.executor = Some(Arc::clone(&executor));
+        if let Some(a) = launch_approver {
+            let _ = state.launch_approver.set(a);
+        }
         let state = Arc::new(state);
         state.start_approval_bridge(approvals);
         state.connect_mcp_servers(executor);
@@ -288,7 +326,6 @@ impl AppState {
         if servers.is_empty() {
             return;
         }
-        let secrets = self.mcp_secret_store();
         let epoch = self.mcp_epoch.load(Ordering::SeqCst);
         for cfg in &servers {
             self.set_mcp_status(McpServerStatus {
@@ -302,46 +339,8 @@ impl AppState {
         let state = Arc::clone(self);
         tauri::async_runtime::spawn(async move {
             for cfg in servers {
-                let id = cfg.id.clone();
-                let name = cfg.display_name.clone().unwrap_or_else(|| id.clone());
-                let status = |state, message: Option<String>, tools| McpServerStatus {
-                    server_id: id.clone(),
-                    name: name.clone(),
-                    state,
-                    message,
-                    tools,
-                };
-                let client = match dn_tools::McpClient::new(cfg, Arc::clone(&secrets)) {
-                    Ok(c) => {
-                        c.with_auth(Arc::new(dn_tools::OAuthManager::new(Arc::clone(&secrets))))
-                    }
-                    Err(e) => {
-                        eprintln!("MCP server `{id}` is misconfigured: {e}");
-                        state.set_mcp_status(status(
-                            "failed",
-                            Some(
-                                "Its settings are invalid. Check the server configuration.".into(),
-                            ),
-                            0,
-                        ));
-                        continue;
-                    }
-                };
-                if state.mcp_epoch.load(Ordering::SeqCst) != epoch {
+                if !state.connect_mcp_server(&executor, cfg, epoch).await {
                     return; // "Delete all local data" ran meanwhile.
-                }
-                let added = executor.add_server(client).await;
-                if state.mcp_epoch.load(Ordering::SeqCst) != epoch {
-                    executor.remove_server(&id).await;
-                    return;
-                }
-                match added {
-                    Ok(caps) => state.set_mcp_status(status("connected", None, caps.len())),
-                    Err(e) => {
-                        eprintln!("MCP server `{id}` could not be added: {e}");
-                        let msg = crate::agent::model_error(e).message;
-                        state.set_mcp_status(status("failed", Some(msg), 0));
-                    }
                 }
             }
         });
@@ -446,12 +445,34 @@ impl AppState {
         }
     }
 
+    /// Adds an MCP server unless "Delete all local data" ran since `epoch` (before or while
+    /// connecting); then the server is removed again and `None` returned.
+    pub async fn add_mcp_server_if_current(
+        &self,
+        executor: &dn_tools::Executor,
+        client: dn_tools::McpClient,
+        epoch: u64,
+    ) -> Option<Result<Vec<dn_tools::McpCapability>, dn_core::CoreError>> {
+        if self.mcp_epoch.load(Ordering::SeqCst) != epoch {
+            return None;
+        }
+        let id = client.server_id().to_owned();
+        let added = executor.add_server(client).await;
+        if self.mcp_epoch.load(Ordering::SeqCst) != epoch {
+            executor.remove_server(&id).await;
+            return None;
+        }
+        Some(added)
+    }
+
     /// The secret store MCP servers use: the keychain, recording every id written so
-    /// "Delete all local data" finds it later.
+    /// "Delete all local data" finds it later. It refuses writes once a wipe has started
+    /// after it was made, so a server still shutting down can't store a token again.
     pub fn mcp_secret_store(self: &Arc<Self>) -> Arc<dyn dn_tools::SecretStore> {
         Arc::new(TrackedMcpSecrets {
             inner: dn_tools::DnSecrets(Arc::clone(&self.keys.store)),
             state: Arc::downgrade(self),
+            epoch: self.mcp_epoch.load(Ordering::SeqCst),
         })
     }
 
@@ -476,8 +497,9 @@ impl AppState {
     /// a failure and returns the parts it could not delete, in the user's words.
     pub async fn delete_all_local_data(self: &Arc<Self>) -> Vec<&'static str> {
         let mut failed = Vec::new();
-        if !self.stop_all_and_wait(Duration::from_secs(5)).await {
+        if !self.stop_all_and_wait(REPLY_STOP_TIMEOUT).await {
             eprintln!("some replies did not stop in time; deleting anyway");
+            failed.push("an answer that was still being written (it may have been saved again)");
         }
         self.mcp_epoch.fetch_add(1, Ordering::SeqCst);
         if let Some(exec) = &self.executor {
@@ -760,6 +782,138 @@ impl AppState {
     pub fn set_mcp_status(&self, status: McpServerStatus) {
         lock(&self.mcp_status).insert(status.server_id.clone(), status.clone());
         self.emit_approval(ToolEvent::McpServer { status });
+    }
+
+    pub fn mcp_statuses(&self) -> std::collections::BTreeMap<String, McpServerStatus> {
+        lock(&self.mcp_status).clone()
+    }
+
+    pub fn clear_mcp_status(&self, server_id: &str) {
+        lock(&self.mcp_status).remove(server_id);
+        self.emit_approval(ToolEvent::McpServerRemoved {
+            server_id: server_id.to_owned(),
+        });
+    }
+
+    /// Connects one server (replacing a running client of the same id) and reports its
+    /// status. Returns false when "Delete all local data" ran since `epoch`.
+    pub async fn connect_mcp_server(
+        self: &Arc<Self>,
+        executor: &dn_tools::Executor,
+        cfg: dn_tools::McpServerConfig,
+        epoch: u64,
+    ) -> bool {
+        let id = cfg.id.clone();
+        let name = cfg.display_name.clone().unwrap_or_else(|| id.clone());
+        let status = |state, message: Option<String>, tools| McpServerStatus {
+            server_id: id.clone(),
+            name: name.clone(),
+            state,
+            message,
+            tools,
+        };
+        // Connect only what is saved now: the server may have been removed or edited while
+        // this was waiting (a save's background connect, a sign-in).
+        match self.mcp_server(&id) {
+            Ok(current) if current == cfg => {}
+            _ => return true,
+        }
+        executor.remove_server(&id).await;
+        if let Some(req) = crate::mcp::LaunchRequest::of(&cfg) {
+            if !self.local_servers {
+                self.set_mcp_status(status(
+                    "failed",
+                    Some("This version of Demios can't start programs on your computer.".into()),
+                    0,
+                ));
+                return true;
+            }
+            if !self.approve_launch(&id, req).await {
+                self.set_mcp_status(status(
+                    "failed",
+                    Some(
+                        "Not started: you didn't allow it to run. Use Reconnect to be asked again."
+                            .into(),
+                    ),
+                    0,
+                ));
+                return true;
+            }
+        }
+        self.set_mcp_status(status("connecting", None, 0));
+        let secrets = self.mcp_secret_store();
+        let client = match dn_tools::McpClient::new(cfg, Arc::clone(&secrets)) {
+            Ok(c) => c.with_auth(Arc::new(dn_tools::OAuthManager::new(secrets))),
+            Err(e) => {
+                eprintln!("MCP server `{id}` is misconfigured: {e}");
+                self.set_mcp_status(status(
+                    "failed",
+                    Some("Its settings are invalid. Edit the server to fix them.".into()),
+                    0,
+                ));
+                return true;
+            }
+        };
+        let Some(added) = self
+            .add_mcp_server_if_current(executor, client, epoch)
+            .await
+        else {
+            return false;
+        };
+        match added {
+            Ok(caps) => self.set_mcp_status(status("connected", None, caps.len())),
+            Err(e) => {
+                let needs_auth = executor
+                    .client(&id)
+                    .is_some_and(|c| c.status() == dn_tools::ConnectionStatus::NeedsAuth);
+                if needs_auth {
+                    self.set_mcp_status(status(
+                        "needs_auth",
+                        Some("Sign in to use this server's tools.".into()),
+                        0,
+                    ));
+                } else {
+                    eprintln!("MCP server `{id}` could not be added: {e}");
+                    let msg = crate::agent::model_error(e).message;
+                    self.set_mcp_status(status("failed", Some(msg), 0));
+                }
+            }
+        }
+        true
+    }
+
+    /// Whether the user allowed this exact command line for this server, asking (native
+    /// dialog, outside the webview) when they haven't yet. A "yes" is remembered.
+    async fn approve_launch(&self, id: &str, req: crate::mcp::LaunchRequest) -> bool {
+        let line = req.command_line();
+        let known = self
+            .db()
+            .ok()
+            .and_then(|db| settings::mcp_launch_approved(&db, id, &line).ok())
+            .unwrap_or(false);
+        if known {
+            return true;
+        }
+        let Some(approver) = self.launch_approver.get() else {
+            return false;
+        };
+        if !approver.ask(req).await {
+            return false;
+        }
+        match self.db() {
+            Ok(db) => {
+                if let Err(e) = settings::record_mcp_launch(&db, id, &line) {
+                    eprintln!("could not remember a launch approval: {e}");
+                }
+            }
+            Err(_) => eprintln!("could not remember a launch approval"),
+        }
+        true
+    }
+
+    /// The current `mcp_epoch` (see [`Self::delete_all_local_data`]).
+    pub fn mcp_epoch_now(&self) -> u64 {
+        self.mcp_epoch.load(Ordering::SeqCst)
     }
 
     pub fn pending_approvals(&self) -> Vec<ApprovalPrompt> {
@@ -1312,6 +1466,58 @@ mod tests {
         let failed = st.wipe_local_data();
         assert!(
             failed.iter().any(|f| f.contains("settings unreadable")),
+            "{failed:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn after_a_wipe_old_mcp_connects_and_token_writes_are_refused() {
+        let (st, exec, keys) = state_with_executor();
+        let epoch = st.mcp_epoch.load(Ordering::SeqCst);
+        let store = st.mcp_secret_store();
+        assert!(st.delete_all_local_data().await.is_empty());
+
+        // A token refresh from a server that was still shutting down.
+        assert!(store.set("mcp.gh.oauth", "{}").is_err());
+        assert!(
+            keys.store
+                .get(&dn_secrets::SecretId::mcp("mcp.gh.oauth"))
+                .unwrap()
+                .is_none()
+        );
+        // A store made after the wipe works again.
+        st.mcp_secret_store().set("mcp.new.token", "x").unwrap();
+
+        // A connect that started before the wipe doesn't add its server.
+        let cfg = dn_tools::McpServerConfig::http("gh", "http://127.0.0.1:9/mcp");
+        let client = dn_tools::McpClient::new(cfg, st.mcp_secret_store()).unwrap();
+        assert!(
+            st.add_mcp_server_if_current(&exec, client, epoch)
+                .await
+                .is_none()
+        );
+        assert!(exec.client("gh").is_none());
+        // With the current epoch it is added (connect fails, the server is registered).
+        let cfg = dn_tools::McpServerConfig::http("gh", "http://127.0.0.1:9/mcp");
+        let client = dn_tools::McpClient::new(cfg, st.mcp_secret_store()).unwrap();
+        let now = st.mcp_epoch.load(Ordering::SeqCst);
+        assert!(
+            st.add_mcp_server_if_current(&exec, client, now)
+                .await
+                .is_some()
+        );
+        assert!(exec.client("gh").is_some());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_reply_that_does_not_stop_is_reported() {
+        let (st, _exec, _keys) = state_with_executor();
+        let c = st.create_conversation().unwrap();
+        // Reserved and never released: the reply ignores the cancel.
+        let (_token, _cancel) = st.reserve(c.id).unwrap().into_parts();
+        let failed = st.delete_all_local_data().await;
+        assert!(
+            failed.iter().any(|f| f.contains("still being written")),
             "{failed:?}"
         );
     }

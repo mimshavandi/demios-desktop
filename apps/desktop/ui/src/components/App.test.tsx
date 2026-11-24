@@ -72,6 +72,7 @@ function fakeApi() {
   const artifacts: ArtifactDetail[] = [];
   let settings: Settings = { slots: {}, telemetry_enabled: false };
   let n = 0;
+  const reports: [string, string | null][] = [];
   let listener: ((ev: ChatEvent) => void) | null = null;
   const id = () => `id-${++n}`;
   const m = (cid: string, role: "user" | "assistant", text: string, status: StoredMessage["status"]): StoredMessage => ({
@@ -101,6 +102,16 @@ function fakeApi() {
   });
   const api: Api = {
     appInfo: async () => ({ version: "0.1.0", dev_fake_model: true, data_dir: "/tmp", models_dir: "/tmp/models" }),
+    listMcpServers: async () => ({ servers: [], local_servers_allowed: true }),
+    saveMcpServer: async () => ({ servers: [], local_servers_allowed: true }),
+    removeMcpServer: async () => ({ servers: [], local_servers_allowed: true }),
+    reconnectMcpServer: async () => null,
+    signInMcpServer: async () => null,
+    signOutMcpServer: async () => ({ servers: [], local_servers_allowed: true }),
+    reportProblem: async (kind, messageId) => {
+      reports.push([kind, messageId ?? null]);
+      return null;
+    },
     localDataSummary: async () => ({
       conversations: convs.length,
       artifacts: artifacts.length,
@@ -212,6 +223,7 @@ function fakeApi() {
     downloads,
     pauses,
     localRows,
+    reports,
   };
 }
 
@@ -273,6 +285,81 @@ describe("App", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Hello" })).toBeTruthy());
     // The model badge says where the answer ran.
     expect(screen.getAllByText(/On this device/).length).toBeGreaterThan(0);
+  });
+
+  it("discloses AI answers: first-run notice, composer line, labelled answers", async () => {
+    const { api, emit } = fakeApi();
+    let saved: Settings | null = null;
+    const update = api.updateSettings;
+    api.updateSettings = async (s) => {
+      saved = s;
+      return update(s);
+    };
+    render(<App api={api} />);
+    expect(await screen.findByText(/Demios lets you chat with AI models you choose/)).toBeTruthy();
+    // The persistent line is part of the composer's description for screen readers.
+    const box = screen.getByLabelText("Message");
+    expect(box.getAttribute("aria-describedby")).toContain("composer-disclosure");
+    expect(document.getElementById("composer-disclosure")?.textContent).toContain("can be wrong");
+
+    fireEvent.click(screen.getByRole("button", { name: "Got it" }));
+    await waitFor(() => expect(screen.queryByText(/Demios lets you chat with AI models you choose/)).toBeNull());
+    expect(document.activeElement).toBe(box);
+    expect(saved).toMatchObject({ ai_notice_seen: true });
+    // The line by the composer stays.
+    expect(document.getElementById("composer-disclosure")).toBeTruthy();
+
+    fireEvent.change(box, { target: { value: "Hello" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    await screen.findByRole("button", { name: "Stop answer" });
+    act(() => {
+      emit({ type: "text_delta", message_id: "id-3", offset: 0, text: "Hi" });
+      emit({ type: "done", message_id: "id-3", finish_reason: "stop", usage: { input_tokens: 1, output_tokens: 1 } });
+    });
+    const answer = await screen.findByTestId("message-assistant");
+    expect(answer.getAttribute("data-ai-generated")).toBe("true");
+    expect(answer.getAttribute("data-generator")).toBe("local:dev-fake");
+    expect(answer.getAttribute("aria-label")).toMatch(/^AI answer from /);
+  });
+
+  it("reports a problem or an answer without sending chat content", async () => {
+    const { api, emit, reports, msgs } = fakeApi();
+    render(<App api={api} />);
+    const box = await screen.findByLabelText("Message");
+    fireEvent.change(box, { target: { value: "private question" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    await screen.findByRole("button", { name: "Stop answer" });
+    // The backend stores the finished answer; the list reloads from it.
+    const stored = [...msgs.values()].flat().find((x) => x.role === "assistant");
+    if (stored) {
+      stored.content = [{ type: "text", text: "an answer" }];
+      stored.status = "complete";
+    }
+    act(() => {
+      emit({ type: "text_delta", message_id: "id-3", offset: 0, text: "an answer" });
+      emit({ type: "done", message_id: "id-3", finish_reason: "stop", usage: { input_tokens: 1, output_tokens: 1 } });
+    });
+    // Wait until the chat has settled (the list reloads after the answer ends).
+    await waitFor(() => expect(screen.getByRole("button", { name: "private question" })).toBeTruthy());
+    fireEvent.click(await screen.findByRole("button", { name: "Report this answer" }));
+    await waitFor(() => expect(reports).toEqual([["answer", "id-3"]]));
+    expect(await screen.findByText("Opened the report form in your browser")).toBeTruthy();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Models" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "General" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Report a problem" }));
+    await waitFor(() => expect(reports).toEqual([["answer", "id-3"], ["problem", null]]));
+    // Only kinds and message ids went to the backend: no chat text.
+    expect(JSON.stringify(reports)).not.toContain("private question");
+  });
+
+  it("does not show the first-run notice once seen", async () => {
+    const { api } = fakeApi();
+    await api.updateSettings({ slots: {}, telemetry_enabled: false, ai_notice_seen: true });
+    render(<App api={api} />);
+    expect(await screen.findByText("What can I help with?")).toBeTruthy();
+    expect(screen.queryByText(/Demios lets you chat with AI models you choose/)).toBeNull();
+    expect(document.getElementById("composer-disclosure")).toBeTruthy();
   });
 
   it("keeps the prompt when sending fails", async () => {

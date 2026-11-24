@@ -1,8 +1,8 @@
 import { marked } from "marked";
 import { readSource, showError } from "./source";
 
-/** A leading YAML front-matter block (`---` … `---`), e.g. the host's AI-generated marker. Not shown. */
-const FRONT_MATTER = /^---\r?\n[\s\S]*?\r?\n---\r?\n/;
+/** Leading YAML front-matter blocks (`---` … `---`): the host's AI marker, and the model's own if any. Not shown. */
+const FRONT_MATTER = /^(?:---\r?\n[\s\S]*?\r?\n---\r?\n)+/;
 
 try {
   const root = document.getElementById("root");

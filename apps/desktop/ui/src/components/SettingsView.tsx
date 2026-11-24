@@ -1,4 +1,4 @@
-import { Cpu, KeyRound, Trash2 } from "lucide-react";
+import { Cpu, ExternalLink, KeyRound, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Api } from "../ipc/commands";
 import {
@@ -13,6 +13,8 @@ import {
 } from "../ipc/types";
 import { Badge, Button, ICON, InlineMessage, Select, Skeleton, TextField, type SelectGroup } from "./primitives";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { Licences } from "./Licences";
+import { McpServersCard } from "./McpServers";
 import { LocalModelsCard, formatBytes } from "./LocalModels";
 import { useToast } from "./toast";
 
@@ -210,30 +212,7 @@ function ModelsPage({
 
       <LocalModelsCard api={api} initial={catalog.local_models} onReady={refreshCatalog} />
 
-      {servers.length > 0 && (
-        <section className="card" aria-labelledby="servers-h">
-          <h2 id="servers-h">Tool servers</h2>
-          {[...servers]
-            .sort((a, b) => a.name.localeCompare(b.name))
-            .map((s) => (
-              <div className="row" key={s.server_id} data-testid="mcp-server-row">
-                <div className="row-main">
-                  <span className="row-title">{s.name}</span>
-                  <span className="dn-help">
-                    {s.state === "connected"
-                      ? `${s.tools} ${s.tools === 1 ? "tool" : "tools"}`
-                      : s.state === "connecting"
-                        ? "Connecting…"
-                        : (s.message ?? "Couldn't connect.")}
-                  </span>
-                </div>
-                <Badge tone={s.state === "connected" ? "success" : s.state === "failed" ? "danger" : "neutral"}>
-                  {s.state === "connected" ? "Connected" : s.state === "failed" ? "Failed" : "Connecting"}
-                </Badge>
-              </div>
-            ))}
-        </section>
-      )}
+      <McpServersCard api={api} live={servers} />
 
       <section className="card" aria-labelledby="keys-h">
         <h2 id="keys-h">Provider keys</h2>
@@ -433,6 +412,15 @@ function GeneralPage({ api, info }: { api: Api; info: AppInfo | null }) {
     }
   };
 
+  const reportProblem = async () => {
+    try {
+      await api.reportProblem("problem");
+      toast({ tone: "info", title: "Opened the report form in your browser" });
+    } catch (e) {
+      toast({ tone: "error", title: errorMessage(e) });
+    }
+  };
+
   const deleteAll = async () => {
     setDeleting(true);
     setDeleteError(null);
@@ -512,10 +500,29 @@ function GeneralPage({ api, info }: { api: Api; info: AppInfo | null }) {
         <div className="row">
           <div className="row-main">
             <span className="row-title">Demios Desktop {info?.version ?? ""}</span>
+            <span className="dn-help">
+              Answers come from the AI model you choose, on this computer or from a provider you add a key for. Demios
+              doesn't check them: they can be wrong or made up, so verify anything important.
+            </span>
             <span className="dn-help">Your chats are stored in {info?.data_dir ?? "the app data folder"}</span>
             {info?.models_dir != null && <span className="dn-help">Downloaded models are stored in {info.models_dir}</span>}
           </div>
         </div>
+        <div className="row">
+          <div className="row-main">
+            <span className="row-title">Report a problem</span>
+            <span className="dn-help">
+              Opens a form on GitHub in your browser, with the app version and your operating system filled in. Nothing
+              from your chats is sent. To report an answer, use the flag under it.
+            </span>
+          </div>
+          <div className="row-actions">
+            <Button icon={<ExternalLink {...ICON} aria-hidden="true" />} onClick={() => void reportProblem()}>
+              Report a problem
+            </Button>
+          </div>
+        </div>
+        <Licences />
       </section>
       <ConfirmDialog
         open={confirming}

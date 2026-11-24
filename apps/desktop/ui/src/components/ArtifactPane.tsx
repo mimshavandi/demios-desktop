@@ -22,7 +22,7 @@ export interface ArtifactPaneProps {
   /** Display name of a model ref, for "Made by <model>". */
   modelName: (ref: string) => string;
   /** Content as rendered, with the AI-generated marker; stored versions stay unchanged. */
-  mark?: (type: ArtifactType, content: string, model: string | null) => string;
+  mark?: (type: ArtifactType, version: ArtifactVersionView) => string;
   onClose: () => void;
 }
 
@@ -95,7 +95,7 @@ export function ArtifactPane(p: ArtifactPaneProps) {
           },
           mark: (a, v) =>
             v.author === "model"
-              ? (latest.current.mark?.(a.artifact_type, v.content, (v as ArtifactVersionView).model) ?? v.content)
+              ? (latest.current.mark?.(a.artifact_type, v as ArtifactVersionView) ?? v.content)
               : v.content,
         });
         viewRef.current = view;
