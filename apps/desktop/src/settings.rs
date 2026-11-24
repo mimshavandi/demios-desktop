@@ -46,13 +46,16 @@ pub const SLOTS: &[SlotInfo] = &[
     },
 ];
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     /// slot id → `ModelRef` string. Missing = not configured (never a silent fallback).
     pub slots: BTreeMap<String, String>,
     /// Off by default. No telemetry is collected in this build either way.
     pub telemetry_enabled: bool,
+    /// MCP servers the tool runtime connects to at startup (secret *ids* only).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub mcp_servers: Vec<dn_tools::McpServerConfig>,
 }
 
 impl Settings {
@@ -64,6 +67,10 @@ impl Settings {
             model
                 .parse::<ModelRef>()
                 .map_err(|e| format!("slot `{slot}`: {e}"))?;
+        }
+        for s in &self.mcp_servers {
+            s.validate()
+                .map_err(|e| format!("MCP server `{}`: {e}", s.id))?;
         }
         Ok(())
     }

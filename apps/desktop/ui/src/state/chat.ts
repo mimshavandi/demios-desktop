@@ -5,6 +5,15 @@
 
 import type { ChatEvent, Id, StoredMessage, TurnStarted } from "../ipc/types";
 
+/** A tool call seen on the stream (before the run's messages are stored). */
+export interface LiveToolCall {
+  call_id: string;
+  name: string;
+  arguments: unknown;
+  status: "running" | "done" | "error";
+  summary: string;
+}
+
 export interface ChatState {
   conversationId: Id | null;
   messages: StoredMessage[];
@@ -13,6 +22,8 @@ export interface ChatState {
   /** A send or regenerate is in flight; its events may arrive before the reply. */
   awaiting: boolean;
   pending: Record<Id, ChatEvent[]>;
+  /** Live tool calls per assistant message id. */
+  tools: Record<Id, LiveToolCall[]>;
 }
 
 export type ChatAction =
@@ -28,6 +39,7 @@ export const initialChat: ChatState = {
   streamingId: null,
   awaiting: false,
   pending: {},
+  tools: {},
 };
 
 function applyEvent(m: StoredMessage, ev: ChatEvent): StoredMessage {
@@ -41,6 +53,8 @@ function applyEvent(m: StoredMessage, ev: ChatEvent): StoredMessage {
       return { ...m, content: [{ type: "text", text }, ...m.content.slice(1)] };
     }
     case "reasoning_delta":
+    case "tool_call_started":
+    case "tool_call_finished":
       return m;
     case "done":
       return {
@@ -51,6 +65,29 @@ function applyEvent(m: StoredMessage, ev: ChatEvent): StoredMessage {
     case "error":
       return { ...m, status: "error", finish_reason: "error", error: ev.message };
   }
+}
+
+function applyTools(tools: Record<Id, LiveToolCall[]>, ev: ChatEvent): Record<Id, LiveToolCall[]> {
+  if (ev.type === "tool_call_started") {
+    const list = tools[ev.message_id] ?? [];
+    const call: LiveToolCall = {
+      call_id: ev.call_id,
+      name: ev.name,
+      arguments: ev.arguments,
+      status: "running",
+      summary: "",
+    };
+    return { ...tools, [ev.message_id]: [...list, call] };
+  }
+  if (ev.type === "tool_call_finished") {
+    const list = (tools[ev.message_id] ?? []).map((c) =>
+      c.call_id === ev.call_id
+        ? { ...c, status: ev.is_error ? ("error" as const) : ("done" as const), summary: ev.summary }
+        : c,
+    );
+    return { ...tools, [ev.message_id]: list };
+  }
+  return tools;
 }
 
 function isTerminal(ev: ChatEvent): boolean {
@@ -67,6 +104,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         streamingId: streaming?.id ?? null,
         awaiting: false,
         pending: {},
+        tools: {},
       };
     }
     case "sending":
@@ -84,7 +122,11 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       }
       let assistant = assistant_message;
       const buffered = state.pending[assistant.id] ?? [];
-      for (const ev of buffered) assistant = applyEvent(assistant, ev);
+      let tools = state.tools;
+      for (const ev of buffered) {
+        assistant = applyEvent(assistant, ev);
+        tools = applyTools(tools, ev);
+      }
       const { [assistant.id]: _drop, ...pending } = state.pending;
       return {
         ...state,
@@ -92,6 +134,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         streamingId: buffered.some(isTerminal) ? null : assistant.id,
         awaiting: false,
         pending,
+        tools,
       };
     }
     case "event": {
@@ -108,7 +151,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       messages[idx] = applyEvent(current, ev);
       const streamingId =
         isTerminal(ev) && state.streamingId === ev.message_id ? null : state.streamingId;
-      return { ...state, messages, streamingId };
+      return { ...state, messages, streamingId, tools: applyTools(state.tools, ev) };
     }
     case "turn_failed":
       return { ...state, streamingId: null, awaiting: false, pending: {} };

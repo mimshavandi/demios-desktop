@@ -3,7 +3,17 @@
 // when `import.meta.env.DEV` and no Tauri runtime is present.
 
 import type { Api } from "./commands";
-import type { ChatEvent, Conversation, ModelCatalog, Settings, StoredMessage } from "./types";
+import type {
+  ApprovalDecision,
+  ApprovalPrompt,
+  ChatEvent,
+  Conversation,
+  ModelCatalog,
+  Settings,
+  StoredMessage,
+  ToolEvent,
+  UnknownOutcome,
+} from "./types";
 
 const REPLY = (q: string, turn: number) =>
   `**Dev fake model** (turn ${turn}). No real model is connected yet, so this reply is canned.\n\n` +
@@ -68,6 +78,7 @@ export function createMockApi(): Api {
     ],
     key_store: "session only (browser mock)",
     settings,
+    chat_model: settings.slots["chat"] ?? "local:dev-fake",
   });
 
   const stream = (cid: string, a: StoredMessage, q: string, onEvent: (e: ChatEvent) => void) => {
@@ -99,6 +110,43 @@ export function createMockApi(): Api {
     };
   };
   const stops = new Map<string, () => void>();
+  let approvalSink: ((e: ToolEvent) => void) | null = null;
+  const waiting = new Map<string, { prompt: ApprovalPrompt; done: (d: ApprovalDecision) => void }>();
+  const unknown: UnknownOutcome[] = [];
+
+  /** "write …" messages simulate a tool call that needs approval. */
+  const toolTurn = (cid: string, a: StoredMessage, q: string, onEvent: (e: ChatEvent) => void) => {
+    const callId = id();
+    const args = { path: "notes/todo.md", content: q.replace(/^write\s*/i, "") || "Buy milk" };
+    onEvent({ type: "tool_call_started", message_id: a.id, call_id: callId, name: "mcp__files__write_file", arguments: args });
+    const prompt: ApprovalPrompt = {
+      request_id: id(),
+      scope: `conv:${cid}`,
+      capability_id: "mcp.files.write_file",
+      title: "Write to notes/todo.md",
+      description: "Creates or replaces the file with the content below.",
+      risk: "low_write",
+      policy: "ask_once_per_conversation",
+      arguments: args,
+    };
+    const finish = (text: string, isError: boolean) => {
+      onEvent({ type: "tool_call_finished", message_id: a.id, call_id: callId, is_error: isError, summary: isError ? "The user denied this." : "Wrote 1 file." });
+      a.tool_calls = [{ id: callId, name: "mcp__files__write_file", arguments: args }];
+      const tool = message(cid, "tool", isError ? "The user denied this." : "Wrote 1 file.", "complete");
+      tool.tool_call_id = callId;
+      const final = message(cid, "assistant", text, "complete");
+      a.status = "complete";
+      a.finish_reason = "tool_calls";
+      msgs.get(cid)?.push(tool, final);
+      onEvent({ type: "text_delta", message_id: a.id, offset: 0, text });
+      onEvent({ type: "done", message_id: a.id, finish_reason: "stop", usage: { input_tokens: 1, output_tokens: 1 }, stop: "completed" });
+    };
+    waiting.set(prompt.request_id, {
+      prompt,
+      done: (d) => finish(d === "deny" ? "OK, I didn't write the file." : "Done: I added it to notes/todo.md.", d === "deny"),
+    });
+    window.setTimeout(() => approvalSink?.({ type: "requested", prompt }), 300);
+  };
 
   return {
     appInfo: async () => ({ version: "0.1.0 (browser mock)", dev_fake_model: true, data_dir: null }),
@@ -130,7 +178,8 @@ export function createMockApi(): Api {
       const u = message(cid, "user", text, "complete");
       const a = message(cid, "assistant", "", "streaming");
       msgs.get(cid)?.push(u, a);
-      stops.set(cid, stream(cid, a, text, onEvent));
+      if (/^write\b/i.test(text)) toolTurn(cid, a, text, onEvent);
+      else stops.set(cid, stream(cid, a, text, onEvent));
       // IPC serialises; hand out copies so the UI never shares objects with the mock.
       return structuredClone({ user_message: u, assistant_message: a, title });
     },
@@ -166,6 +215,24 @@ export function createMockApi(): Api {
       keys.delete(p);
       removedKeys.add(p);
       return catalog();
+    },
+    watchTools: async (onEvent) => {
+      approvalSink = onEvent;
+      return { approvals: [...waiting.values()].map((w) => w.prompt), servers: [] };
+    },
+    respondApproval: async (requestId, decision) => {
+      const w = waiting.get(requestId);
+      if (w === undefined) throw { code: "expired", message: "This request is no longer waiting." };
+      waiting.delete(requestId);
+      approvalSink?.({ type: "resolved", request_id: requestId, expired: false });
+      w.done(decision);
+      return null;
+    },
+    listUnknownOutcomes: async () => [...unknown],
+    resolveUnknownOutcome: async (key) => {
+      const i = unknown.findIndex((u) => u.key === key);
+      if (i >= 0) unknown.splice(i, 1);
+      return null;
     },
     restoreProviderKey: async (p) => {
       if (!removedKeys.delete(p)) throw { code: "expired", message: "The key can no longer be restored. Paste it again." };

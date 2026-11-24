@@ -4,6 +4,10 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
   AppInfo,
+  ApprovalDecision,
+  ToolEvent,
+  ToolSnapshot,
+  UnknownOutcome,
   ChatEvent,
   Conversation,
   Id,
@@ -33,6 +37,10 @@ interface Commands {
   set_provider_key: { args: { providerId: string; apiKey: string }; ret: ModelCatalog };
   delete_provider_key: { args: { providerId: string }; ret: ModelCatalog };
   restore_provider_key: { args: { providerId: string }; ret: ModelCatalog };
+  watch_tools: { args: { onEvent: Channel<ToolEvent> }; ret: ToolSnapshot };
+  respond_approval: { args: { requestId: Id; decision: ApprovalDecision }; ret: null };
+  list_unknown_outcomes: { args: { conversationId: Id | null }; ret: UnknownOutcome[] };
+  resolve_unknown_outcome: { args: { key: string; happened: boolean }; ret: null };
 }
 
 export type CommandName = keyof Commands;
@@ -41,8 +49,8 @@ function call<K extends CommandName>(cmd: K, args: Commands[K]["args"]): Promise
   return invoke<Commands[K]["ret"]>(cmd, args);
 }
 
-function channel(onEvent: (ev: ChatEvent) => void): Channel<ChatEvent> {
-  const ch = new Channel<ChatEvent>();
+function channel<T>(onEvent: (ev: T) => void): Channel<T> {
+  const ch = new Channel<T>();
   ch.onmessage = onEvent;
   return ch;
 }
@@ -68,6 +76,14 @@ export const api = {
     call("set_provider_key", { providerId, apiKey }),
   deleteProviderKey: (providerId: string) => call("delete_provider_key", { providerId }),
   restoreProviderKey: (providerId: string) => call("restore_provider_key", { providerId }),
+  watchTools: (onEvent: (ev: ToolEvent) => void) =>
+    call("watch_tools", { onEvent: channel(onEvent) }),
+  respondApproval: (requestId: Id, decision: ApprovalDecision) =>
+    call("respond_approval", { requestId, decision }),
+  listUnknownOutcomes: (conversationId: Id | null) =>
+    call("list_unknown_outcomes", { conversationId }),
+  resolveUnknownOutcome: (key: string, happened: boolean) =>
+    call("resolve_unknown_outcome", { key, happened }),
 };
 
 export type Api = typeof api;
