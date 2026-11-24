@@ -680,3 +680,97 @@ pub async fn sign_in_mcp_server(
         }
     }
 }
+
+// ---- add a model from Hugging Face (T-INF-10)
+
+fn local_models(s: &AppState) -> IpcResult<Arc<crate::local::LocalModels>> {
+    s.models.local.clone().ok_or_else(|| {
+        IpcError::new(
+            "unavailable",
+            "Local models aren't available in this build.",
+        )
+    })
+}
+
+#[tauri::command]
+pub async fn hub_search(
+    state: AppStateRef<'_>,
+    text: String,
+    sort: dn_models::hub::SearchSort,
+    cursor: Option<String>,
+) -> IpcResult<dn_models::hub::SearchPage> {
+    let hub = blocking(&state, |s| crate::hub::client(&s.keys)).await?;
+    crate::hub::search(&hub, &text, sort, cursor.as_deref()).await
+}
+
+#[tauri::command]
+pub async fn hub_repo(state: AppStateRef<'_>, repo: String) -> IpcResult<crate::hub::RepoView> {
+    let hub = blocking(&state, |s| crate::hub::client(&s.keys)).await?;
+    let local = local_models(&state)?;
+    crate::hub::repo(&hub, &local, &repo).await
+}
+
+/// Downloads one quantisation (verified, resumable) and lists it as a local model.
+#[tauri::command]
+pub async fn hub_pull(
+    state: AppStateRef<'_>,
+    repo: String,
+    sha: String,
+    variant: String,
+    on_event: Channel<crate::hub::PullEvent>,
+) -> IpcResult<String> {
+    let hub = blocking(&state, |s| crate::hub::client(&s.keys)).await?;
+    let local = local_models(&state)?;
+    crate::hub::pull(hub, local, &state.hub_pulls, repo, sha, variant, move |p| {
+        let _ = on_event.send(crate::hub::PullEvent::Progress(p));
+    })
+    .await
+}
+
+/// Stops a running download; the partial file stays and a new download resumes it.
+#[tauri::command]
+pub async fn hub_cancel(
+    state: AppStateRef<'_>,
+    repo: String,
+    sha: String,
+    variant: String,
+) -> IpcResult<bool> {
+    Ok(state
+        .hub_pulls
+        .cancel(&crate::hub::pull_key(&repo, &sha, &variant)))
+}
+
+/// Whether a Hugging Face token is saved (never the token itself).
+#[tauri::command]
+pub async fn hf_token_status(state: AppStateRef<'_>) -> IpcResult<bool> {
+    blocking(&state, |s| {
+        Ok(s.keys.has(dn_models::hub::HF_TOKEN_SECRET)?)
+    })
+    .await
+}
+
+/// Saves the Hugging Face token (for gated models) in the system keychain.
+#[tauri::command]
+pub async fn set_hf_token(state: AppStateRef<'_>, token: String) -> IpcResult<bool> {
+    let token = token.trim().to_string();
+    if token.is_empty() || token.len() > 512 || token.chars().any(char::is_whitespace) {
+        return Err(IpcError::invalid(
+            "Paste the token as one line without spaces.",
+        ));
+    }
+    blocking(&state, move |s| {
+        s.keys
+            .set(dn_models::hub::HF_TOKEN_SECRET, &Secret::new(token))?;
+        Ok(true)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn delete_hf_token(state: AppStateRef<'_>) -> IpcResult<bool> {
+    blocking(&state, |s| {
+        s.keys.delete(dn_models::hub::HF_TOKEN_SECRET)?;
+        Ok(false)
+    })
+    .await
+}
