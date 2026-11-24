@@ -2,8 +2,12 @@
 
 Real-app tests: WebdriverIO drives the built app through
 [tauri-driver](https://v2.tauri.app/develop/tests/webdriver/), which runs the platform's
-WebDriver (WebKitWebDriver on Linux, msedgedriver on Windows). CI job `e2e` runs them on
-`ubuntu-latest` and `windows-latest`.
+WebDriver (WebKitWebDriver on Linux, msedgedriver on Windows).
+
+- CI job **`e2e`** (required): `ubuntu-latest`, WebKitGTK.
+- CI job **`e2e-windows`** (`continue-on-error`): `windows-latest`, WebView2. It doesn't
+  create a session yet; see [T-SHELL-06](#t-shell-06-windows-webview2-session) below. Its
+  msedgedriver log is uploaded as the `msedgedriver-log` artifact.
 
 ## Scenario (`specs/chat.e2e.mjs`)
 1. Launch, new chat, send. Assert the answer streams (`data-status="streaming"`), completes and quotes the prompt.
@@ -22,6 +26,49 @@ cd apps/desktop/e2e && npm ci && npm test        # Linux headless: xvfb-run -a n
 ```
 - Linux needs `webkitgtk-webdriver` (Ubuntu 24.04+; `webkit2gtk-driver` on older releases).
 - Windows needs an msedgedriver whose major version matches the installed WebView2 runtime; set `MSEDGEDRIVER=<path>`.
+
+## T-SHELL-06: Windows WebView2 session
+**Symptom.** Every `POST /session` fails with `session not created: DevToolsActivePort file
+doesn't exist` (4 retries, 60 s each). Seen on `windows-latest` with WebView2 runtime
+157.0.4341.46 and msedgedriver 157.0.4341.60 (runner copy, same major).
+
+**Ruled out**
+- *App crashes at start:* launched directly, it is still running after 8 s, with no output
+  and no panic.
+- *Driver/runtime mismatch:* same major version. The job also downloads the exact runtime
+  version from Microsoft when the majors differ.
+- *App pre-started:* the driver launches it. msedgedriver's log shows
+  `Launching Microsoft Edge: "…\target\debug\demios-desktop.exe"` with `browserName:
+  webview2` and `binary` set by tauri-driver.
+- *Linux-specific setup:* the same suite, binary features and data-dir env pass on Linux.
+
+**What the verbose msedgedriver log shows.** It sets
+`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` (including `--remote-debugging-port=0` and
+`--enable-automation`, with no `--user-data-dir`), launches the binary, waits 60 s, then logs
+`Failed to connect to msedge`. So the WebView2 browser process never reports a DevTools port
+where the driver looks for it.
+
+**Hypotheses, most likely first**
+1. *User-data folder mismatch.* msedgedriver points WebView2 at its own temp profile
+   (probably via `WEBVIEW2_USER_DATA_FOLDER`) and reads `DevToolsActivePort` from there.
+   Tauri passes its own data directory (`…\io.demios.desktop\EBWebView`) through the
+   WebView2 API, which may win, so the file is written elsewhere.
+   Try: in e2e builds (`fake_model`), if `WEBVIEW2_USER_DATA_FOLDER` is set, create the
+   main window in `setup` with `.data_directory(that)` (window config `create: false`).
+   Or list `%LOCALAPPDATA%\io.demios.desktop\EBWebView` after a failed run to see
+   whether a `DevToolsActivePort` file landed there.
+2. *Browser-args precedence.* wry/Tauri pass their own `AdditionalBrowserArguments`
+   (`--disable-features=msWebOOUI,…`). If the API value replaces the env var on this runtime,
+   `--remote-debugging-port` never arrives. Try: window config `additionalBrowserArgs`
+   that includes the env var's content, or set `browserArgs` from the env in e2e builds.
+3. *Port vs pipe.* The log suggests `--remote-debugging-pipe`; not controllable through
+   tauri-driver 2.0.6. Try tauri-driver 3.x when it is stable.
+4. *Alternative driver.* `tauri-plugin-wdio-webdriver` (an embedded WebDriver, no
+   msedgedriver) would avoid the handshake. It is a new dependency, so it needs the lead's
+   OK.
+
+Done-check for T-SHELL-06: `e2e-windows` green three runs in a row, then drop
+`continue-on-error` and make it required.
 
 ## macOS: manual release checklist
 macOS has no WebDriver for WKWebView, so run this before every release, on a signed build where possible.
