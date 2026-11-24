@@ -4,6 +4,7 @@ import {
   messageText,
   type ApprovalDecision,
   type ApprovalPrompt,
+  type ArtifactType,
   type Id,
   type ModelCatalog,
   type StoredMessage,
@@ -12,7 +13,9 @@ import {
 import { AI_DISCLOSURE, AI_FIRST_RUN_NOTICE } from "../ai";
 import { describeModel } from "../models";
 import { mod } from "../platform";
+import { withoutArtifactBlocks } from "../fenced";
 import { canRegenerate, type ChatState, type LiveToolCall } from "../state/chat";
+import { ArtifactCard } from "./ArtifactPane";
 import { Markdown } from "./Markdown";
 import { ModelBadge } from "./ModelBadge";
 import { Button, ICON, IconButton, InlineMessage, Skeleton } from "./primitives";
@@ -41,6 +44,9 @@ interface Props {
   /** Tool writes of this conversation whose outcome is unknown. */
   unknowns: UnknownOutcome[];
   onResolveUnknown: (key: string, happened: boolean) => Promise<void>;
+  /** Artifacts each assistant message made (by message id), for the artifact cards. */
+  artifactCards: Record<Id, ArtifactCardInfo[]>;
+  onOpenArtifact: (id: Id) => void;
   /** Show the first-run AI notice (T-STORE-09). */
   aiNotice?: boolean;
   onDismissAiNotice?: () => void;
@@ -48,6 +54,14 @@ interface Props {
   onReportAnswer?: (messageId: Id) => void;
   /** A link in an answer was clicked. */
   onOpenLink?: (href: string) => void;
+}
+
+/** One artifact a message created or changed: its latest version from that message. */
+export interface ArtifactCardInfo {
+  id: Id;
+  title: string;
+  type: ArtifactType;
+  version: number;
 }
 
 interface ToolResult {
@@ -185,6 +199,8 @@ export function ChatView(p: Props) {
                   onOpenLink={p.onOpenLink}
                   live={p.state.tools[m.id] ?? []}
                   results={results}
+                  artifacts={p.artifactCards[m.id] ?? []}
+                  onOpenArtifact={p.onOpenArtifact}
                 />
               ))}
           {p.approvals.map((a) => (
@@ -281,6 +297,8 @@ function Message({
   onOpenLink,
   live,
   results,
+  artifacts,
+  onOpenArtifact,
 }: {
   m: StoredMessage;
   catalog: ModelCatalog | null;
@@ -292,9 +310,11 @@ function Message({
   onOpenLink?: ((href: string) => void) | undefined;
   live: LiveToolCall[];
   results: Map<string, ToolResult>;
+  artifacts: ArtifactCardInfo[];
+  onOpenArtifact: (id: Id) => void;
 }) {
   const toast = useToast();
-  const text = messageText(m);
+  const raw = messageText(m);
   // Stored calls (after the run) or live ones (while streaming).
   const calls =
     m.tool_calls.length > 0
@@ -308,6 +328,11 @@ function Message({
           summary: results.get(c.id)?.text ?? "",
         }))
       : live;
+  // Artifact tool calls that worked are shown as artifact cards instead of tool cards.
+  const shownCalls = calls.filter((c) => !(c.name.startsWith("artifact_") && c.status === "done"));
+  const usedArtifactTools = calls.some((c) => c.name.startsWith("artifact_"));
+  // A tool-less model's saved `<artifact>` blocks are shown as cards, not as raw text.
+  const text = artifacts.length > 0 && !usedArtifactTools ? withoutArtifactBlocks(raw) : raw;
   if (m.role === "user") {
     return (
       <article className="msg msg-user" aria-label="You" data-testid="message-user">
@@ -336,7 +361,10 @@ function Message({
           </div>
         )
       )}
-      {calls.map((c) => (
+      {artifacts.map((a) => (
+        <ArtifactCard key={a.id} title={a.title} type={a.type} version={a.version} onOpen={() => onOpenArtifact(a.id)} />
+      ))}
+      {shownCalls.map((c) => (
         <ToolCallCard
           key={c.call_id}
           name={c.name}

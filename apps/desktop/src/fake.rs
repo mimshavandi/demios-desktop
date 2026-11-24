@@ -3,7 +3,8 @@
 //! build.rs); always compiled for tests.
 
 use dn_core::chat::{
-    ChatModel, ChatRequest, ContentPart, EventStream, FinishReason, Role, StreamEvent, Usage,
+    ChatModel, ChatRequest, ContentPart, EventStream, FinishReason, Role, StreamEvent, ToolCall,
+    Usage,
 };
 use std::collections::VecDeque;
 use std::future::Future as _;
@@ -36,22 +37,96 @@ impl Default for FakeChatModel {
     }
 }
 
+/// First line of the HTML artifact the fake makes ("make an HTML artifact"), then the
+/// update it applies ("update the artifact"). The e2e suite checks for these strings.
+pub const FAKE_ARTIFACT_V1: &str = "Version one";
+pub const FAKE_ARTIFACT_V2: &str = "Version two";
+
+fn text_of(m: &dn_core::chat::ChatMessage) -> String {
+    m.content
+        .iter()
+        .filter_map(|p| match p {
+            ContentPart::Text { text } => Some(text.as_str()),
+            ContentPart::Image { .. } => None,
+        })
+        .collect()
+}
+
 impl FakeChatModel {
+    /// What the fake does for `req`: a tool call (artifacts, when the tool is offered) or
+    /// the canned text reply.
+    pub fn plan(req: &ChatRequest) -> (String, Option<ToolCall>) {
+        let offered = |name: &str| req.tools.iter().any(|t| t.name == name);
+        let last = req.messages.last();
+        if let Some(m) = last.filter(|m| m.role == Role::Tool) {
+            let ok = text_of(m).contains("\"ok\":true");
+            return (
+                if ok {
+                    "Done. The artifact is open next to the chat.".into()
+                } else {
+                    "That didn't work; the tool reported an error.".into()
+                },
+                None,
+            );
+        }
+        let user = req
+            .messages
+            .iter()
+            .rev()
+            .find(|m| m.role == Role::User)
+            .map(text_of)
+            .unwrap_or_default()
+            .to_lowercase();
+        if user.contains("update the artifact") && offered("artifact_update") {
+            // The id comes from the latest successful artifact tool result in the history.
+            let id = req.messages.iter().rev().find_map(|m| {
+                (m.role == Role::Tool)
+                    .then(|| serde_json::from_str::<serde_json::Value>(&text_of(m)).ok())
+                    .flatten()
+                    .and_then(|v| v.get("id").and_then(|i| i.as_str()).map(String::from))
+            });
+            if let Some(id) = id {
+                return (
+                    "Updating the artifact.".into(),
+                    Some(ToolCall {
+                        id: "fake_update".into(),
+                        name: "artifact_update".into(),
+                        arguments: serde_json::json!({
+                            "id": id,
+                            "old_str": FAKE_ARTIFACT_V1,
+                            "new_str": FAKE_ARTIFACT_V2,
+                        }),
+                    }),
+                );
+            }
+        }
+        if user.contains("html artifact") && offered("artifact_create") {
+            let content = format!(
+                "<!doctype html>\n<html><head><title>Fake artifact</title></head>\n<body>\n<h1 data-testid=\"fake-artifact-heading\">{FAKE_ARTIFACT_V1}</h1>\n<p>Made by the dev fake model.</p>\n</body></html>\n"
+            );
+            return (
+                "Making an HTML artifact.".into(),
+                Some(ToolCall {
+                    id: "fake_create".into(),
+                    name: "artifact_create".into(),
+                    arguments: serde_json::json!({
+                        "type": "html",
+                        "title": "Fake artifact",
+                        "content": content,
+                    }),
+                }),
+            );
+        }
+        (Self::reply_for(req), None)
+    }
+
     pub fn reply_for(req: &ChatRequest) -> String {
         let last_user = req
             .messages
             .iter()
             .rev()
             .find(|m| m.role == Role::User)
-            .map(|m| {
-                m.content
-                    .iter()
-                    .filter_map(|p| match p {
-                        ContentPart::Text { text } => Some(text.as_str()),
-                        ContentPart::Image { .. } => None,
-                    })
-                    .collect::<String>()
-            })
+            .map(text_of)
             .unwrap_or_default();
         let quoted = last_user
             .lines()
@@ -72,7 +147,7 @@ impl FakeChatModel {
 
 impl ChatModel for FakeChatModel {
     fn chat(&self, req: ChatRequest) -> EventStream {
-        let reply = Self::reply_for(&req);
+        let (reply, tool_call) = Self::plan(&req);
         let mut chunks: VecDeque<String> = VecDeque::new();
         let mut cur = String::new();
         for ch in reply.chars() {
@@ -93,8 +168,10 @@ impl ChatModel for FakeChatModel {
             output_tokens: chunks.len() as u32,
             input_tokens,
             chunks,
+            tool_call,
             delay: self.delay,
             sleep: None,
+            done_reason: FinishReason::Stop,
             done: false,
         })
     }
@@ -102,10 +179,12 @@ impl ChatModel for FakeChatModel {
 
 struct FakeStream {
     chunks: VecDeque<String>,
+    tool_call: Option<ToolCall>,
     delay: Duration,
     sleep: Option<Pin<Box<tokio::time::Sleep>>>,
     input_tokens: u32,
     output_tokens: u32,
+    done_reason: FinishReason,
     done: bool,
 }
 
@@ -126,12 +205,18 @@ impl futures_core::Stream for FakeStream {
             }
             self.sleep = None;
         }
+        if self.chunks.is_empty()
+            && let Some(call) = self.tool_call.take()
+        {
+            self.done_reason = FinishReason::ToolCalls;
+            return Poll::Ready(Some(Ok(StreamEvent::ToolCall { call })));
+        }
         Poll::Ready(Some(Ok(match self.chunks.pop_front() {
             Some(text) => StreamEvent::TextDelta { text },
             None => {
                 self.done = true;
                 StreamEvent::Done {
-                    finish_reason: FinishReason::Stop,
+                    finish_reason: self.done_reason,
                     usage: Usage {
                         input_tokens: self.input_tokens,
                         output_tokens: self.output_tokens,

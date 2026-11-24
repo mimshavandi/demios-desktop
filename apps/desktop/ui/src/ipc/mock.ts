@@ -6,6 +6,7 @@ import type { Api } from "./commands";
 import type {
   ApprovalDecision,
   ApprovalPrompt,
+  ArtifactDetail,
   ChatEvent,
   Conversation,
   ModelCatalog,
@@ -201,6 +202,7 @@ export function createMockApi(): Api {
     key_store: "session only (browser mock)",
     settings,
     chat_model: settings.slots["chat"] ?? "local:dev-fake",
+    chat_model_tools: true,
   });
 
   const stream = (cid: string, a: StoredMessage, q: string, onEvent: (e: ChatEvent) => void) => {
@@ -270,6 +272,45 @@ export function createMockApi(): Api {
     window.setTimeout(() => approvalSink?.({ type: "requested", prompt }), 300);
   };
 
+  // Artifacts: "make an html artifact" creates one, "update the artifact" patches it
+  // (mirrors the Rust dev fake model in apps/desktop/src/fake.rs).
+  const artifacts: ArtifactDetail[] = [];
+  const iso = () => new Date().toISOString();
+  const artifactTurn = (cid: string, a: StoredMessage, q: string, onEvent: (ev: ChatEvent) => void) => {
+    const existing = artifacts.filter((x) => x.conversation_id === cid).at(-1);
+    let text = "Done. The artifact is open next to the chat.";
+    let target: ArtifactDetail | undefined;
+    if (/update the artifact/i.test(q) && existing !== undefined) {
+      const last = existing.versions.at(-1);
+      if (last !== undefined) {
+        existing.versions.push({ ...last, n: last.n + 1, parent_n: last.n, content: last.content.replace("Version one", "Version two"), message_id: a.id, author: "model", model: "local:dev-fake", created_at: iso() });
+      }
+      target = existing;
+    } else {
+      target = {
+        id: id(),
+        conversation_id: cid,
+        artifact_type: { kind: "html" },
+        title: "Fake artifact",
+        versions: [{ n: 1, content: "<!doctype html><html><head><title>Fake</title></head><body><h1>Version one</h1><p>Made by the dev fake model.</p></body></html>", author: "model", parent_n: null, message_id: a.id, created_at: iso(), model: "local:dev-fake" }],
+      };
+      artifacts.push(target);
+    }
+    const v = target.versions.at(-1)?.n ?? 1;
+    a.content = [{ type: "text", text }];
+    a.status = "complete";
+    window.setTimeout(() => {
+      onEvent({ type: "artifact_changed", message_id: a.id, conversation_id: cid, artifact_id: target.id, title: target.title, version: v });
+      onEvent({ type: "text_delta", message_id: a.id, offset: 0, text });
+      onEvent({ type: "done", message_id: a.id, finish_reason: "stop", usage: { input_tokens: 1, output_tokens: 1 }, stop: "completed" });
+    }, 200);
+  };
+  const findArtifact = (cid: string, aid: string): ArtifactDetail => {
+    const x = artifacts.find((y) => y.id === aid && y.conversation_id === cid);
+    if (x === undefined) throw { code: "not_found", message: "That artifact isn't in this chat." };
+    return x;
+  };
+
   return {
     appInfo: async () => ({ version: "0.1.0 (browser mock)", dev_fake_model: true, data_dir: null, models_dir: null }),
     openLink: async (url) => {
@@ -282,6 +323,7 @@ export function createMockApi(): Api {
     },
     localDataSummary: async () => ({
       conversations: convs.filter((c) => !deleted.has(c.id)).length,
+      artifacts: artifacts.length,
       data_dir: null,
       models_dir: null,
       models_bytes: localRows
@@ -331,6 +373,7 @@ export function createMockApi(): Api {
       const a = message(cid, "assistant", "", "streaming");
       msgs.get(cid)?.push(u, a);
       if (/^write\b/i.test(text)) toolTurn(cid, a, text, onEvent);
+      else if (/html artifact|update the artifact/i.test(text)) artifactTurn(cid, a, text, onEvent);
       else stops.set(cid, stream(cid, a, text, onEvent));
       // IPC serialises; hand out copies so the UI never shares objects with the mock.
       return structuredClone({ user_message: u, assistant_message: a, title });
@@ -496,6 +539,18 @@ export function createMockApi(): Api {
       approvalSink?.({ type: "resolved", request_id: requestId, expired: false });
       w.done(decision);
       return null;
+    },
+    listArtifacts: async (cid) =>
+      artifacts
+        .filter((x) => x.conversation_id === cid)
+        .map((x) => ({ id: x.id, conversation_id: cid, artifact_type: x.artifact_type, title: x.title, latest_n: x.versions.at(-1)?.n ?? 0, created_at: x.versions[0]?.created_at ?? iso(), updated_at: x.versions.at(-1)?.created_at ?? iso() })),
+    getArtifact: async (cid, aid) => structuredClone(findArtifact(cid, aid)),
+    rollbackArtifact: async (cid, aid, to) => {
+      const x = findArtifact(cid, aid);
+      const src = x.versions.find((v) => v.n === to);
+      if (src === undefined) throw { code: "not_found", message: `No version ${to}.` };
+      x.versions.push({ ...src, n: x.versions.length + 1, parent_n: to, author: "user", model: null, message_id: null, created_at: iso() });
+      return structuredClone(x);
     },
     listUnknownOutcomes: async () => [...unknown],
     resolveUnknownOutcome: async (key) => {

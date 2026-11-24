@@ -39,3 +39,16 @@ export function chatModelReady(catalog: ModelCatalog | null, devFake: boolean): 
   if (ref === "local:dev-fake") return devFake;
   return catalog?.models.some((m) => m.model_ref === ref && m.available) ?? false;
 }
+
+/** A model's name for "Made by <model>": "Qwen3 8B", "claude-sonnet-5-5 (Anthropic)". */
+export function modelName(ref: string, catalog: ModelCatalog | null): string {
+  const [scheme, a = "", ...rest] = ref.split(":");
+  if (scheme === "local") {
+    return catalog?.models.find((m) => m.model_ref === ref)?.label.replace(/\s*\(.*\)$/, "") ?? a;
+  }
+  if (scheme === "byok" || scheme === "remote") {
+    const provider = catalog?.providers.find((p) => p.id === a)?.name ?? a;
+    return `${rest.join(":")} (${provider})`;
+  }
+  return ref;
+}

@@ -21,6 +21,12 @@ function note(text: string): void {
 const networkAllowed = new Set<string>();
 const view = new ArtifactView(panel, {
   frameUrl,
+  // The desktop app names the model and adds its AI-generated markers (ui/src/ai.ts) here.
+  madeBy: (v) => (v.author === "model" ? "demo model" : null),
+  mark: (a, v) =>
+    v.author === "model" && a.artifact_type.kind === "html"
+      ? v.content.replace(/<head>/i, '<head><meta name="generator" content="Demios (AI-generated with demo model)">')
+      : v.content,
   allowNetwork: (id) => networkAllowed.has(id),
   onAllowNetwork: (id) => {
     networkAllowed.add(id);

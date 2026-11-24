@@ -91,6 +91,7 @@ pub fn migration_sets() -> Vec<MigrationSet> {
     vec![
         MigrationSet::new("app", settings::migrations()),
         MigrationSet::new("tool_ledger", dn_tools::migrations()),
+        MigrationSet::new("artifact", dn_artifacts::migrations()),
     ]
 }
 
@@ -270,6 +271,13 @@ impl AppState {
         store::purge_deleted(&conn, dn_store::now_ms())?;
         // Every purged chat, including ones purged by older builds that kept ledger rows.
         let tombstones = store::list_tombstones(&conn)?;
+        // A purged chat keeps no artifacts either (idempotent: runs on every start).
+        let artifacts = dn_artifacts::ArtifactStore::new(&conn);
+        for (id, _) in &tombstones {
+            if let Err(e) = artifacts.delete_conversation(*id) {
+                eprintln!("could not delete the artifacts of a deleted chat: {e}");
+            }
+        }
 
         let ledger = dn_store::open_connection(path)?;
         match dn_tools::ledger::mark_interrupted(&ledger) {
@@ -623,12 +631,17 @@ impl AppState {
         match self.db() {
             Ok(db) => {
                 let r = store::delete_all(&db).and_then(|()| settings::delete_all(&db));
+                let artifacts = dn_artifacts::ArtifactStore::new(&db).delete_all();
+                if let Err(e) = &artifacts {
+                    eprintln!("could not delete artifacts: {e}");
+                    failed.push("artifacts");
+                }
                 if let Err(e) = r {
                     eprintln!("could not clear the database: {e}");
                     failed.push("chats and settings");
-                } else if let Err(e) =
+                } else if artifacts.is_ok()
                     // Rewrite the file so deleted rows don't linger in free pages or the WAL.
-                    db.execute_batch("VACUUM; PRAGMA wal_checkpoint(TRUNCATE);")
+                    && let Err(e) = db.execute_batch("VACUUM; PRAGMA wal_checkpoint(TRUNCATE);")
                 {
                     // The rows are gone (secure_delete zeroed them); only compaction failed.
                     eprintln!("could not compact the database: {e}");
@@ -1165,6 +1178,13 @@ mod tests {
             let gone = store::create_conversation(&c, "private title").unwrap();
             let kept = store::create_conversation(&c, "kept").unwrap();
             store::delete_conversation(&c, gone.id).unwrap();
+            let arts = dn_artifacts::ArtifactStore::new(&c);
+            let ctx = dn_artifacts::OpContext::model(None);
+            let html = dn_core::artifact::ArtifactType::Html;
+            for conv in [gone.id, kept.id] {
+                arts.create(conv, &html, "Page", "<p>x</p>", None, &ctx)
+                    .unwrap();
+            }
             let l = dn_store::open_connection(&path).unwrap();
             let args = serde_json::json!({});
             for (key, conv) in [("done", gone.id), ("unk", gone.id), ("live", kept.id)] {
@@ -1200,6 +1220,12 @@ mod tests {
                 let db = st.db().unwrap();
                 assert!(store::is_purged(&db, &gone.id.to_string()).unwrap());
                 assert!(store::get_conversation(&db, kept.id).is_ok());
+                let arts = dn_artifacts::ArtifactStore::new(&db);
+                assert!(
+                    arts.list(gone.id).unwrap().is_empty(),
+                    "a purged chat's artifacts go"
+                );
+                assert_eq!(arts.list(kept.id).unwrap().len(), 1);
                 let titles: i64 = db
                     .query_row(
                         "SELECT COUNT(*) FROM store_conversations WHERE title = 'private title'",
@@ -1227,6 +1253,16 @@ mod tests {
         st.executor = Some(Arc::clone(&exec));
 
         let c = st.create_conversation().unwrap();
+        dn_artifacts::ArtifactStore::new(&st.db().unwrap())
+            .create(
+                c.id,
+                &dn_core::artifact::ArtifactType::Html,
+                "Page",
+                "<p>x</p>",
+                None,
+                &dn_artifacts::OpContext::model(None),
+            )
+            .unwrap();
         let mut settings = st.settings().unwrap();
         settings
             .slots
@@ -1270,6 +1306,13 @@ mod tests {
                 .is_empty()
         );
         assert!(store::get_conversation(&st.db().unwrap(), c.id).is_err());
+        assert_eq!(
+            dn_artifacts::ArtifactStore::new(&st.db().unwrap())
+                .counts()
+                .unwrap(),
+            (0, 0),
+            "artifacts are deleted too"
+        );
         assert_eq!(st.settings().unwrap(), Settings::default());
         assert!(!keys.has("openai").unwrap());
         assert!(!keys.has(HF_TOKEN_PROVIDER_ID).unwrap());

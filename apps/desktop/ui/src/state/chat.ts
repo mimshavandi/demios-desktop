@@ -64,6 +64,9 @@ function applyEvent(m: StoredMessage, ev: ChatEvent): StoredMessage {
       };
     case "error":
       return { ...m, status: "error", finish_reason: "error", error: ev.message };
+    case "artifact_changed":
+    case "artifact_not_saved":
+      return m;
   }
 }
 

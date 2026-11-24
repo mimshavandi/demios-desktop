@@ -30,12 +30,16 @@
       ],
       "@dn-tokens/*": [
         "../../ui/design-tokens/*"
+      ],
+      "@dn-artifacts": [
+        "../../ui/artifact-sandbox/src/index.ts"
       ]
     }
   },
   "include": [
     "ui/src",
     "vite.config.ts",
-    "../../crates/dn-core/bindings"
+    "../../crates/dn-core/bindings",
+    "../../ui/artifact-sandbox/src/runtime-modules.d.ts"
   ]
 }

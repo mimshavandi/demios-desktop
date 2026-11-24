@@ -18,6 +18,9 @@ use std::sync::{Arc, Mutex};
 #[derive(Default)]
 pub struct ModelRegistry {
     fixed: HashMap<String, Arc<dyn ChatModel>>,
+    /// Fixed models that can't make tool calls: they get artifacts through the fenced
+    /// `<artifact>` format instead of the `artifact_*` tools (ADR-0004).
+    no_tools: std::collections::HashSet<String>,
     providers: Mutex<Providers>,
     /// Catalogue models on this device (llama.cpp); `None` in tests that don't need them.
     pub local: Option<Arc<crate::local::LocalModels>>,
@@ -44,9 +47,33 @@ impl ModelRegistry {
         r
     }
 
-    /// Registers a fixed backend (dev fake, tests).
+    /// Registers a fixed backend that supports tool calls (dev fake, tests).
     pub fn register(&mut self, model: ModelRef, backend: Arc<dyn ChatModel>) {
+        self.no_tools.remove(&model.to_string());
         self.fixed.insert(model.to_string(), backend);
+    }
+
+    /// Registers a fixed backend that can't make tool calls.
+    pub fn register_without_tools(&mut self, model: ModelRef, backend: Arc<dyn ChatModel>) {
+        self.no_tools.insert(model.to_string());
+        self.fixed.insert(model.to_string(), backend);
+    }
+
+    /// Whether `model` can make tool calls. Decides how the model gets artifacts: the
+    /// `artifact_*` tools when true, the fenced `<artifact>` format otherwise (never both).
+    /// BYOK providers all support tool calling (`dn_providers` reports `tools` for every chat
+    /// model), and so does the llama.cpp backend; anything else is treated as tool-less.
+    pub fn supports_tools(&self, model: &ModelRef) -> bool {
+        let key = model.to_string();
+        if self.fixed.contains_key(&key) {
+            return !self.no_tools.contains(&key);
+        }
+        match model {
+            ModelRef::Byok { .. } => true,
+            // The llama.cpp backend reports tool calling for every chat model it loads.
+            ModelRef::Local { .. } => self.local.as_ref().is_some_and(|l| l.tool_calls()),
+            ModelRef::Remote { .. } => false,
+        }
     }
 
     pub fn contains_fixed(&self, model: &str) -> bool {
@@ -282,6 +309,8 @@ pub struct ModelCatalog {
     /// The model chat uses now (the user's choice, or the one picked automatically when no
     /// chat model is chosen); `None` if nothing is usable.
     pub chat_model: Option<String>,
+    /// Whether `chat_model` makes tool calls (artifacts through tools, not the fenced format).
+    pub chat_model_tools: bool,
 }
 
 pub fn catalog(registry: &ModelRegistry, keys: &Keys, settings: &Settings) -> ModelCatalog {
@@ -345,6 +374,7 @@ pub fn catalog(registry: &ModelRegistry, keys: &Keys, settings: &Settings) -> Mo
         key_store: keys.description.into(),
         settings: settings.clone(),
         chat_model: None,
+        chat_model_tools: false,
     }
 }
 

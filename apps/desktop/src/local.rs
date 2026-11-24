@@ -712,6 +712,11 @@ impl<B: InferenceBackend> LocalModels<B> {
             .collect()
     }
 
+    /// Whether this backend emits tool calls (decides the artifact protocol, T-ART-06).
+    pub fn tool_calls(&self) -> bool {
+        self.backend.capabilities().tool_calls
+    }
+
     /// The catalogue followed by the external models.
     pub fn entries(&self) -> Vec<CatalogEntry> {
         let mut v = self.catalog.models.clone();

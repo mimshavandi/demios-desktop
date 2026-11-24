@@ -5,6 +5,8 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
   AppInfo,
   ApprovalDecision,
+  ArtifactDetail,
+  ArtifactSummary,
   LocalModelEvent,
   LocalModelRow,
   ToolEvent,
@@ -70,6 +72,12 @@ interface Commands {
   respond_approval: { args: { requestId: Id; decision: ApprovalDecision }; ret: null };
   list_unknown_outcomes: { args: { conversationId: Id | null }; ret: UnknownOutcome[] };
   resolve_unknown_outcome: { args: { key: string; happened: boolean }; ret: null };
+  list_artifacts: { args: { conversationId: Id }; ret: ArtifactSummary[] };
+  get_artifact: { args: { conversationId: Id; artifactId: Id }; ret: ArtifactDetail };
+  rollback_artifact: {
+    args: { conversationId: Id; artifactId: Id; toVersion: number };
+    ret: ArtifactDetail;
+  };
   watch_local_models: { args: { onEvent: Channel<LocalModelEvent> }; ret: LocalModelRow[] };
   download_model: { args: { modelId: string }; ret: null };
   pause_download: { args: { modelId: string }; ret: null };
@@ -148,6 +156,11 @@ export const api = {
     call("list_unknown_outcomes", { conversationId }),
   resolveUnknownOutcome: (key: string, happened: boolean) =>
     call("resolve_unknown_outcome", { key, happened }),
+  listArtifacts: (conversationId: Id) => call("list_artifacts", { conversationId }),
+  getArtifact: (conversationId: Id, artifactId: Id) =>
+    call("get_artifact", { conversationId, artifactId }),
+  rollbackArtifact: (conversationId: Id, artifactId: Id, toVersion: number) =>
+    call("rollback_artifact", { conversationId, artifactId, toVersion }),
   watchLocalModels: (onEvent: (ev: LocalModelEvent) => void) =>
     call("watch_local_models", { onEvent: channel(onEvent) }),
   downloadModel: (modelId: string) => call("download_model", { modelId }),
