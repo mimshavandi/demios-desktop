@@ -126,3 +126,15 @@ pub enum StreamEvent {
         usage: Usage,
     },
 }
+
+/// Stream of events for one chat call.
+pub type EventStream = std::pin::Pin<
+    Box<dyn futures_core::Stream<Item = Result<StreamEvent, crate::CoreError>> + Send>,
+>;
+
+/// Anything that can answer a [`ChatRequest`]: a local backend (`dn-inference`) or a
+/// remote/BYOK provider (`dn-providers`). The agent loop (`dn-agent`) only sees this trait.
+/// Dropping the stream cancels the call.
+pub trait ChatModel: Send + Sync {
+    fn chat(&self, req: ChatRequest) -> EventStream;
+}

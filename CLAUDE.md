@@ -10,3 +10,6 @@ Guidance for Claude Code sessions in demios-desktop.
 - Gates before every PR: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`.
 - Never copy code or text from the private Demios repo; port contracts and cite `demios@<sha>:<path>` in the PR body.
 - Don't add dependencies outside D-012 without asking the lead; record every one in `docs/dependencies.md`.
+- Persistence: crates that store data use `rusqlite` against a `&rusqlite::Connection` the app passes in, and export `pub fn migrations() -> &'static [&'static str]` (their own tables, prefixed by crate, e.g. `artifact_`, `tool_ledger_`). `dn-store` composes and runs them. Don't reach into another crate's tables.
+- Chat: local backends and providers implement `dn_core::chat::ChatModel`; the agent loop only uses that trait.
+- Shared files (`Cargo.toml` workspace deps, `docs/dependencies.md`) will conflict between workers: rebase on `main` before opening a PR and keep edits to them minimal.
