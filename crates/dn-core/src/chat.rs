@@ -5,6 +5,7 @@ use crate::model::ModelRef;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum Role {
     System,
@@ -14,6 +15,7 @@ pub enum Role {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentPart {
     Text {
@@ -27,13 +29,16 @@ pub enum ContentPart {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ToolCall {
     pub id: String,
     pub name: String,
+    #[cfg_attr(feature = "ts", ts(type = "unknown"))]
     pub arguments: serde_json::Value,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ChatMessage {
     pub role: Role,
     pub content: Vec<ContentPart>,
@@ -56,14 +61,17 @@ impl ChatMessage {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ToolSpec {
     pub name: String,
     pub description: String,
+    #[cfg_attr(feature = "ts", ts(type = "unknown"))]
     pub input_schema: serde_json::Value,
 }
 
 /// Whether the model should think before answering (port of Demios's caller-tagged policy).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum Reasoning {
     /// Decide from `caller` (prose-for-the-user callers keep thinking on).
@@ -74,7 +82,9 @@ pub enum Reasoning {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ChatRequest {
+    #[cfg_attr(feature = "ts", ts(type = "string"))]
     pub model: ModelRef,
     pub messages: Vec<ChatMessage>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -85,6 +95,7 @@ pub struct ChatRequest {
     pub temperature: Option<f32>,
     /// JSON Schema the output must satisfy (constrained decoding where supported).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(type = "unknown"))]
     pub response_schema: Option<serde_json::Value>,
     #[serde(default)]
     pub reasoning: Reasoning,
@@ -93,6 +104,7 @@ pub struct ChatRequest {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum FinishReason {
     Stop,
@@ -103,6 +115,7 @@ pub enum FinishReason {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Usage {
     pub input_tokens: u32,
     pub output_tokens: u32,
@@ -110,6 +123,7 @@ pub struct Usage {
 
 /// One item of a streamed response.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StreamEvent {
     TextDelta {
