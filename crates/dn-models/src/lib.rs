@@ -12,6 +12,7 @@ pub mod download;
 pub mod fit;
 pub mod gguf;
 pub mod hub;
+pub mod link;
 #[cfg(test)]
 mod testserver;
 
