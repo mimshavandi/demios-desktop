@@ -16,11 +16,14 @@ serde_json = "1"
 thiserror = "2"
 uuid = { version = "1", features = ["v7", "serde"] }
 futures-core = "0.3"
+zeroize = "1"
 tokio = { version = "1", default-features = false }
 # Maintained fork of the archived serde_yaml (D-012 allows "serde_yaml or a maintained successor").
 serde_yaml_ng = "0.10"
 # No remote/file $ref resolution: schemas are bundled.
 jsonschema = { version = "0.63", default-features = false }
+# Pure-Rust backends only (no libdbus/openssl): Keychain, Credential Manager, Secret Service via zbus.
+keyring = { version = "3.6", features = ["apple-native", "windows-native", "async-secret-service", "tokio", "crypto-rust"] }
 ts-rs = { version = "12", default-features = false, features = ["serde-compat", "no-serde-warnings"] }
 dn-core = { path = "crates/dn-core", version = "0.1.0" }
 rusqlite = { version = "0.43", features = ["bundled"] }
