@@ -104,7 +104,9 @@ impl InferenceBackend for OpenAiCompatBackend {
         if let Some(k) = api_key {
             cfg = cfg.with_key(k.clone().into());
         }
-        let provider = dn_providers::build(cfg).map_err(provider_err)?;
+        // Which local server this is decides how thinking is switched on/off (T-PRV-04).
+        let family = dn_providers::detect_server_family(&cfg).await;
+        let provider = dn_providers::build(cfg.with_server_family(family)).map_err(provider_err)?;
         self.endpoints
             .lock()
             .map_err(|_| InferenceError::Runtime("endpoint table poisoned".into()))?
@@ -201,40 +203,49 @@ mod tests {
     use dn_core::chat::{ChatMessage, ChatModel, Role, StreamEvent};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    /// One-shot SSE server answering "hi" and recording the request body.
+    /// SSE server answering "hi" to the chat request (recorded); other requests (the
+    /// server-family probes on load) get a 404.
     async fn server() -> (String, tokio::task::JoinHandle<String>) {
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}/v1", l.local_addr().unwrap());
         let task = tokio::spawn(async move {
-            let (mut s, _) = l.accept().await.unwrap();
-            let mut buf = vec![0u8; 16384];
-            let mut req = String::new();
             loop {
-                let n = s.read(&mut buf).await.unwrap();
-                req.push_str(&String::from_utf8_lossy(&buf[..n]));
-                if let Some(i) = req.find("\r\n\r\n") {
-                    let len: usize = req[..i]
-                        .lines()
-                        .find_map(|l| {
-                            l.to_ascii_lowercase()
-                                .strip_prefix("content-length:")
-                                .map(|v| v.trim().parse().unwrap())
-                        })
-                        .unwrap_or(0);
-                    if req.len() >= i + 4 + len {
-                        break;
+                let (mut s, _) = l.accept().await.unwrap();
+                let mut buf = vec![0u8; 16384];
+                let mut req = String::new();
+                loop {
+                    let n = s.read(&mut buf).await.unwrap();
+                    req.push_str(&String::from_utf8_lossy(&buf[..n]));
+                    if let Some(i) = req.find("\r\n\r\n") {
+                        let len: usize = req[..i]
+                            .lines()
+                            .find_map(|l| {
+                                l.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .map(|v| v.trim().parse().unwrap())
+                            })
+                            .unwrap_or(0);
+                        if req.len() >= i + 4 + len {
+                            break;
+                        }
                     }
                 }
-            }
-            let body = "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n\
+                if !req.contains("/chat/completions") {
+                    let _ = s
+                    .write_all(b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")
+                    .await;
+                    continue;
+                }
+                let body = "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n\
                         data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n\
                         data: [DONE]\n\n";
-            let resp = format!(
-                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\n\r\n{body}",
-                body.len()
-            );
-            s.write_all(resp.as_bytes()).await.unwrap();
-            req
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\n\r\n{body}",
+                    body.len()
+                );
+                s.write_all(resp.as_bytes()).await.unwrap();
+                return req;
+            }
         });
         (url, task)
     }

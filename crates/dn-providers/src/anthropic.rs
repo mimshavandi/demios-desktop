@@ -149,7 +149,7 @@ async fn run(inner: Arc<Inner>, req: ChatRequest, tx: Emit) {
         let mut finish = FinishReason::Stop;
         let mut any_call = false;
         let mut stopped = false;
-        let mut sse = http::SseReader::new(&id, resp);
+        let mut sse = http::SseReader::new(&id, resp, &inner.cfg);
         while let Some(ev) = sse.next().await? {
             let v: Value = serde_json::from_str(&ev.data).map_err(|e| bad_response(&id, e))?;
             match v["type"].as_str().unwrap_or(ev.event.as_str()) {

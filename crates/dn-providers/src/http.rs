@@ -262,6 +262,25 @@ pub(crate) fn truncated(provider_id: &str, missing: &str) -> CoreError {
     )
 }
 
+/// The stream went silent for longer than its timeout.
+pub(crate) fn stalled(provider_id: &str, after: std::time::Duration, started: bool) -> CoreError {
+    unavailable(
+        format!("{provider_id} stopped responding. Try again."),
+        format!(
+            "{provider_id}: no data for {:.0?} {}",
+            after,
+            if started {
+                "mid-stream (idle timeout)"
+            } else {
+                "before the first byte (first-byte timeout)"
+            }
+        ),
+        vec![RecoveryAction::Retry {
+            after_seconds: None,
+        }],
+    )
+}
+
 pub(crate) fn bad_response(provider_id: &str, detail: impl std::fmt::Display) -> CoreError {
     unavailable(
         format!("{provider_id} sent a response we couldn't read."),
@@ -270,23 +289,30 @@ pub(crate) fn bad_response(provider_id: &str, detail: impl std::fmt::Display) ->
     )
 }
 
-/// Pull-based SSE reader over a streaming HTTP body.
+/// Pull-based SSE reader over a streaming HTTP body, with a first-byte and an idle timeout
+/// (any bytes count as activity, including SSE comments/keep-alives).
 pub(crate) struct SseReader<'a> {
     provider_id: &'a str,
     resp: reqwest::Response,
     dec: SseDecoder,
     pending: std::collections::VecDeque<SseEvent>,
     eof: bool,
+    first_byte: std::time::Duration,
+    idle: std::time::Duration,
+    got_bytes: bool,
 }
 
 impl<'a> SseReader<'a> {
-    pub fn new(provider_id: &'a str, resp: reqwest::Response) -> Self {
+    pub fn new(provider_id: &'a str, resp: reqwest::Response, cfg: &crate::ProviderConfig) -> Self {
         Self {
             provider_id,
             resp,
             dec: SseDecoder::new(),
             pending: Default::default(),
             eof: false,
+            first_byte: cfg.first_byte_timeout,
+            idle: cfg.idle_timeout,
+            got_bytes: false,
         }
     }
 
@@ -298,13 +324,20 @@ impl<'a> SseReader<'a> {
             if self.eof {
                 return Ok(None);
             }
-            match self
-                .resp
-                .chunk()
+            let wait = if self.got_bytes {
+                self.idle
+            } else {
+                self.first_byte
+            };
+            let chunk = tokio::time::timeout(wait, self.resp.chunk())
                 .await
-                .map_err(|e| network_error(self.provider_id, &e))?
-            {
-                Some(chunk) => self.pending.extend(self.dec.feed(&chunk)),
+                .map_err(|_| stalled(self.provider_id, wait, self.got_bytes))?
+                .map_err(|e| network_error(self.provider_id, &e))?;
+            match chunk {
+                Some(chunk) => {
+                    self.got_bytes = true;
+                    self.pending.extend(self.dec.feed(&chunk));
+                }
                 None => {
                     self.eof = true;
                     self.pending.extend(self.dec.finish());

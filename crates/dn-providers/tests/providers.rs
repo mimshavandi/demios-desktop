@@ -816,3 +816,198 @@ async fn reasoning_on_with_schema_does_not_think() {
         0
     );
 }
+
+// ---------- Stream timeouts (T-PRV-04) ----------
+
+fn compat(srv: &common::Server) -> ProviderConfig {
+    ProviderConfig::new("local", ProviderKind::OpenAiCompatible).with_base_url(&srv.base)
+}
+
+fn retryable_unavailable(e: &CoreError, needle: &str) {
+    match e {
+        CoreError::ModelUnavailable {
+            developer_message,
+            recovery,
+            ..
+        } => {
+            assert!(developer_message.contains(needle), "{developer_message}");
+            assert!(
+                recovery
+                    .iter()
+                    .any(|r| matches!(r, RecoveryAction::Retry { .. })),
+                "{recovery:?}"
+            );
+        }
+        other => panic!("expected ModelUnavailable, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn stream_that_goes_silent_ends_with_retryable_error() {
+    use std::time::Duration;
+    let mut r = Reply::sse("openai_compat/reasoning_text.sse");
+    // Two events, then silence forever.
+    r.gate = Some(Arc::new(tokio::sync::Notify::new()));
+    let srv = serve(vec![r]).await;
+    let p = build(
+        compat(&srv).with_stream_timeouts(Duration::from_secs(5), Duration::from_millis(200)),
+    )
+    .unwrap();
+    let t0 = std::time::Instant::now();
+    let err = collect(&*p, request("remote:local:qwen3:8b", "chat.reply"))
+        .await
+        .unwrap_err();
+    retryable_unavailable(&err, "idle timeout");
+    assert!(t0.elapsed() < Duration::from_secs(3));
+}
+
+#[tokio::test]
+async fn no_first_byte_within_first_byte_timeout_is_retryable() {
+    use std::time::Duration;
+    let mut r = Reply::sse("openai_compat/reasoning_text.sse");
+    r.hold = Some(Duration::from_secs(5));
+    let srv = serve(vec![r]).await;
+    let p = build(
+        compat(&srv).with_stream_timeouts(Duration::from_millis(200), Duration::from_secs(5)),
+    )
+    .unwrap();
+    let err = collect(&*p, request("remote:local:qwen3:8b", "chat.reply"))
+        .await
+        .unwrap_err();
+    retryable_unavailable(&err, "first-byte timeout");
+}
+
+#[tokio::test]
+async fn slow_first_token_is_allowed_longer_than_idle() {
+    use std::time::Duration;
+    // A reasoning model that thinks for 400 ms before its first byte: fine with a 2 s
+    // first-byte allowance even though the idle timeout is only 100 ms.
+    let mut r = Reply::sse("openai_compat/reasoning_text.sse");
+    r.hold = Some(Duration::from_millis(400));
+    let srv = serve(vec![r]).await;
+    let p = build(
+        compat(&srv).with_stream_timeouts(Duration::from_secs(2), Duration::from_millis(100)),
+    )
+    .unwrap();
+    let evs = collect(&*p, request("remote:local:qwen3:8b", "chat.reply"))
+        .await
+        .unwrap();
+    assert_eq!(text(&evs), "Hi there!");
+}
+
+// ---------- Thinking switch per local server family (T-PRV-04) ----------
+
+async fn body_sent(family: dn_providers::ServerFamily, caller: &str) -> serde_json::Value {
+    let srv = serve(vec![Reply::sse("openai_compat/reasoning_text.sse")]).await;
+    let p = build(compat(&srv).with_server_family(family)).unwrap();
+    collect(&*p, request("remote:local:qwen3:8b", caller))
+        .await
+        .unwrap();
+    srv.requests()[0].body.clone()
+}
+
+#[tokio::test]
+async fn thinking_switch_follows_policy_per_server_family() {
+    use dn_providers::ServerFamily::*;
+    // `chat.reply` is a prose caller (thinking on under Auto); `extract.fields` is not.
+    for fam in [LlamaCpp, Vllm] {
+        let on = body_sent(fam, "chat.reply").await;
+        assert_eq!(
+            on["chat_template_kwargs"],
+            json!({"enable_thinking": true}),
+            "{fam:?}"
+        );
+        assert!(on.get("reasoning_effort").is_none() && on.get("think").is_none());
+        let off = body_sent(fam, "extract.fields").await;
+        assert_eq!(
+            off["chat_template_kwargs"],
+            json!({"enable_thinking": false}),
+            "{fam:?}"
+        );
+    }
+    let on = body_sent(Ollama, "chat.reply").await;
+    assert_eq!(on["think"], true);
+    assert!(on.get("chat_template_kwargs").is_none() && on.get("reasoning_effort").is_none());
+    assert_eq!(body_sent(Ollama, "extract.fields").await["think"], false);
+    // Unknown servers and LM Studio get nothing server-specific.
+    for fam in [Unknown, LmStudio] {
+        let b = body_sent(fam, "chat.reply").await;
+        assert!(
+            b.get("chat_template_kwargs").is_none() && b.get("think").is_none(),
+            "{fam:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn response_schema_turns_thinking_off_on_local_servers() {
+    let srv = serve(vec![Reply::sse("openai_compat/reasoning_text.sse")]).await;
+    let p = build(compat(&srv).with_server_family(dn_providers::ServerFamily::LlamaCpp)).unwrap();
+    let mut req = request("remote:local:qwen3:8b", "chat.reply");
+    req.response_schema = Some(json!({"type": "object"}));
+    collect(&*p, req).await.unwrap();
+    assert_eq!(
+        srv.requests()[0].body["chat_template_kwargs"]["enable_thinking"],
+        false
+    );
+}
+
+#[tokio::test]
+async fn ollama_model_without_thinking_drops_the_switch_and_retries() {
+    let srv = serve(vec![
+        Reply::json(400, "openai_compat/think_unsupported.json"),
+        Reply::sse("openai_compat/reasoning_text.sse"),
+    ])
+    .await;
+    let p = build(compat(&srv).with_server_family(dn_providers::ServerFamily::Ollama)).unwrap();
+    collect(&*p, request("remote:local:llama3.2", "chat.reply"))
+        .await
+        .unwrap();
+    let reqs = srv.requests();
+    assert_eq!(reqs.len(), 2);
+    assert_eq!(reqs[0].body["think"], true);
+    assert!(reqs[1].body.get("think").is_none());
+}
+
+#[tokio::test]
+async fn detects_server_family() {
+    use dn_providers::{ServerFamily, detect_server_family};
+    let models = |owner: &str| {
+        Reply::inline(
+            200,
+            "application/json",
+            &format!(
+                r#"{{"object":"list","data":[{{"id":"m","object":"model","owned_by":"{owner}"}}]}}"#
+            ),
+        )
+    };
+    let srv = serve(vec![models("llamacpp")]).await;
+    assert_eq!(
+        detect_server_family(&compat(&srv)).await,
+        ServerFamily::LlamaCpp
+    );
+    let srv = serve(vec![models("vllm")]).await;
+    assert_eq!(
+        detect_server_family(&compat(&srv)).await,
+        ServerFamily::Vllm
+    );
+    // Ollama: unhelpful owner, but its native /api/version answers.
+    let srv = serve(vec![
+        models("someone"),
+        Reply::inline(200, "application/json", r#"{"version":"0.12.0"}"#),
+    ])
+    .await;
+    let cfg = ProviderConfig::new("o", ProviderKind::OpenAiCompatible)
+        .with_base_url(format!("{}/v1", srv.base));
+    assert_eq!(detect_server_family(&cfg).await, ServerFamily::Ollama);
+    assert_eq!(srv.requests()[1].path, "/api/version");
+    let srv = serve(vec![
+        models("someone"),
+        Reply::inline(404, "application/json", "{}"),
+    ])
+    .await;
+    assert_eq!(
+        detect_server_family(&compat(&srv)).await,
+        ServerFamily::Unknown
+    );
+}

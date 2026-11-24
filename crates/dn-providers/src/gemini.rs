@@ -166,7 +166,7 @@ async fn run(inner: Arc<Inner>, req: ChatRequest, tx: Emit) {
         let mut finish = FinishReason::Stop;
         let mut n_calls = 0u32;
         let mut finished = false;
-        let mut sse = http::SseReader::new(&id, resp);
+        let mut sse = http::SseReader::new(&id, resp, &inner.cfg);
         while let Some(ev) = sse.next().await? {
             let v: Value = serde_json::from_str(&ev.data).map_err(|e| bad_response(&id, e))?;
             if let Some(err) = v.get("error") {

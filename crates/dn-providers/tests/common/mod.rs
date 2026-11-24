@@ -30,6 +30,8 @@ pub struct Reply {
     pub body: Vec<u8>,
     /// Send the body in SSE-event-sized pieces, pausing after the second until `gate` fires.
     pub gate: Option<Arc<Notify>>,
+    /// Wait this long after the response head before sending any body byte.
+    pub hold: Option<std::time::Duration>,
 }
 
 impl Reply {
@@ -39,6 +41,18 @@ impl Reply {
             content_type: "text/event-stream",
             body: read(fixture),
             gate: None,
+            hold: None,
+        }
+    }
+
+    /// A body given inline (small JSON answers that don't merit a fixture file).
+    pub fn inline(status: u16, content_type: &'static str, body: &str) -> Self {
+        Self {
+            status,
+            content_type,
+            body: body.as_bytes().to_vec(),
+            gate: None,
+            hold: None,
         }
     }
 
@@ -48,6 +62,7 @@ impl Reply {
             content_type: "application/json",
             body: read(fixture),
             gate: None,
+            hold: None,
         }
     }
 }
@@ -131,6 +146,10 @@ pub async fn serve(replies: Vec<Reply>) -> Server {
                 reply.body.len()
             );
             sock.write_all(head.as_bytes()).await.unwrap();
+            let _ = sock.flush().await;
+            if let Some(d) = reply.hold {
+                tokio::time::sleep(d).await;
+            }
             // Write event by event so the client must parse incrementally.
             let text = reply.body;
             let mut pieces: Vec<&[u8]> = Vec::new();
