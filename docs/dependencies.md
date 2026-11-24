@@ -8,6 +8,7 @@ Every direct dependency is listed here with why and its licence (ADR-0009). Appr
 | thiserror | all | typed errors | MIT/Apache-2.0 | T-CORE-01 |
 | uuid (v7) | dn-core | time-ordered, sync-safe ids | MIT/Apache-2.0 | T-CORE-01 |
 | futures-core | dn-core | `Stream` trait for `ChatModel::chat` | MIT/Apache-2.0 | T-CORE-01 |
+| ts-rs 12 (optional, `ts` feature; `serde-compat`, no default features) | dn-core | TypeScript bindings for the UI in `crates/dn-core/bindings/`; not in the default build | MIT | T-CORE-04 |
 | tokio | dn-agent | async runtime; `sync` for cancellation (D-012) | MIT | T-AGT-02 |
 | rusqlite 0.43 (`bundled`) | dn-store | SQLite store and migration runner (ADR-0007); bundled SQLite so all three OSes build the same | MIT (SQLite: public domain) | T-CORE-02 |
 
