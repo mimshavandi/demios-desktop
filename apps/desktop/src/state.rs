@@ -110,6 +110,10 @@ pub enum ToolEvent {
     McpServer {
         status: McpServerStatus,
     },
+    /// The server was removed from settings.
+    McpServerRemoved {
+        server_id: String,
+    },
 }
 
 /// Connection state of one configured MCP server, for toasts and the Models page.
@@ -117,9 +121,10 @@ pub enum ToolEvent {
 pub struct McpServerStatus {
     pub server_id: String,
     pub name: String,
-    /// `connecting`, `connected` or `failed`.
+    /// `connecting`, `connected`, `needs_auth` (an OAuth server without a valid sign-in),
+    /// `signing_in` (waiting for the browser) or `failed`.
     pub state: &'static str,
-    /// User-facing reason when `failed`.
+    /// User-facing reason when `failed` or `needs_auth`.
     pub message: Option<String>,
     pub tools: usize,
 }
@@ -294,7 +299,6 @@ impl AppState {
         if servers.is_empty() {
             return;
         }
-        let secrets = self.mcp_secret_store();
         let epoch = self.mcp_epoch.load(Ordering::SeqCst);
         for cfg in &servers {
             self.set_mcp_status(McpServerStatus {
@@ -308,44 +312,8 @@ impl AppState {
         let state = Arc::clone(self);
         tauri::async_runtime::spawn(async move {
             for cfg in servers {
-                let id = cfg.id.clone();
-                let name = cfg.display_name.clone().unwrap_or_else(|| id.clone());
-                let status = |state, message: Option<String>, tools| McpServerStatus {
-                    server_id: id.clone(),
-                    name: name.clone(),
-                    state,
-                    message,
-                    tools,
-                };
-                let client = match dn_tools::McpClient::new(cfg, Arc::clone(&secrets)) {
-                    Ok(c) => {
-                        c.with_auth(Arc::new(dn_tools::OAuthManager::new(Arc::clone(&secrets))))
-                    }
-                    Err(e) => {
-                        eprintln!("MCP server `{id}` is misconfigured: {e}");
-                        state.set_mcp_status(status(
-                            "failed",
-                            Some(
-                                "Its settings are invalid. Check the server configuration.".into(),
-                            ),
-                            0,
-                        ));
-                        continue;
-                    }
-                };
-                let Some(added) = state
-                    .add_mcp_server_if_current(&executor, client, epoch)
-                    .await
-                else {
+                if !state.connect_mcp_server(&executor, cfg, epoch).await {
                     return; // "Delete all local data" ran meanwhile.
-                };
-                match added {
-                    Ok(caps) => state.set_mcp_status(status("connected", None, caps.len())),
-                    Err(e) => {
-                        eprintln!("MCP server `{id}` could not be added: {e}");
-                        let msg = crate::agent::model_error(e).message;
-                        state.set_mcp_status(status("failed", Some(msg), 0));
-                    }
                 }
             }
         });
@@ -782,6 +750,82 @@ impl AppState {
     pub fn set_mcp_status(&self, status: McpServerStatus) {
         lock(&self.mcp_status).insert(status.server_id.clone(), status.clone());
         self.emit_approval(ToolEvent::McpServer { status });
+    }
+
+    pub fn mcp_statuses(&self) -> std::collections::BTreeMap<String, McpServerStatus> {
+        lock(&self.mcp_status).clone()
+    }
+
+    pub fn clear_mcp_status(&self, server_id: &str) {
+        lock(&self.mcp_status).remove(server_id);
+        self.emit_approval(ToolEvent::McpServerRemoved {
+            server_id: server_id.to_owned(),
+        });
+    }
+
+    /// Connects one server (replacing a running client of the same id) and reports its
+    /// status. Returns false when "Delete all local data" ran since `epoch`.
+    pub async fn connect_mcp_server(
+        self: &Arc<Self>,
+        executor: &dn_tools::Executor,
+        cfg: dn_tools::McpServerConfig,
+        epoch: u64,
+    ) -> bool {
+        let id = cfg.id.clone();
+        let name = cfg.display_name.clone().unwrap_or_else(|| id.clone());
+        let status = |state, message: Option<String>, tools| McpServerStatus {
+            server_id: id.clone(),
+            name: name.clone(),
+            state,
+            message,
+            tools,
+        };
+        executor.remove_server(&id).await;
+        self.set_mcp_status(status("connecting", None, 0));
+        let secrets = self.mcp_secret_store();
+        let client = match dn_tools::McpClient::new(cfg, Arc::clone(&secrets)) {
+            Ok(c) => c.with_auth(Arc::new(dn_tools::OAuthManager::new(secrets))),
+            Err(e) => {
+                eprintln!("MCP server `{id}` is misconfigured: {e}");
+                self.set_mcp_status(status(
+                    "failed",
+                    Some("Its settings are invalid. Edit the server to fix them.".into()),
+                    0,
+                ));
+                return true;
+            }
+        };
+        let Some(added) = self
+            .add_mcp_server_if_current(executor, client, epoch)
+            .await
+        else {
+            return false;
+        };
+        match added {
+            Ok(caps) => self.set_mcp_status(status("connected", None, caps.len())),
+            Err(e) => {
+                let needs_auth = executor
+                    .client(&id)
+                    .is_some_and(|c| c.status() == dn_tools::ConnectionStatus::NeedsAuth);
+                if needs_auth {
+                    self.set_mcp_status(status(
+                        "needs_auth",
+                        Some("Sign in to use this server's tools.".into()),
+                        0,
+                    ));
+                } else {
+                    eprintln!("MCP server `{id}` could not be added: {e}");
+                    let msg = crate::agent::model_error(e).message;
+                    self.set_mcp_status(status("failed", Some(msg), 0));
+                }
+            }
+        }
+        true
+    }
+
+    /// The current `mcp_epoch` (see [`Self::delete_all_local_data`]).
+    pub fn mcp_epoch_now(&self) -> u64 {
+        self.mcp_epoch.load(Ordering::SeqCst)
     }
 
     pub fn pending_approvals(&self) -> Vec<ApprovalPrompt> {

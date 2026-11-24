@@ -79,6 +79,12 @@ function fakeApi() {
   });
   const api: Api = {
     appInfo: async () => ({ version: "0.1.0", dev_fake_model: true, data_dir: "/tmp", models_dir: "/tmp/models" }),
+    listMcpServers: async () => ({ servers: [], local_servers_allowed: true }),
+    saveMcpServer: async () => ({ servers: [], local_servers_allowed: true }),
+    removeMcpServer: async () => ({ servers: [], local_servers_allowed: true }),
+    reconnectMcpServer: async () => null,
+    signInMcpServer: async () => null,
+    signOutMcpServer: async () => ({ servers: [], local_servers_allowed: true }),
     reportProblem: async (kind, messageId) => {
       reports.push([kind, messageId ?? null]);
       return null;

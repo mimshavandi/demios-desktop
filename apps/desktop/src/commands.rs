@@ -502,3 +502,164 @@ pub async fn pause_download(state: AppStateRef<'_>, model_id: String) -> IpcResu
     local(&state)?.pause(&model_id);
     Ok(())
 }
+
+// ---- MCP servers screen (T-SHELL-08)
+
+fn tools_executor(s: &AppState) -> IpcResult<Arc<dn_tools::Executor>> {
+    s.executor
+        .clone()
+        .ok_or_else(|| IpcError::new("unavailable", "Tools are not available."))
+}
+
+#[tauri::command]
+pub async fn list_mcp_servers(state: AppStateRef<'_>) -> IpcResult<crate::mcp::ServersView> {
+    blocking(&state, |s| s.mcp_servers_view()).await
+}
+
+/// Adds a server (`editing: null`) or saves changes to one, then (re)connects it.
+#[tauri::command]
+pub async fn save_mcp_server(
+    state: AppStateRef<'_>,
+    input: crate::mcp::ServerInput,
+    editing: Option<String>,
+) -> IpcResult<crate::mcp::ServersView> {
+    let cfg = blocking(&state, move |s| {
+        s.save_mcp_server(&input, editing.as_deref())
+    })
+    .await?;
+    let st = Arc::clone(state.inner());
+    let exec = tools_executor(&st)?;
+    let epoch = st.mcp_epoch_now();
+    tauri::async_runtime::spawn(async move {
+        st.connect_mcp_server(&exec, cfg, epoch).await;
+    });
+    blocking(&state, |s| s.mcp_servers_view()).await
+}
+
+/// Stops the server and deletes it with its secrets and sign-in. Can't be undone.
+#[tauri::command]
+pub async fn remove_mcp_server(
+    state: AppStateRef<'_>,
+    server_id: String,
+) -> IpcResult<crate::mcp::ServersView> {
+    if let Some(exec) = &state.executor {
+        exec.remove_server(&server_id).await;
+    }
+    blocking(&state, move |s| s.remove_mcp_server_config(&server_id)).await?;
+    blocking(&state, |s| s.mcp_servers_view()).await
+}
+
+#[tauri::command]
+pub async fn reconnect_mcp_server(state: AppStateRef<'_>, server_id: String) -> IpcResult<()> {
+    let cfg = blocking(&state, move |s| s.mcp_server(&server_id)).await?;
+    let st = Arc::clone(state.inner());
+    let exec = tools_executor(&st)?;
+    let epoch = st.mcp_epoch_now();
+    st.connect_mcp_server(&exec, cfg, epoch).await;
+    Ok(())
+}
+
+/// Deletes the server's stored OAuth tokens and stops it; it then needs a new sign-in.
+#[tauri::command]
+pub async fn sign_out_mcp_server(
+    state: AppStateRef<'_>,
+    server_id: String,
+) -> IpcResult<crate::mcp::ServersView> {
+    let id = server_id.clone();
+    let cfg = blocking(&state, move |s| s.sign_out_mcp_server(&id)).await?;
+    if let Some(exec) = &state.executor {
+        exec.remove_server(&server_id).await;
+    }
+    state.set_mcp_status(crate::state::McpServerStatus {
+        server_id: cfg.id.clone(),
+        name: cfg.display_name.clone().unwrap_or_else(|| cfg.id.clone()),
+        state: "needs_auth",
+        message: Some("Signed out. Sign in to use this server's tools.".into()),
+        tools: 0,
+    });
+    blocking(&state, |s| s.mcp_servers_view()).await
+}
+
+/// How long sign-in waits for the browser to come back.
+const SIGN_IN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
+/// Signs in to an OAuth server: opens the server's sign-in page in the system browser
+/// (from Rust; the webview can't open URLs) and waits for the redirect on a loopback port.
+#[tauri::command]
+pub async fn sign_in_mcp_server(
+    app: tauri::AppHandle,
+    state: AppStateRef<'_>,
+    server_id: String,
+) -> IpcResult<()> {
+    use tauri_plugin_opener::OpenerExt;
+    let id = server_id.clone();
+    let cfg = blocking(&state, move |s| s.mcp_server(&id)).await?;
+    if crate::mcp::oauth_id(&cfg).is_none() {
+        return Err(IpcError::invalid("This server doesn't use sign-in."));
+    }
+    let st = Arc::clone(state.inner());
+    let exec = tools_executor(&st)?;
+    let name = cfg.display_name.clone().unwrap_or_else(|| cfg.id.clone());
+    let set = |state: &'static str, message: Option<String>| {
+        st.set_mcp_status(crate::state::McpServerStatus {
+            server_id: cfg.id.clone(),
+            name: name.clone(),
+            state,
+            message,
+            tools: 0,
+        })
+    };
+    set(
+        "signing_in",
+        Some("Finish signing in in your browser.".into()),
+    );
+    let result = async {
+        let redirect = dn_tools::LoopbackRedirect::bind().await.map_err(|e| {
+            eprintln!("oauth loopback: {e}");
+            IpcError::new("unavailable", "Couldn't start sign-in. Try again.")
+        })?;
+        let oauth = dn_tools::OAuthManager::new(st.mcp_secret_store());
+        let pending = oauth
+            .begin(&cfg, redirect.redirect_uri())
+            .await
+            .map_err(|e| {
+                eprintln!("oauth begin for `{}`: {e}", cfg.id);
+                IpcError::new(
+                    "sign_in",
+                    "The server didn't offer a way to sign in. Check its address, then try again.",
+                )
+            })?;
+        let url = pending.authorize_url().to_owned();
+        if !crate::mcp::safe_sign_in_url(&url) {
+            eprintln!("refusing to open a non-https sign-in URL for `{}`", cfg.id);
+            return Err(IpcError::new(
+                "sign_in",
+                "The server's sign-in page isn't a secure (https) address, so Demios didn't open it.",
+            ));
+        }
+        app.opener().open_url(url, None::<&str>).map_err(|e| {
+            eprintln!("could not open the browser: {e}");
+            IpcError::new("unavailable", "Couldn't open your browser.")
+        })?;
+        let callback = redirect
+            .wait_timeout(SIGN_IN_TIMEOUT)
+            .await
+            .map_err(|_| IpcError::new("timeout", "Sign-in took too long. Try again."))?;
+        pending.complete(&callback).await.map_err(|e| {
+            eprintln!("oauth complete for `{}`: {e}", cfg.id);
+            IpcError::new("sign_in", "Sign-in didn't finish. Try again.")
+        })
+    }
+    .await;
+    match result {
+        Ok(()) => {
+            let epoch = st.mcp_epoch_now();
+            st.connect_mcp_server(&exec, cfg.clone(), epoch).await;
+            Ok(())
+        }
+        Err(e) => {
+            set("needs_auth", Some(e.message.clone()));
+            Err(e)
+        }
+    }
+}

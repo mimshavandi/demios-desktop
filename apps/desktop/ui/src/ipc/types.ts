@@ -112,7 +112,7 @@ export interface ApprovalPrompt {
 export interface McpServerStatus {
   server_id: string;
   name: string;
-  state: "connecting" | "connected" | "failed";
+  state: "connecting" | "connected" | "needs_auth" | "signing_in" | "failed";
   message: string | null;
   tools: number;
 }
@@ -122,7 +122,8 @@ export type ToolEvent =
   | { type: "requested"; prompt: ApprovalPrompt }
   /** `expired`: timed out or its run ended before an answer. */
   | { type: "resolved"; request_id: Id; expired: boolean }
-  | { type: "mcp_server"; status: McpServerStatus };
+  | { type: "mcp_server"; status: McpServerStatus }
+  | { type: "mcp_server_removed"; server_id: string };
 
 export interface ToolSnapshot {
   approvals: ApprovalPrompt[];
@@ -230,6 +231,62 @@ export interface AppInfo {
   data_dir: string | null;
   /** Where downloaded models live (shared with the `dn` CLI). */
   models_dir: string | null;
+}
+
+// ---- MCP servers screen (T-SHELL-08). Secret values never come back from the backend.
+
+/** An env var or header. `value` is set for plain values only; `stored` says a secret is saved. */
+export interface McpValueView {
+  name: string;
+  secret: boolean;
+  value: string | null;
+  stored: boolean;
+}
+
+export type McpTransportView =
+  | { type: "stdio"; command: string; args: string[]; env: McpValueView[] }
+  | {
+      type: "streamable_http";
+      url: string;
+      headers: McpValueView[];
+      oauth: { scopes: string[]; client_id: string | null; signed_in: boolean } | null;
+    };
+
+export interface McpServerView {
+  id: string;
+  name: string;
+  transport: McpTransportView;
+  status: McpServerStatus | null;
+}
+
+export interface McpServersView {
+  servers: McpServerView[];
+  /** False in builds that can't start local programs (Flatpak): HTTP servers only. */
+  local_servers_allowed: boolean;
+}
+
+/** A value from the form. For a secret, `value: null` keeps the stored one. */
+export interface McpValueInput {
+  name: string;
+  secret: boolean;
+  value: string | null;
+}
+
+export type McpTransportInput =
+  | { type: "stdio"; command: string; args: string[]; env: McpValueInput[] }
+  | {
+      type: "streamable_http";
+      url: string;
+      headers: McpValueInput[];
+      oauth: boolean;
+      scopes: string[];
+      client_id: string | null;
+    };
+
+export interface McpServerInput {
+  id: string;
+  name: string | null;
+  transport: McpTransportInput;
 }
 
 /** "Report a problem" (app) or "Report this answer" (a model answer). */
