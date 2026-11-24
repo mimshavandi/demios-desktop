@@ -1115,6 +1115,8 @@ mod tests {
         );
         assert!(local.is_ready("tiny") && !local.wont_fit("tiny"));
         let mut s = AppState::in_memory().unwrap();
+        // No other source (not even the dev fake model in feature builds).
+        s.models = crate::models::ModelRegistry::default();
         s.models.local = Some(Arc::new(local));
         let st = Arc::new(s);
         let conv = st.create_conversation().unwrap();
