@@ -4,6 +4,7 @@ use crate::Id;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ArtifactType {
     Html,
@@ -15,6 +16,7 @@ pub enum ArtifactType {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum Author {
     Model,
@@ -22,6 +24,7 @@ pub enum Author {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ArtifactVersion {
     /// 1-based, strictly increasing per artifact.
     pub n: u32,
@@ -35,6 +38,7 @@ pub struct ArtifactVersion {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Artifact {
     pub id: Id,
     pub conversation_id: Id,
@@ -51,6 +55,7 @@ impl Artifact {
 
 /// The three operations models use on artifacts (tool names `artifact_create`, `artifact_update`, `artifact_rewrite`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum ArtifactOp {
     Create {

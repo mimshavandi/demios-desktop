@@ -3,8 +3,9 @@ use std::fmt;
 
 /// Time-ordered UUIDv7 identifier. Stable across devices so records can sync (ADR-0007/0008).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(transparent)]
-pub struct Id(pub uuid::Uuid);
+pub struct Id(#[cfg_attr(feature = "ts", ts(type = "string"))] pub uuid::Uuid);
 
 impl Id {
     pub fn new() -> Self {
