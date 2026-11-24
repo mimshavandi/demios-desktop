@@ -452,6 +452,11 @@ version = "0.1.0"
 [[package]]
 name = "dn-agent"
 version = "0.1.0"
+dependencies = [
+ "dn-core",
+ "serde_json",
+ "tokio",
+]
 
 [[package]]
 name = "dn-artifacts"
