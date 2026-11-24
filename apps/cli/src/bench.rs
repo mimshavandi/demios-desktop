@@ -107,14 +107,18 @@ impl PeakMem {
     }
 }
 
+/// Context for a bench run: `--ctx` if it holds one run, else just enough for it.
+pub fn bench_ctx(user: Option<u32>, n_prompt: u32, n_gen: u32) -> u32 {
+    user.unwrap_or(0).max(n_prompt + n_gen + 16)
+}
+
 pub async fn run(a: BenchArgs) -> Result<(), String> {
     let path = resolve_model(&a.model)?;
     let g = Gguf::open(&path).map_err(|e| e.to_string())?;
     let fp = ModelFootprint::from_gguf(&g);
-    // Placement and KV from the fit estimator (unless set); the context is fixed below.
-    let (mut opts, _) = a.load.auto_options(&path)?;
-    // Context must hold one run.
-    opts.n_ctx = Some(a.load.ctx().unwrap_or(0).max(a.n_prompt + a.n_gen + 16));
+    // Context must hold one run; placement and KV are estimated for that context.
+    let ctx = bench_ctx(a.load.ctx(), a.n_prompt, a.n_gen);
+    let (opts, _) = a.load.with_ctx(ctx).auto_options(&path)?;
     let mem = PeakMem::start();
     let backend = LlamaCppBackend::new();
     let t0 = Instant::now();
