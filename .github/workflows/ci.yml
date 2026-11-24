@@ -124,7 +124,12 @@ jobs:
             Expand-Archive "$dir/d.zip" -DestinationPath $dir -Force
             $driver = Join-Path $dir 'msedgedriver.exe'
           }
-          "MSEDGEDRIVER=$driver" | Out-File -FilePath $env:GITHUB_ENV -Append
+          # Wrapper that turns on msedgedriver's verbose log (tauri-driver passes no flags).
+          $log = Join-Path $env:RUNNER_TEMP 'msedgedriver.log'
+          $wrap = Join-Path $env:RUNNER_TEMP 'msedgedriver-verbose.cmd'
+          "@`"$driver`" --verbose --log-path=`"$log`" %*" | Out-File -FilePath $wrap -Encoding ascii
+          "MSEDGEDRIVER=$wrap" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "MSEDGEDRIVER_LOG=$log" | Out-File -FilePath $env:GITHUB_ENV -Append
       - name: Build the UI
         working-directory: apps/desktop
         run: |
@@ -152,6 +157,10 @@ jobs:
         if: runner.os == 'Windows'
         working-directory: apps/desktop/e2e
         run: npm test
+      - name: msedgedriver log (Windows)
+        if: always() && runner.os == 'Windows'
+        shell: pwsh
+        run: if (Test-Path $env:MSEDGEDRIVER_LOG) { Get-Content $env:MSEDGEDRIVER_LOG -Tail 120 } else { Write-Host "no msedgedriver log" }
   supply-chain:
     runs-on: ubuntu-latest
     steps:
