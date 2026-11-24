@@ -15,6 +15,7 @@ An open-source desktop app for chatting with AI models you choose: one running o
 - Stop an answer mid-way (Ctrl+. or ⌘.) and retry it.
 - Keep conversations between launches, and delete them with Undo.
 - Run models on your computer: download from a built-in catalogue of 12 open models. Each row shows whether the model fits your machine ("Won't fit" when it doesn't), its licence, and download progress. Downloads can be paused, resume after an interruption, and are checked against their SHA-256.
+- Add any GGUF model from Hugging Face: search, see each version's size, whether it fits and its licence before downloading, and add a Hugging Face token for gated models. GGUF models already in your Hugging Face cache are used where they are, never changed or deleted.
 - Use your own key for Anthropic, OpenAI or Google Gemini.
 - Light and dark appearance that follows your system, and keyboard shortcuts for the main actions.
 - See where your data goes in **Settings → General**, and remove everything with **Delete all local data**: chats, settings, downloaded models and the keys Demios saved, after a confirmation that lists what will go.
@@ -31,7 +32,7 @@ Not available yet:
 
 - Artifacts: documents, code and small apps the model makes, opened in a side pane. The pane is there but stays empty for now.
 - Connecting the app to an OpenAI-compatible server (such as Ollama). The `dn` CLI can already do this.
-- Adding models from Hugging Face in the app, and opening `demios://` add-model links in it. The `dn` CLI can already do both.
+- Opening `demios://` add-model links in the app. The `dn` CLI can already do this.
 - Signed installers for macOS, Windows and Linux.
 
 ## Screenshots
@@ -90,7 +91,7 @@ dn run -m qwen3-4b-q4_k_m "Explain DNS briefly"  # chat from the terminal
 dn run --endpoint http://localhost:11434/v1 -m llama3.2 "Hi"   # an OpenAI-compatible server
 ```
 
-Catalogue models downloaded with `dn` show up in the app too; models downloaded from Hugging Face with `dn` don't yet. See [the dn guide](docs/user/dn-cli.md), or run `dn --help` for every option.
+Models downloaded with `dn`, from the catalogue or from Hugging Face, show up in the app too. See [the dn guide](docs/user/dn-cli.md), or run `dn --help` for every option.
 
 ## Privacy and safety
 
