@@ -17,6 +17,7 @@ export function ConfirmDialog({
   title,
   children,
   confirmLabel,
+  cancelLabel = "Cancel",
   busy = false,
   ready = true,
   error = null,
@@ -28,6 +29,8 @@ export function ConfirmDialog({
   title: string;
   children: ReactNode;
   confirmLabel: string;
+  /** The safe choice, focused when the dialog opens. */
+  cancelLabel?: string;
   busy?: boolean;
   /** False while the body is still loading what will be deleted: confirm stays disabled. */
   ready?: boolean;
@@ -80,7 +83,7 @@ export function ConfirmDialog({
           <div className="dn-dialog-actions">
             <AlertDialog.Cancel asChild>
               <Button variant="secondary" ref={cancelRef} disabled={busy}>
-                Cancel
+                {cancelLabel}
               </Button>
             </AlertDialog.Cancel>
             {/* Not AlertDialog.Action: that closes at once; this stays open until the work ends. */}

@@ -125,6 +125,58 @@ describe("McpToolsPanel (T-SHELL-11)", () => {
     await waitFor(() => expect(within(row).getByText("Asks every time")).toBeTruthy());
   });
 
+  const choose = async (row: HTMLElement, option: string) => {
+    const select = within(row).getByRole("combobox", { name: "When a model uses it" });
+    fireEvent.keyDown(select, { key: "ArrowDown" });
+    fireEvent.click(await screen.findByRole("option", { name: option }));
+    return select;
+  };
+
+  it("asks before a risky tool stops asking, and cancelling changes nothing", async () => {
+    const { api, calls } = fake([
+      tool("delete_file", { seeded_risk: "destructive", approval: "always_ask", runs_without_asking: false }),
+    ]);
+    ui(api);
+    const row = await screen.findByTestId("mcp-tool");
+    const select = await choose(row, "Run without asking");
+    const dialog = await screen.findByRole("alertdialog", {
+      name: "Let delete_file (can delete or overwrite) run without asking?",
+    });
+    expect(dialog.textContent).toContain("delete or overwrite data");
+    const keep = within(dialog).getByRole("button", { name: "Keep asking" });
+    expect(document.activeElement).toBe(keep);
+    fireEvent.click(keep);
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(select));
+    expect(calls).toEqual([]);
+    expect(within(row).getByText("Follow its risk tier")).toBeTruthy();
+
+    // "Ask once per chat" for a destructive tool also asks; confirming saves it.
+    await choose(row, "Ask once per chat");
+    const again = await screen.findByRole("alertdialog", {
+      name: "Ask only once per chat for delete_file (can delete or overwrite)?",
+    });
+    const confirm = within(again).getByRole("button", { name: "Ask once per chat" }) as HTMLButtonElement;
+    await waitFor(() => expect(confirm.disabled).toBe(false), { timeout: 1500 });
+    fireEvent.click(confirm);
+    await waitFor(() => expect(calls).toEqual([["choice", { name: "delete_file", choice: "ask_once_per_chat" }]]));
+  });
+
+  it("needs no confirm for read and low-write tools, or for an external write asked once per chat", async () => {
+    const { api, calls } = fake([
+      tool("read_file"),
+      tool("write_file", { seeded_risk: "low_write", approval: "ask_once_per_conversation", runs_without_asking: false }),
+      tool("post", { seeded_risk: "external_write", approval: "always_ask", runs_without_asking: false }),
+    ]);
+    ui(api);
+    const rows = await screen.findAllByTestId("mcp-tool");
+    await choose(rows[0]!, "Run without asking");
+    await choose(rows[1]!, "Run without asking");
+    await choose(rows[2]!, "Ask once per chat");
+    await waitFor(() => expect(calls).toHaveLength(3));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
   it("says when the server isn't connected", async () => {
     const api = {
       listMcpTools: async () => ({ server_id: "files", connected: false, tools: [] }),

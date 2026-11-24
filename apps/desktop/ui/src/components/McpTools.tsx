@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { Api } from "../ipc/commands";
-import { errorMessage, type McpServerToolsView, type McpToolView, type ToolChoice } from "../ipc/types";
+import { errorMessage, type McpServerToolsView, type McpToolView, type RiskTier, type ToolChoice } from "../ipc/types";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { Badge, Button, InlineMessage, Select, Skeleton } from "./primitives";
 import { useToast } from "./toast";
 import { RiskBadge } from "./ToolCards";
@@ -11,6 +12,34 @@ const CHOICES: { value: Exclude<ToolChoice, "default">; label: string }[] = [
   { value: "run_without_asking", label: "Run without asking" },
   { value: "off", label: "Off: models can't use it" },
 ];
+
+/** What a tool of this tier could do, for the confirm before it stops asking. */
+const RISK_TEXT: Partial<Record<RiskTier, { label: string; harm: string }>> = {
+  external_write: {
+    label: "acts outside the app",
+    harm: "It can send or change things outside Demios, such as messages, issues or files on a service.",
+  },
+  destructive: {
+    label: "can delete or overwrite",
+    harm: "It can delete or overwrite data, and that may not be undoable.",
+  },
+  sensitive: {
+    label: "sensitive",
+    harm: "It works with sensitive data, such as credentials, payments or personal records.",
+  },
+};
+
+/**
+ * Whether choosing `choice` for `t` loosens approval for a risky tool and needs a confirm:
+ * "Run without asking" for a tool that acts outside the app, deletes or is sensitive, and
+ * "Ask once per chat" for one that deletes or is sensitive. Read and low-write tools never do.
+ */
+export function needsConfirm(t: McpToolView, choice: ToolChoice): boolean {
+  const r = t.seeded_risk;
+  if (choice === "run_without_asking") return r === "external_write" || r === "destructive" || r === "sensitive";
+  if (choice === "ask_once_per_chat") return r === "destructive" || r === "sensitive";
+  return false;
+}
 
 function approvalText(t: McpToolView): string {
   if (t.disabled) return "Off";
@@ -40,6 +69,9 @@ export function McpToolsPanel({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  // A risky choice waiting for its confirm; focus goes back to its select afterwards.
+  const [pending, setPending] = useState<{ tool: McpToolView; choice: ToolChoice } | null>(null);
+  const pendingTrigger = useRef<HTMLElement | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -80,6 +112,12 @@ export function McpToolsPanel({
       row?.querySelector<HTMLElement>("[role=combobox], button")?.focus();
     });
   };
+
+  const save = (t: McpToolView, choice: ToolChoice) =>
+    act(`choice:${t.name}`, "Couldn't save that.", () => api.setMcpToolChoice(serverId, t.name, choice));
+
+  const pendingRisk = pending === null ? undefined : RISK_TEXT[pending.tool.seeded_risk];
+  const pendingLabel = pending?.choice === "ask_once_per_chat" ? "Ask once per chat" : "Run without asking";
 
   const flagged = view?.tools.filter((t) => t.flag !== null) ?? [];
 
@@ -127,14 +165,48 @@ export function McpToolsPanel({
               key={t.id}
               tool={t}
               busy={busy}
-              onChoice={(choice) =>
-                void act(`choice:${t.name}`, "Couldn't save that.", () => api.setMcpToolChoice(serverId, t.name, choice))
-              }
+              onChoice={(choice, trigger) => {
+                if (needsConfirm(t, choice)) {
+                  pendingTrigger.current = trigger;
+                  setPending({ tool: t, choice });
+                } else {
+                  void save(t, choice);
+                }
+              }}
               onReview={() => void review([t])}
             />
           ))}
         </ul>
       )}
+      <ConfirmDialog
+        open={pending !== null}
+        onOpenChange={(o) => {
+          if (!o) setPending(null);
+        }}
+        title={
+          pending === null
+            ? ""
+            : pending.choice === "ask_once_per_chat"
+              ? `Ask only once per chat for ${pending.tool.name} (${pendingRisk?.label ?? ""})?`
+              : `Let ${pending.tool.name} (${pendingRisk?.label ?? ""}) run without asking?`
+        }
+        confirmLabel={pendingLabel}
+        cancelLabel="Keep asking"
+        onConfirm={() => {
+          const p = pending;
+          setPending(null);
+          if (p !== null) void save(p.tool, p.choice);
+        }}
+        returnFocusTo={pendingTrigger}
+      >
+        <p>{pendingRisk?.harm}</p>
+        <p>
+          {pending?.choice === "ask_once_per_chat"
+            ? "After you allow it once in a chat, models can use it again in that chat without showing you what it will do."
+            : "Models could use it in any chat without showing you what it will do first."}{" "}
+          You can change this back at any time.
+        </p>
+      </ConfirmDialog>
     </div>
   );
 }
@@ -147,7 +219,7 @@ function ToolRow({
 }: {
   tool: McpToolView;
   busy: string | null;
-  onChoice: (c: ToolChoice) => void;
+  onChoice: (c: ToolChoice, trigger: HTMLElement | null) => void;
   onReview: () => void;
 }) {
   const selectId = useId();
@@ -178,7 +250,7 @@ function ToolRow({
           emptyText=""
           groups={[{ label: "Your choice", options: CHOICES }]}
           {...(t.flag !== null ? { "aria-describedby": helpId } : {})}
-          onValueChange={(v) => onChoice(v === "" ? "default" : (v as ToolChoice))}
+          onValueChange={(v) => onChoice(v === "" ? "default" : (v as ToolChoice), document.getElementById(selectId))}
         />
         {busy === `choice:${t.name}` && <span className="dn-help">Saving…</span>}
         {t.flag !== null && (

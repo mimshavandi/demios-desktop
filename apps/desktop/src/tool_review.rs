@@ -241,11 +241,12 @@ pub fn forget_removed(settings: &mut Settings) {
     settings
         .reviewed_tools
         .retain(|server, _| ids.contains(server.as_str()));
-    settings.tool_overrides.retain(|cap, _| {
-        cap.strip_prefix("mcp.")
-            .and_then(|rest| rest.split_once('.'))
-            .is_some_and(|(server, _)| ids.contains(server))
-    });
+    // By each known server's own prefix, not by splitting the id: ids are `[a-z0-9_-]+`
+    // (`McpServerConfig::validate`), but this doesn't depend on it.
+    let prefixes: Vec<String> = ids.iter().map(|id| format!("mcp.{id}.")).collect();
+    settings
+        .tool_overrides
+        .retain(|cap, _| prefixes.iter().any(|p| cap.starts_with(p.as_str())));
 }
 
 /// Records `tools` of `server_id` as reviewed, each only if its fingerprint is that of the
@@ -665,11 +666,53 @@ mod tests {
                 ToolChoice::Off.apply(None).unwrap(),
             );
         }
+        // A tool name with dots, and one server id that is a prefix of another's.
+        s.tool_overrides.insert(
+            "mcp.work.files.write".into(),
+            ToolChoice::Off.apply(None).unwrap(),
+        );
+        s.tool_overrides.insert(
+            "mcp.workx.write".into(),
+            ToolChoice::Off.apply(None).unwrap(),
+        );
         forget_removed(&mut s);
         assert_eq!(s.reviewed_tools.keys().collect::<Vec<_>>(), ["work"]);
         assert_eq!(
             s.tool_overrides.keys().collect::<Vec<_>>(),
-            ["mcp.work.write"]
+            ["mcp.work.files.write", "mcp.work.write"]
         );
+    }
+
+    #[test]
+    fn choices_of_a_server_whose_id_had_a_dot_are_kept_by_its_prefix() {
+        // Saved ids can't contain '.', but matching doesn't rely on that.
+        let mut s = Settings {
+            mcp_servers: vec![dn_tools::McpServerConfig::http(
+                "a.b",
+                "https://x.example/mcp",
+            )],
+            ..Default::default()
+        };
+        for cap in ["mcp.a.b.write", "mcp.a.write"] {
+            s.tool_overrides
+                .insert(cap.into(), ToolChoice::Off.apply(None).unwrap());
+        }
+        forget_removed(&mut s);
+        assert_eq!(
+            s.tool_overrides.keys().collect::<Vec<_>>(),
+            ["mcp.a.b.write"]
+        );
+    }
+
+    #[test]
+    fn saved_server_ids_cant_contain_a_dot() {
+        let s = Settings {
+            mcp_servers: vec![dn_tools::McpServerConfig::http(
+                "a.b",
+                "https://x.example/mcp",
+            )],
+            ..Default::default()
+        };
+        assert!(s.validate().is_err());
     }
 }

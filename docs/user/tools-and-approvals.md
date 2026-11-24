@@ -51,6 +51,13 @@ Select **Tools** on a server's row to list its tools. Each shows:
 
 Under **When a model uses it**, choose **Ask every time**, **Ask once per chat**, **Run without asking** or **Off**, or **Follow its risk tier** to go back to the default. Your choice is kept and applied every time the server connects.
 
+Some choices ask you to confirm first, because a model could then do real harm without showing you:
+
+- **Run without asking** for a tool that acts outside the app, can delete or overwrite, or is sensitive.
+- **Ask once per chat** for a tool that can delete or overwrite, or is sensitive.
+
+The confirmation names the tool and what it could do. **Keep asking** leaves your choice as it was; select the choice's own button (**Run without asking** or **Ask once per chat**) to apply it. Tools that only read or change local data don't ask for a confirmation.
+
 ### New or changed tools
 
 Demios remembers each server's tools as they were when it first connected. If a server later adds a tool, or changes one's description, inputs or risk hints, the tool is marked **New** or **Changed**, the row shows how many tools are **to review**, and those tools ask before every use, whatever your choice. Read what changed, then select **Mark reviewed** (or **Mark all reviewed**).
