@@ -27,6 +27,11 @@ Demios Desktop runs AI models the user chooses: local GGUF models through llama.
 - **Show where an answer ran.** The model badge says "on this device" or names the provider. Provider rows in Settings say that messages go to that provider.
 - **Never auto-approve.** Model-requested actions with side effects need the user's approval, as described in the design system §4 approval card.
 
+## Known gaps
+
+- **Copied answers aren't marked.** "Copy answer" puts plain text on the clipboard, with no machine-readable marker. A rich-clipboard flavour (`text/html` with the generator meta) depends on `ClipboardItem` support in each OS webview, so it is left out for now.
+- **Artifacts:** the app doesn't render artifacts yet. W-artifacts applies the `ai.ts` markers when it embeds the sandbox (T-ART-06).
+
 ## Open question
 
 Whether Demios is the *provider* of a generative AI system or only a deployer-side UI, when it runs a model the user picked, is a legal question for the owner. Until it's answered, we apply the transparency duties (Art. 50) in full.

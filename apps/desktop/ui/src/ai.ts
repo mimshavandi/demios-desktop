@@ -1,5 +1,10 @@
 // AI disclosure (T-STORE-09, readiness audit S-11; EU AI Act Art. 50). One place for the
 // words and for the machine-readable "AI-generated" marker that model-made content carries.
+//
+// Stable API: artifacts (W-artifacts, T-ART-06) and exports use `aiGeneratorMeta`,
+// `aiGeneratorComment` and `aiFrontMatter`. Change their names, parameters or output format
+// only together with those callers. `model` is the `ModelRef` string of the message that
+// made the content (`local:<id>`, `byok:<provider>:<model>`), or null when unknown.
 
 /** The persistent line by the composer (screen-reader readable via aria-describedby). */
 export const AI_DISCLOSURE = "Answers come from the AI model you chose and can be wrong. Check important facts.";
