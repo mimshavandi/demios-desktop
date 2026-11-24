@@ -2,7 +2,7 @@
 
 **Scope:** `crates/dn-tools` — the MCP client (stdio, Streamable HTTP), the capability wrapper,
 the approval gate, the side-effect ledger and MCP OAuth. Decision record: ADR-0006.
-**Status:** wave 1. Owner: W-tools; reviewed by the lead.
+**Status:** first version, reviewed by the maintainers.
 
 ## Assets
 | Asset | Where it lives |
@@ -92,7 +92,7 @@ an error message echoes a header.*
   into arguments. Approval prompts show arguments for writes; reads to open-world servers do
   not prompt. **Open item:** a secret-pattern scan on arguments that forces approval.
 - The ledger stores write arguments and outputs in the app database (encrypted at rest once
-  SQLCipher lands, D-012). Developer messages may include server stderr; they go to logs, not to
+  SQLCipher lands). Developer messages may include server stderr; they go to logs, not to
   other services.
 
 ### T4. OAuth attacks
@@ -129,6 +129,6 @@ an error message echoes a header.*
   it in that scope is refused with a model-visible "ask the user to confirm" error, because a
   model retry carries a fresh call id (a fresh key) and would otherwise repeat the write.
 
-## Out of scope (wave 1)
-Sandboxing stdio servers (OS sandbox profiles), signed server registries, Twin approvals
-(will reuse this gate and ledger), per-tool network egress policy.
+## Out of scope for now
+Sandboxing stdio servers (OS sandbox profiles), signed server registries, per-tool network
+egress policy.

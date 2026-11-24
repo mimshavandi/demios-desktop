@@ -1,6 +1,6 @@
 # Design standard — demios-desktop
 
-Status: **accepted** (D-014, 2026-11-24) (T-DES-01, ADR-0010). Visual preview: `docs/design/preview.html` (also shared as a private artifact for owner review). Applies to `apps/desktop/ui` and the chrome of `ui/artifact-sandbox`. Tokens: `ui/design-tokens`. Built from the `design:design-system` and `ui-ux-behaves` guidance: tokens → components with defined states → patterns, WCAG 2.2 AA, and every container covering `loading · empty · ready · error` (+ `warning` where there is risk).
+Status: **accepted** (2026-11-24) (T-DES-01, ADR-0010). Visual preview: `docs/design/preview.html`. Applies to `apps/desktop/ui` and the chrome of `ui/artifact-sandbox`. Tokens: `ui/design-tokens`. Built from the `design:design-system` and `ui-ux-behaves` guidance: tokens → components with defined states → patterns, WCAG 2.2 AA, and every container covering `loading · empty · ready · error` (+ `warning` where there is risk).
 
 ## 1. Principles
 
