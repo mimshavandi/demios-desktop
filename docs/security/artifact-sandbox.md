@@ -65,7 +65,7 @@ No fetch of anything from anywhere, including the app and artifact origins. `'un
 - **Session history.** Joint session history is shared with the host. In WebKit a sandboxed frame's `history.go(-n)` navigated the host page in our tests (Chromium blocks it). The bridge replaces `History.prototype.back/forward/go/pushState/replaceState` and the Navigation API's traversal methods with locked no-ops before artifact code runs. The escape suite checks that the host URL doesn't change.
 
 ### C7. Rendering without the host parsing content
-The host never parses or runs artifact content. It escapes data into the document (`jsonForHtml` for source blobs, HTML-escaping for code), and runtimes (marked, mermaid with `securityLevel: "strict"`, sucrase + React) run inside the frame. No CDN: every library is bundled at a pinned version (D-012 / docs/dependencies.md).
+The host never parses or runs artifact content. It escapes data into the document (`jsonForHtml` for source blobs, HTML-escaping for code), and runtimes (marked, mermaid with `securityLevel: "strict"`, sucrase + React) run inside the frame. No CDN: every library is bundled at a pinned version (docs/dependencies.md).
 
 ## Shell requirements (W-shell, `apps/desktop`)
 | # | Requirement | Why |

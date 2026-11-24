@@ -1,5 +1,5 @@
 //! Tool capabilities, risk and preflight (ADR-0006).
-//! Ported concepts: Demios `AppCapability`, `capability_preflight.py`, Twin `approval_policy.py`.
+//! Ported concepts: Demios `AppCapability`, `capability_preflight.py`, `approval_policy.py`.
 
 use serde::{Deserialize, Serialize};
 
