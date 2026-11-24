@@ -17,6 +17,8 @@ await mkdir(out, { recursive: true });
 
 // mermaid optionally uses elkjs (EPL-2.0 OR GPL-3.0) for its "elk" layout. Keep it out of the
 // bundle (licence policy, ADR-0009); diagrams asking for that layout get a clear error.
+// The licences check (apps/desktop/licenses-extra.json, `npm_exclude`) relies on this stub:
+// if it goes away, remove elkjs from that list too.
 const noElk = {
   name: "no-elkjs",
   setup(b) {
