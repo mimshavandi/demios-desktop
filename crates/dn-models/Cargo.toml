@@ -9,6 +9,7 @@ description = "GGUF metadata, machine fit estimator, curated model catalogue and
 
 [dependencies]
 dn-core.workspace = true
+dn-secrets.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

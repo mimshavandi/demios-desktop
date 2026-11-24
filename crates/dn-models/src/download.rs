@@ -64,6 +64,9 @@ pub struct Expected<'a> {
     pub url: &'a str,
     pub size: u64,
     pub sha256: &'a str,
+    /// `Authorization: Bearer` for gated repos. reqwest drops it on redirects to another
+    /// host (the Hub redirects file downloads to its CDN).
+    pub bearer: Option<&'a str>,
 }
 
 fn hex(d: &[u8]) -> String {
@@ -178,6 +181,9 @@ async fn fetch(
     progress: Progress<'_>,
 ) -> Result<(), DownloadError> {
     let mut req = client.get(exp.url);
+    if let Some(t) = exp.bearer {
+        req = req.bearer_auth(t);
+    }
     if *have > 0 {
         req = req.header(reqwest::header::RANGE, format!("bytes={have}-"));
     }
@@ -343,6 +349,7 @@ pub async fn pull(
             url: &url,
             size: entry.size,
             sha256: &entry.sha256,
+            bearer: None,
         },
         &models_dir.join(&entry.file),
         progress,
@@ -486,6 +493,7 @@ mod tests {
             url: &url,
             size: data.len() as u64,
             sha256: &sha(&data),
+            bearer: None,
         };
         let c = reqwest::Client::new();
         let mut last = 0;
@@ -514,6 +522,7 @@ mod tests {
                 url: &url,
                 size: data.len() as u64,
                 sha256: &sha(&data),
+                bearer: None,
             },
             &dest,
             &mut |d, _| {
@@ -538,6 +547,7 @@ mod tests {
                 url: &url,
                 size: data.len() as u64,
                 sha256: &sha(&data),
+                bearer: None,
             },
             &dest,
             &mut |_, _| {},
@@ -566,6 +576,7 @@ mod tests {
                 url: &url,
                 size: data.len() as u64,
                 sha256: &sha(&data),
+                bearer: None,
             },
             &dest,
             &mut |_, _| {},
@@ -583,6 +594,7 @@ mod tests {
                 url,
                 size: data.len() as u64,
                 sha256: &sha(data),
+                bearer: None,
             },
             dest,
             &mut |_, _| {},
@@ -674,6 +686,7 @@ mod tests {
                 url: &url,
                 size: data.len() as u64,
                 sha256: &"0".repeat(64),
+                bearer: None,
             },
             &dest,
             &mut |_, _| {},
