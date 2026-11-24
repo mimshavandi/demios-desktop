@@ -1,0 +1,2 @@
+data: {"candidates": [{"content": {"parts": [{"text": "Hello"}],"role": "model"},"index": 0}],"usageMetadata": {"promptTokenCount": 8,"totalTokenCount": 9},"modelVersion": "gemini-2.5-flash","responseId": "REDACTED"}
+

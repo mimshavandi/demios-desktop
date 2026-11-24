@@ -16,6 +16,8 @@ serde_json = "1"
 thiserror = "2"
 uuid = { version = "1", features = ["v7", "serde"] }
 futures-core = "0.3"
+# rustls (aws-lc-rs) + platform verifier; no OpenSSL.
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2", "charset"] }
 zeroize = "1"
 tokio = { version = "1", default-features = false }
 # Maintained fork of the archived serde_yaml (D-012 allows "serde_yaml or a maintained successor").
