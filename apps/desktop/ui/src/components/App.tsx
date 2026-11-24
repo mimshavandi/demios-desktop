@@ -20,7 +20,7 @@ import {
 } from "../ipc/types";
 import { markArtifact } from "../artifactMarks";
 import { chatModel, chatModelReady, describeModel, modelName } from "../models";
-import { artifactFrameUrl, isMac, mod } from "../platform";
+import { ARTIFACTS_UNAVAILABLE, artifactFrameUrl, isMac, mod } from "../platform";
 import { chatReducer, initialChat } from "../state/chat";
 import { ArtifactPane } from "./ArtifactPane";
 import { ChatView, type ArtifactCardInfo } from "./ChatView";
@@ -162,11 +162,17 @@ function Shell({ api }: { api: Api }) {
         return;
       }
       try {
+        // Summaries are cheap; full versions are fetched for every artifact only when a chat
+        // opens (the cards need them), and afterwards only for the one that changed.
         const list = await api.listArtifacts(id);
-        const details = await Promise.all(list.map((a) => api.getArtifact(id, a.id)));
+        const ids = focus !== undefined ? [focus] : list.map((a) => a.id);
+        const details = await Promise.all(ids.map((aid) => api.getArtifact(id, aid)));
         if (openIdRef.current !== id) return;
         setArtifacts(list);
-        setArtifactDetails(Object.fromEntries(details.map((d) => [d.id, d])));
+        setArtifactDetails((all) => {
+          const fresh = Object.fromEntries(details.map((d) => [d.id, d]));
+          return focus !== undefined ? { ...all, ...fresh } : fresh;
+        });
         setOpenArtifact((cur) =>
           focus !== undefined
             ? focus
@@ -295,6 +301,12 @@ function Shell({ api }: { api: Api }) {
         }
         return;
       }
+      if (event.type === "artifact_not_saved") {
+        if (event.conversation_id === openIdRef.current) {
+          toast({ tone: "error", title: `"${event.title}" wasn't saved as an artifact. ${event.reason}` });
+        }
+        return;
+      }
       dispatch({ kind: "event", event });
       if (event.type === "done" || event.type === "error") {
         const msg =
@@ -322,7 +334,7 @@ function Shell({ api }: { api: Api }) {
         }
       }
     },
-    [api, refreshConversations, refreshUnknowns, refreshArtifacts],
+    [api, refreshConversations, refreshUnknowns, refreshArtifacts, toast],
   );
 
   const decide = useCallback(
@@ -461,7 +473,7 @@ function Shell({ api }: { api: Api }) {
       try {
         const d = await api.rollbackArtifact(id, aid, n);
         setArtifactDetails((all) => ({ ...all, [d.id]: d }));
-        setArtifacts((list) => list.map((a) => (a.id === d.id ? { ...a, latest_n: d.versions.length } : a)));
+        setArtifacts((list) => list.map((a) => (a.id === d.id ? { ...a, latest_n: d.versions.at(-1)?.n ?? a.latest_n } : a)));
         toast({ tone: "success", title: `Restored v${n} as v${d.versions.at(-1)?.n ?? ""}` });
       } catch (e) {
         toast({ tone: "error", title: errorMessage(e) });
@@ -613,6 +625,8 @@ function Shell({ api }: { api: Api }) {
           modelName={(ref) => modelName(ref, catalog)}
           mark={(type, v) => markArtifact(type, v.content, v.model, v.created_at)}
           onClose={toggleArtifacts}
+          unavailable={ARTIFACTS_UNAVAILABLE}
+          fixMode={catalog?.chat_model_tools === false ? "fenced" : "tools"}
         />
       )}
       <div className="dn-visually-hidden" role="status" aria-live="polite">

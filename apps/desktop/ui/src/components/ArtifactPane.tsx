@@ -24,6 +24,10 @@ export interface ArtifactPaneProps {
   /** Content as rendered, with the AI-generated marker; stored versions stay unchanged. */
   mark?: (type: ArtifactType, version: ArtifactVersionView) => string;
   onClose: () => void;
+  /** Set when artifacts can't be shown on this platform: the message replaces the viewer. */
+  unavailable?: string | null;
+  /** How the chat model changes artifacts, for the "Ask to fix" wording. */
+  fixMode?: "tools" | "fenced";
 }
 
 export function typeLabel(t: ArtifactType): string {
@@ -74,7 +78,7 @@ export function ArtifactPane(p: ArtifactPaneProps) {
   // The view keeps the callbacks it was built with; route them through a ref.
   const latest = useRef(p);
   latest.current = p;
-  const hasDetail = p.detail !== null;
+  const hasDetail = p.detail !== null && !p.unavailable;
 
   useEffect(() => {
     if (!hasDetail) return;
@@ -90,9 +94,11 @@ export function ArtifactPane(p: ArtifactPaneProps) {
           allowNetwork: (id) => network.current.has(id),
           onAllowNetwork: (id) => network.current.add(id),
           madeBy: (v) => {
+            if (v.author !== "model") return null;
             const model = (v as ArtifactVersionView).model;
-            return v.author === "model" ? latest.current.modelName(model ?? "an AI model") : null;
+            return model === null ? "an AI model" : latest.current.modelName(model);
           },
+          fixMode: () => latest.current.fixMode ?? "tools",
           mark: (a, v) =>
             v.author === "model"
               ? (latest.current.mark?.(a.artifact_type, v as ArtifactVersionView) ?? v.content)
@@ -113,6 +119,20 @@ export function ArtifactPane(p: ArtifactPaneProps) {
       viewRef.current = null;
     };
   }, [hasDetail]);
+
+  // Network permission is for the version the user saw: a newer version the model wrote
+  // starts with the network off again (the toggle asks again).
+  const seen = useRef<Map<Id, number>>(new Map());
+  useEffect(() => {
+    const d = p.detail;
+    if (d === null) return;
+    const last = d.versions.at(-1);
+    const before = seen.current.get(d.id);
+    if (last !== undefined && before !== undefined && last.n > before && last.author === "model") {
+      network.current.delete(d.id);
+    }
+    if (last !== undefined) seen.current.set(d.id, last.n);
+  }, [p.detail]);
 
   useEffect(() => {
     if (viewRef.current !== null && p.detail !== null) {
@@ -154,6 +174,11 @@ export function ArtifactPane(p: ArtifactPaneProps) {
               ))}
             </nav>
           )}
+          {p.unavailable ? (
+            <div data-testid="artifacts-unavailable">
+              <InlineMessage tone="info">{p.unavailable}</InlineMessage>
+            </div>
+          ) : null}
           {loadError !== null && <InlineMessage tone="error">{loadError}</InlineMessage>}
           <div ref={hostRef} className="artifact-host" hidden={!hasDetail} data-testid="artifact-host" />
         </div>

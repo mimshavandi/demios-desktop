@@ -63,17 +63,54 @@ pub fn is_frame_path(path: &str) -> bool {
     matches!(path, "/frame/" | "/frame/index.html")
 }
 
+/// Whether the request is for the artifact origin itself: `artifact://localhost` (macOS, Linux)
+/// or `http://artifact.localhost` (Windows).
+fn is_frame_origin(uri: &tauri::http::Uri) -> bool {
+    matches!(
+        (uri.scheme_str(), uri.host()),
+        (Some(SCHEME), Some("localhost")) | (Some("http"), Some("artifact.localhost"))
+    )
+}
+
+/// Who may embed the frame: the app's own window only.
+fn frame_ancestors() -> &'static str {
+    if cfg!(debug_assertions) {
+        // `tauri dev` serves the UI from the Vite dev server.
+        "frame-ancestors tauri://localhost http://tauri.localhost https://tauri.localhost http://localhost:1420 http://127.0.0.1:1420"
+    } else {
+        "frame-ancestors tauri://localhost http://tauri.localhost https://tauri.localhost"
+    }
+}
+
 /// Response for a request on the `artifact` scheme: the frame shell at `/frame/` (GET only),
 /// 404 for anything else.
 pub fn frame_response(req: &Request<Vec<u8>>) -> Response<Vec<u8>> {
     let path = req.uri().path();
-    if req.method() != tauri::http::Method::GET || !is_frame_path(path) {
+    if req.method() != tauri::http::Method::GET
+        || !is_frame_origin(req.uri())
+        || !is_frame_path(path)
+    {
         return Response::builder()
             .status(StatusCode::NOT_FOUND)
             .header(header::CONTENT_TYPE, "text/plain")
             .header("X-Content-Type-Options", "nosniff")
             .header(header::CONTENT_SECURITY_POLICY, "default-src 'none'")
             .body(b"not found".to_vec())
+            .expect("static response");
+    }
+    // Windows: WebView2 injects the app's init scripts (Tauri's IPC object) into sub-frames and
+    // they can't be removed, so artifacts are off there (threat model R8; the UI says so). Serve
+    // an inert page with no script at all, in case anything still loads the frame.
+    if cfg!(windows) {
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+            .header(
+                header::CONTENT_SECURITY_POLICY,
+                "default-src 'none'; sandbox",
+            )
+            .header("X-Content-Type-Options", "nosniff")
+            .body(b"<!doctype html><p>Artifacts aren't available on Windows yet.</p>".to_vec())
             .expect("static response");
     }
     let network = req
@@ -86,7 +123,13 @@ pub fn frame_response(req: &Request<Vec<u8>>) -> Response<Vec<u8>> {
         .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
         .header(
             header::CONTENT_SECURITY_POLICY,
-            if network { &csp.network } else { &csp.strict },
+            // `sandbox allow-scripts`: the document is sandboxed even if the iframe attribute
+            // were ever dropped; `frame-ancestors`: only the app's window may embed it.
+            format!(
+                "{}; sandbox allow-scripts; {}",
+                if network { &csp.network } else { &csp.strict },
+                frame_ancestors()
+            ),
         )
         .header("X-Content-Type-Options", "nosniff")
         .header(header::REFERRER_POLICY, "no-referrer")
@@ -336,6 +379,19 @@ pub struct FencedRun {
     parser: FencedParser,
     tx: std::sync::mpsc::Sender<dn_artifacts::FencedArtifact>,
     worker: tauri::async_runtime::JoinHandle<()>,
+    sink: Arc<dyn EventSink>,
+    conversation_id: Id,
+    message_id: Id,
+}
+
+/// The user-facing event for a fenced block that wasn't saved.
+fn not_saved(message_id: Id, conversation_id: Id, title: &str, reason: String) -> ChatEvent {
+    ChatEvent::ArtifactNotSaved {
+        message_id,
+        conversation_id,
+        title: title.to_owned(),
+        reason,
+    }
 }
 
 impl FencedRun {
@@ -346,7 +402,9 @@ impl FencedRun {
         sink: Arc<dyn EventSink>,
     ) -> Self {
         let (tx, rx) = std::sync::mpsc::channel::<dn_artifacts::FencedArtifact>();
+        let worker_sink = Arc::clone(&sink);
         let worker = tauri::async_runtime::spawn_blocking(move || {
+            let sink = worker_sink;
             for block in rx {
                 let result = match state.db() {
                     Ok(db) => dn_artifacts::apply_fenced(
@@ -357,13 +415,24 @@ impl FencedRun {
                     ),
                     Err(e) => {
                         eprintln!("artifact block not saved: {}", e.message);
+                        sink.send(not_saved(
+                            message_id,
+                            conversation_id,
+                            &block.header.title,
+                            "Local data couldn't be written.".into(),
+                        ));
                         continue;
                     }
                 };
                 match result {
                     Ok(a) => sink.send(changed(message_id, conversation_id, &a)),
-                    // The model can't get a tool result back; the UI shows the block as not saved.
-                    Err(e) => eprintln!("artifact block not saved: {e}"),
+                    // The model can't get a tool result back: tell the user instead.
+                    Err(e) => sink.send(not_saved(
+                        message_id,
+                        conversation_id,
+                        &block.header.title,
+                        e.to_string(),
+                    )),
                 }
             }
         });
@@ -371,6 +440,9 @@ impl FencedRun {
             parser: FencedParser::new(),
             tx,
             worker,
+            sink,
+            conversation_id,
+            message_id,
         }
     }
 
@@ -381,8 +453,23 @@ impl FencedRun {
 
     fn handle(&mut self, events: Vec<FenceEvent>) {
         for ev in events {
-            if let FenceEvent::Close(block) = ev {
-                let _ = self.tx.send(block);
+            match ev {
+                FenceEvent::Close(block) => {
+                    let _ = self.tx.send(block);
+                }
+                FenceEvent::Rejected { header, reason } => self.sink.send(not_saved(
+                    self.message_id,
+                    self.conversation_id,
+                    &header.title,
+                    reason,
+                )),
+                FenceEvent::Unterminated(block) => self.sink.send(not_saved(
+                    self.message_id,
+                    self.conversation_id,
+                    &block.header.title,
+                    ArtifactError::Unterminated.to_string(),
+                )),
+                _ => {}
             }
         }
     }
@@ -406,6 +493,7 @@ mod tests {
         Request::builder().uri(uri).body(vec![]).unwrap()
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn serves_only_the_frame_shell() {
         let ok = frame_response(&req("artifact://localhost/frame/"));
@@ -414,11 +502,14 @@ mod tests {
         assert_eq!(h["x-content-type-options"], "nosniff");
         let csp = h["content-security-policy"].to_str().unwrap();
         assert!(csp.contains("default-src 'none'"), "{csp}");
+        let policy = csp.split("; sandbox").next().unwrap();
         assert!(
-            !csp.contains("https:"),
+            !policy.contains("https:"),
             "strict policy has no network: {csp}"
         );
         assert_eq!(ok.body(), FRAME_HTML.as_bytes());
+        assert!(csp.contains("sandbox allow-scripts"), "{csp}");
+        assert!(csp.contains("frame-ancestors tauri://localhost"), "{csp}");
 
         // Windows form of the same origin.
         let win = frame_response(&req("http://artifact.localhost/frame/index.html"));
@@ -430,6 +521,9 @@ mod tests {
             "artifact://localhost/frame/x.js",
             "artifact://localhost/frame",
             "artifact://localhost/index.html",
+            "artifact://evil/frame/",
+            "http://evil.localhost/frame/",
+            "https://artifact.localhost/frame/",
         ] {
             let r = frame_response(&req(bad));
             assert_eq!(r.status(), StatusCode::NOT_FOUND, "{bad}");
@@ -442,11 +536,26 @@ mod tests {
         assert_eq!(frame_response(&post).status(), StatusCode::NOT_FOUND);
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn windows_serves_an_inert_page() {
+        let r = frame_response(&req("http://artifact.localhost/frame/"));
+        assert_eq!(r.status(), StatusCode::OK);
+        let body = String::from_utf8(r.body().clone()).unwrap();
+        assert!(!body.contains("<script"), "{body}");
+        assert!(body.contains("aren't available on Windows"));
+    }
+
+    #[cfg(not(windows))]
     #[test]
     fn network_policy_only_with_net_1() {
         let csp = |uri: &str| {
+            // The content policy, without the `sandbox` / `frame-ancestors` tail.
             frame_response(&req(uri)).headers()["content-security-policy"]
                 .to_str()
+                .unwrap()
+                .split("; sandbox")
+                .next()
                 .unwrap()
                 .to_owned()
         };

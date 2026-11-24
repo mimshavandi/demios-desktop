@@ -57,6 +57,14 @@ pub enum ChatEvent {
         message: String,
         recovery: Vec<RecoveryAction>,
     },
+    /// A fenced `<artifact>` block from a model without tool calling wasn't saved (cut off,
+    /// rejected, or refused by the store); `reason` says why.
+    ArtifactNotSaved {
+        message_id: Id,
+        conversation_id: Id,
+        title: String,
+        reason: String,
+    },
     /// An artifact was created or got a new version in this turn (T-ART-06).
     ArtifactChanged {
         message_id: Id,
@@ -1246,6 +1254,40 @@ mod tests {
             assert!(names.contains(&t), "{names:?}");
         }
         assert!(!system_text(&reqs[0]).contains("<artifact id="));
+    }
+
+    /// Writes an `<artifact>` block that never closes.
+    struct CutOff;
+    impl ChatModel for CutOff {
+        fn chat(&self, _req: dn_core::chat::ChatRequest) -> dn_core::chat::EventStream {
+            use dn_core::chat::StreamEvent;
+            Box::pin(Iter(
+                vec![
+                    Ok(StreamEvent::TextDelta {
+                        text: "<artifact id=\"p\" type=\"html\" title=\"Cut\">\n<p>half".into(),
+                    }),
+                    Ok(StreamEvent::Done {
+                        finish_reason: FinishReason::Length,
+                        usage: Usage::default(),
+                    }),
+                ]
+                .into_iter(),
+            ))
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn unsaved_fenced_blocks_are_reported() {
+        let st = artifact_state("local:plain", Arc::new(CutOff), false);
+        let conv = st.create_conversation().unwrap();
+        let (_, evs) = turn(&st, conv.id, "make a page").await;
+        assert!(
+            evs.iter().any(|e| matches!(e,
+                ChatEvent::ArtifactNotSaved { title, reason, .. }
+                    if title == "Cut" && reason.contains("not closed"))),
+            "{evs:?}"
+        );
+        assert!(crate::artifacts::list(&st, conv.id).unwrap().is_empty());
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -187,7 +187,8 @@ jobs:
         run: |
           $debug = '--remote-debugging-port=0 --enable-automation'
           $wryDefault = '--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection'
-          $conf = Get-Content apps/desktop/tauri.conf.json -Raw | ConvertFrom-Json
+          # The Windows config's window (it carries the WebRTC policy switch, T-ART-06).
+          $conf = Get-Content apps/desktop/tauri.windows.conf.json -Raw | ConvertFrom-Json
           $windows = @($conf.app.windows | ForEach-Object {
             $base = if ($_.additionalBrowserArgs) { $_.additionalBrowserArgs } else { $wryDefault }
             $_ | Add-Member -NotePropertyName additionalBrowserArgs -NotePropertyValue "$base $debug" -Force -PassThru

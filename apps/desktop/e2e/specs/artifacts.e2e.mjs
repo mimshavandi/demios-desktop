@@ -10,8 +10,19 @@ import http from "node:http";
 
 const byTestId = (id) => $(`[data-testid="${id}"]`);
 const textOf = (el) => browser.execute((e) => e.textContent ?? "", el);
-// Linux (WebKitGTK) and macOS; Windows serves the scheme as http://artifact.localhost.
-const FRAME_ORIGIN = process.platform === "win32" ? "http://artifact.localhost" : "artifact://localhost";
+const FRAME_ORIGIN = "artifact://localhost";
+// Artifacts are off on Windows for now (threat model R8): the pane says so and renders nothing.
+const WINDOWS = process.platform === "win32";
+
+/** Conversations as the app's own window sees them, through its IPC (main frame only). */
+function conversationCount() {
+  return browser.executeAsync((done) => {
+    window.__TAURI_INTERNALS__
+      .invoke("list_conversations")
+      .then((list) => done(list.length))
+      .catch((e) => done(`error: ${e}`));
+  });
+}
 
 /** Records every request that reaches it: the frame must never get here. */
 function spyServer() {
@@ -83,7 +94,23 @@ describe("artifacts", () => {
   });
   after(() => spy?.server.close());
 
-  it("creates, renders, updates and restores an artifact", async () => {
+  it("Windows: the artifact is saved, and the pane says artifacts aren't available", async function () {
+    if (!WINDOWS) this.skip();
+    await (await byTestId("new-chat")).waitForExist({ timeout: 60_000 });
+    await (await byTestId("new-chat")).click();
+    await send("Make an HTML artifact");
+    await lastAnswerDone(1);
+    const card = await byTestId("artifact-card");
+    await card.waitForExist({ timeout: 30_000, timeoutMsg: "no artifact card in the answer" });
+    await (await byTestId("artifact-card-open")).click();
+    const gate = await byTestId("artifacts-unavailable");
+    await gate.waitForExist({ timeout: 20_000, timeoutMsg: "no Windows gate message in the pane" });
+    expect(await textOf(gate)).toContain("aren't available on Windows");
+    expect((await $$('[data-testid="artifact-frame"]')).length).toBe(0);
+  });
+
+  it("creates, renders, updates and restores an artifact", async function () {
+    if (WINDOWS) this.skip();
     await (await byTestId("new-chat")).waitForExist({ timeout: 60_000 });
     await (await byTestId("new-chat")).click();
 
@@ -116,8 +143,10 @@ describe("artifacts", () => {
     await frameHeading("Version one");
   });
 
-  it("the artifact frame can't reach IPC, the network or the app's DOM", async () => {
-    const conversationsBefore = (await $$('[data-testid="conversation-item"]')).length;
+  it("the artifact frame can't reach IPC, the network or the app's DOM", async function () {
+    if (WINDOWS) this.skip();
+    const conversationsBefore = await conversationCount();
+    expect(typeof conversationsBefore).toBe("number");
     const frame = await $('[data-testid="artifact-pane"] [data-testid="artifact-frame"]');
     expect(await frame.getAttribute("src")).toMatch(new RegExp(`^${FRAME_ORIGIN}/frame/`));
     expect(await frame.getAttribute("sandbox")).toBe("allow-scripts");
@@ -203,8 +232,7 @@ describe("artifacts", () => {
     expect(await browser.execute(() => document.querySelectorAll("[data-pwned]").length)).toBe(0);
     expect(await browser.execute(() => location.href)).not.toContain("127.0.0.1");
     // ...and no IPC call went through (the raw handler message created no conversation).
-    await (await byTestId("new-chat")).click();
     await browser.pause(500);
-    expect((await $$('[data-testid="conversation-item"]')).length).toBe(conversationsBefore);
+    expect(await conversationCount()).toBe(conversationsBefore);
   });
 });

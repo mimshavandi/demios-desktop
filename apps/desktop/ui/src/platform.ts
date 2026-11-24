@@ -16,3 +16,15 @@ export function artifactFrameUrl(): string {
   }
   return /Windows/i.test(navigator.userAgent) ? "http://artifact.localhost/frame/" : "artifact://localhost/frame/";
 }
+
+/** Running on Windows (WebView2). */
+export const isWindows = typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent);
+
+/**
+ * Why artifacts can't be shown in this build, or `null` when they can. On Windows, WebView2 runs
+ * the app's init scripts (Tauri's IPC object) in sub-frames too, and they can't be removed from
+ * the artifact frame, so artifacts stay off there for now (threat model R8).
+ */
+export const ARTIFACTS_UNAVAILABLE: string | null = isWindows
+  ? "Artifacts aren't available on Windows yet. They are saved, and will open here in a later version."
+  : null;

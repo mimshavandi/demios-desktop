@@ -280,11 +280,11 @@ pub async fn update_settings(
 fn catalog(s: &AppState) -> IpcResult<ModelCatalog> {
     let settings = s.settings()?;
     let mut c = models::catalog(&s.models, &s.keys, &settings);
-    c.chat_model = s
-        .agent
-        .resolve_model(&settings, &s.models, &s.keys)
-        .ok()
-        .map(|m| m.to_string());
+    let resolved = s.agent.resolve_model(&settings, &s.models, &s.keys).ok();
+    c.chat_model_tools = resolved
+        .as_ref()
+        .is_some_and(|m| s.models.supports_tools(m));
+    c.chat_model = resolved.map(|m| m.to_string());
     Ok(c)
 }
 

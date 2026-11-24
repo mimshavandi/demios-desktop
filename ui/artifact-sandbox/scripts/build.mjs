@@ -4,7 +4,7 @@
 import { build } from "esbuild";
 import { copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 // mermaid optionally uses elkjs (EPL-2.0 OR GPL-3.0): it is stubbed out, and the build fails
 // if any of it gets in (runtimes and every file of dist/).
 import { elkProblems, noElk } from "./no-elk.mjs";
@@ -84,7 +84,8 @@ await build({
   plugins: [runtimeText],
   logLevel: "warning",
 });
-const { artifactCsp } = await import(join(root, "build", "document.mjs"));
+// A file URL, not a path: import() of "D:\\…" fails on Windows (ERR_UNSUPPORTED_ESM_URL_SCHEME).
+const { artifactCsp } = await import(pathToFileURL(join(root, "build", "document.mjs")).href);
 const boot = await readFile(join(out, "boot.js"), "utf8");
 await mkdir(join(dist, "frame"), { recursive: true });
 await writeFile(

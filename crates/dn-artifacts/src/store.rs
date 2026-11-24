@@ -58,6 +58,10 @@ END;
 pub const MAX_CONTENT_BYTES: usize = 2 * 1024 * 1024;
 /// Longest title accepted (characters).
 pub const MAX_TITLE_CHARS: usize = 200;
+/// Artifacts one conversation may hold (a runaway model can't fill the disk).
+pub const MAX_ARTIFACTS_PER_CONVERSATION: usize = 100;
+/// Versions one artifact may have, including restores.
+pub const MAX_VERSIONS_PER_ARTIFACT: u32 = 200;
 
 pub(crate) fn check_content(what: &'static str, s: &str) -> Result<()> {
     if s.len() > MAX_CONTENT_BYTES {
@@ -231,6 +235,17 @@ impl<'c> ArtifactStore<'c> {
         let type_json = serde_json::to_string(artifact_type)
             .map_err(|e| ArtifactError::Corrupt(e.to_string()))?;
         let tx = WriteTx::begin(self.conn)?;
+        let existing: i64 = tx.conn.query_row(
+            "SELECT COUNT(*) FROM artifact_artifacts WHERE conversation_id = ?1",
+            [conversation_id.to_string()],
+            |r| r.get(0),
+        )?;
+        if existing as usize >= MAX_ARTIFACTS_PER_CONVERSATION {
+            return Err(ArtifactError::TooMany {
+                what: "artifacts",
+                max: MAX_ARTIFACTS_PER_CONVERSATION,
+            });
+        }
         tx.conn.execute(
             &format!(
                 "INSERT INTO artifact_artifacts
@@ -545,6 +560,12 @@ fn insert_version(
     parent_n: Option<u32>,
     ctx: &OpContext,
 ) -> Result<ArtifactVersion> {
+    if n > MAX_VERSIONS_PER_ARTIFACT {
+        return Err(ArtifactError::TooMany {
+            what: "versions of one artifact",
+            max: MAX_VERSIONS_PER_ARTIFACT as usize,
+        });
+    }
     let created_at: String = conn.query_row(
         &format!(
             "INSERT INTO artifact_versions
@@ -1122,6 +1143,44 @@ pub(crate) mod tests {
         create(&store, Id::new(), "x");
         store.delete_all().unwrap();
         assert_eq!(store.counts().unwrap(), (0, 0));
+    }
+
+    #[test]
+    fn artifacts_and_versions_are_capped() {
+        let conn = db();
+        let store = ArtifactStore::new(&conn);
+        let conv = Id::new();
+        let ctx = OpContext::model(None);
+        for _ in 0..MAX_ARTIFACTS_PER_CONVERSATION {
+            create(&store, conv, "x");
+        }
+        let err = store
+            .create(conv, &ArtifactType::Html, "one more", "y", None, &ctx)
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ArtifactError::TooMany {
+                    what: "artifacts",
+                    ..
+                }
+            ),
+            "{err}"
+        );
+        assert!(err.to_string().contains("artifact_rewrite"));
+        // Another conversation is unaffected; one artifact's versions are capped too.
+        let other = Id::new();
+        let id = create(&store, other, "v1");
+        for i in 2..=MAX_VERSIONS_PER_ARTIFACT {
+            store.rewrite(other, id, &format!("v{i}"), &ctx).unwrap();
+        }
+        let err = store.rewrite(other, id, "too many", &ctx).unwrap_err();
+        assert!(matches!(err, ArtifactError::TooMany { .. }), "{err}");
+        let err = store
+            .rollback(other, id, 1, &OpContext::user())
+            .unwrap_err();
+        assert!(matches!(err, ArtifactError::TooMany { .. }), "{err}");
+        assert_eq!(store.latest(id).unwrap().n, MAX_VERSIONS_PER_ARTIFACT);
     }
 
     #[test]

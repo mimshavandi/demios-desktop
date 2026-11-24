@@ -27,12 +27,12 @@ export function markArtifact(type: ArtifactType, content: string, model: string 
   }
 }
 
+/**
+ * The meta goes at the very start (after a doctype, which must stay first): the HTML parser puts
+ * a leading <meta> into the document's real head, whatever comes later, so a "<head>" inside a
+ * comment or a script string can't misplace it.
+ */
 function markHtml(content: string, meta: string): string {
-  const head = /<head(\s[^>]*)?>/i.exec(content);
-  if (head) return content.slice(0, head.index + head[0].length) + meta + content.slice(head.index + head[0].length);
-  const html = /<html(\s[^>]*)?>/i.exec(content);
-  if (html) return content.slice(0, html.index + html[0].length) + `<head>${meta}</head>` + content.slice(html.index + html[0].length);
-  // A fragment: the parser moves a leading meta into the generated head.
   const doctype = /^\s*<!doctype[^>]*>/i.exec(content);
   return doctype ? `${doctype[0]}${meta}${content.slice(doctype[0].length)}` : `${meta}${content}`;
 }

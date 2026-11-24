@@ -20,7 +20,11 @@ afterEach(cleanup);
 
 // The real renderer needs a webview (constructable stylesheets, sandboxed frames); record
 // what the pane hands it instead. Its own behaviour is tested in ui/artifact-sandbox.
-const shown = vi.hoisted(() => ({ artifacts: [] as { id: string; versions: unknown[] }[], madeBy: [] as (string | null)[] }));
+const shown = vi.hoisted(() => ({
+  artifacts: [] as { id: string; versions: unknown[] }[],
+  madeBy: [] as (string | null)[],
+  opts: null as null | { allowNetwork?: (id: string) => boolean; onAllowNetwork?: (id: string) => void },
+}));
 vi.mock("@dn-artifacts", () => ({
   ArtifactView: class {
     constructor(
@@ -28,6 +32,7 @@ vi.mock("@dn-artifacts", () => ({
       private opts: { madeBy?: (v: { author: string; model?: string | null }) => string | null },
     ) {
       this.el.append(Object.assign(document.createElement("div"), { textContent: "sandbox view" }));
+      shown.opts = this.opts as typeof shown.opts;
     }
     setArtifact(a: { id: string; versions: { author: string; model?: string | null }[] }) {
       shown.artifacts.push(a);
@@ -99,6 +104,7 @@ function fakeApi() {
     key_store: "memory",
     settings,
     chat_model: null,
+    chat_model_tools: true,
   });
   const api: Api = {
     appInfo: async () => ({ version: "0.1.0", dev_fake_model: true, data_dir: "/tmp", models_dir: "/tmp/models" }),
@@ -259,6 +265,18 @@ describe("App", () => {
     expect(shown.madeBy.at(-1)).toBe("Dev fake");
     fireEvent.click(screen.getByRole("button", { name: "Open Fake artifact" }));
     expect(screen.getByTestId("artifact-host").hidden).toBe(false);
+
+    // Network allowed for v1 doesn't carry over to a new version the model writes.
+    shown.opts?.onAllowNetwork?.("art-1");
+    expect(shown.opts?.allowNetwork?.("art-1")).toBe(true);
+    const art = artifacts[0];
+    if (!art) throw new Error("no artifact");
+    art.versions.push({ ...art.versions[0]!, n: 2, parent_n: 1, content: "<h1>Version two</h1>" });
+    act(() => {
+      emit({ type: "artifact_changed", message_id: assistantId, conversation_id: conv, artifact_id: "art-1", title: "Fake artifact", version: 2 });
+    });
+    await waitFor(() => expect(shown.artifacts.at(-1)?.versions.length).toBe(2));
+    expect(shown.opts?.allowNetwork?.("art-1")).toBe(false);
   });
 
   it("sends a message and renders the streamed answer as markdown", async () => {

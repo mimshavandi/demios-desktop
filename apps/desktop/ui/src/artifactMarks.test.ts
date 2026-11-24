@@ -4,12 +4,13 @@ import { markArtifact } from "./artifactMarks";
 const T = "2026-11-24T10:00:00Z";
 
 describe("markArtifact", () => {
-  it("puts the generator meta in the HTML head", () => {
-    const out = markArtifact({ kind: "html" }, "<!doctype html><html><head><title>x</title></head><body>b</body></html>", "local:dev-fake", T);
-    expect(out).toMatch(/<head><meta name="generator" content="Demios \(AI-generated with local:dev-fake\)"><title>/);
-  });
-  it("adds a head when there is none, and handles fragments", () => {
-    expect(markArtifact({ kind: "html" }, "<html><body>b</body></html>", null, T)).toMatch(/^<html><head><meta name="generator"[^>]*><\/head><body>/);
+  it("puts the generator meta first, where the parser places it in the real head", () => {
+    const doc = '<!doctype html><!-- <head> in a comment --><html><head><title>x</title></head><body>b</body></html>';
+    const out = markArtifact({ kind: "html" }, doc, "local:dev-fake", T);
+    expect(out.startsWith('<!doctype html><meta name="generator" content="Demios (AI-generated with local:dev-fake)">')).toBe(true);
+    const parsed = new DOMParser().parseFromString(out, "text/html");
+    expect(parsed.head.querySelector('meta[name="generator"]')).not.toBeNull();
+    expect(parsed.title).toBe("x");
     expect(markArtifact({ kind: "html" }, "<p>hi</p>", null, T)).toMatch(/^<meta name="generator"[^>]*><p>hi<\/p>$/);
   });
   it("comments SVG after the XML declaration", () => {

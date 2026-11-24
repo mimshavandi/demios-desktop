@@ -187,6 +187,7 @@ export function createMockApi(): Api {
     key_store: "session only (browser mock)",
     settings,
     chat_model: settings.slots["chat"] ?? "local:dev-fake",
+    chat_model_tools: true,
   });
 
   const stream = (cid: string, a: StoredMessage, q: string, onEvent: (e: ChatEvent) => void) => {
@@ -467,7 +468,7 @@ export function createMockApi(): Api {
     listArtifacts: async (cid) =>
       artifacts
         .filter((x) => x.conversation_id === cid)
-        .map((x) => ({ id: x.id, conversation_id: cid, artifact_type: x.artifact_type, title: x.title, latest_n: x.versions.length, created_at: x.versions[0]?.created_at ?? iso(), updated_at: x.versions.at(-1)?.created_at ?? iso() })),
+        .map((x) => ({ id: x.id, conversation_id: cid, artifact_type: x.artifact_type, title: x.title, latest_n: x.versions.at(-1)?.n ?? 0, created_at: x.versions[0]?.created_at ?? iso(), updated_at: x.versions.at(-1)?.created_at ?? iso() })),
     getArtifact: async (cid, aid) => structuredClone(findArtifact(cid, aid)),
     rollbackArtifact: async (cid, aid, to) => {
       const x = findArtifact(cid, aid);

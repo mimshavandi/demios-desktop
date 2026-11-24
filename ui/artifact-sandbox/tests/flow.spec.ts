@@ -206,7 +206,8 @@ test("markdown front matter (the host's AI marker) is not shown", async ({ page 
   const f = frame(page);
   await expect(f.locator("h1")).toHaveText("Notes");
   await expect(f.locator("body")).not.toContainText("ai_generated");
-  await expect(f.locator("body")).not.toContainText("model_own_meta");
+  // Exactly one block is the host's; a second one is the artifact's own text and stays visible.
+  await expect(f.locator("body")).toContainText("model_own_meta");
 });
 
 test("the frame shell opened as a top-level page stays inert", async ({ page }) => {

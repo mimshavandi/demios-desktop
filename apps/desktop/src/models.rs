@@ -303,6 +303,8 @@ pub struct ModelCatalog {
     /// The model chat uses now (the user's choice, or the one picked automatically when no
     /// chat model is chosen); `None` if nothing is usable.
     pub chat_model: Option<String>,
+    /// Whether `chat_model` makes tool calls (artifacts through tools, not the fenced format).
+    pub chat_model_tools: bool,
 }
 
 pub fn catalog(registry: &ModelRegistry, keys: &Keys, settings: &Settings) -> ModelCatalog {
@@ -366,6 +368,7 @@ pub fn catalog(registry: &ModelRegistry, keys: &Keys, settings: &Settings) -> Mo
         key_store: keys.description.into(),
         settings: settings.clone(),
         chat_model: None,
+        chat_model_tools: false,
     }
 }
 
