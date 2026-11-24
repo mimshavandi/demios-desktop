@@ -10,7 +10,7 @@ Demios artifacts are proprietary JSON (PenDocument, Excalidraw elements) rendere
 - **Types (v1):** `html`, `react` (single-file JSX, bundled in-app with a pinned esbuild-wasm/sucrase + import map of an allow-listed CDN set or vendored libs), `svg`, `mermaid`, `markdown`, `code` (with language). Later: `slides`, `sheet`, `board`, `form` — Demios designers return as artifact types with templates.
 - **Model protocol:** the model calls tools `artifact_create {type,title,content}`, `artifact_update {id, old_str, new_str}` (exact-match patch, like Claude), `artifact_rewrite {id, content}`. Tools are exposed to every model; for models without tool calling, a fenced-block fallback (`<artifact id= type= title=>…</artifact>`) is parsed from the stream.
 - **Rendering:** a separate webview/iframe on a unique custom origin (`artifact://<id>`), `sandbox="allow-scripts"` without `allow-same-origin`, strict CSP (no network by default; per-artifact "allow network" toggle), no Tauri IPC exposed. Communication via `postMessage` only (size, errors, "ask the model to fix" button that sends console errors back).
-- **Export:** save to file, copy, open in browser. Team product: share an artifact to a space.
+- **Export:** save to file, copy, open in browser.
 - **Inline blocks** (Demios A2UI: chart, kpi, table, status, action) stay as lightweight in-message blocks — not artifacts.
 
 ## Options considered

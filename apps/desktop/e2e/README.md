@@ -1,4 +1,4 @@
-# Desktop e2e (T-SHELL-05, D-015)
+# Desktop e2e (T-SHELL-05)
 
 Real-app tests: WebdriverIO drives the built app through
 [tauri-driver](https://v2.tauri.app/develop/tests/webdriver/), which runs the platform's

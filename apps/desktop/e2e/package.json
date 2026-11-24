@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "license": "Apache-2.0",
   "type": "module",
-  "description": "Real-app end-to-end tests: tauri-driver + WebdriverIO (D-015, T-SHELL-05).",
+  "description": "Real-app end-to-end tests: tauri-driver + WebdriverIO (T-SHELL-05).",
   "scripts": {
     "test": "wdio run ./wdio.conf.mjs"
   },

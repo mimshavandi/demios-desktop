@@ -67,7 +67,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test -p dn-core --features ts ts_bindings
-  # Real-app e2e (D-015, T-SHELL-05): tauri-driver + WebdriverIO against a debug build with
+  # Real-app e2e (T-SHELL-05): tauri-driver + WebdriverIO against a debug build with
   # the dev fake model. macOS has no WKWebView WebDriver; see apps/desktop/e2e/README.md.
   e2e:
     runs-on: ubuntu-latest

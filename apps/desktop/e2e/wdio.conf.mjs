@@ -1,4 +1,4 @@
-// Real-app e2e (D-015, T-SHELL-05): WebdriverIO talks to tauri-driver, which launches the
+// Real-app e2e (T-SHELL-05): WebdriverIO talks to tauri-driver, which launches the
 // built app through the platform's WebDriver (WebKitWebDriver on Linux, msedgedriver on
 // Windows). macOS has no WKWebView WebDriver: see README.md for the manual checklist.
 //
