@@ -111,9 +111,10 @@ pub async fn run(a: BenchArgs) -> Result<(), String> {
     let path = resolve_model(&a.model)?;
     let g = Gguf::open(&path).map_err(|e| e.to_string())?;
     let fp = ModelFootprint::from_gguf(&g);
-    let mut opts = a.load.options()?;
+    // Placement and KV from the fit estimator (unless set); the context is fixed below.
+    let (mut opts, _) = a.load.auto_options(&path)?;
     // Context must hold one run.
-    opts.n_ctx = Some(opts.n_ctx.unwrap_or(0).max(a.n_prompt + a.n_gen + 16));
+    opts.n_ctx = Some(a.load.ctx().unwrap_or(0).max(a.n_prompt + a.n_gen + 16));
     let mem = PeakMem::start();
     let backend = LlamaCppBackend::new();
     let t0 = Instant::now();

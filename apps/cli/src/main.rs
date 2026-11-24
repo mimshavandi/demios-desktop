@@ -66,25 +66,39 @@ enum KvArg {
     Q4_0,
 }
 
-/// Options shared by `run` and `bench` for loading a GGUF.
-#[derive(Args, Clone)]
+/// Options shared by `run` and `bench` for loading a GGUF. Anything left unset is chosen by
+/// the fit estimator (`dn fit`) for this machine, unless `--no-auto`.
+#[derive(Args, Clone, Default)]
 pub struct LoadArgs {
-    /// Context window (default: min(training context, 8192)).
+    /// Context window (default: the fit estimator's choice).
     #[arg(long)]
     ctx: Option<u32>,
-    /// Layers on the GPU (default: all).
+    /// Layers on the GPU (default: the fit estimator's choice; all when it fits).
     #[arg(long)]
     gpu_layers: Option<u32>,
     /// Keep MoE experts in CPU RAM: `all` or the number of leading layers.
     #[arg(long)]
     moe_cpu: Option<String>,
-    #[arg(long, value_enum, default_value = "f16")]
-    kv: KvArg,
+    /// KV cache type (default: the fit estimator's choice).
+    #[arg(long, value_enum)]
+    kv: Option<KvArg>,
     #[arg(long)]
     threads: Option<u32>,
+    /// Don't use the fit estimator: llama.cpp defaults (ctx min(train, 8192), all layers on
+    /// the GPU, f16 KV).
+    #[arg(long)]
+    no_auto: bool,
+    /// Load even when the fit estimator says the model won't fit.
+    #[arg(long)]
+    force: bool,
 }
 
 impl LoadArgs {
+    /// `--ctx` as given.
+    pub fn ctx(&self) -> Option<u32> {
+        self.ctx
+    }
+
     pub fn options(&self) -> Result<LoadOptions, String> {
         let moe_offload = match self.moe_cpu.as_deref() {
             None => MoeOffload::None,
@@ -99,13 +113,73 @@ impl LoadArgs {
             gpu_layers: self.gpu_layers,
             moe_offload,
             kv_cache: match self.kv {
-                KvArg::F16 => KvCacheQuant::F16,
-                KvArg::Q8_0 => KvCacheQuant::Q8_0,
-                KvArg::Q4_0 => KvCacheQuant::Q4_0,
+                None | Some(KvArg::F16) => KvCacheQuant::F16,
+                Some(KvArg::Q8_0) => KvCacheQuant::Q8_0,
+                Some(KvArg::Q4_0) => KvCacheQuant::Q4_0,
             },
             threads: self.threads,
             ..Default::default()
         })
+    }
+
+    /// [`options`](Self::options) with every unset value taken from the fit estimator for
+    /// `path` on this machine. Refuses a model that won't fit unless `--force`.
+    pub fn auto_options(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<(LoadOptions, Option<dn_models::FitReport>), String> {
+        let opts = self.options()?;
+        if self.no_auto {
+            return Ok((opts, None));
+        }
+        let g = Gguf::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let fp = ModelFootprint::from_gguf(&g);
+        let report = dn_models::fit(&fp, &machine(None, None, false));
+        if report.status == FitStatus::MemoryBlocked && !self.force {
+            let hint = report
+                .suggested_quant
+                .as_deref()
+                .map(|q| format!(" Try a smaller quant ({q})."))
+                .unwrap_or_default();
+            return Err(format!(
+                "{} won't fit in this machine's memory (needs {}, budget {}).{hint} \
+                 `dn fit` shows the details; --force loads anyway.",
+                path.display(),
+                gib(report.recommended.need_bytes),
+                gib(report.recommended.budget_bytes)
+            ));
+        }
+        Ok((self.apply_fit(opts, &report, fp.n_layer), Some(report)))
+    }
+
+    /// Fill what the user didn't set from `report`.
+    fn apply_fit(
+        &self,
+        mut opts: LoadOptions,
+        report: &dn_models::FitReport,
+        n_layer: u32,
+    ) -> LoadOptions {
+        let r = &report.recommended;
+        if self.ctx.is_none() {
+            opts.n_ctx = Some(r.n_ctx);
+        }
+        if self.gpu_layers.is_none() {
+            opts.gpu_layers = r.placement.gpu_layers;
+        }
+        if self.moe_cpu.is_none() && r.placement.moe_cpu_layers > 0 {
+            opts.moe_offload = if r.placement.moe_cpu_layers >= n_layer {
+                MoeOffload::All
+            } else {
+                MoeOffload::FirstLayers(r.placement.moe_cpu_layers)
+            };
+        }
+        if self.kv.is_none() {
+            opts.kv_cache = match r.kv {
+                KvType::F16 => KvCacheQuant::F16,
+                KvType::Q8_0 => KvCacheQuant::Q8_0,
+            };
+        }
+        opts
     }
 }
 
@@ -223,10 +297,32 @@ async fn run(a: RunArgs) -> Result<(), String> {
         let path = resolve_model(&a.model)?;
         let spec = ModelSpec::gguf(&path);
         let backend = Arc::new(LlamaCppBackend::new());
-        let m = LoadedModel::load(backend.clone(), &spec, &a.load.options()?)
+        let (opts, report) = a.load.auto_options(&path)?;
+        if let Some(r) = &report
+            && r.status != FitStatus::Ready
+        {
+            eprintln!("[dn] fit: {} (see `dn fit`)", status_label(r.status));
+        }
+        let m = LoadedModel::load(backend.clone(), &spec, &opts)
             .await
             .map_err(|e| e.to_string())?;
         if a.verbose {
+            eprintln!(
+                "[dn] settings: ctx {} · kv {:?} · gpu layers {} · moe {:?}{}",
+                opts.n_ctx
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "default".into()),
+                opts.kv_cache,
+                opts.gpu_layers
+                    .map(|g| g.to_string())
+                    .unwrap_or_else(|| "all".into()),
+                opts.moe_offload,
+                if report.is_some() {
+                    " (fit estimator)"
+                } else {
+                    ""
+                }
+            );
             let info = backend.model_info(m.handle()).map_err(|e| e.to_string())?;
             eprintln!(
                 "[dn] loaded {} ({}, {} layers, ctx {}) in {:.2}s; gpu offload: {}",
@@ -522,5 +618,58 @@ async fn main() -> ExitCode {
             eprintln!("dn: {e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn moe() -> ModelFootprint {
+        ModelFootprint {
+            weight_bytes: 18_600_000_000,
+            expert_bytes: 17_500_000_000,
+            n_params: 30_500_000_000,
+            n_layer: 48,
+            n_ctx_train: 40_960,
+            n_vocab: 151_936,
+            n_embd: 2048,
+            kv_elems_per_token: 48 * 4 * (128 + 128),
+            quant: Some("Q4_K_M".into()),
+            swa_kv_elems_per_token: 0,
+            sliding_window: 0,
+        }
+    }
+
+    #[test]
+    fn fit_fills_unset_load_options() {
+        let report = dn_models::fit(&moe(), &Machine::discrete(32 * GIB, 8 * GIB));
+        let r = &report.recommended;
+        let a = LoadArgs::default();
+        let o = a.apply_fit(a.options().unwrap(), &report, 48);
+        assert_eq!(o.n_ctx, Some(r.n_ctx));
+        assert_eq!(o.gpu_layers, r.placement.gpu_layers);
+        assert_eq!(
+            o.moe_offload,
+            MoeOffload::FirstLayers(r.placement.moe_cpu_layers)
+        );
+        assert!(r.placement.moe_cpu_layers > 0);
+    }
+
+    #[test]
+    fn user_settings_win_over_fit() {
+        let report = dn_models::fit(&moe(), &Machine::discrete(32 * GIB, 8 * GIB));
+        let a = LoadArgs {
+            ctx: Some(1024),
+            gpu_layers: Some(3),
+            moe_cpu: Some("all".into()),
+            kv: Some(KvArg::Q4_0),
+            ..Default::default()
+        };
+        let o = a.apply_fit(a.options().unwrap(), &report, 48);
+        assert_eq!(o.n_ctx, Some(1024));
+        assert_eq!(o.gpu_layers, Some(3));
+        assert_eq!(o.moe_offload, MoeOffload::All);
+        assert_eq!(o.kv_cache, KvCacheQuant::Q4_0);
     }
 }
