@@ -194,8 +194,14 @@ export interface FitView {
 }
 
 /** A curated catalogue model on (or for) this device. */
+/** Where a local model comes from (T-INF-10). */
+export type ModelOrigin = "catalog" | "hub" | "hf_cache";
+
 export interface LocalModelRow {
   id: string;
+  origin: ModelOrigin;
+  /** Hub and cache models: where the file is. */
+  location: string | null;
   model_ref: string;
   name: string;
   repo: string;
@@ -212,7 +218,69 @@ export interface LocalModelRow {
   fit: FitView;
 }
 
-export type LocalModelEvent = { type: "changed"; row: LocalModelRow };
+export type LocalModelEvent = { type: "changed"; row: LocalModelRow } | { type: "removed"; id: string };
+
+// ---- add a model from Hugging Face (T-INF-10)
+
+export type HubSort = "downloads" | "likes" | "trending" | "updated";
+
+export interface HubRepoSummary {
+  id: string;
+  author: string;
+  downloads: number;
+  likes: number;
+  last_modified: string | null;
+  gated: boolean;
+  pipeline_tag: string | null;
+  license: string | null;
+  tags: string[];
+}
+
+export interface HubSearchPage {
+  items: HubRepoSummary[];
+  next: string | null;
+}
+
+export type LicenseWarning = "missing" | "non_commercial" | "custom" | "use_policy";
+
+export interface HubLicense {
+  id: string | null;
+  name: string | null;
+  link: string | null;
+  warning: LicenseWarning | null;
+}
+
+export interface HubVariant {
+  name: string;
+  quant: string | null;
+  total_size: number;
+  parts: number;
+  /** Every part has a published checksum; only then can it be downloaded. */
+  verifiable: boolean;
+  fit: FitView | null;
+  /** Already downloaded: its model ref. */
+  downloaded: string | null;
+  /** Downloading now (started earlier): the latest progress. */
+  progress: HubPullProgress | null;
+}
+
+export interface HubRepoView {
+  id: string;
+  sha: string;
+  gated: boolean;
+  license: HubLicense;
+  card_url: string;
+  variants: HubVariant[];
+}
+
+export interface HubPullProgress {
+  part: number;
+  parts: number;
+  done_bytes: number;
+  total_bytes: number;
+}
+
+export type HubPullEvent = { type: "progress" } & HubPullProgress;
 
 export interface ModelCatalog {
   slots: SlotInfo[];

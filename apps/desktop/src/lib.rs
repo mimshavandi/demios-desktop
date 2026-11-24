@@ -11,6 +11,7 @@ pub mod commands;
 pub mod error;
 #[cfg(any(fake_model, test))]
 pub mod fake;
+pub mod hub;
 pub mod links;
 pub mod local;
 pub mod mcp;
@@ -134,6 +135,14 @@ pub fn run() {
             commands::reconnect_mcp_server,
             commands::sign_in_mcp_server,
             commands::sign_out_mcp_server,
+            commands::hub_search,
+            commands::hub_repo,
+            commands::hub_pull,
+            commands::hub_cancel,
+            commands::hub_pull_status,
+            commands::hf_token_status,
+            commands::set_hf_token,
+            commands::delete_hf_token,
             commands::list_conversations,
             commands::create_conversation,
             commands::rename_conversation,

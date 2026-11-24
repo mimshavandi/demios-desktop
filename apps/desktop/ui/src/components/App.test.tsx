@@ -31,6 +31,8 @@ function fakeApi() {
   const localRows: LocalModelRow[] = [
     {
       id: "m1",
+      origin: "catalog",
+      location: null,
       model_ref: "local:m1",
       name: "Tiny Model",
       repo: "org/tiny",
@@ -80,6 +82,16 @@ function fakeApi() {
   });
   const api: Api = {
     appInfo: async () => ({ version: "0.1.0", dev_fake_model: true, data_dir: "/tmp", models_dir: "/tmp/models" }),
+    hubSearch: async () => ({ items: [], next: null }),
+    hubRepo: async () => {
+      throw { code: "model_unavailable", message: "not in this test" };
+    },
+    hubPull: async () => "local:x",
+    hubCancel: async () => true,
+    hubPullStatus: async () => ({}),
+    hfTokenStatus: async () => false,
+    setHfToken: async () => true,
+    deleteHfToken: async () => false,
     listMcpServers: async () => ({ servers: [], local_servers_allowed: true }),
     saveMcpServer: async () => ({ servers: [], local_servers_allowed: true }),
     removeMcpServer: async () => ({ servers: [], local_servers_allowed: true }),

@@ -128,7 +128,7 @@ fn wont_fit_error(state: &AppState, model: &ModelRef) -> Option<IpcError> {
         code: "model_unavailable",
         message: format!(
             "{} won't fit on this computer. Choose a smaller model in Settings → Models.",
-            local.name(id).unwrap_or(id)
+            local.name(id).unwrap_or_else(|| id.to_string())
         ),
         recovery: vec![RecoveryAction::ChooseModelForSlot {
             agent_id: crate::agent::AGENT_ID.into(),
