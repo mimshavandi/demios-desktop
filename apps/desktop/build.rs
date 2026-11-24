@@ -15,6 +15,7 @@ const COMMANDS: &[&str] = &[
     "hub_repo",
     "hub_pull",
     "hub_cancel",
+    "hub_pull_status",
     "hf_token_status",
     "set_hf_token",
     "delete_hf_token",

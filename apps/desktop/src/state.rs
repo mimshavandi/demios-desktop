@@ -184,7 +184,7 @@ pub struct AppState {
     /// Whether this build may start local (stdio) MCP servers (not in Flatpak).
     pub local_servers: bool,
     /// Running Hugging Face downloads (add-model screen).
-    pub hub_pulls: crate::hub::HubPulls,
+    pub hub_pulls: Arc<crate::hub::HubPulls>,
     /// Asks before a local MCP server starts (native dialog in the app; tests set a fake).
     pub launch_approver: std::sync::OnceLock<Arc<dyn crate::mcp::LaunchApprover>>,
 }

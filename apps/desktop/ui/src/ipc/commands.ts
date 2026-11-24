@@ -25,6 +25,7 @@ import type {
   HubRepoView,
   HubSearchPage,
   HubSort,
+  HubPullProgress,
 } from "./types";
 
 interface Commands {
@@ -42,6 +43,7 @@ interface Commands {
   hub_repo: { args: { repo: string }; ret: HubRepoView };
   hub_pull: { args: { repo: string; sha: string; variant: string; onEvent: Channel<HubPullEvent> }; ret: string };
   hub_cancel: { args: { repo: string; sha: string; variant: string }; ret: boolean };
+  hub_pull_status: { args: { repo: string; sha: string; variants: string[] }; ret: Record<string, HubPullProgress> };
   hf_token_status: { args: Record<string, never>; ret: boolean };
   set_hf_token: { args: { token: string }; ret: boolean };
   delete_hf_token: { args: Record<string, never>; ret: boolean };
@@ -106,6 +108,8 @@ export const api = {
     call("hub_pull", { repo, sha, variant, onEvent: channel(onEvent) }),
   /** Pauses a running download; downloading again resumes it. */
   hubCancel: (repo: string, sha: string, variant: string) => call("hub_cancel", { repo, sha, variant }),
+  /** Progress of running downloads of these variants (for a screen that came back). */
+  hubPullStatus: (repo: string, sha: string, variants: string[]) => call("hub_pull_status", { repo, sha, variants }),
   hfTokenStatus: () => call("hf_token_status", {}),
   setHfToken: (token: string) => call("set_hf_token", { token }),
   deleteHfToken: () => call("delete_hf_token", {}),

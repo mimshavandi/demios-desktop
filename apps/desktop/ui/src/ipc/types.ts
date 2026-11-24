@@ -260,6 +260,8 @@ export interface HubVariant {
   fit: FitView | null;
   /** Already downloaded: its model ref. */
   downloaded: string | null;
+  /** Downloading now (started earlier): the latest progress. */
+  progress: HubPullProgress | null;
 }
 
 export interface HubRepoView {

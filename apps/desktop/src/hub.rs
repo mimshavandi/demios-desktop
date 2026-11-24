@@ -30,6 +30,8 @@ pub struct VariantView {
     pub fit: Option<FitView>,
     /// Already downloaded: its `local:` model ref.
     pub downloaded: Option<String>,
+    /// Downloading now (started from this screen earlier): the latest progress.
+    pub progress: Option<PullProgress>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -48,40 +50,142 @@ pub enum PullEvent {
     Progress(PullProgress),
 }
 
-/// Running downloads, by `repo@sha/variant`, so the screen can cancel one.
+/// Running downloads, by `repo@sha/variant`: one at a time per file, cancellable, with the
+/// last progress so a screen that comes back can show it.
+///
+/// Like the catalogue downloads: a run is registered with a generation token *before* its
+/// task starts (a second start is refused), a finishing old run can't remove a newer run's
+/// entry, and a resumed run waits on a per-file lock until the paused one has let go of its
+/// files (and dn-models' `.lock`).
 #[derive(Default)]
 pub struct HubPulls {
-    running: Mutex<HashMap<String, tokio::task::AbortHandle>>,
+    running: Mutex<HashMap<String, (u64, Option<tokio::task::AbortHandle>)>>,
+    locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    progress: Mutex<HashMap<String, PullProgress>>,
+    next: std::sync::atomic::AtomicU64,
+}
+
+/// Why a run didn't finish.
+#[derive(Debug, PartialEq, Eq)]
+pub enum RunEnd {
+    Busy,
+    Cancelled,
+    Failed,
 }
 
 pub fn pull_key(repo: &str, sha: &str, variant: &str) -> String {
     format!("{repo}@{sha}/{variant}")
 }
 
+fn guard<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|p| p.into_inner())
+}
+
 impl HubPulls {
+    /// Runs `work` as the download for `key`.
+    pub async fn run<T: Send + 'static>(
+        &self,
+        key: &str,
+        work: impl std::future::Future<Output = T> + Send + 'static,
+    ) -> Result<T, RunEnd> {
+        let generation = self.next.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        {
+            let mut running = guard(&self.running);
+            if running.contains_key(key) {
+                return Err(RunEnd::Busy);
+            }
+            running.insert(key.to_owned(), (generation, None));
+        }
+        let lock = Arc::clone(guard(&self.locks).entry(key.to_owned()).or_default());
+        let task = tokio::spawn(async move {
+            // Wait until a paused run of the same file has stopped.
+            let _held = lock.lock_owned().await;
+            work.await
+        });
+        {
+            let mut running = guard(&self.running);
+            match running.get_mut(key) {
+                Some((g, h)) if *g == generation => *h = Some(task.abort_handle()),
+                // Cancelled before the task was registered: stop it now.
+                _ => task.abort(),
+            }
+        }
+        let result = task.await;
+        {
+            let mut running = guard(&self.running);
+            if running.get(key).is_some_and(|(g, _)| *g == generation) {
+                running.remove(key);
+                guard(&self.progress).remove(key);
+            }
+        }
+        match result {
+            Ok(v) => Ok(v),
+            Err(e) if e.is_cancelled() => Err(RunEnd::Cancelled),
+            Err(e) => {
+                eprintln!("hub pull task: {e}");
+                Err(RunEnd::Failed)
+            }
+        }
+    }
+
     pub fn cancel(&self, key: &str) -> bool {
-        match self.running.lock().ok().and_then(|mut m| m.remove(key)) {
-            Some(h) => {
-                h.abort();
+        match guard(&self.running).remove(key) {
+            Some((_, h)) => {
+                if let Some(h) = h {
+                    h.abort();
+                }
                 true
             }
             None => false,
         }
     }
-    fn start(&self, key: String, h: tokio::task::AbortHandle) -> IpcResult<()> {
-        let mut m = self
-            .running
-            .lock()
-            .map_err(|_| IpcError::new("internal", "Something went wrong. Try again."))?;
-        if m.contains_key(&key) {
-            return Err(IpcError::new("busy", "That model is already downloading."));
+
+    pub fn record(&self, key: &str, p: PullProgress) {
+        if guard(&self.running).contains_key(key) {
+            guard(&self.progress).insert(key.to_owned(), p);
         }
-        m.insert(key, h);
-        Ok(())
     }
-    fn finish(&self, key: &str) {
-        if let Ok(mut m) = self.running.lock() {
-            m.remove(key);
+
+    /// Progress of a running download (zero until the first update), or `None`.
+    pub fn progress_of(&self, key: &str) -> Option<PullProgress> {
+        if !guard(&self.running).contains_key(key) {
+            return None;
+        }
+        Some(
+            guard(&self.progress)
+                .get(key)
+                .cloned()
+                .unwrap_or(PullProgress {
+                    part: 0,
+                    parts: 1,
+                    done_bytes: 0,
+                    total_bytes: 0,
+                }),
+        )
+    }
+}
+
+/// Lets progress through at most every `every`, and always the last update of a part.
+pub struct Throttle {
+    every: std::time::Duration,
+    last: Option<std::time::Instant>,
+}
+
+impl Throttle {
+    pub fn new(every: std::time::Duration) -> Self {
+        Self { every, last: None }
+    }
+    pub fn pass(&mut self, p: &PullProgress, now: std::time::Instant) -> bool {
+        let done = p.done_bytes >= p.total_bytes;
+        if done
+            || self
+                .last
+                .is_none_or(|t| now.duration_since(t) >= self.every)
+        {
+            self.last = Some(now);
+            true
+        } else {
+            false
         }
     }
 }
@@ -136,7 +240,12 @@ fn base_variant(variants: &[GgufVariant]) -> Option<&GgufVariant> {
 
 /// Repo details: licence, card, and each model quantisation with its fit (read from one
 /// header, scaled for the others and marked estimated) and whether it's downloaded.
-pub async fn repo(hub: &HubClient, local: &LocalModels, repo: &str) -> IpcResult<RepoView> {
+pub async fn repo(
+    hub: &HubClient,
+    local: &LocalModels,
+    pulls: &HubPulls,
+    repo: &str,
+) -> IpcResult<RepoView> {
     hub::validate_repo_id(repo).map_err(hub_error)?;
     let info = hub.repo(repo, None).await.map_err(hub_error)?;
     let variants: Vec<GgufVariant> = hub
@@ -176,6 +285,7 @@ pub async fn repo(hub: &HubClient, local: &LocalModels, repo: &str) -> IpcResult
                 verifiable: v.files.iter().all(|f| f.sha256.is_some()),
                 fit,
                 downloaded: downloaded.get(&v.name).cloned(),
+                progress: pulls.progress_of(&pull_key(&info.id, &info.sha, &v.name)),
             }
         })
         .collect();
@@ -189,20 +299,27 @@ pub async fn repo(hub: &HubClient, local: &LocalModels, repo: &str) -> IpcResult
     })
 }
 
-/// Downloads one quantisation of `repo` pinned at `sha` into the models folder, reporting
-/// progress, then lists it as a local model. Returns its `local:` model ref.
+/// Downloads one quantisation of `repo` pinned at `sha` (the 40-hex commit from
+/// [`repo`]) into the models folder, reporting progress (at most every 250 ms), then lists
+/// it as a local model. Returns its `local:` model ref.
 pub async fn pull(
     hub: HubClient,
     local: Arc<LocalModels>,
-    pulls: &HubPulls,
+    pulls: Arc<HubPulls>,
     repo: String,
     sha: String,
     variant: String,
     mut on_progress: impl FnMut(PullProgress) + Send + 'static,
 ) -> IpcResult<String> {
     hub::validate_repo_id(&repo).map_err(hub_error)?;
+    if sha.len() != 40 || !sha.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(IpcError::invalid(
+            "That model version isn't valid. Open the model again.",
+        ));
+    }
     let key = pull_key(&repo, &sha, &variant);
-    let task = tokio::spawn(async move {
+    let (k2, p2) = (key.clone(), Arc::clone(&pulls));
+    let work = async move {
         let info: RepoInfo = hub.repo(&repo, Some(&sha)).await?;
         let v = hub
             .variants(&info.id, &info.sha)
@@ -210,8 +327,14 @@ pub async fn pull(
             .into_iter()
             .find(|x| x.name == variant && x.kind == VariantKind::Model)
             .ok_or_else(|| HubError::NotFound(format!("{repo}: {variant}")))?;
+        let mut throttle = Throttle::new(std::time::Duration::from_millis(250));
         let path = hub
-            .pull(&info, &v, local.dir(), &mut |p| on_progress(p))
+            .pull(&info, &v, local.dir(), &mut |p| {
+                p2.record(&k2, p.clone());
+                if throttle.pass(&p, std::time::Instant::now()) {
+                    on_progress(p);
+                }
+            })
             .await?;
         let l2 = Arc::clone(&local);
         tokio::task::spawn_blocking(move || l2.refresh_externals())
@@ -229,23 +352,18 @@ pub async fn pull(
                 .map(|r| r.model_ref)
                 .unwrap_or_else(|| format!("local:hf/{}/{stem}", info.id)),
         )
-    });
-    pulls.start(key.clone(), task.abort_handle())?;
-    let result = task.await;
-    pulls.finish(&key);
-    match result {
+    };
+    match pulls.run(&key, work).await {
         Ok(r) => r.map_err(hub_error),
-        Err(e) if e.is_cancelled() => Err(IpcError::new(
+        Err(RunEnd::Busy) => Err(IpcError::new("busy", "That model is already downloading.")),
+        Err(RunEnd::Cancelled) => Err(IpcError::new(
             "cancelled",
-            "Download paused. Downloading it again resumes where it stopped.",
+            "Paused. Resume to continue where it stopped.",
         )),
-        Err(e) => {
-            eprintln!("hub pull task: {e}");
-            Err(IpcError::new(
-                "internal",
-                "The download stopped. Try again.",
-            ))
-        }
+        Err(RunEnd::Failed) => Err(IpcError::new(
+            "internal",
+            "The download stopped. Try again.",
+        )),
     }
 }
 
@@ -274,18 +392,81 @@ mod tests {
         assert!(base_variant(&[]).is_none());
     }
 
-    #[tokio::test]
-    async fn a_second_pull_of_the_same_file_is_refused_and_cancel_stops_it() {
-        let pulls = HubPulls::default();
-        let task = tokio::spawn(std::future::pending::<()>());
-        pulls.start("k".into(), task.abort_handle()).unwrap();
-        let other = tokio::spawn(std::future::pending::<()>());
-        let err = pulls.start("k".into(), other.abort_handle()).unwrap_err();
-        assert!(err.message.contains("already downloading"));
-        other.abort();
+    #[tokio::test(flavor = "multi_thread")]
+    async fn pause_resume_pause_waits_for_the_paused_run_and_keeps_the_new_one() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let pulls = Arc::new(HubPulls::default());
+        // A run that holds "the file" until it is dropped (aborted).
+        struct Holds(Arc<AtomicBool>);
+        impl Drop for Holds {
+            fn drop(&mut self) {
+                // Letting go takes a moment, like closing files.
+                std::thread::sleep(std::time::Duration::from_millis(30));
+                self.0.store(false, Ordering::SeqCst);
+            }
+        }
+        let holding = Arc::new(AtomicBool::new(false));
+        let first = {
+            let (p, h) = (Arc::clone(&pulls), Arc::clone(&holding));
+            tokio::spawn(async move {
+                p.run("k", async move {
+                    h.store(true, Ordering::SeqCst);
+                    let _held = Holds(h);
+                    std::future::pending::<()>().await
+                })
+                .await
+            })
+        };
+        while !holding.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+        // A second start while it runs is refused.
+        assert_eq!(pulls.run("k", async {}).await, Err(RunEnd::Busy));
+
+        // Pause, then resume at once: the new run starts only after the old one let go.
         assert!(pulls.cancel("k"));
-        assert!(task.await.unwrap_err().is_cancelled());
+        let overlapped = Arc::new(AtomicBool::new(false));
+        let second = {
+            let (p, h, o) = (
+                Arc::clone(&pulls),
+                Arc::clone(&holding),
+                Arc::clone(&overlapped),
+            );
+            tokio::spawn(async move {
+                p.run("k", async move {
+                    o.store(h.load(Ordering::SeqCst), Ordering::SeqCst);
+                    std::future::pending::<()>().await
+                })
+                .await
+            })
+        };
+        assert_eq!(first.await.unwrap(), Err(RunEnd::Cancelled));
+        // The old run finishing didn't remove the new registration: pause works on it.
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        assert!(
+            !overlapped.load(Ordering::SeqCst),
+            "never ran while the old one held the file"
+        );
+        assert!(pulls.cancel("k"), "the resumed run is still registered");
+        assert_eq!(second.await.unwrap(), Err(RunEnd::Cancelled));
         assert!(!pulls.cancel("k"));
+    }
+
+    #[test]
+    fn progress_is_throttled_but_the_last_update_always_passes() {
+        let mut t = Throttle::new(std::time::Duration::from_millis(250));
+        let p = |done| PullProgress {
+            part: 0,
+            parts: 1,
+            done_bytes: done,
+            total_bytes: 100,
+        };
+        let t0 = std::time::Instant::now();
+        let ms = |n| t0 + std::time::Duration::from_millis(n);
+        assert!(t.pass(&p(1), ms(0)));
+        assert!(!t.pass(&p(2), ms(100)));
+        assert!(t.pass(&p(3), ms(260)));
+        assert!(t.pass(&p(100), ms(270)), "the final update always passes");
     }
 
     #[tokio::test]

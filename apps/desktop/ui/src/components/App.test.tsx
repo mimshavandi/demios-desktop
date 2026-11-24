@@ -87,6 +87,7 @@ function fakeApi() {
     },
     hubPull: async () => "local:x",
     hubCancel: async () => true,
+    hubPullStatus: async () => ({}),
     hfTokenStatus: async () => false,
     setHfToken: async () => true,
     deleteHfToken: async () => false,

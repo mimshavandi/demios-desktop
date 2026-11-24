@@ -134,6 +134,7 @@ pub fn run() {
             commands::hub_repo,
             commands::hub_pull,
             commands::hub_cancel,
+            commands::hub_pull_status,
             commands::hf_token_status,
             commands::set_hf_token,
             commands::delete_hf_token,

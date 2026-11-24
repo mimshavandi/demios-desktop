@@ -69,7 +69,9 @@ export function AddFromHub({ api, onClose }: { api: Api; onClose: () => void }) 
         onBack={() => {
           setRepo(null);
           requestAnimationFrame(() =>
-            document.querySelector<HTMLButtonElement>(`[data-repo="${lastRepoButton.current ?? ""}"]`)?.focus(),
+            [...document.querySelectorAll<HTMLButtonElement>("button[data-repo]")]
+              .find((b) => b.dataset["repo"] === lastRepoButton.current)
+              ?.focus(),
           );
         }}
       />
@@ -187,7 +189,10 @@ const LICENSE_NOTE: Record<NonNullable<HubLicense["warning"]>, { tone: "warning"
   use_policy: { tone: "info", text: "Commercial use is allowed under an acceptable-use policy. Read it on the model card." },
 };
 
-type Pull = { done: number; total: number } | { error: string };
+type Pull =
+  | { done: number; total: number }
+  | { paused: true; done: number; total: number }
+  | { error: string };
 
 function RepoDetail({ api, repo, onBack }: { api: Api; repo: string; onBack: () => void }) {
   const toast = useToast();
@@ -195,17 +200,65 @@ function RepoDetail({ api, repo, onBack }: { api: Api; repo: string; onBack: () 
   const [error, setError] = useState<string | null>(null);
   const [pulls, setPulls] = useState<Record<string, Pull>>({});
   const [done, setDone] = useState<Record<string, string>>({});
+  const [announce, setAnnounce] = useState("");
   const headingRef = useRef<HTMLHeadingElement>(null);
+  /** Downloads started from this screen (their progress comes on our channel). */
+  const ours = useRef<Set<string>>(new Set());
+  const lastStep = useRef<Record<string, number>>({});
+
+  // Polite, in 25 % steps (not every update).
+  const progressed = (name: string, doneB: number, total: number) => {
+    const step = total > 0 ? Math.floor((doneB / total) * 4) : 0;
+    if (step > (lastStep.current[name] ?? 0) && step < 4) {
+      lastStep.current[name] = step;
+      setAnnounce(`${name}: ${step * 25}% downloaded`);
+    }
+  };
 
   const load = async () => {
     setError(null);
     setView(null);
     try {
-      setView(await api.hubRepo(repo));
+      const v = await api.hubRepo(repo);
+      setView(v);
+      // Downloads still running from an earlier visit: show them, then follow them below.
+      const running: Record<string, Pull> = {};
+      for (const x of v.variants) {
+        if (x.progress !== null && !ours.current.has(x.name)) {
+          running[x.name] = { done: x.progress.done_bytes, total: x.progress.total_bytes || x.total_size };
+        }
+      }
+      setPulls((p) => ({ ...running, ...p }));
     } catch (e) {
       setError(errorMessage(e));
     }
   };
+
+  // Follow downloads this screen didn't start (left and came back) until they end.
+  const followed = view === null ? [] : Object.keys(pulls).filter((n) => !ours.current.has(n) && "done" in pulls[n]! && !("paused" in pulls[n]!));
+  useEffect(() => {
+    if (view === null || followed.length === 0) return;
+    const t = window.setInterval(() => {
+      void api
+        .hubPullStatus(view.id, view.sha, followed)
+        .then((status) => {
+          setPulls((p) => {
+            const next = { ...p };
+            for (const n of followed) {
+              const st = status[n];
+              if (st !== undefined) next[n] = { done: st.done_bytes, total: st.total_bytes || (next[n] as { total: number }).total };
+              else delete next[n];
+            }
+            return next;
+          });
+          // A followed download ended: reload to show it as downloaded (or not).
+          if (followed.some((n) => status[n] === undefined)) void load();
+        })
+        .catch(() => {});
+    }, 1000);
+    return () => window.clearInterval(t);
+    // Re-run when the set of followed downloads changes.
+  }, [view, followed.join("|")]);
 
   useEffect(() => {
     void load();
@@ -215,16 +268,30 @@ function RepoDetail({ api, repo, onBack }: { api: Api; repo: string; onBack: () 
 
   const download = async (v: HubVariant) => {
     if (view === null) return;
-    setPulls((p) => ({ ...p, [v.name]: { done: 0, total: v.total_size } }));
+    const prev = pulls[v.name];
+    ours.current.add(v.name);
+    setPulls((p) => ({ ...p, [v.name]: { done: prev !== undefined && "done" in prev ? prev.done : 0, total: v.total_size } }));
     try {
-      const ref = await api.hubPull(view.id, view.sha, v.name, (ev) =>
-        setPulls((p) => ({ ...p, [v.name]: { done: ev.done_bytes, total: ev.total_bytes } })),
-      );
+      const ref = await api.hubPull(view.id, view.sha, v.name, (ev) => {
+        setPulls((p) => ({ ...p, [v.name]: { done: ev.done_bytes, total: ev.total_bytes } }));
+        progressed(v.quant ?? v.name, ev.done_bytes, ev.total_bytes);
+      });
+      setAnnounce(`${v.quant ?? v.name} downloaded`);
       setDone((d) => ({ ...d, [v.name]: ref }));
       setPulls(({ [v.name]: _, ...rest }) => rest);
       toast({ tone: "success", title: `${repo.split("/")[1] ?? repo} ${v.quant ?? v.name} downloaded` });
     } catch (e) {
-      setPulls((p) => ({ ...p, [v.name]: { error: errorMessage(e) } }));
+      const paused = typeof e === "object" && e !== null && (e as { code?: string }).code === "cancelled";
+      setPulls((p) => {
+        const cur = p[v.name];
+        const at = cur !== undefined && "done" in cur ? cur : { done: 0, total: v.total_size };
+        return {
+          ...p,
+          [v.name]: paused ? { paused: true, done: at.done, total: at.total } : { error: errorMessage(e) },
+        };
+      });
+    } finally {
+      ours.current.delete(v.name);
     }
   };
 
@@ -274,7 +341,7 @@ function RepoDetail({ api, repo, onBack }: { api: Api; repo: string; onBack: () 
           {view.license.warning !== null && (
             <InlineMessage tone={LICENSE_NOTE[view.license.warning].tone}>{LICENSE_NOTE[view.license.warning].text}</InlineMessage>
           )}
-          {view.gated && <HfToken api={api} />}
+          {view.gated && <HfToken api={api} onSaved={() => void load()} />}
           {view.variants.length === 0 ? (
             <p className="dn-help">This repo has no GGUF files Demios can run.</p>
           ) : (
@@ -307,7 +374,7 @@ function RepoDetail({ api, repo, onBack }: { api: Api; repo: string; onBack: () 
                           <span className="dn-help">Fit unknown: its details couldn't be read.</span>
                         )}
                       </span>
-                      {pull !== undefined && "done" in pull && (
+                      {pull !== undefined && "done" in pull && !("paused" in pull) && (
                         <div className="dl-progress">
                           <div
                             className="dl-bar"
@@ -325,6 +392,12 @@ function RepoDetail({ api, repo, onBack }: { api: Api; repo: string; onBack: () 
                           </span>
                         </div>
                       )}
+                      {pull !== undefined && "paused" in pull && (
+                        <InlineMessage tone="info">
+                          Paused at {formatBytes(pull.done)} of {formatBytes(pull.total)}. Resume to continue where it
+                          stopped.
+                        </InlineMessage>
+                      )}
                       {pull !== undefined && "error" in pull && <InlineMessage tone="error">{pull.error}</InlineMessage>}
                       {!v.verifiable && (
                         <span className="dn-help">No published checksum, so Demios won't download it.</span>
@@ -333,7 +406,7 @@ function RepoDetail({ api, repo, onBack }: { api: Api; repo: string; onBack: () 
                     <div className="row-actions local-actions">
                       {ref !== null && ref !== undefined ? (
                         <Badge tone="success">Downloaded</Badge>
-                      ) : pull !== undefined && "done" in pull ? (
+                      ) : pull !== undefined && "done" in pull && !("paused" in pull) ? (
                         <Button
                           size="sm"
                           icon={<Pause {...ICON} aria-hidden="true" />}
@@ -349,7 +422,7 @@ function RepoDetail({ api, repo, onBack }: { api: Api; repo: string; onBack: () 
                           icon={<Download {...ICON} aria-hidden="true" />}
                           onClick={() => void download(v)}
                         >
-                          {pull !== undefined ? "Retry" : "Download"}
+                          {pull === undefined ? "Download" : "paused" in pull ? "Resume" : "Retry"}
                         </Button>
                       )}
                     </div>
@@ -358,6 +431,9 @@ function RepoDetail({ api, repo, onBack }: { api: Api; repo: string; onBack: () 
               })}
             </ul>
           )}
+          <div className="dn-visually-hidden" role="status" aria-live="polite">
+            {announce}
+          </div>
           <p className="dn-help">
             Downloads go to your models folder, are checked against Hugging Face's published checksum, and resume if
             interrupted.
@@ -369,7 +445,7 @@ function RepoDetail({ api, repo, onBack }: { api: Api; repo: string; onBack: () 
 }
 
 /** The Hugging Face token, for models that need access. Kept in the system keychain. */
-function HfToken({ api }: { api: Api }) {
+function HfToken({ api, onSaved }: { api: Api; onSaved: () => void }) {
   const toast = useToast();
   const [has, setHas] = useState<boolean | null>(null);
   const [value, setValue] = useState("");
@@ -422,6 +498,8 @@ function HfToken({ api }: { api: Api }) {
               setHas(await api.setHfToken(value));
               setValue("");
               toast({ tone: "success", title: "Hugging Face token saved" });
+              // Access may differ with a token: read the repo again.
+              onSaved();
             } catch (err) {
               setError(errorMessage(err));
             } finally {

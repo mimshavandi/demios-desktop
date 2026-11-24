@@ -23,8 +23,8 @@ const repoView = (over: Partial<HubRepoView> = {}): HubRepoView => ({
   license: { id: "apache-2.0", name: null, link: null, warning: null },
   card_url: "https://huggingface.co/org/Tiny-GGUF",
   variants: [
-    { name: "Tiny-Q4_K_M", quant: "Q4_K_M", total_size: 1e9, parts: 1, verifiable: true, fit: fit("ready", false), downloaded: null },
-    { name: "Tiny-F16", quant: "F16", total_size: 4e9, parts: 2, verifiable: false, fit: fit("memory_blocked", true), downloaded: null },
+    { name: "Tiny-Q4_K_M", quant: "Q4_K_M", total_size: 1e9, parts: 1, verifiable: true, fit: fit("ready", false), downloaded: null, progress: null },
+    { name: "Tiny-F16", quant: "F16", total_size: 4e9, parts: 2, verifiable: false, fit: fit("memory_blocked", true), downloaded: null, progress: null },
   ],
   ...over,
 });
@@ -35,6 +35,7 @@ function fake(view = repoView()) {
   let finishPull: ((ref: string) => void) | null = null;
   let failPull: ((e: unknown) => void) | null = null;
   let searchFails = true;
+  let status: Record<string, { part: number; parts: number; done_bytes: number; total_bytes: number }> = {};
   const api = {
     hubSearch: async (text: string, sort: string, cursor: string | null) => {
       calls.push(["search", text, sort, cursor]);
@@ -59,6 +60,10 @@ function fake(view = repoView()) {
       });
     },
     hubCancel: async (...a: string[]) => (calls.push(["cancel", ...a]), true),
+    hubPullStatus: async (_r: string, _s: string, names: string[]) => {
+      calls.push(["status", ...names]);
+      return status;
+    },
     hfTokenStatus: async () => false,
     setHfToken: async (t: string) => (calls.push(["token", t]), true),
     deleteHfToken: async () => false,
@@ -69,6 +74,7 @@ function fake(view = repoView()) {
     progress: (done: number, total: number) => pullEvents?.({ type: "progress", part: 0, parts: 1, done_bytes: done, total_bytes: total }),
     finish: (ref: string) => finishPull?.(ref),
     fail: (e: unknown) => failPull?.(e),
+    setStatus: (st: typeof status) => (status = st),
   };
 }
 
@@ -150,6 +156,71 @@ describe("AddFromHub", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save token" }));
     expect(await screen.findByText("Hugging Face token saved.")).toBeTruthy();
     expect(f.calls).toContainEqual(["token", "hf_abc"]);
+  });
+});
+
+describe("AddFromHub, review fixes", () => {
+  const open = async (f: ReturnType<typeof fake>) => {
+    ui(<AddFromHub api={f.api} onClose={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+    fireEvent.click(await screen.findByRole("button", { name: /org\/Tiny-GGUF/ }));
+  };
+
+  it("pausing shows Paused with Resume, not an error", async () => {
+    const f = fake();
+    await open(f);
+    const [q4] = await screen.findAllByTestId("hub-variant");
+    fireEvent.click(within(q4!).getByRole("button", { name: "Download" }));
+    act(() => f.progress(300e6, 1e9));
+    fireEvent.click(await within(q4!).findByRole("button", { name: "Pause" }));
+    act(() => f.fail({ code: "cancelled", message: "Paused. Resume to continue where it stopped." }));
+    expect(await within(q4!).findByText(/Paused at 300 MB of 1.0 GB/)).toBeTruthy();
+    expect(within(q4!).getByRole("button", { name: "Resume" })).toBeTruthy();
+    expect(within(q4!).queryByRole("alert")).toBeNull();
+  });
+
+  it("follows a download started earlier and shows it done when it ends", async () => {
+    const view = repoView();
+    view.variants[0] = { ...view.variants[0]!, progress: { part: 0, parts: 1, done_bytes: 100e6, total_bytes: 1e9 } };
+    const f = fake(view);
+    f.setStatus({ "Tiny-Q4_K_M": { part: 0, parts: 1, done_bytes: 600e6, total_bytes: 1e9 } });
+    await open(f);
+    const [q4] = await screen.findAllByTestId("hub-variant");
+    expect(within(q4!).getByRole("progressbar").getAttribute("aria-valuenow")).toBe("100000000");
+    await waitFor(() => expect(within(q4!).getByRole("progressbar").getAttribute("aria-valuenow")).toBe("600000000"), {
+      timeout: 2500,
+    });
+    // It ends: the repo is read again and shows it downloaded.
+    view.variants[0] = { ...view.variants[0]!, progress: null, downloaded: "local:hf/org/Tiny-GGUF/Tiny-Q4_K_M" };
+    f.setStatus({});
+    await waitFor(() => expect(screen.getAllByTestId("hub-variant")[0]!.textContent).toContain("Downloaded"), { timeout: 2500 });
+  });
+
+  it("saving a token reads the repo again", async () => {
+    const f = fake(repoView({ gated: true }));
+    await open(f);
+    fireEvent.change(await screen.findByLabelText("Hugging Face token"), { target: { value: "hf_abc" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save token" }));
+    await waitFor(() => expect(f.calls.filter((c) => c[0] === "repo").length).toBe(2));
+  });
+
+  it("rate limits and being offline say what to do, with Retry", async () => {
+    for (const message of [
+      "Hugging Face is limiting requests. Try again in a moment.",
+      "Couldn't reach Hugging Face. Check your connection.",
+    ]) {
+      const api = {
+        hubSearch: async () => {
+          throw { code: "capability", message };
+        },
+      } as unknown as Api;
+      ui(<AddFromHub api={api} onClose={() => {}} />);
+      fireEvent.click(screen.getByRole("button", { name: "Search" }));
+      expect(await screen.findByText(message)).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+      cleanup();
+    }
   });
 });
 

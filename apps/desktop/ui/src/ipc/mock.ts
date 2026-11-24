@@ -390,9 +390,9 @@ export function createMockApi(): Api {
         },
         card_url: `https://huggingface.co/${repo}`,
         variants: [
-          { name: "Q4_K_M", quant: "Q4_K_M", total_size: 1_100_000_000, parts: 1, verifiable: true, fit: fit("ready", "Fits this computer with room to spare.", false), downloaded: null },
-          { name: "Q8_0", quant: "Q8_0", total_size: 2_000_000_000, parts: 1, verifiable: true, fit: { ...fit("caution", "Fits, with little memory left for other apps."), estimated: true }, downloaded: null },
-          { name: "F16", quant: "F16", total_size: 3_800_000_000, parts: 2, verifiable: false, fit: { ...fit("memory_blocked", "Won't fit in this computer's memory."), estimated: true }, downloaded: null },
+          { name: "Q4_K_M", quant: "Q4_K_M", total_size: 1_100_000_000, parts: 1, verifiable: true, fit: fit("ready", "Fits this computer with room to spare.", false), downloaded: null, progress: null },
+          { name: "Q8_0", quant: "Q8_0", total_size: 2_000_000_000, parts: 1, verifiable: true, fit: { ...fit("caution", "Fits, with little memory left for other apps."), estimated: true }, downloaded: null, progress: null },
+          { name: "F16", quant: "F16", total_size: 3_800_000_000, parts: 2, verifiable: false, fit: { ...fit("memory_blocked", "Won't fit in this computer's memory."), estimated: true }, downloaded: null, progress: null },
         ],
       };
       return view;
@@ -420,6 +420,7 @@ export function createMockApi(): Api {
       return row.model_ref;
     },
     hubCancel: async () => true,
+    hubPullStatus: async () => ({}),
     hfTokenStatus: async () => hfToken,
     setHfToken: async () => (hfToken = true),
     deleteHfToken: async () => (hfToken = false),

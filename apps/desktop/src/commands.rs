@@ -483,9 +483,14 @@ pub async fn watch_local_models(
     state: AppStateRef<'_>,
     on_event: Channel<crate::local::LocalModelEvent>,
 ) -> IpcResult<Vec<crate::local::LocalModelRow>> {
-    Ok(local(&state)?.watch(Arc::new(move |ev| {
+    let lm = local(&state)?;
+    let rows = lm.watch(Arc::new(move |ev| {
         let _ = on_event.send(ev);
-    })))
+    }));
+    // Settings › Models opened: pick up Hub downloads made by the CLI and changes in the
+    // Hugging Face cache; rows that changed arrive as events.
+    tauri::async_runtime::spawn_blocking(move || lm.refresh_externals());
+    Ok(rows)
 }
 
 /// Starts or resumes a catalogue download (resumable, SHA-256 verified).
@@ -707,7 +712,7 @@ pub async fn hub_search(
 pub async fn hub_repo(state: AppStateRef<'_>, repo: String) -> IpcResult<crate::hub::RepoView> {
     let hub = blocking(&state, |s| crate::hub::client(&s.keys)).await?;
     let local = local_models(&state)?;
-    crate::hub::repo(&hub, &local, &repo).await
+    crate::hub::repo(&hub, &local, &state.hub_pulls, &repo).await
 }
 
 /// Downloads one quantisation (verified, resumable) and lists it as a local model.
@@ -721,10 +726,31 @@ pub async fn hub_pull(
 ) -> IpcResult<String> {
     let hub = blocking(&state, |s| crate::hub::client(&s.keys)).await?;
     let local = local_models(&state)?;
-    crate::hub::pull(hub, local, &state.hub_pulls, repo, sha, variant, move |p| {
+    let pulls = Arc::clone(&state.hub_pulls);
+    crate::hub::pull(hub, local, pulls, repo, sha, variant, move |p| {
         let _ = on_event.send(crate::hub::PullEvent::Progress(p));
     })
     .await
+}
+
+/// Progress of the running downloads of `repo` at `sha`, by variant name (for a screen
+/// that came back while they run).
+#[tauri::command]
+pub async fn hub_pull_status(
+    state: AppStateRef<'_>,
+    repo: String,
+    sha: String,
+    variants: Vec<String>,
+) -> IpcResult<std::collections::BTreeMap<String, dn_models::hub::PullProgress>> {
+    Ok(variants
+        .into_iter()
+        .filter_map(|v| {
+            let p = state
+                .hub_pulls
+                .progress_of(&crate::hub::pull_key(&repo, &sha, &v))?;
+            Some((v, p))
+        })
+        .collect())
 }
 
 /// Stops a running download; the partial file stays and a new download resumes it.
