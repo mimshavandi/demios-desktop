@@ -12,6 +12,7 @@ pub mod commands;
 pub mod error;
 #[cfg(any(fake_model, test))]
 pub mod fake;
+pub mod local;
 pub mod models;
 pub mod secrets;
 pub mod settings;
@@ -103,6 +104,9 @@ pub fn run() {
             commands::list_artifacts,
             commands::get_artifact,
             commands::rollback_artifact,
+            commands::watch_local_models,
+            commands::download_model,
+            commands::pause_download,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Demios Desktop")
@@ -111,6 +115,13 @@ pub fn run() {
             // process trees) explicitly, with a bound so a stuck server can't hang quit.
             if let tauri::RunEvent::Exit = event {
                 use tauri::Manager;
+                // Downloads stop; their partial files resume next time.
+                if let Some(local) = app
+                    .try_state::<std::sync::Arc<state::AppState>>()
+                    .and_then(|s| s.models.local.clone())
+                {
+                    local.pause_all();
+                }
                 let executor = app
                     .try_state::<std::sync::Arc<state::AppState>>()
                     .and_then(|s| s.executor.clone());

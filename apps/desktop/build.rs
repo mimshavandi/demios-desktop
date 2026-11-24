@@ -24,6 +24,9 @@ const COMMANDS: &[&str] = &[
     "list_artifacts",
     "get_artifact",
     "rollback_artifact",
+    "watch_local_models",
+    "download_model",
+    "pause_download",
 ];
 
 /// Copies the artifact frame shell (`ui/artifact-sandbox/dist/frame/`) into OUT_DIR for
@@ -38,7 +41,10 @@ fn artifact_frame() {
     let csp = frame.join("csp.json");
     println!("cargo::rerun-if-changed={}", html.display());
     println!("cargo::rerun-if-changed={}", csp.display());
-    let (h, c) = match (std::fs::read_to_string(&html), std::fs::read_to_string(&csp)) {
+    let (h, c) = match (
+        std::fs::read_to_string(&html),
+        std::fs::read_to_string(&csp),
+    ) {
         (Ok(h), Ok(c)) => (h, c),
         _ => {
             if std::env::var_os("CARGO_FEATURE_CUSTOM_PROTOCOL").is_some() {

@@ -387,3 +387,40 @@ pub async fn rollback_artifact(
     })
     .await
 }
+
+// ---- local models (T-SHELL-07)
+
+fn local(state: &AppState) -> IpcResult<Arc<crate::local::LocalModels>> {
+    state.models.local.clone().ok_or_else(|| {
+        IpcError::new(
+            "unavailable",
+            "Local models aren't available in this build.",
+        )
+    })
+}
+
+/// Subscribes to download progress and state changes; returns the current rows.
+#[tauri::command]
+pub async fn watch_local_models(
+    state: AppStateRef<'_>,
+    on_event: Channel<crate::local::LocalModelEvent>,
+) -> IpcResult<Vec<crate::local::LocalModelRow>> {
+    Ok(local(&state)?.watch(Arc::new(move |ev| {
+        let _ = on_event.send(ev);
+    })))
+}
+
+/// Starts or resumes a catalogue download (resumable, SHA-256 verified).
+#[tauri::command]
+pub async fn download_model(state: AppStateRef<'_>, model_id: String) -> IpcResult<()> {
+    local(&state)?
+        .download(&model_id)
+        .map_err(IpcError::invalid)
+}
+
+/// Pauses a download; the partial file is kept and resumed by the next download.
+#[tauri::command]
+pub async fn pause_download(state: AppStateRef<'_>, model_id: String) -> IpcResult<()> {
+    local(&state)?.pause(&model_id);
+    Ok(())
+}

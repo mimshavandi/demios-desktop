@@ -102,13 +102,48 @@ fn title_from(text: &str) -> String {
 }
 
 /// The model for the next turn and its backend. Blocking (settings, keychain).
+/// The model for the next turn and its backend. Blocking (settings, keychain, and loading
+/// a local model's weights).
+///
+/// When no chat model is chosen, the resolver's automatic pick is saved as the choice, so a
+/// later download or key never silently changes which model answers.
 fn model_for_turn(state: &AppState) -> IpcResult<(ModelRef, Arc<dyn ChatModel>)> {
-    let settings = state.settings()?;
-    let model = state
+    let mut settings = state.settings()?;
+    let chosen = settings.slot("chat");
+    let model = match state
         .agent
-        .resolve_model(&settings, &state.models, &state.keys)?;
+        .resolve_model(&settings, &state.models, &state.keys)
+    {
+        Ok(m) => m,
+        // The resolver only knows "disabled"; say why when it's a local model too big here.
+        Err(e) => return Err(chosen.and_then(|m| wont_fit_error(state, &m)).unwrap_or(e)),
+    };
     let backend = state.models.get(&model, &state.keys).map_err(model_error)?;
+    // Save an automatic pick only once it actually loaded.
+    if chosen.is_none() {
+        settings.slots.insert("chat".into(), model.to_string());
+        state.save_settings(&settings)?;
+    }
     Ok((model, backend))
+}
+
+fn wont_fit_error(state: &AppState, model: &ModelRef) -> Option<IpcError> {
+    let local = state.models.local.as_ref()?;
+    let id = crate::local::catalogue_id(model)?;
+    if !(local.is_ready(id) && local.wont_fit(id)) {
+        return None;
+    }
+    Some(IpcError {
+        code: "model_unavailable",
+        message: format!(
+            "{} won't fit on this computer. Choose a smaller model in Settings → Models.",
+            local.name(id).unwrap_or(id)
+        ),
+        recovery: vec![RecoveryAction::ChooseModelForSlot {
+            agent_id: crate::agent::AGENT_ID.into(),
+            slot_id: "primary".into(),
+        }],
+    })
 }
 
 /// Sends `text` as a new user message and streams the reply. Blocking (SQLite): call it
@@ -124,9 +159,11 @@ pub fn send(
     if text.trim().is_empty() {
         return Err(IpcError::invalid("Message is empty."));
     }
+    // Reserve first: loading a local model can take seconds, and a second send meanwhile
+    // must get "busy", not load the weights again.
+    let reservation = state.reserve(conversation_id)?;
     let (model, backend) = model_for_turn(state)?;
     let mode = ArtifactMode::for_model(state, &model);
-    let reservation = state.reserve(conversation_id)?;
     let (user, assistant, title, history) = {
         let db = state.db()?;
         let conv = store::get_conversation(&db, conversation_id)?;
@@ -168,9 +205,11 @@ pub fn regenerate(
     conversation_id: Id,
     sink: impl EventSink,
 ) -> IpcResult<TurnStarted> {
+    // Reserve first: loading a local model can take seconds, and a second send meanwhile
+    // must get "busy", not load the weights again.
+    let reservation = state.reserve(conversation_id)?;
     let (model, backend) = model_for_turn(state)?;
     let mode = ArtifactMode::for_model(state, &model);
-    let reservation = state.reserve(conversation_id)?;
     let (assistant, history) = {
         let db = state.db()?;
         let msgs = store::list_messages(&db, conversation_id)?;
@@ -225,7 +264,12 @@ fn history(
     let fenced = (mode == ArtifactMode::Fenced
         && state.agent.manifest.allows_tool("artifact.create"))
     .then_some(dn_artifacts::protocol::FENCED_INSTRUCTIONS);
-    let system: Vec<&str> = state.agent.system_prompt().into_iter().chain(fenced).collect();
+    let system: Vec<&str> = state
+        .agent
+        .system_prompt()
+        .into_iter()
+        .chain(fenced)
+        .collect();
     if !system.is_empty() {
         out.push(ChatMessage::text(Role::System, system.join("\n\n")));
     }
@@ -271,7 +315,14 @@ fn start(
     };
     let fenced = (mode == ArtifactMode::Fenced
         && state.agent.manifest.allows_tool("artifact.create"))
-    .then(|| FencedRun::start(Arc::clone(&state), conversation_id, message_id, Arc::clone(&sink)));
+    .then(|| {
+        FencedRun::start(
+            Arc::clone(&state),
+            conversation_id,
+            message_id,
+            Arc::clone(&sink),
+        )
+    });
     tauri::async_runtime::spawn(async move {
         let (result, failed_calls) = run(
             &*backend, &tools, fenced, &cfg, history, &cancel, &state, message_id, &*sink,
@@ -632,9 +683,12 @@ mod tests {
     }
 
     /// Waits until no message in the conversation is still streaming (stored outcome).
+    /// Waits until the run is fully over: its row stored (not "streaming") *and* the chat's
+    /// busy flag released. The flag is cleared just after the row is written, so waiting on
+    /// the row alone let the next send hit "busy" (flaky on CI).
     async fn wait_idle(state: &AppState, conv: Id) {
         for _ in 0..600 {
-            let streaming = {
+            let streaming = state.is_generating(conv) || {
                 let db = state.db().unwrap();
                 store::list_messages(&db, conv)
                     .unwrap()
@@ -1082,14 +1136,27 @@ mod tests {
 
         let a = crate::artifacts::get(&st, conv.id, id).unwrap();
         assert_eq!(a.versions.len(), 1);
-        assert!(a.versions[0].version.content.contains(crate::fake::FAKE_ARTIFACT_V1));
+        assert!(
+            a.versions[0]
+                .version
+                .content
+                .contains(crate::fake::FAKE_ARTIFACT_V1)
+        );
         // Provenance for "Made by <model>".
-        assert_eq!(a.versions[0].model.as_deref(), Some(crate::fake::FAKE_MODEL_REF));
+        assert_eq!(
+            a.versions[0].model.as_deref(),
+            Some(crate::fake::FAKE_MODEL_REF)
+        );
 
         turn(&st, conv.id, "Please update the artifact").await;
         let a = crate::artifacts::get(&st, conv.id, id).unwrap();
         assert_eq!(a.versions.len(), 2);
-        assert!(a.versions[1].version.content.contains(crate::fake::FAKE_ARTIFACT_V2));
+        assert!(
+            a.versions[1]
+                .version
+                .content
+                .contains(crate::fake::FAKE_ARTIFACT_V2)
+        );
 
         let a = crate::artifacts::rollback(&st, conv.id, id, 1).unwrap();
         let v3 = &a.versions[2].version;
@@ -1149,10 +1216,15 @@ mod tests {
         req.messages
             .iter()
             .filter(|m| m.role == Role::System)
-            .map(|m| m.content.iter().map(|p| match p {
-                ContentPart::Text { text } => text.as_str(),
-                ContentPart::Image { .. } => "",
-            }).collect::<String>())
+            .map(|m| {
+                m.content
+                    .iter()
+                    .map(|p| match p {
+                        ContentPart::Text { text } => text.as_str(),
+                        ContentPart::Image { .. } => "",
+                    })
+                    .collect::<String>()
+            })
             .collect()
     }
 
@@ -1163,7 +1235,8 @@ mod tests {
         let conv = st.create_conversation().unwrap();
         let (_, evs) = turn(&st, conv.id, "make a page").await;
         assert!(
-            !evs.iter().any(|e| matches!(e, ChatEvent::ArtifactChanged { .. })),
+            !evs.iter()
+                .any(|e| matches!(e, ChatEvent::ArtifactChanged { .. })),
             "{evs:?}"
         );
         assert!(crate::artifacts::list(&st, conv.id).unwrap().is_empty());
@@ -1185,24 +1258,167 @@ mod tests {
         let conv = st.create_conversation().unwrap();
         let (started, evs) = turn(&st, conv.id, "make a page").await;
         assert!(
-            evs.iter().any(|e| matches!(e, ChatEvent::ArtifactChanged { title, .. } if title == "Fenced page")),
+            evs.iter().any(
+                |e| matches!(e, ChatEvent::ArtifactChanged { title, .. } if title == "Fenced page")
+            ),
             "{evs:?}"
         );
         let list = crate::artifacts::list(&st, conv.id).unwrap();
         assert_eq!(list.len(), 1, "only the fenced block, not the tool call");
         let a = crate::artifacts::get(&st, conv.id, list[0].id).unwrap();
         assert_eq!(a.versions[0].version.content, "<p>fenced</p>");
-        assert_eq!(a.versions[0].version.message_id, Some(started.assistant_message.id));
+        assert_eq!(
+            a.versions[0].version.message_id,
+            Some(started.assistant_message.id)
+        );
         let reqs = rec.requests.lock().unwrap();
         assert!(
-            !reqs[0].tools.iter().any(|t| t.name.starts_with("artifact_")),
+            !reqs[0]
+                .tools
+                .iter()
+                .any(|t| t.name.starts_with("artifact_")),
             "no artifact tools for a tool-less model"
         );
         assert!(system_text(&reqs[0]).contains(dn_artifacts::protocol::FENCED_INSTRUCTIONS));
         // The stray tool call was refused, not run.
         let msgs = store::list_messages(&st.db().unwrap(), conv.id).unwrap();
-        let tool = msgs.iter().find(|m| m.role == Role::Tool).expect("tool result row");
+        let tool = msgs
+            .iter()
+            .find(|m| m.role == Role::Tool)
+            .expect("tool result row");
         assert!(tool.text().contains("isn't available"), "{}", tool.text());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_automatic_pick_is_saved_so_later_downloads_dont_change_it() {
+        let mut models = crate::models::ModelRegistry::default();
+        models.register(
+            "local:dev-fake".parse().unwrap(),
+            Arc::new(FakeChatModel {
+                delay: Duration::from_millis(0),
+            }),
+        );
+        let mut s = AppState::in_memory().unwrap();
+        s.models = models;
+        let st = Arc::new(s);
+        assert!(
+            st.settings().unwrap().slot("chat").is_none(),
+            "nothing chosen yet"
+        );
+        let conv = st.create_conversation().unwrap();
+        let (_e, s1) = sink();
+        send(&st, conv.id, "hi".into(), s1).unwrap();
+        wait_idle(&st, conv.id).await;
+        assert_eq!(
+            st.settings()
+                .unwrap()
+                .slot("chat")
+                .map(|m| m.to_string())
+                .as_deref(),
+            Some("local:dev-fake"),
+            "the first automatic pick became the saved choice"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_chosen_model_that_wont_fit_says_so() {
+        let dir = std::env::temp_dir().join(format!("dn-chat-fit-{}", Id::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("huge.gguf"), b"12345").unwrap();
+        std::fs::write(dir.join("huge.gguf.sha256"), "aa").unwrap();
+        let catalog = dn_models::Catalog {
+            version: 1,
+            models: vec![dn_models::CatalogEntry {
+                id: "huge".into(),
+                name: "Huge Model".into(),
+                repo: "o/r".into(),
+                revision: "x".into(),
+                file: "huge.gguf".into(),
+                size: 5,
+                sha256: "aa".into(),
+                quant: "Q4_K_M".into(),
+                params_b: 999.0,
+                capabilities: vec![dn_core::model::Capability::Chat],
+                license: "mit".into(),
+                notes: String::new(),
+            }],
+        };
+        // 1 MiB of RAM: the 999B model can't fit.
+        let local = crate::local::LocalModels::new(
+            dir.clone(),
+            catalog,
+            dn_models::Machine::cpu_only(1 << 20),
+        );
+        assert!(local.wont_fit("huge"));
+        let mut s = AppState::in_memory().unwrap();
+        s.models.local = Some(Arc::new(local));
+        let st = Arc::new(s);
+        let mut settings = crate::settings::Settings::default();
+        settings.slots.insert("chat".into(), "local:huge".into());
+        st.save_settings(&settings).unwrap();
+        let conv = st.create_conversation().unwrap();
+        let (_e, s1) = sink();
+        let err = send(&st, conv.id, "hi".into(), s1).unwrap_err();
+        assert!(
+            err.message.contains("won't fit on this computer"),
+            "{}",
+            err.message
+        );
+        assert_eq!(count(&st, conv.id), 0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_automatic_pick_that_fails_to_load_is_not_saved() {
+        // The only ready source is a downloaded local model whose file isn't a valid GGUF,
+        // so the resolver picks it automatically and llama.cpp then fails to load it.
+        let dir = std::env::temp_dir().join(format!("dn-chat-badload-{}", Id::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("tiny.gguf"), b"12345").unwrap();
+        std::fs::write(dir.join("tiny.gguf.sha256"), "aa").unwrap();
+        let catalog = dn_models::Catalog {
+            version: 1,
+            models: vec![dn_models::CatalogEntry {
+                id: "tiny".into(),
+                name: "Tiny".into(),
+                repo: "o/r".into(),
+                revision: "x".into(),
+                file: "tiny.gguf".into(),
+                size: 5,
+                sha256: "aa".into(),
+                quant: "Q4_K_M".into(),
+                params_b: 0.1,
+                capabilities: vec![dn_core::model::Capability::Chat],
+                license: "mit".into(),
+                notes: String::new(),
+            }],
+        };
+        let local = crate::local::LocalModels::new(
+            dir.clone(),
+            catalog,
+            dn_models::Machine::cpu_only(16 << 30),
+        );
+        assert!(local.is_ready("tiny") && !local.wont_fit("tiny"));
+        let mut s = AppState::in_memory().unwrap();
+        // No other source (not even the dev fake model in feature builds).
+        s.models = crate::models::ModelRegistry::default();
+        s.models.local = Some(Arc::new(local));
+        let st = Arc::new(s);
+        let conv = st.create_conversation().unwrap();
+        let (_e, s1) = sink();
+        // As in the app: chat turns run on a blocking thread (loading uses block_on).
+        let st2 = Arc::clone(&st);
+        let conv_id = conv.id;
+        let err = tokio::task::spawn_blocking(move || send(&st2, conv_id, "hi".into(), s1))
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(err.code, "model_unavailable", "{}", err.message);
+        assert!(
+            st.settings().unwrap().slot("chat").is_none(),
+            "a failed load isn't saved as the choice"
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

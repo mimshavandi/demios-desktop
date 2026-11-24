@@ -7,6 +7,8 @@ import type {
   ApprovalDecision,
   ArtifactDetail,
   ArtifactSummary,
+  LocalModelEvent,
+  LocalModelRow,
   ToolEvent,
   ToolSnapshot,
   UnknownOutcome,
@@ -49,6 +51,9 @@ interface Commands {
     args: { conversationId: Id; artifactId: Id; toVersion: number };
     ret: ArtifactDetail;
   };
+  watch_local_models: { args: { onEvent: Channel<LocalModelEvent> }; ret: LocalModelRow[] };
+  download_model: { args: { modelId: string }; ret: null };
+  pause_download: { args: { modelId: string }; ret: null };
 }
 
 export type CommandName = keyof Commands;
@@ -97,6 +102,10 @@ export const api = {
     call("get_artifact", { conversationId, artifactId }),
   rollbackArtifact: (conversationId: Id, artifactId: Id, toVersion: number) =>
     call("rollback_artifact", { conversationId, artifactId, toVersion }),
+  watchLocalModels: (onEvent: (ev: LocalModelEvent) => void) =>
+    call("watch_local_models", { onEvent: channel(onEvent) }),
+  downloadModel: (modelId: string) => call("download_model", { modelId }),
+  pauseDownload: (modelId: string) => call("pause_download", { modelId }),
 };
 
 export type Api = typeof api;

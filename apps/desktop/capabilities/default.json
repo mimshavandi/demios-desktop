@@ -29,6 +29,9 @@
     "allow-list-artifacts",
     "allow-get-artifact",
     "allow-rollback-artifact",
+    "allow-watch-local-models",
+    "allow-download-model",
+    "allow-pause-download",
     "core:window:allow-start-dragging"
   ]
 }

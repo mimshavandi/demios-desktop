@@ -360,6 +360,23 @@ pre.code .code-copy { position: absolute; top: var(--dn-space-1); right: var(--d
 .approval-actions kbd { color: inherit; opacity: 0.75; }
 .unknown-card { border-color: var(--dn-color-border-strong); }
 
+/* ---------- local models (download rows, §4) ---------- */
+.local-row { align-items: flex-start; }
+.local-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--dn-space-2); }
+.local-license { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--dn-space-1); }
+.local-license code { font-size: var(--dn-text-xs); }
+.local-actions { flex-direction: column; align-items: flex-end; padding-top: 0; }
+.local-blocked { display: inline-flex; align-items: center; gap: var(--dn-space-1); }
+.dl-progress { display: grid; gap: var(--dn-space-1); margin-top: var(--dn-space-1); }
+.dl-bar {
+  height: var(--dn-space-2); border-radius: var(--dn-radius-full);
+  background: var(--dn-color-surface-sunken); overflow: hidden;
+}
+.dl-bar > span {
+  display: block; height: 100%; background: var(--dn-color-accent);
+  transition: width var(--dn-motion-base) var(--dn-motion-ease);
+}
+
 /* ---------- artifact pane ---------- */
 .artifacts {
   grid-area: art; min-width: 0; display: grid; place-items: center;

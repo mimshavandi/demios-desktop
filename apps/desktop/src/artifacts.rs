@@ -62,8 +62,7 @@ fn frame_csp() -> &'static FrameCsp {
 /// 404 for anything else.
 pub fn frame_response(req: &Request<Vec<u8>>) -> Response<Vec<u8>> {
     let path = req.uri().path();
-    if req.method() != tauri::http::Method::GET
-        || !matches!(path, "/frame/" | "/frame/index.html")
+    if req.method() != tauri::http::Method::GET || !matches!(path, "/frame/" | "/frame/index.html")
     {
         return Response::builder()
             .status(StatusCode::NOT_FOUND)
@@ -142,7 +141,10 @@ pub fn get(state: &AppState, conversation_id: Id, artifact_id: Id) -> IpcResult<
         .exists_in(artifact_id, conversation_id)
         .map_err(store_error)?
     {
-        return Err(IpcError::new("not_found", "That artifact isn't in this chat."));
+        return Err(IpcError::new(
+            "not_found",
+            "That artifact isn't in this chat.",
+        ));
     }
     let a = store.get(artifact_id).map_err(store_error)?;
     let models: std::collections::HashMap<Id, Option<String>> =
@@ -165,9 +167,9 @@ fn view(a: Artifact, models: &std::collections::HashMap<Id, Option<String>>) -> 
             .map(|v| VersionView {
                 model: match v.author {
                     dn_core::artifact::Author::User => None,
-                    dn_core::artifact::Author::Model => v
-                        .message_id
-                        .and_then(|m| models.get(&m).cloned().flatten()),
+                    dn_core::artifact::Author::Model => {
+                        v.message_id.and_then(|m| models.get(&m).cloned().flatten())
+                    }
                 },
                 version: v,
             })
@@ -252,8 +254,7 @@ impl ArtifactTools {
         dn_artifacts::tool_specs()
             .into_iter()
             .filter(|s| {
-                capability_id(&s.name)
-                    .is_some_and(|c| self.state.agent.manifest.allows_tool(&c))
+                capability_id(&s.name).is_some_and(|c| self.state.agent.manifest.allows_tool(&c))
             })
             .collect()
     }
@@ -307,7 +308,9 @@ impl ToolExecutor for RunTools {
                 Ok(r) => r,
                 Err(e) => {
                     eprintln!("artifact tool failed: {e}");
-                    return Ok(ToolOutput::error("The artifact couldn't be saved. Try again."));
+                    return Ok(ToolOutput::error(
+                        "The artifact couldn't be saved. Try again.",
+                    ));
                 }
             };
             if let Ok(ap) = &result {
@@ -407,7 +410,10 @@ mod tests {
         assert_eq!(h["x-content-type-options"], "nosniff");
         let csp = h["content-security-policy"].to_str().unwrap();
         assert!(csp.contains("default-src 'none'"), "{csp}");
-        assert!(!csp.contains("https:"), "strict policy has no network: {csp}");
+        assert!(
+            !csp.contains("https:"),
+            "strict policy has no network: {csp}"
+        );
         assert_eq!(ok.body(), FRAME_HTML.as_bytes());
 
         // Windows form of the same origin.
@@ -453,8 +459,14 @@ mod tests {
 
     #[test]
     fn capability_ids_match_the_manifest_names() {
-        assert_eq!(capability_id("artifact_create").as_deref(), Some("artifact.create"));
-        assert_eq!(capability_id("artifact_rewrite").as_deref(), Some("artifact.rewrite"));
+        assert_eq!(
+            capability_id("artifact_create").as_deref(),
+            Some("artifact.create")
+        );
+        assert_eq!(
+            capability_id("artifact_rewrite").as_deref(),
+            Some("artifact.rewrite")
+        );
         assert_eq!(capability_id("calc"), None);
     }
 }
