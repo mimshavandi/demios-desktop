@@ -21,6 +21,7 @@ tokio = { version = "1", default-features = false }
 serde_yaml_ng = "0.10"
 # No remote/file $ref resolution: schemas are bundled.
 jsonschema = { version = "0.63", default-features = false }
+ts-rs = { version = "12", default-features = false, features = ["serde-compat", "no-serde-warnings"] }
 dn-core = { path = "crates/dn-core", version = "0.1.0" }
 rusqlite = { version = "0.43", features = ["bundled"] }
 dn-store = { path = "crates/dn-store", version = "0.1.0" }
