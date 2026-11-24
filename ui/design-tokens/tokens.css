@@ -79,6 +79,7 @@
   --dn-color-focus: #5658DD;
   --dn-color-code-bg: #F3F3F6;
   --dn-color-overlay: rgba(22, 22, 29, 0.40);
+  --dn-color-text-on-danger: #FFFFFF;
   --dn-shadow-1: 0 1px 2px rgba(22,22,29,0.06);
   --dn-shadow-2: 0 4px 12px rgba(22,22,29,0.08);
   --dn-shadow-3: 0 16px 40px rgba(22,22,29,0.16);
@@ -112,6 +113,7 @@
     --dn-color-focus: #A1AAEF;
     --dn-color-code-bg: #0D0D10;
     --dn-color-overlay: rgba(0, 0, 0, 0.60);
+    --dn-color-text-on-danger: #111115;
     --dn-shadow-1: 0 1px 2px rgba(0,0,0,0.40);
     --dn-shadow-2: 0 4px 12px rgba(0,0,0,0.45);
     --dn-shadow-3: 0 16px 40px rgba(0,0,0,0.60);
@@ -145,6 +147,7 @@
   --dn-color-focus: #A1AAEF;
   --dn-color-code-bg: #0D0D10;
   --dn-color-overlay: rgba(0, 0, 0, 0.60);
+  --dn-color-text-on-danger: #111115;
   --dn-shadow-1: 0 1px 2px rgba(0,0,0,0.40);
   --dn-shadow-2: 0 4px 12px rgba(0,0,0,0.45);
   --dn-shadow-3: 0 16px 40px rgba(0,0,0,0.60);
