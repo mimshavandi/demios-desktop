@@ -9,6 +9,8 @@ pub struct Reply {
     pub status: u16,
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
+    /// Omit `Content-Length` (body delimited by closing the connection).
+    pub no_length: bool,
 }
 
 impl Reply {
@@ -17,6 +19,7 @@ impl Reply {
             status: 200,
             headers: vec![("content-type".into(), "application/json".into())],
             body: body.as_bytes().to_vec(),
+            no_length: false,
         }
     }
 
@@ -25,6 +28,7 @@ impl Reply {
             status: 200,
             headers: vec![],
             body,
+            no_length: false,
         }
     }
 
@@ -33,7 +37,13 @@ impl Reply {
             status,
             headers: vec![],
             body: vec![],
+            no_length: false,
         }
+    }
+
+    pub fn without_length(mut self) -> Self {
+        self.no_length = true;
+        self
     }
 
     pub fn header(mut self, k: &str, v: &str) -> Self {
@@ -75,11 +85,15 @@ pub async fn serve(routes: HashMap<String, Reply>) -> Server {
                 let target = head.split_whitespace().nth(1).unwrap_or("/").to_string();
                 log.lock().unwrap().push(head.to_lowercase());
                 let r = routes.get(&target).cloned().unwrap_or(Reply::status(404));
-                let mut out = format!(
-                    "HTTP/1.1 {} X\r\ncontent-length: {}\r\nconnection: close\r\n",
-                    r.status,
-                    r.body.len()
-                );
+                let mut out = if r.no_length {
+                    format!("HTTP/1.1 {} X\r\nconnection: close\r\n", r.status)
+                } else {
+                    format!(
+                        "HTTP/1.1 {} X\r\ncontent-length: {}\r\nconnection: close\r\n",
+                        r.status,
+                        r.body.len()
+                    )
+                };
                 for (k, v) in &r.headers {
                     out.push_str(&format!("{k}: {v}\r\n"));
                 }
