@@ -13,7 +13,7 @@ default = ["llamacpp", "openai-compat"]
 llamacpp = ["dep:llama-cpp-2"]
 cuda = ["llamacpp", "llama-cpp-2/cuda"]
 vulkan = ["llamacpp", "llama-cpp-2/vulkan"]
-openai-compat = ["dep:reqwest"]
+openai-compat = ["dep:dn-providers"]
 
 [dependencies]
 dn-core.workspace = true
@@ -21,12 +21,12 @@ futures-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
-reqwest = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util"] }
+dn-providers = { workspace = true, optional = true }
 llama-cpp-2 = { workspace = true, optional = true }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["net"] }
+tokio = { workspace = true, features = ["net", "io-util"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 llama-cpp-2 = { workspace = true, optional = true, features = ["metal"] }

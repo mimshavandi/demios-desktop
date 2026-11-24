@@ -1,0 +1,4 @@
+data: {"id":"chatcmpl-REDACTED","object":"chat.completion.chunk","created":1764000000,"model":"gpt-4o-mini-2024-07-18","choices":[{"index":0,"delta":{"role":"assistant","content":"Hello"},"logprobs":null,"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-REDACTED","object":"chat.completion.chunk","created":1764000000,"model":"gpt-4o-mini-2024-07-18","choices":[{"index":0,"delta":{"content":" from"},"logprobs":null,"finish_reason":null}],"usage":null}
+

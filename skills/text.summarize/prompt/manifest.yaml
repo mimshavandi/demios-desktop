@@ -1,0 +1,7 @@
+id: text.summarize
+description: Summary prompt for the text.summarize skill.
+active_version: v1
+versions:
+  - version: v1
+    file: v1.md
+    variables: [text, max_words]

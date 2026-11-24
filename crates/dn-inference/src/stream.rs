@@ -15,19 +15,11 @@ pub(crate) type Item = Result<StreamEvent, CoreError>;
 /// producer observes on its next send and stops: that is how stream drop cancels a call.
 pub(crate) struct ChannelStream {
     rx: mpsc::Receiver<Item>,
-    _guard: Option<AbortOnDrop>,
 }
 
 impl ChannelStream {
     pub(crate) fn new(rx: mpsc::Receiver<Item>) -> Self {
-        Self { rx, _guard: None }
-    }
-
-    pub(crate) fn with_task(rx: mpsc::Receiver<Item>, task: tokio::task::JoinHandle<()>) -> Self {
-        Self {
-            rx,
-            _guard: Some(AbortOnDrop(task)),
-        }
+        Self { rx }
     }
 }
 
@@ -35,15 +27,6 @@ impl Stream for ChannelStream {
     type Item = Item;
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Item>> {
         self.rx.poll_recv(cx)
-    }
-}
-
-/// Aborts a tokio task when dropped (cancels in-flight HTTP reads immediately).
-pub(crate) struct AbortOnDrop(tokio::task::JoinHandle<()>);
-
-impl Drop for AbortOnDrop {
-    fn drop(&mut self) {
-        self.0.abort();
     }
 }
 

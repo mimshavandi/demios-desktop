@@ -1,0 +1,2 @@
+data: {"candidates": [{"content": {"parts": [],"role": "model"},"finishReason": "MALFORMED_FUNCTION_CALL","index": 0}],"usageMetadata": {"promptTokenCount": 70,"totalTokenCount": 70},"modelVersion": "gemini-2.5-flash","responseId": "REDACTED"}
+

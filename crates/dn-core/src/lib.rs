@@ -19,3 +19,6 @@ pub use error::{CoreError, RecoveryAction};
 /// Changing it orphans users' data and stored keys.
 pub const APP_ID: &str = "io.demios.desktop";
 pub use id::Id;
+
+#[cfg(all(test, feature = "ts"))]
+mod ts_bindings;

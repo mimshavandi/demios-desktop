@@ -8,7 +8,7 @@ version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/mimshavandi/demios-desktop"
-rust-version = "1.85"
+rust-version = "1.89"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -16,13 +16,26 @@ serde_json = "1"
 thiserror = "2"
 uuid = { version = "1", features = ["v7", "serde"] }
 futures-core = "0.3"
-rusqlite = { version = "0.43", features = ["bundled"] }
+# rustls (aws-lc-rs) + platform verifier; no OpenSSL.
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2", "charset"] }
+zeroize = "1"
+tokio = { version = "1", default-features = false }
+# Maintained fork of the archived serde_yaml (D-012 allows "serde_yaml or a maintained successor").
+serde_yaml_ng = "0.10"
+# No remote/file $ref resolution: schemas are bundled.
+jsonschema = { version = "0.63", default-features = false }
+# Pure-Rust backends only (no libdbus/openssl): Keychain, Credential Manager, Secret Service via zbus.
+keyring = { version = "3.6", features = ["apple-native", "windows-native", "async-secret-service", "tokio", "crypto-rust"] }
+ts-rs = { version = "12", default-features = false, features = ["serde-compat", "no-serde-warnings"] }
 dn-core = { path = "crates/dn-core", version = "0.1.0" }
+rusqlite = { version = "0.43", features = ["bundled"] }
 dn-store = { path = "crates/dn-store", version = "0.1.0" }
+dn-agent = { path = "crates/dn-agent", version = "0.1.0" }
+dn-secrets = { path = "crates/dn-secrets", version = "0.1.0" }
+process-wrap = { version = "10", default-features = false, features = ["tokio1", "process-group", "job-object"] }
+dn-providers = { path = "crates/dn-providers", version = "0.1.0" }
 dn-inference = { path = "crates/dn-inference", version = "0.1.0", default-features = false }
 dn-models = { path = "crates/dn-models", version = "0.1.0" }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util"] }
-reqwest = { version = "0.13", features = ["json"] }
 llama-cpp-2 = { version = "0.1.161", default-features = false, features = ["common"] }
 sha2 = "0.11"
 sysinfo = { version = "0.36", default-features = false, features = ["system"] }

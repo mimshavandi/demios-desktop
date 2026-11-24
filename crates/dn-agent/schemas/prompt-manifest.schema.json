@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mimshavandi/demios-desktop/crates/dn-agent/schemas/prompt-manifest.schema.json",
+  "title": "prompts/<id>/manifest.yaml",
+  "description": "A versioned prompt. Each version is a Markdown file next to the manifest; `{name}` placeholders are filled at render time (ADR-0005).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "active_version", "versions"],
+  "properties": {
+    "id": {"type": "string", "format": "dotted-id"},
+    "description": {"type": "string"},
+    "active_version": {"type": "string", "format": "prompt-version"},
+    "versions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["version", "file"],
+        "properties": {
+          "version": {"type": "string", "format": "prompt-version"},
+          "file": {"type": "string", "minLength": 1},
+          "variables": {"type": "array", "items": {"type": "string", "format": "identifier"}},
+          "description": {"type": "string"}
+        }
+      }
+    }
+  }
+}

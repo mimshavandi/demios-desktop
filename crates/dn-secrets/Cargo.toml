@@ -7,6 +7,14 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+dn-core.workspace = true
+keyring.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt"] }
+zeroize.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [lints]
 workspace = true
