@@ -45,9 +45,16 @@ pub enum HubError {
     InvalidPath(String),
     #[error("repo or revision not found: {0}")]
     NotFound(String),
-    /// 401/403: gated or private. `has_token` says whether a token was sent.
+    /// 403, or 401 without a token: gated or private. `has_token` says whether a token was
+    /// sent (with one, the account hasn't accepted the model's terms).
     #[error("{repo} needs access (gated or private); token sent: {has_token}")]
     Gated { repo: String, has_token: bool },
+    /// 401 although a token was sent: the token is invalid or expired.
+    #[error("the Hugging Face token was rejected")]
+    Unauthorized,
+    /// The repo has no complete GGUF model file at this revision.
+    #[error("{0} has no GGUF files")]
+    NoGguf(String),
     #[error("rate limited by the Hub")]
     RateLimited { retry_after: Option<u32> },
     #[error("hub returned {status}: {body}")]
@@ -79,6 +86,14 @@ impl From<HubError> for CoreError {
                 }
                 .to_string(),
                 vec![RecoveryAction::AddProviderKey],
+            ),
+            HubError::Unauthorized => (
+                "Your Hugging Face token was rejected. Replace it in settings.".to_string(),
+                vec![RecoveryAction::AddProviderKey],
+            ),
+            HubError::NoGguf(_) => (
+                "This repo has no GGUF files Demios can run.".to_string(),
+                vec![],
             ),
             HubError::RateLimited { retry_after } => (
                 "Hugging Face is limiting requests. Try again in a moment.".to_string(),
@@ -188,12 +203,15 @@ pub struct SearchQuery {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RepoSummary {
     pub id: String,
+    /// Owner part of `id`.
+    pub author: String,
     pub downloads: u64,
     pub likes: u64,
     pub last_modified: Option<String>,
     pub gated: bool,
     pub pipeline_tag: Option<String>,
     pub license: Option<String>,
+    pub tags: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -486,6 +504,7 @@ impl HubClient {
         let status = resp.status().as_u16();
         match status {
             200..=299 => Ok(resp),
+            401 if self.token.is_some() => Err(HubError::Unauthorized),
             401 | 403 => Err(HubError::Gated {
                 repo: repo.unwrap_or("").into(),
                 has_token: self.token.is_some(),
@@ -641,6 +660,15 @@ impl HubClient {
         Ok(out)
     }
 
+    /// [`files`](Self::files) grouped by [`gguf_variants`]; `NoGguf` when there is no model.
+    pub async fn variants(&self, repo: &str, sha: &str) -> Result<Vec<GgufVariant>> {
+        let v = gguf_variants(&self.files(repo, sha).await?);
+        if v.iter().all(|v| v.kind != VariantKind::Model) {
+            return Err(HubError::NoGguf(repo.into()));
+        }
+        Ok(v)
+    }
+
     /// `{endpoint}/{repo}/resolve/{sha}/{path}`.
     pub fn file_url(&self, repo: &str, sha: &str, path: &str) -> Result<String> {
         validate_repo_id(repo)?;
@@ -785,6 +813,7 @@ fn parse_summary(v: &Value) -> Option<RepoSummary> {
         })
         .unwrap_or_default();
     Some(RepoSummary {
+        author: id.split('/').next().unwrap_or_default().into(),
         id: id.into(),
         downloads: v["downloads"].as_u64().unwrap_or(0),
         likes: v["likes"].as_u64().unwrap_or(0),
@@ -792,6 +821,7 @@ fn parse_summary(v: &Value) -> Option<RepoSummary> {
         gated: is_gated(&v["gated"]),
         pipeline_tag: v["pipeline_tag"].as_str().map(String::from),
         license: license_of(v, &tags).id,
+        tags,
     })
 }
 
@@ -1167,6 +1197,10 @@ mod tests {
         assert!(matches!(
             c.repo("o/missing", None).await,
             Err(HubError::NotFound(_))
+        ));
+        assert!(matches!(
+            client(&s.url, Some("bad")).repo("o/locked", None).await,
+            Err(HubError::Unauthorized)
         ));
         let core: CoreError = HubError::Gated {
             repo: "o/n".into(),
