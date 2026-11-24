@@ -19,6 +19,14 @@ futures-core = "0.3"
 rusqlite = { version = "0.43", features = ["bundled"] }
 dn-core = { path = "crates/dn-core", version = "0.1.0" }
 dn-store = { path = "crates/dn-store", version = "0.1.0" }
+dn-inference = { path = "crates/dn-inference", version = "0.1.0", default-features = false }
+dn-models = { path = "crates/dn-models", version = "0.1.0" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util"] }
+reqwest = { version = "0.13", features = ["json"] }
+llama-cpp-2 = { version = "0.1.161", default-features = false, features = ["common"] }
+sha2 = "0.11"
+sysinfo = { version = "0.36", default-features = false, features = ["system"] }
+clap = { version = "4", features = ["derive"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
