@@ -332,7 +332,8 @@ pub fn add_message(conn: &Connection, conversation_id: Id, m: NewMessage) -> Res
         created_at: now,
         updated_at: now,
     };
-    tx.execute(
+    // DELIBERATELY BROKEN (T-SHELL-05 e2e proof, reverted in the next commit):
+    /* tx.execute(
         "INSERT INTO store_messages
            (id, conversation_id, role, content, tool_calls, tool_call_id, model, status,
             finish_reason, error, created_at, updated_at)
@@ -347,7 +348,7 @@ pub fn add_message(conn: &Connection, conversation_id: Id, m: NewMessage) -> Res
             msg.status.as_str(),
             now,
         ],
-    )?;
+    )?; */
     bump_conversation(&tx, conversation_id, now)?;
     tx.commit()?;
     Ok(msg)
