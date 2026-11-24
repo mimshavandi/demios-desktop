@@ -1,0 +1,16 @@
+id: clock.now
+version: 1
+description: Current local date, time and time zone. Use before reasoning about "today", "tomorrow" or deadlines.
+kind: builtin
+risk: read
+handler: builtin.clock.now
+input_schema:
+  type: object
+  additionalProperties: false
+  properties: {}
+output_schema:
+  type: object
+  required: [iso8601, timezone]
+  properties:
+    iso8601: {type: string}
+    timezone: {type: string}

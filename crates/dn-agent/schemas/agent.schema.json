@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mimshavandi/demios-desktop/crates/dn-agent/schemas/agent.schema.json",
+  "title": "agent.yaml",
+  "description": "An agent: system prompt, model slots, allowed skills and tools, loop policies (ADR-0005).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "version", "description", "prompt", "model_slots"],
+  "properties": {
+    "id": {"type": "string", "format": "dotted-id", "description": "Dotted id, e.g. `assistant.default`."},
+    "version": {"type": "integer", "minimum": 1},
+    "description": {"type": "string", "minLength": 1},
+    "prompt": {"type": "string", "format": "prompt-ref", "description": "System prompt: `<prompt-id>` (active version) or `<prompt-id>@v<n>`."},
+    "model_slots": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["slot_id", "capability"],
+        "properties": {
+          "slot_id": {"type": "string", "minLength": 1},
+          "capability": {"enum": ["chat", "vision", "embedding", "stt", "tts", "image"]},
+          "default_model": {"type": ["string", "null"], "format": "model-ref"},
+          "user_configurable": {"type": "boolean"}
+        }
+      }
+    },
+    "skills": {"type": "array", "items": {"type": "string", "format": "dotted-id"}},
+    "tools": {"type": "array", "description": "Allowed capability ids; a trailing `*` matches a prefix (`mcp.filesystem.*`).", "items": {"type": "string", "minLength": 1}},
+    "policies": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_steps": {"type": "integer", "minimum": 1, "maximum": 64},
+        "reasoning": {"enum": ["auto", "on", "off"]},
+        "caller": {"type": "string", "format": "dotted-id"},
+        "max_tokens": {"type": "integer", "minimum": 1},
+        "temperature": {"type": "number", "minimum": 0, "maximum": 2}
+      }
+    }
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mimshavandi/demios-desktop/crates/dn-agent/schemas/skill.schema.json",
+  "title": "skill.yaml",
+  "description": "A skill the model can call as a tool (ADR-0005). `prompt` and `tool_chain` skills need no code; `builtin` skills are Rust handlers registered by id.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "version", "description", "kind", "risk", "input_schema"],
+  "properties": {
+    "id": {"type": "string", "format": "dotted-id"},
+    "version": {"type": "integer", "minimum": 1},
+    "description": {"type": "string", "minLength": 1, "description": "Shown to the model as the tool description; say when to use it."},
+    "kind": {"enum": ["prompt", "tool_chain", "builtin"]},
+    "risk": {"enum": ["read", "low_write", "external_write", "destructive", "sensitive"]},
+    "input_schema": {"type": "object", "description": "JSON Schema of the tool arguments."},
+    "output_schema": {"type": "object"},
+    "prompt": {"type": "string", "format": "prompt-ref", "description": "Required for `kind: prompt`. Input fields are the template variables."},
+    "model_slot": {"type": "string", "minLength": 1, "description": "Agent slot that runs a `prompt` skill (default `primary`)."},
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Required for `kind: tool_chain`. Argument strings may use `{input.<field>}` and `{steps.<n>.output}`.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["tool"],
+        "properties": {
+          "tool": {"type": "string", "minLength": 1},
+          "arguments": {"type": "object"}
+        }
+      }
+    },
+    "handler": {"type": "string", "format": "dotted-id", "description": "Required for `kind: builtin`."}
+  }
+}
