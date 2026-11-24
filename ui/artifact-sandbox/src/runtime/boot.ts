@@ -36,6 +36,13 @@ function stripHostGlobals(): boolean {
 }
 
 (() => {
+  // Only ever a child of the host: as a top-level page (a link or a stray navigation) it has
+  // nobody to render for, so it stays inert.
+  if (window.top === window) {
+    stripHostGlobals();
+    document.documentElement.textContent = "Artifacts open in the Demios artifact pane.";
+    return;
+  }
   if (!stripHostGlobals()) {
     // Never hand artifact code a realm that still reaches the app's IPC.
     document.documentElement.textContent = "This artifact can't be shown safely in this window.";

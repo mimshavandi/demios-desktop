@@ -38,6 +38,11 @@ pub fn allowed_navigation(url: &tauri::Url) -> bool {
         "tauri" => host == "localhost",
         // Windows serves the app from http(s)://tauri.localhost.
         "http" | "https" if host == "tauri.localhost" => true,
+        // The artifact frame shell (T-ART-06): WebKitGTK and WebView2 also ask about sub-frame
+        // navigations. Only the shell's own document; should the main window ever land there,
+        // the shell removes the IPC globals and refuses to run (it renders only for a parent).
+        "artifact" => host == "localhost" && artifacts::is_frame_path(url.path()),
+        "http" if host == "artifact.localhost" => artifacts::is_frame_path(url.path()),
         "http" if cfg!(debug_assertions) => {
             (host == "localhost" || host == "127.0.0.1") && url.port() == Some(1420)
         }
@@ -149,6 +154,9 @@ mod tests {
             "tauri://localhost/",
             "http://tauri.localhost/index.html",
             "https://tauri.localhost/",
+            "artifact://localhost/frame/",
+            "artifact://localhost/frame/?net=1",
+            "http://artifact.localhost/frame/",
         ] {
             assert!(allowed_navigation(&ok.parse().unwrap()), "{ok}");
         }
@@ -158,6 +166,11 @@ mod tests {
             "file:///etc/passwd",
             "javascript:alert(1)",
             "tauri://evil/",
+            "artifact://localhost/",
+            "artifact://localhost/other",
+            "artifact://evil/frame/",
+            "https://artifact.localhost/frame/",
+            "http://artifact.localhost/x",
         ] {
             assert!(!allowed_navigation(&bad.parse().unwrap()), "{bad}");
         }

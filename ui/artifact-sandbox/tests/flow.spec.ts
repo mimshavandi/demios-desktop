@@ -1,6 +1,6 @@
 // Done-check: create → render → update → v2 → rollback, through the real UI.
 import { expect, test } from "@playwright/test";
-import { frame, openDemo } from "./helpers";
+import { ART, frame, openDemo } from "./helpers";
 
 test("create → render → update → v2 → rollback", async ({ page }) => {
   await openDemo(page);
@@ -206,4 +206,17 @@ test("markdown front matter (the host's AI marker) is not shown", async ({ page 
   const f = frame(page);
   await expect(f.locator("h1")).toHaveText("Notes");
   await expect(f.locator("body")).not.toContainText("ai_generated");
+});
+
+test("the frame shell opened as a top-level page stays inert", async ({ page }) => {
+  // A link or stray navigation in the app's window must not turn the shell into a renderer.
+  await page.addInitScript(() => {
+    const seen: unknown[] = [];
+    (window as unknown as { __seen: unknown[] }).__seen = seen;
+    window.addEventListener("message", (e) => seen.push(e.data));
+  });
+  await page.goto(`${ART}/frame/`);
+  await expect(page.locator("html")).toContainText("artifact pane");
+  await page.waitForTimeout(300);
+  expect(await page.evaluate(() => (window as unknown as { __seen: unknown[] }).__seen)).toEqual([]);
 });

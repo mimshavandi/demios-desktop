@@ -58,12 +58,16 @@ fn frame_csp() -> &'static FrameCsp {
     })
 }
 
+/// The only path served on the artifact origin.
+pub fn is_frame_path(path: &str) -> bool {
+    matches!(path, "/frame/" | "/frame/index.html")
+}
+
 /// Response for a request on the `artifact` scheme: the frame shell at `/frame/` (GET only),
 /// 404 for anything else.
 pub fn frame_response(req: &Request<Vec<u8>>) -> Response<Vec<u8>> {
     let path = req.uri().path();
-    if req.method() != tauri::http::Method::GET || !matches!(path, "/frame/" | "/frame/index.html")
-    {
+    if req.method() != tauri::http::Method::GET || !is_frame_path(path) {
         return Response::builder()
             .status(StatusCode::NOT_FOUND)
             .header(header::CONTENT_TYPE, "text/plain")
