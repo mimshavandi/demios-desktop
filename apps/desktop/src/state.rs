@@ -185,6 +185,8 @@ pub struct AppState {
     pub local_servers: bool,
     /// Running Hugging Face downloads (add-model screen).
     pub hub_pulls: Arc<crate::hub::HubPulls>,
+    /// `demios://models/add` links waiting for or shown on the confirmation screen.
+    pub add_links: crate::deeplink::AddLinks,
     /// Asks before a local MCP server starts (native dialog in the app; tests set a fake).
     pub launch_approver: std::sync::OnceLock<Arc<dyn crate::mcp::LaunchApprover>>,
 }
@@ -240,6 +242,7 @@ impl AppState {
             mcp_epoch: AtomicU64::new(0),
             local_servers: crate::mcp::local_servers_allowed(),
             hub_pulls: Default::default(),
+            add_links: Default::default(),
             launch_approver: std::sync::OnceLock::new(),
         }
     }

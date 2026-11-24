@@ -32,6 +32,8 @@ Every direct dependency is listed here with why and its licence (ADR-0009). Anyt
 | tauri-plugin-opener 2 | apps/desktop | open the "Report a problem" form in the system browser; called from Rust only, its JS commands are not granted (lead approved 2026-11-24; links in answers will add an http/https-only capability later) | MIT/Apache-2.0 | T-STORE-14 |
 | tauri-plugin-dialog 2 | apps/desktop | native "start this program?" confirm before a local MCP server is launched, shown from Rust only; its JS commands are not granted (lead approved) | MIT/Apache-2.0 | T-SHELL-08 |
 | url 2 | apps/desktop | parse the MCP OAuth sign-in URL (scheme, host, no userinfo) before opening it; already in the tree via reqwest (lead approved) | MIT/Apache-2.0 | T-SHELL-08 |
+| tauri-plugin-deep-link 2 | apps/desktop | the OS hands `demios://models/add` links to the app; handled in Rust only (`AddModelLink::parse` as data, opens the confirmation, never downloads); its JS commands are not granted (lead approved) | MIT/Apache-2.0 | T-INF-12 |
+| tauri-plugin-single-instance 2 (`deep-link`) | apps/desktop | a link (or a second launch) opens the running app instead of a second copy; the second launch's command line is ignored, its link forwarded to the deep-link handler (lead approved) | MIT/Apache-2.0 | T-INF-12 |
 
 ### UI (npm, `apps/desktop/package.json`)
 

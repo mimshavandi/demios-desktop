@@ -270,7 +270,7 @@ export function createMockApi(): Api {
     window.setTimeout(() => approvalSink?.({ type: "requested", prompt }), 300);
   };
 
-  return {
+  const api: Api = {
     appInfo: async () => ({ version: "0.1.0 (browser mock)", dev_fake_model: true, data_dir: null, models_dir: null }),
     reportProblem: async (kind, messageId) => {
       console.info("mock: would open the report form", kind, messageId);
@@ -389,6 +389,8 @@ export function createMockApi(): Api {
           warning: meta.license?.includes("-nc") ? "non_commercial" : meta.license?.startsWith("llama") ? "use_policy" : null,
         },
         card_url: `https://huggingface.co/${repo}`,
+        selected: null,
+        fit_unknown: false,
         variants: [
           { name: "Q4_K_M", quant: "Q4_K_M", total_size: 1_100_000_000, parts: 1, verifiable: true, fit: fit("ready", "Fits this computer with room to spare.", false), downloaded: null, progress: null },
           { name: "Q8_0", quant: "Q8_0", total_size: 2_000_000_000, parts: 1, verifiable: true, fit: { ...fit("caution", "Fits, with little memory left for other apps."), estimated: true }, downloaded: null, progress: null },
@@ -421,6 +423,16 @@ export function createMockApi(): Api {
     },
     hubCancel: async () => true,
     hubPullStatus: async () => ({}),
+    // Browser preview: `window.demiosMockAddLink("demios://models/add?repo=…&quant=…")`.
+    watchAddLinks: async (onEvent) => {
+      (window as unknown as { demiosMockAddLink: (url: string) => void }).demiosMockAddLink = (url: string) => {
+        const q = new URL(url.replace("demios://", "https://demios.invalid/")).searchParams;
+        onEvent({ repo: q.get("repo") ?? "", file: q.get("file"), quant: q.get("quant"), revision: q.get("revision") });
+      };
+      return null;
+    },
+    addLinkDone: async () => null,
+    hubResolveLink: async (link) => ({ ...(await api.hubRepo(link.repo)), selected: link.quant }),
     hfTokenStatus: async () => hfToken,
     setHfToken: async () => (hfToken = true),
     deleteHfToken: async () => (hfToken = false),
@@ -544,4 +556,5 @@ export function createMockApi(): Api {
       return catalog();
     },
   };
+  return api;
 }

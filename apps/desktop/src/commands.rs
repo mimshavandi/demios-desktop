@@ -800,3 +800,34 @@ pub async fn delete_hf_token(state: AppStateRef<'_>) -> IpcResult<bool> {
     })
     .await
 }
+
+// ---- demios://models/add links (T-INF-12)
+
+/// The add-model screen subscribes to links from the OS; returns one that arrived first.
+#[tauri::command]
+pub async fn watch_add_links(
+    state: AppStateRef<'_>,
+    on_event: Channel<dn_models::link::AddModelLink>,
+) -> IpcResult<Option<dn_models::link::AddModelLink>> {
+    Ok(state.add_links.watch(Arc::new(move |l| {
+        let _ = on_event.send(l);
+    })))
+}
+
+/// The link's confirmation was closed: the next link may open it again.
+#[tauri::command]
+pub async fn add_link_done(state: AppStateRef<'_>) -> IpcResult<()> {
+    state.add_links.done();
+    Ok(())
+}
+
+/// What a link asks for, resolved for the confirmation screen (no download).
+#[tauri::command]
+pub async fn hub_resolve_link(
+    state: AppStateRef<'_>,
+    link: dn_models::link::AddModelLink,
+) -> IpcResult<crate::hub::RepoView> {
+    let hub = blocking(&state, |s| crate::hub::client(&s.keys)).await?;
+    let local = local_models(&state)?;
+    crate::hub::resolve_link(&hub, &local, &state.hub_pulls, &link).await
+}

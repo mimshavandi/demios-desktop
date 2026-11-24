@@ -8,6 +8,7 @@ compile_error!("the dev fake model must never be in a release build");
 pub mod agent;
 pub mod chat;
 pub mod commands;
+pub mod deeplink;
 pub mod error;
 #[cfg(any(fake_model, test))]
 pub mod fake;
@@ -59,6 +60,35 @@ fn navigation_guard<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
         .build()
 }
 
+/// Routes `demios://` links from the OS to the add-model confirmation screen, as data
+/// (`deeplink::AddLinks::receive` parses them; nothing downloads from a link).
+fn install_add_links(app: &tauri::AppHandle, state: &std::sync::Arc<state::AppState>) {
+    use tauri_plugin_deep_link::DeepLinkExt;
+    // Installers register the scheme; dev builds on Linux and Windows register it here.
+    #[cfg(any(target_os = "linux", all(debug_assertions, windows)))]
+    if let Err(e) = app.deep_link().register_all() {
+        eprintln!("could not register demios:// links: {e}");
+    }
+    let receive = {
+        let state = std::sync::Arc::clone(state);
+        move |url: &str| {
+            if let Err(why) = state.add_links.receive(url) {
+                eprintln!("ignored a demios:// link: {why:?}");
+            }
+        }
+    };
+    if let Ok(Some(urls)) = app.deep_link().get_current() {
+        for u in urls {
+            receive(u.as_str());
+        }
+    }
+    app.deep_link().on_open_url(move |ev| {
+        for u in ev.urls() {
+            receive(u.as_str());
+        }
+    });
+}
+
 /// Asks with a native dialog (outside the webview) before a local MCP server starts.
 struct NativeLaunchApprover(tauri::AppHandle);
 
@@ -87,6 +117,18 @@ impl mcp::LaunchApprover for NativeLaunchApprover {
 
 pub fn run() {
     tauri::Builder::default()
+        // First: a second launch (e.g. from a demios:// link) hands over to this one. With
+        // the `deep-link` feature the link is forwarded to the deep-link plugin below; the
+        // second launch's command line is otherwise ignored.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            use tauri::Manager;
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.unminimize();
+                let _ = w.set_focus();
+            }
+        }))
+        // demios://models/add links, from Rust only (no JS commands granted).
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(navigation_guard())
         // Used from Rust only (`commands::report_problem`): no link-click handler is injected
         // into the webview, and none of its JS commands are granted (see capabilities).
@@ -116,6 +158,7 @@ pub fn run() {
                     dir.display()
                 )
             })?;
+            install_add_links(app.handle(), &state);
             app.manage(state);
             Ok(())
         })
@@ -135,6 +178,9 @@ pub fn run() {
             commands::hub_pull,
             commands::hub_cancel,
             commands::hub_pull_status,
+            commands::watch_add_links,
+            commands::add_link_done,
+            commands::hub_resolve_link,
             commands::hf_token_status,
             commands::set_hf_token,
             commands::delete_hf_token,

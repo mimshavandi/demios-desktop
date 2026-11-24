@@ -22,6 +22,8 @@ const repoView = (over: Partial<HubRepoView> = {}): HubRepoView => ({
   gated: false,
   license: { id: "apache-2.0", name: null, link: null, warning: null },
   card_url: "https://huggingface.co/org/Tiny-GGUF",
+  selected: null,
+  fit_unknown: false,
   variants: [
     { name: "Tiny-Q4_K_M", quant: "Q4_K_M", total_size: 1e9, parts: 1, verifiable: true, fit: fit("ready", false), downloaded: null, progress: null },
     { name: "Tiny-F16", quant: "F16", total_size: 4e9, parts: 2, verifiable: false, fit: fit("memory_blocked", true), downloaded: null, progress: null },

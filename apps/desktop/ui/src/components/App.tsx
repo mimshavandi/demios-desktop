@@ -13,6 +13,7 @@ import {
   type McpServerStatus,
   type ModelCatalog,
   type ReportKind,
+  type AddModelLink,
   type Settings,
   type UnknownOutcome,
 } from "../ipc/types";
@@ -97,6 +98,33 @@ function Shell({ api }: { api: Api }) {
     },
     [api, toast],
   );
+
+  // demios://models/add links from the OS open the add-model confirmation (T-INF-12).
+  const [addLink, setAddLink] = useState<AddModelLink | null>(null);
+  const addLinkRef = useRef<AddModelLink | null>(null);
+  addLinkRef.current = addLink;
+  useEffect(() => {
+    let alive = true;
+    const show = (l: AddModelLink) => {
+      if (!alive) return;
+      addLinkRef.current = l;
+      setAddLink(l);
+      setView({ kind: "settings", section: "models" });
+    };
+    void api
+      .watchAddLinks(show)
+      .then((pending) => {
+        if (pending !== null) show(pending);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [api]);
+  const closeAddLink = useCallback(() => {
+    setAddLink(null);
+    void api.addLinkDone().catch(() => {});
+  }, [api]);
 
   const dismissAiNotice = useCallback(async () => {
     const hide = (settings: Settings) =>
@@ -215,6 +243,8 @@ function Shell({ api }: { api: Api }) {
         setConversations(list);
         setListState({ kind: "ready" });
         await open(list[0]?.id ?? null);
+        // A link that started the app wins over opening the last chat.
+        if (addLinkRef.current !== null) setView({ kind: "settings", section: "models" });
       } catch (e) {
         setListState({ kind: "error", message: errorMessage(e) });
       }
@@ -508,6 +538,8 @@ function Shell({ api }: { api: Api }) {
             onSection={goSettings}
             onCatalog={setCatalog}
             servers={servers}
+            addLink={addLink}
+            onAddLinkClosed={closeAddLink}
           />
         )}
       </main>

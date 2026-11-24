@@ -42,6 +42,10 @@ pub struct RepoView {
     pub license: LicenseInfo,
     pub card_url: String,
     pub variants: Vec<VariantView>,
+    /// The variant a `demios://` link chose, if it chose exactly one.
+    pub selected: Option<String>,
+    /// The fit couldn't be worked out (the GGUF header wasn't readable).
+    pub fit_unknown: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -259,6 +263,38 @@ pub async fn repo(
         Some(b) => hub.footprint(&info, b).await.ok().map(|fp| (b.clone(), fp)),
         None => None,
     };
+    let fits = variants
+        .iter()
+        .map(|v| {
+            base_fp.as_ref().map(|(b, fp)| {
+                let est = hub::estimate_variant(fp, b, v).fit(local.machine());
+                local.fit_view_for(&est.value, est.estimated)
+            })
+        })
+        .collect();
+    let fit_unknown = base_fp.is_none();
+    Ok(build_view(
+        &info,
+        &variants,
+        fits,
+        None,
+        fit_unknown,
+        local,
+        pulls,
+    ))
+}
+
+/// The screen's view of a repo pinned to a commit: model variants with fit, downloaded and
+/// running state.
+fn build_view(
+    info: &RepoInfo,
+    variants: &[GgufVariant],
+    fits: Vec<Option<FitView>>,
+    selected: Option<String>,
+    fit_unknown: bool,
+    local: &LocalModels,
+    pulls: &HubPulls,
+) -> RepoView {
     let downloaded: HashMap<String, String> = local
         .rows()
         .into_iter()
@@ -272,31 +308,67 @@ pub async fn repo(
         .collect();
     let views = variants
         .iter()
-        .map(|v| {
-            let fit = base_fp.as_ref().map(|(b, fp)| {
-                let est = hub::estimate_variant(fp, b, v).fit(local.machine());
-                local.fit_view_for(&est.value, est.estimated)
-            });
-            VariantView {
-                name: v.name.clone(),
-                quant: v.quant.clone(),
-                total_size: v.total_size,
-                parts: v.files.len(),
-                verifiable: v.files.iter().all(|f| f.sha256.is_some()),
-                fit,
-                downloaded: downloaded.get(&v.name).cloned(),
-                progress: pulls.progress_of(&pull_key(&info.id, &info.sha, &v.name)),
-            }
+        .zip(fits)
+        .filter(|(v, _)| v.kind == VariantKind::Model)
+        .map(|(v, fit)| VariantView {
+            name: v.name.clone(),
+            quant: v.quant.clone(),
+            total_size: v.total_size,
+            parts: v.files.len(),
+            verifiable: v.files.iter().all(|f| f.sha256.is_some()),
+            fit,
+            downloaded: downloaded.get(&v.name).cloned(),
+            progress: pulls.progress_of(&pull_key(&info.id, &info.sha, &v.name)),
         })
         .collect();
-    Ok(RepoView {
+    RepoView {
         id: info.id.clone(),
         sha: info.sha.clone(),
         gated: info.gated,
         license: info.license.clone(),
         card_url: info.card_url.clone(),
         variants: views,
-    })
+        selected,
+        fit_unknown,
+    }
+}
+
+/// A `demios://` link's model, as the confirmation screen shows it: pinned to the commit the
+/// link's revision resolves to, with the variant it chose (if one) and fits. Downloads
+/// nothing; the user starts the download from the screen.
+pub async fn resolve_link(
+    hub: &HubClient,
+    local: &LocalModels,
+    pulls: &HubPulls,
+    link: &dn_models::link::AddModelLink,
+) -> IpcResult<RepoView> {
+    let link = crate::deeplink::revalidate(link)
+        .map_err(|_| IpcError::invalid("That link isn't a valid Demios model link."))?;
+    let plan = link
+        .resolve(hub, local.machine())
+        .await
+        .map_err(hub_error)?;
+    let fits = plan
+        .fits
+        .iter()
+        .map(|f| {
+            f.as_ref()
+                .map(|e| local.fit_view_for(&e.value, e.estimated))
+        })
+        .collect();
+    let selected = plan.selected_variant().map(|v| v.name.clone());
+    let fit_unknown = plan
+        .warnings
+        .contains(&dn_models::link::PlanWarning::FitUnknown);
+    Ok(build_view(
+        &plan.info,
+        &plan.variants,
+        fits,
+        selected,
+        fit_unknown,
+        local,
+        pulls,
+    ))
 }
 
 /// Downloads one quantisation of `repo` pinned at `sha` (the 40-hex commit from
