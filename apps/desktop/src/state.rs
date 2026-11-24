@@ -24,20 +24,44 @@ pub fn migration_sets() -> Vec<MigrationSet> {
     ]
 }
 
-/// Approval traffic to the UI (design-system §4 Approval card).
+/// Tool-runtime traffic to the UI: approval cards (design-system §4) and MCP server status.
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum ApprovalEvent {
+pub enum ToolEvent {
     Requested {
         prompt: ApprovalPrompt,
     },
-    /// Answered, timed out or abandoned (its run ended): remove the card.
+    /// Answered (`expired: false`), or timed out / abandoned because its run ended or was
+    /// stopped (`expired: true`): remove the card.
     Resolved {
         request_id: Id,
+        expired: bool,
+    },
+    McpServer {
+        status: McpServerStatus,
     },
 }
 
-type ApprovalSink = Arc<dyn Fn(ApprovalEvent) + Send + Sync>;
+/// Connection state of one configured MCP server, for toasts and the Models page.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct McpServerStatus {
+    pub server_id: String,
+    pub name: String,
+    /// `connecting`, `connected` or `failed`.
+    pub state: &'static str,
+    /// User-facing reason when `failed`.
+    pub message: Option<String>,
+    pub tools: usize,
+}
+
+/// What the UI gets when it subscribes.
+#[derive(Clone, Debug, Serialize)]
+pub struct ToolSnapshot {
+    pub approvals: Vec<ApprovalPrompt>,
+    pub servers: Vec<McpServerStatus>,
+}
+
+type ToolSink = Arc<dyn Fn(ToolEvent) + Send + Sync>;
 
 /// How long a removed provider key can be restored with Undo (it is gone from the key
 /// store immediately and held only in memory meanwhile).
@@ -73,7 +97,8 @@ pub struct AppState {
     /// The dn-tools executor itself, for outcome-unknown resolution. `None` in tests.
     pub executor: Option<Arc<dn_tools::Executor>>,
     approvals: Mutex<HashMap<Id, ApprovalRequest>>,
-    approval_sink: Mutex<Option<ApprovalSink>>,
+    approval_sink: Mutex<Option<ToolSink>>,
+    mcp_status: Mutex<std::collections::BTreeMap<String, McpServerStatus>>,
     running: Mutex<HashMap<Id, Running>>,
     live: Mutex<HashMap<Id, Live>>,
     removed_keys: Mutex<HashMap<String, RemovedKey>>,
@@ -123,6 +148,7 @@ impl AppState {
             executor: None,
             approvals: Mutex::new(HashMap::new()),
             approval_sink: Mutex::new(None),
+            mcp_status: Mutex::new(Default::default()),
             running: Mutex::new(HashMap::new()),
             live: Mutex::new(HashMap::new()),
             removed_keys: Mutex::new(HashMap::new()),
@@ -186,20 +212,50 @@ impl AppState {
         }
         let secrets: Arc<dyn dn_tools::SecretStore> =
             Arc::new(dn_tools::DnSecrets(Arc::clone(&self.keys.store)));
+        for cfg in &servers {
+            self.set_mcp_status(McpServerStatus {
+                server_id: cfg.id.clone(),
+                name: cfg.display_name.clone().unwrap_or_else(|| cfg.id.clone()),
+                state: "connecting",
+                message: None,
+                tools: 0,
+            });
+        }
+        let state = Arc::clone(self);
         tauri::async_runtime::spawn(async move {
             for cfg in servers {
                 let id = cfg.id.clone();
+                let name = cfg.display_name.clone().unwrap_or_else(|| id.clone());
+                let status = |state, message: Option<String>, tools| McpServerStatus {
+                    server_id: id.clone(),
+                    name: name.clone(),
+                    state,
+                    message,
+                    tools,
+                };
                 let client = match dn_tools::McpClient::new(cfg, Arc::clone(&secrets)) {
                     Ok(c) => {
                         c.with_auth(Arc::new(dn_tools::OAuthManager::new(Arc::clone(&secrets))))
                     }
                     Err(e) => {
                         eprintln!("MCP server `{id}` is misconfigured: {e}");
+                        state.set_mcp_status(status(
+                            "failed",
+                            Some(
+                                "Its settings are invalid. Check the server configuration.".into(),
+                            ),
+                            0,
+                        ));
                         continue;
                     }
                 };
-                if let Err(e) = executor.add_server(client).await {
-                    eprintln!("MCP server `{id}` could not be added: {e}");
+                match executor.add_server(client).await {
+                    Ok(caps) => state.set_mcp_status(status("connected", None, caps.len())),
+                    Err(e) => {
+                        eprintln!("MCP server `{id}` could not be added: {e}");
+                        let msg = crate::agent::model_error(e).message;
+                        state.set_mcp_status(status("failed", Some(msg), 0));
+                    }
                 }
             }
         });
@@ -339,8 +395,15 @@ impl AppState {
     ) {
         let state = Arc::clone(self);
         tauri::async_runtime::spawn(async move {
-            while let Some(req) = rx.recv().await {
-                state.add_approval(req);
+            let mut sweep = tokio::time::interval(Duration::from_millis(500));
+            loop {
+                tokio::select! {
+                    req = rx.recv() => match req {
+                        Some(req) => state.add_approval(req),
+                        None => break,
+                    },
+                    _ = sweep.tick() => state.prune_closed_approvals(),
+                }
             }
         });
     }
@@ -348,25 +411,61 @@ impl AppState {
     /// Holds a pending request and shows it in the UI. Never answered here: no
     /// auto-allow, the user decides (or the gate's timeout denies).
     pub fn add_approval(&self, req: ApprovalRequest) {
+        self.prune_closed_approvals();
+        if req.is_closed() {
+            return;
+        }
         let prompt = req.prompt.clone();
         lock(&self.approvals).insert(prompt.request_id, req);
-        self.emit_approval(ApprovalEvent::Requested { prompt });
+        self.emit_approval(ToolEvent::Requested { prompt });
     }
 
-    fn emit_approval(&self, ev: ApprovalEvent) {
+    /// Requests whose call is gone (timed out, stopped, run ended) leave the UI as expired.
+    /// Keyed by request, so another run's pending approvals are never touched.
+    pub fn prune_closed_approvals(&self) {
+        let gone: Vec<Id> = {
+            let mut m = lock(&self.approvals);
+            let ids: Vec<Id> = m
+                .iter()
+                .filter(|(_, r)| r.is_closed())
+                .map(|(id, _)| *id)
+                .collect();
+            for id in &ids {
+                m.remove(id);
+            }
+            ids
+        };
+        for request_id in gone {
+            self.emit_approval(ToolEvent::Resolved {
+                request_id,
+                expired: true,
+            });
+        }
+    }
+
+    fn emit_approval(&self, ev: ToolEvent) {
         let sink = lock(&self.approval_sink).clone();
         if let Some(sink) = sink {
             sink(ev);
         }
     }
 
-    /// The UI subscribes once; it gets the requests already waiting.
-    pub fn watch_approvals(&self, sink: ApprovalSink) -> Vec<ApprovalPrompt> {
+    /// The UI subscribes once; it gets the requests already waiting and server states.
+    pub fn watch_tools(&self, sink: ToolSink) -> ToolSnapshot {
         *lock(&self.approval_sink) = Some(sink);
-        self.pending_approvals()
+        ToolSnapshot {
+            approvals: self.pending_approvals(),
+            servers: lock(&self.mcp_status).values().cloned().collect(),
+        }
+    }
+
+    pub fn set_mcp_status(&self, status: McpServerStatus) {
+        lock(&self.mcp_status).insert(status.server_id.clone(), status.clone());
+        self.emit_approval(ToolEvent::McpServer { status });
     }
 
     pub fn pending_approvals(&self) -> Vec<ApprovalPrompt> {
+        self.prune_closed_approvals();
         let mut v: Vec<ApprovalPrompt> = lock(&self.approvals)
             .values()
             .map(|r| r.prompt.clone())
@@ -376,11 +475,20 @@ impl AppState {
     }
 
     /// Answers a request. "Allow for this chat" is downgraded to "allow once" for
-    /// destructive and sensitive capabilities (design-system §4).
+    /// destructive and sensitive capabilities (design-system §4). A request whose call is
+    /// already gone is `expired`, never reported as approved.
     pub fn respond_approval(&self, request_id: Id, decision: ApprovalDecision) -> IpcResult<()> {
+        let expired = || IpcError::new("expired", "This request expired before you answered.");
         let req = lock(&self.approvals)
             .remove(&request_id)
-            .ok_or_else(|| IpcError::new("expired", "This request is no longer waiting."))?;
+            .ok_or_else(expired)?;
+        if req.is_closed() {
+            self.emit_approval(ToolEvent::Resolved {
+                request_id,
+                expired: true,
+            });
+            return Err(expired());
+        }
         let decision = match decision {
             ApprovalDecision::ApproveForConversation
                 if req.prompt.risk >= dn_core::capability::RiskTier::Destructive =>
@@ -390,28 +498,11 @@ impl AppState {
             d => d,
         };
         req.respond(decision);
-        self.emit_approval(ApprovalEvent::Resolved { request_id });
+        self.emit_approval(ToolEvent::Resolved {
+            request_id,
+            expired: false,
+        });
         Ok(())
-    }
-
-    /// Drops (= denies) requests of a conversation whose run has ended.
-    pub fn drop_approvals_for(&self, conversation_id: Id) {
-        let scope = format!("conv:{conversation_id}");
-        let gone: Vec<Id> = {
-            let mut m = lock(&self.approvals);
-            let ids: Vec<Id> = m
-                .iter()
-                .filter(|(_, r)| r.prompt.scope == scope)
-                .map(|(id, _)| *id)
-                .collect();
-            for id in &ids {
-                m.remove(id);
-            }
-            ids
-        };
-        for request_id in gone {
-            self.emit_approval(ApprovalEvent::Resolved { request_id });
-        }
     }
 
     // ---- provider keys with Undo
@@ -463,10 +554,11 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn approvals_wait_for_the_user_and_reach_the_ui() {
         let st = Arc::new(AppState::in_memory().unwrap());
-        let seen = Arc::new(Mutex::new(Vec::<ApprovalEvent>::new()));
+        let seen = Arc::new(Mutex::new(Vec::<ToolEvent>::new()));
         let s2 = Arc::clone(&seen);
         assert!(
-            st.watch_approvals(Arc::new(move |e| s2.lock().unwrap().push(e)))
+            st.watch_tools(Arc::new(move |e| s2.lock().unwrap().push(e)))
+                .approvals
                 .is_empty()
         );
 
@@ -495,8 +587,10 @@ mod tests {
             ApprovalPolicy::AskOncePerConversation
         ));
         let evs = seen.lock().unwrap();
-        assert!(matches!(evs[0], ApprovalEvent::Requested { .. }));
-        assert!(matches!(evs[1], ApprovalEvent::Resolved { request_id } if request_id == id));
+        assert!(matches!(evs[0], ToolEvent::Requested { .. }));
+        assert!(
+            matches!(evs[1], ToolEvent::Resolved { request_id, expired: false } if request_id == id)
+        );
         assert!(
             st.respond_approval(id, ApprovalDecision::Approve).is_err(),
             "answered once"
@@ -530,23 +624,68 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn ended_runs_drop_their_approvals() {
+    async fn closed_requests_expire_and_are_never_approved() {
+        let st = Arc::new(AppState::in_memory().unwrap());
+        let seen = Arc::new(Mutex::new(Vec::<ToolEvent>::new()));
+        let s2 = Arc::clone(&seen);
+        st.watch_tools(Arc::new(move |e| s2.lock().unwrap().push(e)));
+        let (gate, rx) = dn_tools::ApprovalGate::new(4);
+        let gate = Arc::new(gate.with_timeout(Duration::from_millis(100)));
+        st.start_approval_bridge(rx);
+        let p = prompt(RiskTier::LowWrite);
+        let id = p.request_id;
+        let g = Arc::clone(&gate);
+        let waiting = tokio::spawn(async move { g.check(p).await });
+        assert!(!waiting.await.unwrap().allowed(), "timeout denies");
+        // The request is still listed until the next sweep; answering it now must fail.
+        let err = st.respond_approval(id, ApprovalDecision::Approve);
+        if let Err(e) = err {
+            assert_eq!(e.code, "expired");
+        }
+        for _ in 0..40 {
+            if seen
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|e| matches!(e, ToolEvent::Resolved { request_id, expired: true } if *request_id == id))
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(seen.lock().unwrap().iter().any(
+            |e| matches!(e, ToolEvent::Resolved { request_id, expired: true } if *request_id == id)
+        ));
+        assert!(st.pending_approvals().is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_ending_run_does_not_touch_another_runs_approval() {
         let st = Arc::new(AppState::in_memory().unwrap());
         let (gate, rx) = dn_tools::ApprovalGate::new(4);
+        let gate = Arc::new(gate);
         st.start_approval_bridge(rx);
-        let mut p = prompt(RiskTier::LowWrite);
-        let conv = Id::new();
-        p.scope = format!("conv:{conv}");
-        let waiting = tokio::spawn(async move { gate.check(p).await });
+        // Run A's call is cancelled (its future dropped); run B's call keeps waiting.
+        let (ga, gb) = (Arc::clone(&gate), Arc::clone(&gate));
+        let a = tokio::spawn(async move { ga.check(prompt(RiskTier::LowWrite)).await });
+        let pb = prompt(RiskTier::LowWrite);
+        let b_id = pb.request_id;
+        let b = tokio::spawn(async move { gb.check(pb).await });
         for _ in 0..100 {
-            if !st.pending_approvals().is_empty() {
+            if st.pending_approvals().len() == 2 {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
-        st.drop_approvals_for(conv);
-        assert!(st.pending_approvals().is_empty());
-        assert!(!waiting.await.unwrap().allowed(), "dropped = denied");
+        a.abort();
+        let _ = a.await;
+        st.prune_closed_approvals();
+        let pending = st.pending_approvals();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].request_id, b_id);
+        st.respond_approval(b_id, ApprovalDecision::Approve)
+            .unwrap();
+        assert!(b.await.unwrap().allowed());
     }
 
     #[test]

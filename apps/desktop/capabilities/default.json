@@ -22,7 +22,7 @@
     "allow-delete-provider-key",
     "allow-restore-conversation",
     "allow-restore-provider-key",
-    "allow-watch-approvals",
+    "allow-watch-tools",
     "allow-respond-approval",
     "allow-list-unknown-outcomes",
     "allow-resolve-unknown-outcome",

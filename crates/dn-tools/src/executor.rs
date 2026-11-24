@@ -223,6 +223,18 @@ impl Executor {
         self.reindex_names();
     }
 
+    /// Stops every server (app exit): stdio servers and their process trees are killed.
+    pub async fn shutdown_all(&self) {
+        let clients: Vec<Arc<McpClient>> = self
+            .clients
+            .read()
+            .map(|c| c.values().cloned().collect())
+            .unwrap_or_default();
+        for c in clients {
+            c.shutdown().await;
+        }
+    }
+
     /// Re-list a server's tools (after connect, restart or `tools/list_changed`).
     pub async fn refresh(&self, server_id: &str) -> Result<Vec<McpCapability>, CoreError> {
         let client = self.client(server_id).ok_or_else(|| {

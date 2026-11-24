@@ -18,7 +18,15 @@ use std::sync::{Arc, Mutex};
 #[derive(Default)]
 pub struct ModelRegistry {
     fixed: HashMap<String, Arc<dyn ChatModel>>,
-    providers: Mutex<HashMap<String, Arc<dyn ProviderAdapter>>>,
+    providers: Mutex<Providers>,
+}
+
+/// Cached adapters plus a generation per provider: a key change bumps it, so an adapter
+/// built from the old key while the change happened is used once but never cached.
+#[derive(Default)]
+struct Providers {
+    adapters: HashMap<String, Arc<dyn ProviderAdapter>>,
+    generation: HashMap<String, u64>,
 }
 
 impl ModelRegistry {
@@ -59,10 +67,14 @@ impl ModelRegistry {
         };
         let def = provider(provider_id)
             .ok_or_else(|| unavailable(format!("Unknown provider `{provider_id}`."), vec![]))?;
-        if let Some(a) = lock(&self.providers).get(provider_id) {
-            let a: Arc<dyn ChatModel> = a.clone();
-            return Ok(a);
-        }
+        let generation = {
+            let p = lock(&self.providers);
+            if let Some(a) = p.adapters.get(provider_id) {
+                let a: Arc<dyn ChatModel> = a.clone();
+                return Ok(a);
+            }
+            p.generation.get(provider_id).copied().unwrap_or(0)
+        };
         let key = keys
             .get(provider_id)
             .map_err(|e| unavailable(crate::error::IpcError::from(e).message, vec![]))?
@@ -77,14 +89,54 @@ impl ModelRegistry {
             })?;
         let adapter =
             dn_providers::build(ProviderConfig::new(provider_id, def.kind).with_key(key))?;
-        lock(&self.providers).insert(provider_id.clone(), Arc::clone(&adapter));
+        {
+            let mut p = lock(&self.providers);
+            if p.generation.get(provider_id).copied().unwrap_or(0) == generation {
+                p.adapters.insert(provider_id.clone(), Arc::clone(&adapter));
+            }
+        }
         let a: Arc<dyn ChatModel> = adapter;
         Ok(a)
     }
 
     /// Forget a cached adapter (its key was replaced or removed).
     pub fn invalidate(&self, provider_id: &str) {
-        lock(&self.providers).remove(provider_id);
+        let mut p = lock(&self.providers);
+        p.adapters.remove(provider_id);
+        *p.generation.entry(provider_id.to_string()).or_default() += 1;
+    }
+
+    #[cfg(test)]
+    fn cached(&self, provider_id: &str) -> bool {
+        lock(&self.providers).adapters.contains_key(provider_id)
+    }
+
+    /// Test hook: a key change lands while an adapter is being built.
+    #[cfg(test)]
+    fn get_racing_invalidate(
+        &self,
+        model: &ModelRef,
+        keys: &Keys,
+    ) -> Result<Arc<dyn ChatModel>, CoreError> {
+        let ModelRef::Byok { provider_id, .. } = model else {
+            unreachable!()
+        };
+        let generation = lock(&self.providers)
+            .generation
+            .get(provider_id)
+            .copied()
+            .unwrap_or(0);
+        let def = provider(provider_id).unwrap();
+        let key = keys.get(provider_id).unwrap().unwrap();
+        let adapter =
+            dn_providers::build(ProviderConfig::new(provider_id, def.kind).with_key(key))?;
+        self.invalidate(provider_id);
+        let mut p = lock(&self.providers);
+        if p.generation.get(provider_id).copied().unwrap_or(0) == generation {
+            p.adapters.insert(provider_id.clone(), Arc::clone(&adapter));
+        }
+        let a: Arc<dyn ChatModel> = adapter;
+        Ok(a)
     }
 
     /// What the resolver may pick from. Blocking: checks the keychain.
@@ -211,6 +263,9 @@ pub struct ModelCatalog {
     pub local_models: Vec<LocalModelPlaceholder>,
     pub key_store: String,
     pub settings: Settings,
+    /// The model chat uses now (the user's choice, or the one picked automatically when no
+    /// chat model is chosen); `None` if nothing is usable.
+    pub chat_model: Option<String>,
 }
 
 pub fn catalog(registry: &ModelRegistry, keys: &Keys, settings: &Settings) -> ModelCatalog {
@@ -268,6 +323,7 @@ pub fn catalog(registry: &ModelRegistry, keys: &Keys, settings: &Settings) -> Mo
         local_models,
         key_store: keys.description.into(),
         settings: settings.clone(),
+        chat_model: None,
     }
 }
 
@@ -295,6 +351,27 @@ mod tests {
         assert!(!byok.is_empty());
         assert!(byok.iter().all(|m| m.available));
         assert!(c.providers.iter().any(|p| p.id == "anthropic" && p.has_key));
+    }
+
+    #[test]
+    fn adapters_are_cached_per_key_and_never_from_an_old_key() {
+        let keys = Keys::memory();
+        let reg = ModelRegistry::default();
+        let m: ModelRef = "byok:anthropic:claude-sonnet-5-5".parse().unwrap();
+        let e = reg.get(&m, &keys).err().expect("no key yet");
+        assert!(
+            matches!(e, CoreError::ModelUnavailable { ref recovery, .. } if recovery.contains(&RecoveryAction::AddProviderKey))
+        );
+        keys.set("anthropic", &Secret::new("first")).unwrap();
+        reg.get(&m, &keys).unwrap();
+        assert!(reg.cached("anthropic"));
+        reg.invalidate("anthropic");
+        assert!(!reg.cached("anthropic"));
+        // An adapter built while the key changed is not cached.
+        reg.get_racing_invalidate(&m, &keys).unwrap();
+        assert!(!reg.cached("anthropic"));
+        reg.get(&m, &keys).unwrap();
+        assert!(reg.cached("anthropic"));
     }
 
     #[cfg(fake_model)]

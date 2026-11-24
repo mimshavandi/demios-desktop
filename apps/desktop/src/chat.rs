@@ -237,16 +237,26 @@ fn start(
     let message_id = assistant.id;
     let model_ref = model.to_string();
     tauri::async_runtime::spawn(async move {
-        let result = run(&state, &*backend, &cfg, history, &cancel, message_id, &sink).await;
+        let (result, failed_calls) =
+            run(&state, &*backend, &cfg, history, &cancel, message_id, &sink).await;
         let st = Arc::clone(&state);
         let live = state.live_text(message_id);
         // SQLite is blocking: keep it off the async workers.
         let write = tauri::async_runtime::spawn_blocking(move || {
-            persist(&st, conversation_id, message_id, &model_ref, result, live)
+            persist(
+                &st,
+                conversation_id,
+                message_id,
+                &model_ref,
+                result,
+                live,
+                &failed_calls,
+            )
         })
         .await;
         state.end_live(message_id);
-        state.drop_approvals_for(conversation_id);
+        // This run's waiting approvals closed with it; report them expired now.
+        state.prune_closed_approvals();
         state.release(conversation_id, token);
         match write {
             Ok(Ok(ev)) => sink.send(ev),
@@ -272,8 +282,13 @@ async fn run(
     cancel: &CancelToken,
     message_id: Id,
     sink: &impl EventSink,
-) -> Result<RunOutcome, CoreError> {
+) -> (
+    Result<RunOutcome, CoreError>,
+    std::collections::HashSet<String>,
+) {
     let tools = Arc::clone(&state.tools);
+    // Tool calls that came back as errors: their stored result rows say so.
+    let mut failed = std::collections::HashSet::new();
     let mut on_event = |ev: AgentEvent| match ev {
         AgentEvent::StepStarted { step } if step > 0 && state.live_len(message_id) > 0 => {
             // Separate the text of successive steps (after tool results).
@@ -304,15 +319,21 @@ async fn run(
         }),
         AgentEvent::ToolCallFinished {
             call_id, output, ..
-        } => sink.send(ChatEvent::ToolCallFinished {
-            message_id,
-            call_id,
-            is_error: output.is_error,
-            summary: summary(&output.content),
-        }),
+        } => {
+            if output.is_error {
+                failed.insert(call_id.clone());
+            }
+            sink.send(ChatEvent::ToolCallFinished {
+                message_id,
+                call_id,
+                is_error: output.is_error,
+                summary: summary(&output.content),
+            })
+        }
         AgentEvent::StepStarted { .. } | AgentEvent::StepFinished { .. } => {}
     };
-    dn_agent::run_loop(model, &*tools, cfg, history, cancel, &mut on_event).await
+    let result = dn_agent::run_loop(model, &*tools, cfg, history, cancel, &mut on_event).await;
+    (result, failed)
 }
 
 fn summary(parts: &[ContentPart]) -> String {
@@ -365,6 +386,7 @@ fn persist(
     model: &str,
     result: Result<RunOutcome, CoreError>,
     live_text: String,
+    failed_calls: &std::collections::HashSet<String>,
 ) -> IpcResult<ChatEvent> {
     let db = state.db()?;
     let outcome = match result {
@@ -428,7 +450,18 @@ fn persist(
                 },
             )?;
             if let Some(m) = other {
-                add_run_message(&db, conversation_id, model, m, status, finish_reason, true)?;
+                add_run_message(
+                    &db,
+                    conversation_id,
+                    model,
+                    m,
+                    RunEnd {
+                        status,
+                        finish_reason,
+                    },
+                    true,
+                    failed_calls,
+                )?;
             }
         }
     }
@@ -440,9 +473,12 @@ fn persist(
             conversation_id,
             model,
             m,
-            status,
-            finish_reason,
+            RunEnd {
+                status,
+                finish_reason,
+            },
             i + 1 == n,
+            failed_calls,
         )?;
     }
     Ok(ChatEvent::Done {
@@ -453,15 +489,30 @@ fn persist(
     })
 }
 
+/// How the run ended; applied to its last assistant row.
+#[derive(Clone, Copy)]
+struct RunEnd {
+    status: MessageStatus,
+    finish_reason: FinishReason,
+}
+
 fn add_run_message(
     db: &dn_store::Connection,
     conversation_id: Id,
     model: &str,
     m: ChatMessage,
-    status: MessageStatus,
-    finish_reason: FinishReason,
+    end: RunEnd,
     last: bool,
+    failed_calls: &std::collections::HashSet<String>,
 ) -> IpcResult<()> {
+    let RunEnd {
+        status,
+        finish_reason,
+    } = end;
+    let failed_tool = m.role == Role::Tool
+        && m.tool_call_id
+            .as_ref()
+            .is_some_and(|id| failed_calls.contains(id));
     let row = store::add_message(
         db,
         conversation_id,
@@ -470,7 +521,11 @@ fn add_run_message(
             content: m.content.clone(),
             tool_call_id: m.tool_call_id.clone(),
             model: (m.role == Role::Assistant).then(|| model.to_string()),
-            status: MessageStatus::Complete,
+            status: if failed_tool {
+                MessageStatus::Error
+            } else {
+                MessageStatus::Complete
+            },
         },
     )?;
     if m.role == Role::Assistant {
@@ -784,7 +839,7 @@ mod tests {
         }
     }
 
-    struct Calc;
+    struct Calc(bool);
     impl dn_agent::ToolExecutor for Calc {
         fn tools(&self) -> Vec<dn_core::chat::ToolSpec> {
             vec![dn_core::chat::ToolSpec {
@@ -798,7 +853,14 @@ mod tests {
             _call: &'a dn_core::chat::ToolCall,
             _ctx: &'a dn_agent::ToolContext,
         ) -> dn_agent::BoxFuture<'a, Result<dn_agent::ToolOutput, CoreError>> {
-            Box::pin(async { Ok(dn_agent::ToolOutput::text("42")) })
+            let fail = self.0;
+            Box::pin(async move {
+                Ok(if fail {
+                    dn_agent::ToolOutput::error("calculator offline")
+                } else {
+                    dn_agent::ToolOutput::text("42")
+                })
+            })
         }
     }
 
@@ -808,7 +870,7 @@ mod tests {
         models.register("local:scripted".parse().unwrap(), Arc::new(ToolThenAnswer));
         let mut s = AppState::in_memory().unwrap();
         s.models = models;
-        s.tools = Arc::new(Calc);
+        s.tools = Arc::new(Calc(false));
         let st = Arc::new(s);
         let mut settings = crate::settings::Settings::default();
         settings
@@ -868,6 +930,39 @@ mod tests {
                 .len(),
             6
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn failed_tool_calls_are_stored_as_errors() {
+        let mut models = crate::models::ModelRegistry::default();
+        models.register("local:scripted".parse().unwrap(), Arc::new(ToolThenAnswer));
+        let mut s = AppState::in_memory().unwrap();
+        s.models = models;
+        s.tools = Arc::new(Calc(true));
+        let st = Arc::new(s);
+        let mut settings = crate::settings::Settings::default();
+        settings
+            .slots
+            .insert("chat".into(), "local:scripted".into());
+        st.save_settings(&settings).unwrap();
+        let conv = st.create_conversation().unwrap();
+        let (_e, s1) = sink();
+        send(&st, conv.id, "what is 6*7?".into(), s1).unwrap();
+        wait_idle(&st, conv.id).await;
+        let mut tool = None;
+        for _ in 0..100 {
+            tool = store::list_messages(&st.db().unwrap(), conv.id)
+                .unwrap()
+                .into_iter()
+                .find(|m| m.role == Role::Tool);
+            if tool.is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let tool = tool.expect("tool result stored");
+        assert_eq!(tool.status, MessageStatus::Error);
+        assert!(tool.text().contains("calculator offline"));
     }
 
     #[test]

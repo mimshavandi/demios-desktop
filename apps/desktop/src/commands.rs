@@ -10,10 +10,10 @@ use crate::error::{IpcError, IpcResult};
 use crate::models::{self, ModelCatalog};
 use crate::secrets::Secret;
 use crate::settings::Settings;
-use crate::state::{AppState, ApprovalEvent};
+use crate::state::{AppState, ToolEvent, ToolSnapshot};
 use dn_core::Id;
 use dn_store::chat::{self as store, Conversation, StoredMessage};
-use dn_tools::{ApprovalDecision, ApprovalPrompt};
+use dn_tools::ApprovalDecision;
 use serde::Serialize;
 use std::sync::Arc;
 use tauri::State;
@@ -84,6 +84,11 @@ pub async fn rename_conversation(
 #[tauri::command]
 pub async fn delete_conversation(state: AppStateRef<'_>, conversation_id: Id) -> IpcResult<()> {
     chat::stop(&state, conversation_id);
+    // "Always allow in this chat" grants end with the chat.
+    if let Some(exec) = &state.executor {
+        exec.gate()
+            .clear_conversation(&format!("conv:{conversation_id}"));
+    }
     blocking(&state, move |s| {
         Ok(store::delete_conversation(&*s.db()?, conversation_id)?)
     })
@@ -163,7 +168,13 @@ pub async fn update_settings(
 
 fn catalog(s: &AppState) -> IpcResult<ModelCatalog> {
     let settings = s.settings()?;
-    Ok(models::catalog(&s.models, &s.keys, &settings))
+    let mut c = models::catalog(&s.models, &s.keys, &settings);
+    c.chat_model = s
+        .agent
+        .resolve_model(&settings, &s.models, &s.keys)
+        .ok()
+        .map(|m| m.to_string());
+    Ok(c)
 }
 
 #[tauri::command]
@@ -256,13 +267,13 @@ pub async fn restore_provider_key(
 
 // ---- tool approvals and outcome-unknown resolution (T-SHELL-04)
 
-/// Subscribes the UI to approval requests; returns the ones already waiting.
+/// Subscribes the UI to approval requests and MCP server status; returns the current ones.
 #[tauri::command]
-pub async fn watch_approvals(
+pub async fn watch_tools(
     state: AppStateRef<'_>,
-    on_event: Channel<ApprovalEvent>,
-) -> IpcResult<Vec<ApprovalPrompt>> {
-    Ok(state.watch_approvals(Arc::new(move |ev| {
+    on_event: Channel<ToolEvent>,
+) -> IpcResult<ToolSnapshot> {
+    Ok(state.watch_tools(Arc::new(move |ev| {
         let _ = on_event.send(ev);
     })))
 }

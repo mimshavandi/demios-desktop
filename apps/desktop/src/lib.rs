@@ -91,13 +91,32 @@ pub fn run() {
             commands::set_provider_key,
             commands::delete_provider_key,
             commands::restore_provider_key,
-            commands::watch_approvals,
+            commands::watch_tools,
             commands::respond_approval,
             commands::list_unknown_outcomes,
             commands::resolve_unknown_outcome,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Demios Desktop");
+        .build(tauri::generate_context!())
+        .expect("error while building Demios Desktop")
+        .run(|app, event| {
+            // Tauri exits without dropping managed state: stop MCP servers (and their
+            // process trees) explicitly, with a bound so a stuck server can't hang quit.
+            if let tauri::RunEvent::Exit = event {
+                use tauri::Manager;
+                let executor = app
+                    .try_state::<std::sync::Arc<state::AppState>>()
+                    .and_then(|s| s.executor.clone());
+                if let Some(executor) = executor {
+                    tauri::async_runtime::block_on(async move {
+                        let _ = tokio::time::timeout(
+                            std::time::Duration::from_secs(3),
+                            executor.shutdown_all(),
+                        )
+                        .await;
+                    });
+                }
+            }
+        });
 }
 
 #[cfg(test)]

@@ -55,6 +55,12 @@ impl ApprovalRequest {
     pub fn respond(self, decision: ApprovalDecision) {
         let _ = self.responder.send(decision);
     }
+
+    /// The waiting call is gone (timed out, cancelled or its run ended): answering it now
+    /// has no effect.
+    pub fn is_closed(&self) -> bool {
+        self.responder.is_closed()
+    }
 }
 
 /// What the gate concluded.
@@ -168,6 +174,18 @@ impl ApprovalGate {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn request_reports_closed_after_timeout() {
+        let (gate, mut rx) = ApprovalGate::new(1);
+        let gate = gate.with_timeout(Duration::from_millis(20));
+        let check =
+            tokio::spawn(async move { gate.check(prompt(ApprovalPolicy::AlwaysAsk)).await });
+        let req = rx.recv().await.unwrap();
+        assert!(!req.is_closed());
+        assert_eq!(check.await.unwrap(), GateOutcome::Unanswered);
+        assert!(req.is_closed());
+    }
 
     fn prompt(policy: ApprovalPolicy) -> ApprovalPrompt {
         ApprovalPrompt {
