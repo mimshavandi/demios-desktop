@@ -5,8 +5,31 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+description = "Inference backends (llama.cpp in-process, OpenAI-compatible servers) behind one trait (ADR-0003)."
+
+[features]
+default = ["llamacpp"]
+# In-process llama.cpp via llama-cpp-2. Metal is switched on automatically on macOS.
+llamacpp = ["dep:llama-cpp-2"]
+cuda = ["llamacpp", "llama-cpp-2/cuda"]
+vulkan = ["llamacpp", "llama-cpp-2/vulkan"]
 
 [dependencies]
+dn-core.workspace = true
+futures-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util"] }
+dn-providers.workspace = true
+reqwest.workspace = true
+llama-cpp-2 = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["net", "io-util"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+llama-cpp-2 = { workspace = true, optional = true, features = ["metal"] }
 
 [lints]
 workspace = true

@@ -5,8 +5,20 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+description = "GGUF metadata, machine fit estimator, curated model catalogue and verified downloads (ADR-0003)."
 
 [dependencies]
+dn-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util"] }
+reqwest.workspace = true
+sha2.workspace = true
+sysinfo = { workspace = true, features = ["disk"] }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["net"] }
