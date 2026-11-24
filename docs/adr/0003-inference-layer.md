@@ -1,9 +1,9 @@
 # ADR-0003: Inference layer — backend trait, llama.cpp default
 
-**Status:** Proposed · **Date:** 2026-11-24 · **Deciders:** project owner (D-007)
+**Status:** Proposed · **Date:** 2026-11-24 · **Deciders:** project owner
 
 ## Context
-Users bring their own model: local or BYOK. Goal: run **bigger models on small laptops**. Demios Edge already proved llama.cpp on Apple Silicon, but only on macOS and without streaming or tool calls. FreeToken was evaluated ([R-01](../research/R-01-external-tools.md)): strong MoE-offload technique, but Linux+NVIDIA+CUDA 13 only, Python runtime, 4 months old.
+Users bring their own model: local or BYOK. Goal: run **bigger models on small laptops**. Demios Edge already proved llama.cpp on Apple Silicon, but only on macOS and without streaming or tool calls. FreeToken was evaluated: strong MoE-offload technique, but Linux+NVIDIA+CUDA 13 only, Python runtime, 4 months old.
 
 ## Decision
 A single `InferenceBackend` trait in `dn-inference`:
