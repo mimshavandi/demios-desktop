@@ -205,10 +205,11 @@ fn scrub(sse: &str, key: Option<&str>) -> String {
             Some(b) => (b, "\n"),
             None => (line, ""),
         };
-        match body
-            .strip_prefix("data: ")
-            .map(serde_json::from_str::<serde_json::Value>)
-        {
+        // SSE allows `data:` with or without one space after the colon.
+        let data = body
+            .strip_prefix("data:")
+            .map(|d| d.strip_prefix(' ').unwrap_or(d));
+        match data.map(serde_json::from_str::<serde_json::Value>) {
             Some(Ok(mut v)) => {
                 walk(&mut v);
                 out.push_str(&format!("data: {v}{nl}"));
@@ -226,6 +227,11 @@ fn scrub(sse: &str, key: Option<&str>) -> String {
 fn scrub_redacts_ids_signatures_and_key() {
     let raw = "event: x\ndata: {\"id\":\"msg_123\",\"delta\":{\"signature\":\"abc\",\"text\":\"k-SECRET\"}}\n\ndata: [DONE]\n";
     let s = scrub(raw, Some("k-SECRET"));
+    // No space after `data:` is valid SSE too.
+    assert_eq!(
+        scrub("data:{\"id\":\"x\"}\n", None),
+        "data: {\"id\":\"REDACTED\"}\n"
+    );
     assert_eq!(
         s,
         "event: x\ndata: {\"delta\":{\"signature\":\"REDACTED\",\"text\":\"REDACTED\"},\"id\":\"REDACTED\"}\n\ndata: [DONE]\n"
