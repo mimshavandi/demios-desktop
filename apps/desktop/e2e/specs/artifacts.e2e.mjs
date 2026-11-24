@@ -97,7 +97,7 @@ describe("artifacts", () => {
     await frameHeading("Version one");
     expect(await versionLabel()).toMatch(/^v1 · model/);
     // AI labelling: the pane names the model, the rendered document carries the marker.
-    expect(await textOf(await byTestId("artifact-made-by"))).toMatch(/^Made by /);
+    expect(await textOf(await byTestId("artifact-made-by"))).toMatch(/^AI-generated · Made by /);
 
     // 2. Update → v2 (an exact-match patch through artifact_update).
     await send("Please update the artifact");

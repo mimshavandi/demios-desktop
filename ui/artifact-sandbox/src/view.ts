@@ -30,7 +30,7 @@ export interface ArtifactViewOptions {
   onAllowNetwork?: (artifactId: string) => void;
   maxHeight?: number;
   /**
-   * Who made a version, shown in the bar as "Made by <name>" (AI disclosure, T-STORE-09);
+   * Who made a version, shown in the bar as "AI-generated · Made by <name>" (AI disclosure, T-STORE-09);
    * `null` hides the line (for example the user's own restore).
    */
   madeBy?: (v: ArtifactVersion) => string | null;
@@ -280,7 +280,7 @@ export class ArtifactView {
     this.ui.title.textContent = a.title;
     this.ui.kind.textContent = t.kind === "code" ? t.language : (TYPE_LABEL[t.kind] ?? t.kind);
     const by = this.opts.madeBy?.(v) ?? null;
-    this.ui.by.textContent = by === null ? "" : `Made by ${by}`;
+    this.ui.by.textContent = by === null ? "" : `AI-generated · Made by ${by}`;
     this.ui.by.hidden = by === null;
     this.ui.select.replaceChildren(
       ...[...a.versions].reverse().map((x) => {

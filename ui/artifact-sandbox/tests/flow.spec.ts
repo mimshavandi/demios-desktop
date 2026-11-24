@@ -17,7 +17,7 @@ test("create → render → update → v2 → rollback", async ({ page }) => {
   await expect(select.locator("option:checked")).toHaveText(/^v1 · model/);
   await expect(page.getByTestId("old-version-banner")).toBeHidden();
   // AI disclosure: the pane names the model, the rendered document carries the host's marker.
-  await expect(page.getByTestId("artifact-made-by")).toHaveText("Made by demo model");
+  await expect(page.getByTestId("artifact-made-by")).toHaveText("AI-generated · Made by demo model");
   await expect(f.locator('meta[name="generator"]')).toHaveAttribute("content", /AI-generated/);
 
   // Update (exact-match patch) → v2 is a new frame showing the new content.

@@ -444,6 +444,47 @@ impl<'c> ArtifactStore<'c> {
             .transpose()
     }
 
+    /// Permanently deletes every artifact of `conversation_id` with all its versions (when the
+    /// conversation is purged). Returns how many artifacts went.
+    pub fn delete_conversation(&self, conversation_id: Id) -> Result<usize> {
+        self.purge(Some(conversation_id))
+    }
+
+    /// Permanently deletes every artifact and version ("Delete all local data"). Returns how
+    /// many artifacts went.
+    pub fn delete_all(&self) -> Result<usize> {
+        self.purge(None)
+    }
+
+    fn purge(&self, conversation_id: Option<Id>) -> Result<usize> {
+        let tx = WriteTx::begin(self.conn)?;
+        let n = match conversation_id {
+            Some(c) => self.conn.execute(
+                "DELETE FROM artifact_artifacts WHERE conversation_id = ?1",
+                [c.to_string()],
+            )?,
+            None => self.conn.execute("DELETE FROM artifact_artifacts", [])?,
+        };
+        // ON DELETE CASCADE removes the versions; this also covers a connection opened
+        // without foreign keys (orphaned versions are allowed to go, see the trigger).
+        self.conn.execute(
+            "DELETE FROM artifact_versions
+             WHERE artifact_id NOT IN (SELECT id FROM artifact_artifacts)",
+            [],
+        )?;
+        tx.commit()?;
+        Ok(n)
+    }
+
+    /// How many artifacts and versions are stored (for the "Delete all local data" summary).
+    pub fn counts(&self) -> Result<(u64, u64)> {
+        Ok(self.conn.query_row(
+            "SELECT (SELECT COUNT(*) FROM artifact_artifacts), (SELECT COUNT(*) FROM artifact_versions)",
+            [],
+            |r| Ok((r.get::<_, i64>(0)? as u64, r.get::<_, i64>(1)? as u64)),
+        )?)
+    }
+
     /// Whether `id` exists and belongs to `conversation_id`.
     pub fn exists_in(&self, id: Id, conversation_id: Id) -> Result<bool> {
         Ok(self
@@ -1049,6 +1090,38 @@ pub(crate) mod tests {
             .query_row("SELECT COUNT(*) FROM artifact_versions", [], |r| r.get(0))
             .unwrap();
         assert_eq!(left, 0);
+    }
+
+    #[test]
+    fn deletes_a_conversation_or_everything() {
+        let conn = db();
+        let store = ArtifactStore::new(&conn);
+        let (a, b) = (Id::new(), Id::new());
+        let x = create(&store, a, "x");
+        store
+            .update(a, x, "x", "y", &OpContext::model(None))
+            .unwrap();
+        create(&store, a, "z");
+        let kept = create(&store, b, "w");
+        assert_eq!(store.counts().unwrap(), (3, 4));
+
+        assert_eq!(store.delete_conversation(a).unwrap(), 2);
+        assert!(store.list(a).unwrap().is_empty());
+        assert!(store.get(kept).is_ok());
+        assert_eq!(store.counts().unwrap(), (1, 1));
+
+        assert_eq!(store.delete_all().unwrap(), 1);
+        assert_eq!(store.counts().unwrap(), (0, 0));
+    }
+
+    #[test]
+    fn delete_all_also_clears_versions_without_foreign_keys() {
+        let conn = db();
+        conn.pragma_update(None, "foreign_keys", false).unwrap();
+        let store = ArtifactStore::new(&conn);
+        create(&store, Id::new(), "x");
+        store.delete_all().unwrap();
+        assert_eq!(store.counts().unwrap(), (0, 0));
     }
 
     #[test]
