@@ -102,7 +102,7 @@ fn lock(dest: &Path) -> Result<std::fs::File, DownloadError> {
 
 /// Free bytes on the volume holding `dir` (`None` if it can't be told).
 fn free_space(dir: &Path) -> Option<u64> {
-    let dir = std::fs::canonicalize(dir).ok()?;
+    let dir = strip_verbatim(std::fs::canonicalize(dir).ok()?);
     let disks = sysinfo::Disks::new_with_refreshed_list();
     disks
         .list()
@@ -110,6 +110,19 @@ fn free_space(dir: &Path) -> Option<u64> {
         .filter(|d| dir.starts_with(d.mount_point()))
         .max_by_key(|d| d.mount_point().as_os_str().len())
         .map(|d| d.available_space())
+}
+
+/// Windows `canonicalize` returns verbatim paths (`\\?\C:\…`, `\\?\UNC\srv\share\…`) that
+/// never start with a mount point like `C:\`; turn them back into ordinary paths.
+fn strip_verbatim(p: PathBuf) -> PathBuf {
+    let Some(s) = p.to_str() else { return p };
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    match s.strip_prefix(r"\\?\") {
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => PathBuf::from(rest),
+        _ => p,
+    }
 }
 
 /// Start offset of a `Content-Range: bytes START-END/TOTAL` header.
@@ -246,7 +259,7 @@ pub async fn download_to(
     if let Some(dir) = dest.parent() {
         tokio::fs::create_dir_all(dir).await?;
     }
-    let _lock = lock(dest)?;
+    let held = lock(dest)?;
     let part = part(dest);
     let mut hasher = Sha256::new();
     let mut have: u64 = match tokio::fs::metadata(&part).await {
@@ -301,6 +314,9 @@ pub async fn download_to(
     }
     tokio::fs::rename(&part, dest).await?;
     tokio::fs::write(marker(dest), &actual).await?;
+    // Done: release and remove the lock file (a later pull sees the verified marker first).
+    drop(held);
+    let _ = tokio::fs::remove_file(with_suffix(dest, ".lock")).await;
     Ok(dest.to_path_buf())
 }
 
@@ -479,6 +495,7 @@ mod tests {
         assert_eq!(std::fs::read(&dest).unwrap(), data);
         assert_eq!(last, data.len() as u64);
         assert!(is_verified(&dest, exp.size, exp.sha256).await);
+        assert!(!with_suffix(&dest, ".lock").exists());
         // Second call: no request at all.
         download_to(&c, &exp, &dest, &mut |_, _| {}).await.unwrap();
         assert_eq!(hits.load(Ordering::SeqCst), 1);
@@ -631,6 +648,19 @@ mod tests {
     #[test]
     fn free_space_is_known_for_temp_dir() {
         assert!(free_space(&std::env::temp_dir()).is_some_and(|f| f > 0));
+    }
+
+    #[test]
+    fn verbatim_prefix_stripped() {
+        let f = |s: &str| {
+            strip_verbatim(PathBuf::from(s))
+                .to_string_lossy()
+                .into_owned()
+        };
+        assert_eq!(f(r"\\?\C:\Users\x"), r"C:\Users\x");
+        assert_eq!(f(r"\\?\UNC\srv\share\m"), r"\\srv\share\m");
+        assert_eq!(f(r"\\?\Volume{abc}\m"), r"\\?\Volume{abc}\m");
+        assert_eq!(f("/tmp/x"), "/tmp/x");
     }
 
     #[tokio::test]

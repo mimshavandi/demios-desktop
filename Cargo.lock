@@ -815,6 +815,7 @@ dependencies = [
  "dn-providers",
  "futures-core",
  "llama-cpp-2",
+ "reqwest",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

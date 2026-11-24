@@ -4,13 +4,17 @@
 //! Each `chat` call runs on its own OS thread with a fresh context (KV cache) over the shared,
 //! mmapped weights, and streams through a bounded channel. One call runs per loaded model at
 //! a time (a semaphore; a context pool can come later), so memory stays what the fit
-//! estimator planned. Dropping the stream closes the channel; the thread notices between
+//! estimator planned; a call that can't get the slot within 2 s fails with
+//! [`InferenceError::Busy`] (`ModelUnavailable`) rather than waiting forever. Dropping the stream closes the channel; the thread notices between
 //! prompt batches or on its next token and stops. A panic in generation becomes an `Err`
 //! item, never a silently ended stream.
 //!
 //! Prompt safety: the chat template is rendered with placeholders for message content; only
 //! the template's own text is tokenized with special-token parsing, so a message or tool
-//! result cannot forge role boundaries (see [`crate::prompt::split_rendered`]).
+//! result cannot forge role boundaries (see [`crate::prompt::split_rendered`]). Our own
+//! `<tool_call>` / `<tool_response>` wrappers are part of the content, so they are tokenized
+//! as plain text too; that is fine for models where they are ordinary added tokens (Qwen)
+//! but means a model whose control vocabulary contains them sees them spelled out.
 //!
 //! Reasoning: `ChatRequest::reasoning` / `caller` are applied through `dn-providers`'
 //! [`ReasoningPolicy`] (Auto = on for prose callers only, always off with `response_schema`).
@@ -213,7 +217,7 @@ impl LlamaCppBackend {
     /// Prompt-processing and generation throughput with exactly `n_prompt` / `n_gen` tokens.
     pub async fn bench(&self, h: &ModelHandle, n_prompt: u32, n_gen: u32) -> Result<BenchRun> {
         let l = self.get(h)?;
-        let _permit = acquire(&l).await?;
+        let _permit = acquire(&l.gate, GATE_WAIT).await?;
         tokio::task::spawn_blocking(move || bench_blocking(&l, n_prompt, n_gen))
             .await
             .map_err(|e| InferenceError::Runtime(e.to_string()))?
@@ -236,21 +240,27 @@ fn threads(opts: &LoadOptions) -> i32 {
     })
 }
 
-async fn acquire(l: &Loaded) -> Result<OwnedSemaphorePermit> {
-    l.gate
-        .clone()
-        .acquire_owned()
-        .await
-        .map_err(|e| InferenceError::Runtime(format!("model gate: {e}")))
+/// How long a call waits for the model's single slot. Long enough to cover a just-dropped
+/// stream whose thread is still exiting; short enough that a caller that holds a stream on
+/// this model and asks again (chat or embed) gets an error instead of a deadlock.
+const GATE_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
+async fn acquire(gate: &Arc<Semaphore>, wait: std::time::Duration) -> Result<OwnedSemaphorePermit> {
+    match tokio::time::timeout(wait, gate.clone().acquire_owned()).await {
+        Ok(Ok(p)) => Ok(p),
+        _ => Err(InferenceError::Busy),
+    }
 }
 
 /// New context; a quantised KV cache the device can't use (quantised V needs flash
 /// attention) is retried once with f16.
 fn context<'m>(l: &'m Loaded, embeddings: bool) -> Result<LlamaContext<'m>> {
-    match context_with(l, embeddings, l.opts.kv_cache) {
-        Err(_) if l.opts.kv_cache != KvCacheQuant::F16 => {
-            context_with(l, embeddings, KvCacheQuant::F16)
-        }
+    with_kv_fallback(l.opts.kv_cache, |kv| context_with(l, embeddings, kv))
+}
+
+fn with_kv_fallback<T>(kv: KvCacheQuant, make: impl Fn(KvCacheQuant) -> Result<T>) -> Result<T> {
+    match make(kv) {
+        Err(_) if kv != KvCacheQuant::F16 => make(KvCacheQuant::F16),
         r => r,
     }
 }
@@ -359,18 +369,23 @@ fn render(l: &Loaded, turns: &[Turn]) -> Result<String> {
         .map(|t| LlamaChatMessage::new(t.role.into(), t.content.clone()))
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(|e| InferenceError::Runtime(e.to_string()))?;
-    if let Some(Ok(s)) = l
-        .template
-        .as_ref()
-        .map(|t| l.model.apply_chat_template(t, &msgs, true))
-    {
+    render_with(
+        l.template.as_ref(),
+        || LlamaChatTemplate::new("chatml").map_err(|e| InferenceError::Runtime(e.to_string())),
+        |t| l.model.apply_chat_template(t, &msgs, true),
+    )
+}
+
+/// The model's template if it applies, else chatml.
+fn render_with<T, E: std::fmt::Display>(
+    template: Option<&T>,
+    chatml: impl FnOnce() -> Result<T>,
+    apply: impl Fn(&T) -> std::result::Result<String, E>,
+) -> Result<String> {
+    if let Some(Ok(s)) = template.map(&apply) {
         return Ok(s);
     }
-    let chatml =
-        LlamaChatTemplate::new("chatml").map_err(|e| InferenceError::Runtime(e.to_string()))?;
-    l.model
-        .apply_chat_template(&chatml, &msgs, true)
-        .map_err(|e| InferenceError::Runtime(format!("chat template: {e}")))
+    apply(&chatml()?).map_err(|e| InferenceError::Runtime(format!("chat template: {e}")))
 }
 
 /// Switch thinking on/off on the rendered prompt. Returns whether generation starts inside a
@@ -704,7 +719,7 @@ impl InferenceBackend for LlamaCppBackend {
     async fn chat(&self, h: &ModelHandle, req: ChatRequest) -> Result<TokenStream> {
         let l = self.get(h)?;
         let thinking = self.reasoning.thinking(&req);
-        let permit = acquire(&l).await?;
+        let permit = acquire(&l.gate, GATE_WAIT).await?;
         let (tx, rx) = mpsc::channel::<Item>(64);
         std::thread::Builder::new()
             .name("dn-llamacpp-chat".into())
@@ -730,7 +745,7 @@ impl InferenceBackend for LlamaCppBackend {
 
     async fn embed(&self, h: &ModelHandle, input: &[String]) -> Result<Vec<Vec<f32>>> {
         let l = self.get(h)?;
-        let _permit = acquire(&l).await?;
+        let _permit = acquire(&l.gate, GATE_WAIT).await?;
         let input = input.to_vec();
         tokio::task::spawn_blocking(move || embed_blocking(&l, &input))
             .await
@@ -775,6 +790,69 @@ mod tests {
         let mut s = "x".to_string();
         assert!(!apply_thinking(&mut s, false, false));
         assert_eq!(s, "x");
+    }
+
+    #[test]
+    fn chatml_used_when_model_template_errors() {
+        let apply = |t: &&str| match *t {
+            "chatml" => Ok("chatml-out".to_string()),
+            _ => Err("unsupported template"),
+        };
+        let r = render_with(Some(&"weird-jinja"), || Ok("chatml"), apply).unwrap();
+        assert_eq!(r, "chatml-out");
+        let r = render_with(None, || Ok("chatml"), apply).unwrap();
+        assert_eq!(r, "chatml-out");
+        let ok = |_: &&str| Ok::<_, &str>("model-out".to_string());
+        assert_eq!(
+            render_with(Some(&"x"), || Ok("chatml"), ok).unwrap(),
+            "model-out"
+        );
+    }
+
+    #[test]
+    fn quantised_kv_falls_back_to_f16() {
+        let tried = std::cell::RefCell::new(vec![]);
+        let make = |kv: KvCacheQuant| {
+            tried.borrow_mut().push(kv);
+            match kv {
+                KvCacheQuant::F16 => Ok(kv),
+                _ => Err(InferenceError::Runtime(
+                    "V cache needs flash attention".into(),
+                )),
+            }
+        };
+        assert_eq!(
+            with_kv_fallback(KvCacheQuant::Q8_0, make).unwrap(),
+            KvCacheQuant::F16
+        );
+        assert_eq!(*tried.borrow(), [KvCacheQuant::Q8_0, KvCacheQuant::F16]);
+        // f16 failing is not retried.
+        let fail = |_| Err::<(), _>(InferenceError::Runtime("oom".into()));
+        assert!(with_kv_fallback(KvCacheQuant::F16, fail).is_err());
+    }
+
+    #[tokio::test]
+    async fn one_call_per_model_and_busy_instead_of_deadlock() {
+        let wait = std::time::Duration::from_millis(50);
+        let gate = Arc::new(Semaphore::new(1));
+        let held = acquire(&gate, wait).await.unwrap();
+        let e = acquire(&gate, wait).await.unwrap_err();
+        assert!(matches!(e, InferenceError::Busy));
+        let core: dn_core::CoreError = e.into();
+        assert!(matches!(core, dn_core::CoreError::ModelUnavailable { .. }));
+        drop(held);
+        assert!(acquire(&gate, wait).await.is_ok());
+        // A slot freed while waiting is taken.
+        let held = acquire(&gate, wait).await.unwrap();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            drop(held);
+        });
+        assert!(
+            acquire(&gate, std::time::Duration::from_secs(1))
+                .await
+                .is_ok()
+        );
     }
 
     #[test]

@@ -12,7 +12,7 @@ vulkan = ["dn-inference/vulkan"]
 
 [dependencies]
 dn-core.workspace = true
-dn-inference = { workspace = true, features = ["llamacpp", "openai-compat"] }
+dn-inference = { workspace = true, features = ["llamacpp"] }
 dn-models.workspace = true
 clap.workspace = true
 serde.workspace = true

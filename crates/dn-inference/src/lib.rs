@@ -8,8 +8,9 @@
 //!   tool calls (Hermes `<tool_call>` convention + lazy JSON grammar), honours
 //!   `response_schema` with constrained decoding, supports MoE expert offload to CPU and
 //!   quantised KV caches.
-//! - [`OpenAiCompatBackend`] (feature `openai-compat`, default): any `/v1/chat/completions`
-//!   server (Ollama, LM Studio, vLLM, llama-server, FreeToken).
+//! - [`OpenAiCompatBackend`] (always built): any `/v1/chat/completions` server (Ollama,
+//!   LM Studio, vLLM, llama-server, FreeToken), through `dn-providers`; `/v1/embeddings`
+//!   directly.
 //!
 //! Every loaded model can be wrapped in [`LoadedModel`], which implements
 //! [`dn_core::chat::ChatModel`], so the agent loop never knows which backend answered.
@@ -32,7 +33,6 @@ mod types;
 
 #[cfg(feature = "llamacpp")]
 pub mod llamacpp;
-#[cfg(feature = "openai-compat")]
 pub mod openai_compat;
 
 pub use backend::{InferenceBackend, LoadedModel, TokenStream};
@@ -44,5 +44,4 @@ pub use types::{
 
 #[cfg(feature = "llamacpp")]
 pub use llamacpp::LlamaCppBackend;
-#[cfg(feature = "openai-compat")]
 pub use openai_compat::OpenAiCompatBackend;

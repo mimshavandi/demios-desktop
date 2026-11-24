@@ -14,6 +14,8 @@ pub enum InferenceError {
     Unsupported { backend: &'static str, what: String },
     #[error("prompt has {prompt} tokens but the context holds {n_ctx}")]
     ContextOverflow { prompt: usize, n_ctx: u32 },
+    #[error("model is busy with another request")]
+    Busy,
     #[error("inference failed: {0}")]
     Runtime(String),
     #[error("http error: {0}")]
@@ -39,6 +41,12 @@ impl From<InferenceError> for CoreError {
             InferenceError::ContextOverflow { .. } => (
                 "This conversation is too long for the model's context window.".to_string(),
                 vec![],
+            ),
+            InferenceError::Busy => (
+                "This model is busy with another request. Try again when it finishes.".to_string(),
+                vec![RecoveryAction::Retry {
+                    after_seconds: Some(2),
+                }],
             ),
             _ => ("The model could not answer.".to_string(), vec![]),
         };
