@@ -33,6 +33,7 @@ Nothing has been released yet. This section lists what is on `main` now.
 - `dn run` and `dn bench` pick context size, cache type and GPU layers from `dn fit` unless you set them. A model that won't fit is refused unless you pass `--force`; `--no-auto` keeps the plain llama.cpp defaults ([#35](https://github.com/mimshavandi/demios-desktop/pull/35)).
 - `dn models list` and `dn models pull` list and download catalogue models ([#12](https://github.com/mimshavandi/demios-desktop/pull/12)).
 - `dn models search`, `dn models files` and `dn models pull <owner/name> --quant <quant>` find and download GGUF models from Hugging Face at a pinned revision ([#30](https://github.com/mimshavandi/demios-desktop/pull/30)).
+- `dn models open <link>` reads a `demios://models/add?…` link, shows the Hugging Face model it points at, its licence and whether it fits this machine, and downloads it only after you type `y`. The app doesn't open these links yet ([#34](https://github.com/mimshavandi/demios-desktop/pull/34)).
 - `dn models list` also shows models you downloaded from Hugging Face and the ones already in your Hugging Face cache. The cache is only read, never changed ([#33](https://github.com/mimshavandi/demios-desktop/pull/33)).
 - With `--endpoint`, `dn run` detects llama.cpp's `llama-server`, vLLM and Ollama and switches the model's thinking on or off in the way that server expects ([#44](https://github.com/mimshavandi/demios-desktop/pull/44)).
 
