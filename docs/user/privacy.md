@@ -6,7 +6,7 @@ Demios collects no usage data. There is no Demios account and no Demios server.
 
 ## Where your data goes
 
-- **On this computer.** Chats and settings are stored in a database in the app's data folder. Provider keys are kept in your system keychain. Models on this device answer without sending anything off your computer.
+- **On this computer.** Chats, artifacts and settings are stored in a database in the app's data folder. Provider keys are kept in your system keychain. Models on this device answer without sending anything off your computer.
 - **Model providers you add a key for.** Messages in chats that use a provider's model are sent to that provider under your account with them, and their terms apply.
 - **Hugging Face.** Downloading a model fetches it from Hugging Face. Your chats are never sent there.
 - **Tool servers (MCP).** A tool server receives what its tools are asked to do, which can include text from your chat. See [Tools and approvals](tools-and-approvals.md).
@@ -15,13 +15,13 @@ Demios collects no usage data. There is no Demios account and no Demios server.
 
 ## Delete one chat
 
-Point at the chat in the sidebar and select the delete button. You can undo it for 10 seconds. After that, it's removed for good the next time the app starts. See [Chats](chats.md).
+Point at the chat in the sidebar and select the delete button. You can undo it for 10 seconds. After that, it's removed for good, with its artifacts, the next time the app starts. See [Chats](chats.md).
 
 ## Delete all local data
 
 **Settings → General → Delete all local data** removes everything Demios stored on this computer:
 
-- The database: every chat (including recently deleted ones), your settings and tool history.
+- The database: every chat (including recently deleted ones) and its artifacts, your settings and tool history.
 - Downloaded models, including the ones the `dn` command-line tool uses.
 - The keys Demios saved in your system keychain.
 - The app window's own storage.

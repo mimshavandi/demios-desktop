@@ -21,6 +21,10 @@ On Windows and Linux, use Ctrl where macOS uses ⌘.
 
 The card ignores keys pressed in the first half second after it appears, so a key meant for something else can't approve it by accident.
 
+## In the artifact pane
+
+Press Esc to close the pane.
+
 ## In Settings
 
 Use the Left and Right arrow keys to move between the **Models** and **General** tabs.

@@ -25,6 +25,10 @@ Chats are listed in the sidebar under **Recent**, the most recently used first, 
 - **Delete a chat:** point at it in the sidebar and select the delete button. The chat goes at once, and a message lets you **Undo** for 10 seconds. After that it is removed for good the next time the app starts.
 - **Hide or show the sidebar:** select the sidebar button at the top left, or press ⌘\ (Ctrl+\).
 
-## Artifacts pane
+## Links in answers
 
-The button at the top right shows or hides the artifacts pane. Artifacts (documents, code and small apps a model makes) aren't in the app yet, so the pane is empty for now.
+Selecting a link in an answer never opens it inside the app. Instead, a system dialog, **Open link?**, shows the full address, with a note when it uses plain http or contains look-alike letters, and reminds you that the link comes from an AI answer. Select **Open in browser** to open it in your web browser, or **Cancel**. Only web links (http and https) can be opened.
+
+## Artifacts
+
+Web pages, small apps, diagrams and documents the model makes open in a pane next to the chat. See [Artifacts](artifacts.md).
