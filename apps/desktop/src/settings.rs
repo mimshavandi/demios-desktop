@@ -23,6 +23,14 @@ pub fn migrations() -> &'static [&'static str] {
         id         TEXT    PRIMARY KEY NOT NULL,
         created_at INTEGER NOT NULL
     );",
+        // T-SHELL-08: local MCP servers the user allowed to start, per exact command line
+        // (program, arguments and env var names). A change asks again.
+        "CREATE TABLE app_mcp_launch_approvals (
+        server_id    TEXT    NOT NULL,
+        command_line TEXT    NOT NULL,
+        created_at   INTEGER NOT NULL,
+        PRIMARY KEY (server_id, command_line)
+    );",
     ]
 }
 
@@ -42,6 +50,34 @@ pub fn known_mcp_secret_ids(conn: &Connection) -> Result<Vec<String>> {
         .query_map([], |r| r.get(0))?
         .collect::<rusqlite::Result<Vec<String>>>()?;
     Ok(ids)
+}
+
+pub fn record_mcp_launch(conn: &Connection, server_id: &str, command_line: &str) -> Result<()> {
+    conn.execute(
+        "INSERT OR IGNORE INTO app_mcp_launch_approvals (server_id, command_line, created_at)
+         VALUES (?1, ?2, ?3)",
+        params![server_id, command_line, now_ms()],
+    )?;
+    Ok(())
+}
+
+pub fn mcp_launch_approved(conn: &Connection, server_id: &str, command_line: &str) -> Result<bool> {
+    Ok(conn
+        .query_row(
+            "SELECT 1 FROM app_mcp_launch_approvals WHERE server_id = ?1 AND command_line = ?2",
+            params![server_id, command_line],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
+}
+
+pub fn forget_mcp_launches(conn: &Connection, server_id: &str) -> Result<()> {
+    conn.execute(
+        "DELETE FROM app_mcp_launch_approvals WHERE server_id = ?1",
+        [server_id],
+    )?;
+    Ok(())
 }
 
 pub fn forget_mcp_secret_id(conn: &Connection, id: &str) -> Result<()> {
@@ -147,6 +183,7 @@ pub fn save(conn: &Connection, s: &Settings) -> Result<()> {
 pub fn delete_all(conn: &Connection) -> Result<()> {
     conn.execute("DELETE FROM app_settings", [])?;
     conn.execute("DELETE FROM app_mcp_secret_ids", [])?;
+    conn.execute("DELETE FROM app_mcp_launch_approvals", [])?;
     Ok(())
 }
 

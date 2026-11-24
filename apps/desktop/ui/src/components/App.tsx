@@ -182,6 +182,8 @@ function Shell({ api }: { api: Api }) {
             toast({ tone: "warning", title: "An approval request expired, so the tool didn't run" });
           }
           setApprovals((a) => a.filter((x) => x.request_id !== ev.request_id));
+        } else if (ev.type === "mcp_server_removed") {
+          setServers((list) => list.filter((x) => x.server_id !== ev.server_id));
         } else {
           setServers((list) => [...list.filter((x) => x.server_id !== ev.status.server_id), ev.status]);
           if (ev.status.state === "failed") {
