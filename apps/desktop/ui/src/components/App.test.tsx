@@ -79,8 +79,8 @@ function fakeApi() {
   });
   const api: Api = {
     appInfo: async () => ({ version: "0.1.0", dev_fake_model: true, data_dir: "/tmp", models_dir: "/tmp/models" }),
-    reportProblem: async (kind, model) => {
-      reports.push([kind, model ?? null]);
+    reportProblem: async (kind, messageId) => {
+      reports.push([kind, messageId ?? null]);
       return null;
     },
     localDataSummary: async () => ({
@@ -262,14 +262,14 @@ describe("App", () => {
     // Wait until the chat has settled (the list reloads after the answer ends).
     await waitFor(() => expect(screen.getByRole("button", { name: "private question" })).toBeTruthy());
     fireEvent.click(await screen.findByRole("button", { name: "Report this answer" }));
-    await waitFor(() => expect(reports).toEqual([["answer", "local:dev-fake"]]));
+    await waitFor(() => expect(reports).toEqual([["answer", "id-3"]]));
     expect(await screen.findByText("Opened the report form in your browser")).toBeTruthy();
 
     fireEvent.click(await screen.findByRole("button", { name: "Models" }));
     fireEvent.click(await screen.findByRole("tab", { name: "General" }));
     fireEvent.click(await screen.findByRole("button", { name: "Report a problem" }));
-    await waitFor(() => expect(reports).toEqual([["answer", "local:dev-fake"], ["problem", null]]));
-    // Only kinds and model refs went to the backend: no chat text.
+    await waitFor(() => expect(reports).toEqual([["answer", "id-3"], ["problem", null]]));
+    // Only kinds and message ids went to the backend: no chat text.
     expect(JSON.stringify(reports)).not.toContain("private question");
   });
 

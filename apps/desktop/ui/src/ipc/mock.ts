@@ -208,8 +208,8 @@ export function createMockApi(): Api {
 
   return {
     appInfo: async () => ({ version: "0.1.0 (browser mock)", dev_fake_model: true, data_dir: null, models_dir: null }),
-    reportProblem: async (kind, model) => {
-      console.info("mock: would open the report form", kind, model);
+    reportProblem: async (kind, messageId) => {
+      console.info("mock: would open the report form", kind, messageId);
       return null;
     },
     localDataSummary: async () => ({

@@ -4,6 +4,7 @@ import {
   messageText,
   type ApprovalDecision,
   type ApprovalPrompt,
+  type Id,
   type ModelCatalog,
   type StoredMessage,
   type UnknownOutcome,
@@ -43,8 +44,8 @@ interface Props {
   /** Show the first-run AI notice (T-STORE-09). */
   aiNotice?: boolean;
   onDismissAiNotice?: () => void;
-  /** "Report this answer": opens a form in the browser with the model ref, no chat content. */
-  onReportAnswer?: (model: string | null) => void;
+  /** "Report this answer": opens a form in the browser with the answer's model, no chat content. */
+  onReportAnswer?: (messageId: Id) => void;
 }
 
 interface ToolResult {
@@ -283,7 +284,7 @@ function Message({
   isLast: boolean;
   canRetry: boolean;
   onRetry: () => void;
-  onReport?: ((model: string | null) => void) | undefined;
+  onReport?: ((messageId: Id) => void) | undefined;
   live: LiveToolCall[];
   results: Map<string, ToolResult>;
 }) {
@@ -392,7 +393,7 @@ function Message({
             </IconButton>
           )}
           {onReport !== undefined && (
-            <IconButton size="sm" label="Report this answer" onClick={() => onReport(m.model)}>
+            <IconButton size="sm" label="Report this answer" onClick={() => onReport(m.id)}>
               <Flag {...ICON} aria-hidden="true" />
             </IconButton>
           )}
