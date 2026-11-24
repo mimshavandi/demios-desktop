@@ -8,6 +8,7 @@ describe("showArgs", () => {
     expect(out).toContain("report\\u{202E}txt.exe");
     expect(out).toContain("a\\u{200B}b");
     expect(out).not.toMatch(/[\u202E\u200B]/);
+    expect(showArgs({ s: "a\u2028b\u2029c" })).toContain("a\\u{2028}b\\u{2029}c");
     // JSON already escapes C0 controls; they stay visible.
     expect(out).toContain("\\u0007");
   });

@@ -52,8 +52,10 @@ pub struct ApprovalRequest {
 }
 
 impl ApprovalRequest {
-    pub fn respond(self, decision: ApprovalDecision) {
-        let _ = self.responder.send(decision);
+    /// Delivers the answer. Returns `false` when the waiting call is already gone (timed
+    /// out, cancelled): the decision had no effect and the UI must say so.
+    pub fn respond(self, decision: ApprovalDecision) -> bool {
+        self.responder.send(decision).is_ok()
     }
 
     /// The waiting call is gone (timed out, cancelled or its run ended): answering it now
@@ -185,6 +187,10 @@ mod tests {
         assert!(!req.is_closed());
         assert_eq!(check.await.unwrap(), GateOutcome::Unanswered);
         assert!(req.is_closed());
+        assert!(
+            !req.respond(ApprovalDecision::Approve),
+            "a late answer has no effect"
+        );
     }
 
     fn prompt(policy: ApprovalPolicy) -> ApprovalPrompt {
@@ -206,7 +212,7 @@ mod tests {
         let ui = tokio::spawn(async move {
             let req = rx.recv().await.unwrap();
             assert_eq!(req.prompt.capability_id, "mcp.fs.write_file");
-            req.respond(ApprovalDecision::ApproveForConversation);
+            assert!(req.respond(ApprovalDecision::ApproveForConversation));
             rx
         });
         assert_eq!(

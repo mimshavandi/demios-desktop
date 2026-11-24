@@ -374,4 +374,34 @@ describe("App", () => {
     );
     expect(await screen.findByText("Files couldn't connect. It didn't start.")).toBeTruthy();
   });
+
+  it("ignores clicks on a card's buttons in its first half second", async () => {
+    const f = fakeApi();
+    const c = await f.api.createConversation();
+    render(<App api={f.api} />);
+    await screen.findByRole("button", { name: "New chat" });
+    act(() =>
+      f.approve({
+        type: "requested",
+        prompt: {
+          request_id: "r3",
+          scope: `conv:${c.id}`,
+          capability_id: "mcp.files.write_file",
+          title: "Write",
+          description: "",
+          risk: "low_write",
+          policy: "always_ask",
+          arguments: {},
+        },
+      }),
+    );
+    const allow = await screen.findByRole("button", { name: /Allow once/ });
+    // e.g. the second click of a double-click aimed at the previous card.
+    fireEvent.click(allow);
+    await act(() => new Promise((r) => setTimeout(r, 20)));
+    expect(f.responses).toEqual([]);
+    await act(() => new Promise((r) => setTimeout(r, 550)));
+    fireEvent.click(allow);
+    await waitFor(() => expect(f.responses).toEqual([["r3", "approve"]]));
+  });
 });

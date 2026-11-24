@@ -35,10 +35,11 @@ export function RiskBadge({ risk }: { risk: RiskTier }) {
 }
 
 /** JSON for display, with invisible and control characters (bidi overrides, zero-width
- * marks, C0/C1) shown as `\u{…}` escapes, so what the user reads is what the tool gets. */
+ * marks, C0/C1, U+2028/U+2029 line and paragraph separators) shown as `\u{…}` escapes,
+ * so what the user reads is what the tool gets. */
 export function showArgs(value: unknown): string {
   const text = JSON.stringify(value ?? {}, null, 2) ?? "null";
-  return text.replace(/[\p{Cc}\p{Cf}]/gu, (c) =>
+  return text.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, (c) =>
     c === "\n" ? c : `\\u{${(c.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, "0")}}`,
   );
 }
@@ -127,8 +128,8 @@ export function ApprovalCard({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [busy, setBusy] = useState<ApprovalDecision | null>(null);
-  // Keys pressed in the first moments after the card appears were meant for whatever the
-  // user was doing (e.g. ⌘↵ in the composer); they never decide.
+  // Input in the first moments after the card appears was meant for whatever the user was
+  // doing (⌘↵ in the composer, a double-click on the previous card); it never decides.
   const mountedAt = useRef(Date.now());
   const canRemember =
     prompt.policy === "ask_once_per_conversation" &&
@@ -149,6 +150,9 @@ export function ApprovalCard({
 
   const decide = async (d: ApprovalDecision) => {
     if (busy !== null) return;
+    // Clicks and keys in the first half second after the card appears were aimed at
+    // something else (e.g. a double-click on the previous card's "Allow once").
+    if (Date.now() - mountedAt.current < KEY_GUARD_MS) return;
     setBusy(d);
     try {
       await onDecide(d);

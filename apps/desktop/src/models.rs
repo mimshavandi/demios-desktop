@@ -53,6 +53,17 @@ impl ModelRegistry {
 
     /// The backend for `model`. Blocking: may read the key from the keychain.
     pub fn get(&self, model: &ModelRef, keys: &Keys) -> Result<Arc<dyn ChatModel>, CoreError> {
+        self.get_with(model, keys, dn_providers::build)
+    }
+
+    /// [`Self::get`] with the adapter constructor passed in (tests use it to change the key
+    /// mid-build). The cache logic is the same code path either way.
+    fn get_with(
+        &self,
+        model: &ModelRef,
+        keys: &Keys,
+        build: impl FnOnce(ProviderConfig) -> Result<Arc<dyn ProviderAdapter>, CoreError>,
+    ) -> Result<Arc<dyn ChatModel>, CoreError> {
         if let Some(m) = self.fixed.get(&model.to_string()) {
             return Ok(Arc::clone(m));
         }
@@ -87,16 +98,25 @@ impl ModelRegistry {
                     vec![RecoveryAction::AddProviderKey],
                 )
             })?;
-        let adapter =
-            dn_providers::build(ProviderConfig::new(provider_id, def.kind).with_key(key))?;
-        {
-            let mut p = lock(&self.providers);
-            if p.generation.get(provider_id).copied().unwrap_or(0) == generation {
-                p.adapters.insert(provider_id.clone(), Arc::clone(&adapter));
-            }
-        }
+        let adapter = build(ProviderConfig::new(provider_id, def.kind).with_key(key))?;
+        self.cache_if_current(provider_id, generation, &adapter);
         let a: Arc<dyn ChatModel> = adapter;
         Ok(a)
+    }
+
+    /// Caches `adapter` only if no key change happened since `generation` was read: an
+    /// adapter built from an old key is used for this one call and never cached.
+    fn cache_if_current(
+        &self,
+        provider_id: &str,
+        generation: u64,
+        adapter: &Arc<dyn ProviderAdapter>,
+    ) {
+        let mut p = lock(&self.providers);
+        if p.generation.get(provider_id).copied().unwrap_or(0) == generation {
+            p.adapters
+                .insert(provider_id.to_string(), Arc::clone(adapter));
+        }
     }
 
     /// Forget a cached adapter (its key was replaced or removed).
@@ -109,34 +129,6 @@ impl ModelRegistry {
     #[cfg(test)]
     fn cached(&self, provider_id: &str) -> bool {
         lock(&self.providers).adapters.contains_key(provider_id)
-    }
-
-    /// Test hook: a key change lands while an adapter is being built.
-    #[cfg(test)]
-    fn get_racing_invalidate(
-        &self,
-        model: &ModelRef,
-        keys: &Keys,
-    ) -> Result<Arc<dyn ChatModel>, CoreError> {
-        let ModelRef::Byok { provider_id, .. } = model else {
-            unreachable!()
-        };
-        let generation = lock(&self.providers)
-            .generation
-            .get(provider_id)
-            .copied()
-            .unwrap_or(0);
-        let def = provider(provider_id).unwrap();
-        let key = keys.get(provider_id).unwrap().unwrap();
-        let adapter =
-            dn_providers::build(ProviderConfig::new(provider_id, def.kind).with_key(key))?;
-        self.invalidate(provider_id);
-        let mut p = lock(&self.providers);
-        if p.generation.get(provider_id).copied().unwrap_or(0) == generation {
-            p.adapters.insert(provider_id.clone(), Arc::clone(&adapter));
-        }
-        let a: Arc<dyn ChatModel> = adapter;
-        Ok(a)
     }
 
     /// What the resolver may pick from. Blocking: checks the keychain.
@@ -367,8 +359,12 @@ mod tests {
         assert!(reg.cached("anthropic"));
         reg.invalidate("anthropic");
         assert!(!reg.cached("anthropic"));
-        // An adapter built while the key changed is not cached.
-        reg.get_racing_invalidate(&m, &keys).unwrap();
+        // The key changes while the real get() builds the adapter: it's not cached.
+        reg.get_with(&m, &keys, |cfg| {
+            reg.invalidate("anthropic");
+            dn_providers::build(cfg)
+        })
+        .unwrap();
         assert!(!reg.cached("anthropic"));
         reg.get(&m, &keys).unwrap();
         assert!(reg.cached("anthropic"));

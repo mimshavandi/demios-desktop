@@ -395,14 +395,24 @@ impl AppState {
     ) {
         let state = Arc::clone(self);
         tauri::async_runtime::spawn(async move {
-            let mut sweep = tokio::time::interval(Duration::from_millis(500));
             loop {
-                tokio::select! {
-                    req = rx.recv() => match req {
-                        Some(req) => state.add_approval(req),
-                        None => break,
-                    },
-                    _ = sweep.tick() => state.prune_closed_approvals(),
+                // Sweep for expired requests only while some are waiting; otherwise just
+                // wait for the next request.
+                let waiting = !lock(&state.approvals).is_empty();
+                let req = if waiting {
+                    tokio::select! {
+                        req = rx.recv() => req,
+                        _ = tokio::time::sleep(Duration::from_millis(500)) => {
+                            state.prune_closed_approvals();
+                            continue;
+                        }
+                    }
+                } else {
+                    rx.recv().await
+                };
+                match req {
+                    Some(req) => state.add_approval(req),
+                    None => break,
                 }
             }
         });
@@ -497,12 +507,14 @@ impl AppState {
             }
             d => d,
         };
-        req.respond(decision);
+        // The call can still go away between the check above and here: only a delivered
+        // answer counts.
+        let delivered = req.respond(decision);
         self.emit_approval(ToolEvent::Resolved {
             request_id,
-            expired: false,
+            expired: !delivered,
         });
-        Ok(())
+        if delivered { Ok(()) } else { Err(expired()) }
     }
 
     // ---- provider keys with Undo
@@ -638,10 +650,10 @@ mod tests {
         let waiting = tokio::spawn(async move { g.check(p).await });
         assert!(!waiting.await.unwrap().allowed(), "timeout denies");
         // The request is still listed until the next sweep; answering it now must fail.
-        let err = st.respond_approval(id, ApprovalDecision::Approve);
-        if let Err(e) = err {
-            assert_eq!(e.code, "expired");
-        }
+        let err = st
+            .respond_approval(id, ApprovalDecision::Approve)
+            .unwrap_err();
+        assert_eq!(err.code, "expired");
         for _ in 0..40 {
             if seen
                 .lock()

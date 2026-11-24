@@ -107,13 +107,14 @@ pub fn run() {
                     .try_state::<std::sync::Arc<state::AppState>>()
                     .and_then(|s| s.executor.clone());
                 if let Some(executor) = executor {
-                    tauri::async_runtime::block_on(async move {
-                        let _ = tokio::time::timeout(
-                            std::time::Duration::from_secs(3),
-                            executor.shutdown_all(),
-                        )
-                        .await;
-                    });
+                    // Concurrent, each server bounded on its own (one stuck server can't
+                    // keep the others alive or hang quit).
+                    let stuck = tauri::async_runtime::block_on(
+                        executor.shutdown_all(std::time::Duration::from_millis(1500)),
+                    );
+                    if stuck > 0 {
+                        eprintln!("{stuck} MCP server(s) did not stop in time");
+                    }
                 }
             }
         });

@@ -223,16 +223,23 @@ impl Executor {
         self.reindex_names();
     }
 
-    /// Stops every server (app exit): stdio servers and their process trees are killed.
-    pub async fn shutdown_all(&self) {
+    /// Stops every server (app exit) concurrently, each bounded by `per_server`, so one
+    /// stuck server can't keep the others (and their process trees) alive. Returns how
+    /// many servers did not stop in time.
+    pub async fn shutdown_all(&self, per_server: std::time::Duration) -> usize {
         let clients: Vec<Arc<McpClient>> = self
             .clients
             .read()
             .map(|c| c.values().cloned().collect())
             .unwrap_or_default();
-        for c in clients {
-            c.shutdown().await;
-        }
+        shutdown_concurrently(
+            clients
+                .into_iter()
+                .map(|c| async move { c.shutdown().await })
+                .collect(),
+            per_server,
+        )
+        .await
     }
 
     /// Re-list a server's tools (after connect, restart or `tools/list_changed`).
@@ -734,6 +741,27 @@ impl Executor {
     }
 }
 
+/// Runs every shutdown at once, each under its own timeout; returns how many timed out.
+pub(crate) async fn shutdown_concurrently<F>(
+    shutdowns: Vec<F>,
+    per_item: std::time::Duration,
+) -> usize
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    let mut set = tokio::task::JoinSet::new();
+    for f in shutdowns {
+        set.spawn(async move { tokio::time::timeout(per_item, f).await.is_err() });
+    }
+    let mut timed_out = 0;
+    while let Some(r) = set.join_next().await {
+        if r.unwrap_or(true) {
+            timed_out += 1;
+        }
+    }
+    timed_out
+}
+
 fn decode_output(
     cap: &McpCapability,
     v: Option<serde_json::Value>,
@@ -745,4 +773,37 @@ fn decode_output(
             format!("cached output unreadable: {e}"),
         )
     })
+}
+
+#[cfg(test)]
+mod shutdown_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[tokio::test]
+    async fn one_hung_server_does_not_keep_the_others_running() {
+        let stopped = Arc::new(AtomicUsize::new(0));
+        let quick = |n: Arc<AtomicUsize>| async move {
+            n.fetch_add(1, Ordering::SeqCst);
+        };
+        let shutdowns: Vec<std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>> = vec![
+            Box::pin(quick(Arc::clone(&stopped))),
+            // A server whose shutdown never finishes.
+            Box::pin(std::future::pending::<()>()),
+            Box::pin(quick(Arc::clone(&stopped))),
+        ];
+        let started = std::time::Instant::now();
+        let timed_out =
+            shutdown_concurrently(shutdowns, std::time::Duration::from_millis(100)).await;
+        assert_eq!(timed_out, 1);
+        assert_eq!(
+            stopped.load(Ordering::SeqCst),
+            2,
+            "the others still stopped"
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "concurrent, not sequential"
+        );
+    }
 }
