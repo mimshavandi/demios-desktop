@@ -94,7 +94,7 @@ macOS has no WebDriver for WKWebView, so run this before every release, on a sig
 - [ ] WebRTC is not exposed to artifact frames: in the frame console, `typeof RTCPeerConnection` is `"undefined"`. WKWebView can't turn WebRTC off without a private API, so the in-frame bridge is the control there.
 - [ ] Network stays off: in the frame console, `fetch("https://example.com")` is blocked by CSP. **Allow network for this artifact** asks a second time before it turns on.
 
-## Windows: manual artifact checks (until `e2e-windows` runs)
+## Windows: manual artifact checks (until #75 automates them in `e2e-windows`)
 WebView2 runs the app's init scripts in **sub-frames too**. Tauri's IPC object, which holds the invoke key, therefore starts out inside the artifact frame. The frame shell deletes it before artifact code runs, or refuses to render if it can't (`ui/artifact-sandbox/src/runtime/boot.ts`).
 - [ ] In DevTools, choose the artifact frame (`http://artifact.localhost/frame/`): `typeof window.__TAURI_INTERNALS__` and `typeof window.chrome?.webview` are `"undefined"`.
 - [ ] `edge://webrtc-internals` shows no peer connection after `new RTCPeerConnection()` in the frame. The window runs with `--force-webrtc-ip-handling-policy=disable_non_proxied_udp` (`tauri.windows.conf.json`).
