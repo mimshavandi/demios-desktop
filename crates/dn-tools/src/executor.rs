@@ -384,8 +384,18 @@ impl Executor {
         call: &ToolCall,
         cancel: impl std::future::Future<Output = ()> + Send,
     ) -> Result<ToolOutcome, CoreError> {
+        Ok(self.execute_tool_error(ctx, call, cancel).await?)
+    }
+
+    /// [`Self::execute_with_cancel`] keeping the internal error kind (for the agent adapter).
+    pub(crate) async fn execute_tool_error(
+        &self,
+        ctx: &CallContext,
+        call: &ToolCall,
+        cancel: impl std::future::Future<Output = ()> + Send,
+    ) -> Result<ToolOutcome, ToolError> {
         let cancel = std::pin::pin!(cancel);
-        Ok(self.execute_inner(ctx, call, cancel).await?)
+        self.execute_inner(ctx, call, cancel).await
     }
 
     async fn execute_inner(

@@ -8,10 +8,12 @@
 //! - [`ledger`]: SQLite side-effect ledger (`tool_ledger_*` tables, [`migrations`]).
 //! - [`executor`]: ties it together; the agent loop's `ToolExecutor` adapter wraps this.
 //! - [`oauth`]: OAuth 2.1 (code + PKCE, discovery) for remote servers.
+//! - [`agent`]: `dn_agent::ToolExecutor` for [`Executor`].
 //!
 //! Errors leave the crate as [`dn_core::CoreError::Capability`]. Threat model:
 //! `docs/security/mcp-tools.md`.
 
+pub mod agent;
 pub mod approval;
 pub mod capability;
 pub mod client;

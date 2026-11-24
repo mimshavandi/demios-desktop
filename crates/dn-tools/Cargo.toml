@@ -9,6 +9,7 @@ description = "MCP client, capability wrapper, approval gate and side-effect led
 
 [dependencies]
 dn-core.workspace = true
+dn-agent.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

@@ -24,6 +24,7 @@ ts-rs = { version = "12", default-features = false, features = ["serde-compat", 
 dn-core = { path = "crates/dn-core", version = "0.1.0" }
 rusqlite = { version = "0.43", features = ["bundled"] }
 dn-store = { path = "crates/dn-store", version = "0.1.0" }
+dn-agent = { path = "crates/dn-agent", version = "0.1.0" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
