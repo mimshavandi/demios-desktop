@@ -32,14 +32,13 @@ We want Demios Desktop to be usable by everyone, including people who use a keyb
 
 **Automated checks:**
 
-- An end-to-end test runs the real app on Linux, in CI. It sends a message with the keyboard (`Enter`), stops the answer with `⌘.`/`Ctrl+.`, and runs **axe-core** on the screen. The test fails on any serious or critical axe finding.
+- An end-to-end test runs the real app on Linux and Windows, in CI. It sends a message with the keyboard (`Enter`), stops the answer with `⌘.`/`Ctrl+.`, and runs **axe-core** on the screen. The test fails on any serious or critical axe finding.
 - UI unit tests find controls by their accessible role and name. This catches missing labels.
 
 **Before each release:** we walk through the main flow (start a chat, send, stop, approve a tool call, change settings) using only the keyboard.
 
 ## Known gaps
 
-- **Windows:** the end-to-end and axe checks do not run on Windows yet, because the WebView2 driver session fails in CI. The job exists but does not block a release.
 - **macOS:** WKWebView has no WebDriver, so all macOS checks are manual, from a release checklist.
 - **Screen readers:** no full pass has been done yet with VoiceOver (macOS), NVDA or Narrator (Windows), or Orca (Linux). Until one has, we will not tick any store's "accessible" box.
 - **Generated content:** answers and artifacts (pages, apps and diagrams the model writes) are written by the AI model you choose. We cannot guarantee that they are accessible: an artifact may lack alt text, headings, labels or enough contrast. You can ask the model to fix this.
