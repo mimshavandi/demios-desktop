@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 /// The Hugging Face hub cache: `$HF_HUB_CACHE`, else `$HF_HOME/hub`, else
 /// `$XDG_CACHE_HOME/huggingface/hub`, else `~/.cache/huggingface/hub` (also on macOS and
-/// Windows, like huggingface_hub).
+/// Windows, like huggingface_hub; on Windows the home is `%USERPROFILE%` first).
 pub fn hf_cache_dir() -> Option<PathBuf> {
     let env = |k: &str| {
         std::env::var_os(k)
@@ -33,9 +33,12 @@ pub fn hf_cache_dir() -> Option<PathBuf> {
     if let Some(p) = env("XDG_CACHE_HOME") {
         return Some(p.join("huggingface").join("hub"));
     }
-    env("HOME")
-        .or_else(|| env("USERPROFILE"))
-        .map(|h| h.join(".cache").join("huggingface").join("hub"))
+    let home = if cfg!(windows) {
+        env("USERPROFILE").or_else(|| env("HOME"))
+    } else {
+        env("HOME").or_else(|| env("USERPROFILE"))
+    };
+    home.map(|h| h.join(".cache").join("huggingface").join("hub"))
 }
 
 /// One GGUF variant found in the Hugging Face cache.
@@ -83,15 +86,27 @@ pub fn discover(cache_dir: &Path) -> Vec<CachedModel> {
         if validate_repo_id(&repo).is_err() {
             continue;
         }
+        // Never follow a symlinked repo or snapshot directory out of the cache.
+        if !e.file_type().is_ok_and(|t| t.is_dir()) {
+            continue;
+        }
         let dir = e.path();
         let refs = read_refs(&dir.join("refs"));
+        // Snapshot links may only point into this repo's own blob store.
+        let Ok(blobs) = std::fs::canonicalize(dir.join("blobs")) else {
+            continue;
+        };
         let Ok(snaps) = std::fs::read_dir(dir.join("snapshots")) else {
             continue;
         };
         for s in snaps.flatten() {
             let revision = s.file_name().to_string_lossy().into_owned();
+            let is_commit = revision.len() == 40 && revision.chars().all(|c| c.is_ascii_hexdigit());
+            if !is_commit || !s.file_type().is_ok_and(|t| t.is_dir()) {
+                continue;
+            }
             let snap = s.path();
-            let files = snapshot_files(&snap);
+            let files = snapshot_files(&snap, &blobs);
             for variant in gguf_variants(&files) {
                 let Some(first) = variant.files.first() else {
                     continue;
@@ -195,8 +210,9 @@ fn read_refs(dir: &Path) -> Vec<(String, String)> {
 }
 
 /// GGUF files under a snapshot, as repo-relative paths. Dangling links (download still
-/// running or blob removed) are skipped.
-fn snapshot_files(snap: &Path) -> Vec<RepoFile> {
+/// running or blob removed) and links resolving outside `blobs` (the repo's canonical blob
+/// directory) are skipped.
+fn snapshot_files(snap: &Path, blobs: &Path) -> Vec<RepoFile> {
     let mut out = vec![];
     let mut stack = vec![(snap.to_path_buf(), String::new(), 0usize)];
     while let Some((d, prefix, depth)) = stack.pop() {
@@ -229,12 +245,16 @@ fn snapshot_files(snap: &Path) -> Vec<RepoFile> {
                 continue;
             }
             let sha256 = if lm.file_type().is_symlink() {
-                std::fs::read_link(&p)
-                    .ok()
-                    .and_then(|t| {
-                        t.file_name()
-                            .map(|n| n.to_string_lossy().to_ascii_lowercase())
-                    })
+                // Resolve the whole chain; it must end directly in this repo's blobs.
+                let Ok(target) = std::fs::canonicalize(&p) else {
+                    continue;
+                };
+                if target.parent() != Some(blobs) {
+                    continue;
+                }
+                target
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_ascii_lowercase())
                     .filter(|h| h.len() == 64 && h.chars().all(|c| c.is_ascii_hexdigit()))
             } else {
                 None
@@ -308,6 +328,25 @@ mod tests {
         );
         // Not a model repo.
         std::fs::create_dir_all(root.join("datasets--x--y/snapshots/1")).unwrap();
+        // Hostile layouts, all ignored:
+        #[cfg(unix)]
+        {
+            // a link escaping the blob store,
+            let outside = root.join("secret.gguf");
+            std::fs::write(&outside, b"x").unwrap();
+            link(&outside, &snap.join("escape.gguf"));
+            // a snapshot that isn't a commit SHA,
+            let odd = repo.join("snapshots/not-a-sha");
+            std::fs::create_dir_all(&odd).unwrap();
+            link(&blobs.join(&hash), &odd.join("Qwen3-8B-Q4_K_M.gguf"));
+            // a symlinked snapshot directory pointing elsewhere,
+            let elsewhere = root.join("elsewhere");
+            std::fs::create_dir_all(&elsewhere).unwrap();
+            std::fs::write(elsewhere.join("x-Q2_K.gguf"), b"x").unwrap();
+            link(&elsewhere, &repo.join("snapshots").join("b".repeat(40)));
+            // and a symlinked repo directory.
+            link(&repo, &root.join("models--Evil--Mirror"));
+        }
         (hash, snap)
     }
 
