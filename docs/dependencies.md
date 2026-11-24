@@ -21,5 +21,20 @@ Every direct dependency is listed here with why and its licence (ADR-0009). Appr
 | reqwest 0.13 (rustls) | dn-tools | HTTP client handed to rmcp (no redirects for MCP traffic) | MIT/Apache-2.0 | T-CON-01 |
 | axum 0.8 (dev only) | dn-tools tests | in-process Streamable HTTP + OAuth test servers | MIT | T-CON-01 |
 | process-wrap 10 (tokio1, process-group, job-object) | dn-tools | stdio MCP servers run in their own process group (Unix) / job object (Windows) so shutdown also stops grandchildren (e.g. npx → node); same major version rmcp already uses | Apache-2.0 OR MIT | T-CON-01 |
+| tauri 2, tauri-build 2 | apps/desktop | desktop shell, typed IPC, capabilities (ADR-0002, D-006) | MIT/Apache-2.0 | T-SHELL-01 |
+| tokio (`sync`, `macros`, `time`, `rt`) | apps/desktop | cancel a streaming answer (`select!` + `oneshot`); timer for the dev fake model | MIT | T-SHELL-01 |
+
+### UI (npm, `apps/desktop/package.json`)
+
+| Package | Why | Licence | Added in |
+|---|---|---|---|
+| react, react-dom 19 | UI framework (see the T-SHELL-01 PR for React vs Solid) | MIT | T-SHELL-01 |
+| @tauri-apps/api ~2.11 | `invoke` + `Channel` for typed IPC; pinned to the Rust `tauri` minor | MIT/Apache-2.0 | T-SHELL-01 |
+| marked | markdown → HTML for chat messages | MIT | T-SHELL-01 |
+| dompurify | sanitises rendered model output | MPL-2.0 OR Apache-2.0 | T-SHELL-01 |
+| highlight.js (core + 13 languages) | code highlighting | BSD-3-Clause | T-SHELL-01 |
+| @radix-ui/react-{tooltip,switch,select,toast} | headless primitives required by the design standard (D-014, §4) | MIT | T-SHELL-01 |
+| lucide-react | icons, 16 px / 1.5 stroke (design standard §4) | ISC | T-SHELL-01 |
+| dev: typescript 7, vite 8, @vitejs/plugin-react, vitest, @testing-library/react, jsdom, @types/react(-dom), @types/node 22, @tauri-apps/cli ~2.11 | strict typecheck, build, unit tests, `tauri dev/build` | MIT / Apache-2.0 | T-SHELL-01 |
 
 Approved for wave 1 (D-012), add a row when first used: tauri 2, tokio, serde_yaml (or a maintained successor), llama-cpp-2, rmcp, rusqlite (chosen over sqlx: sync, SQLCipher + sqlite-vec support), keyring, reqwest, axum (team server).
