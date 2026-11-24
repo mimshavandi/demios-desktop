@@ -36,7 +36,7 @@ The app keeps its data in a SQLite database called `demios.sqlite3`, in your ope
 The database holds:
 
 - **Conversations:** title, messages, the model that answered, and timestamps.
-- **Settings:** which model you chose for each task and, once you can add them, the tool servers you set up. It stores only the *names* of their credentials, never the credentials themselves.
+- **Settings:** which model you chose for each task, the tool servers you added, and which local server commands you allowed to start. It stores only the *names* of their credentials, never the credentials themselves.
 - **Tool history:** for each tool call the app makes, the tool name, the arguments, the result or error, and timestamps. This history lets the app avoid repeating an action by accident.
 
 Other things stored locally:
@@ -48,7 +48,7 @@ Nothing in these folders is uploaded anywhere by the app.
 
 ## Keys and secrets
 
-API keys for AI providers, and the tokens for tool servers, are stored in your system keychain: macOS Keychain, Windows Credential Manager, or the Secret Service on Linux (for example GNOME Keyring or KWallet). They are stored under the service name `io.demios.app`.
+API keys for AI providers, and the secrets and sign-ins for tool servers, are stored in your system keychain: macOS Keychain, Windows Credential Manager, or the Secret Service on Linux (for example GNOME Keyring or KWallet). They are stored under the service name `io.demios.app`.
 
 They are never written to the database or to logs, and the app never shows them back to you. Local tool programs the app starts don't receive them in their environment, except a credential you have explicitly assigned to that server.
 
@@ -76,10 +76,10 @@ The `dn` command-line tool can also search Hugging Face and download from it, an
 
 ### Tool servers (MCP)
 
-Tool servers let the model use tools. **You can't add a tool server in the app yet.** Once you can, two kinds will exist:
+Tool servers let the model use tools. You add them in **Settings → Models → Tool servers**. There are two kinds:
 
-- **Local servers** are programs on your computer that the app starts for you. They can read files and reach the internet on their own, according to what the program does. Only add servers you trust.
-- **Remote servers** are online services. The app connects to them over HTTPS. When a server needs it, the app signs you in through your browser, and the server sees the app as the client "Demios Desktop".
+- **Local servers** are programs on your computer that the app starts for you. Before a program starts for the first time, and again whenever its command changes, the app asks you in a system dialog that shows the exact command. A local server runs with your permissions: it can read and change your files and reach the internet on its own, according to what the program does. Only add servers you trust.
+- **Remote servers** are online services. The app connects to them over HTTPS. If a server needs you to sign in, **Sign in** opens its sign-in page in your browser, and the server sees the app as the client "Demios Desktop". **Sign out** deletes the stored sign-in.
 
 When the model calls a tool, the server receives the **arguments of that call**. These can contain parts of your conversation. The tool's answer comes back into the conversation, so it is also sent to your AI provider if you use one.
 
@@ -102,6 +102,7 @@ The app is not meant for children under 13 (or the minimum age in your country).
 Because your data is on your own computer, you control it:
 
 - **Delete a chat:** select the delete button next to it in the sidebar. You can undo this for 10 seconds. At the next start of the app, its messages and its tool history are removed for good. Only the chat's internal id and the time it was deleted are kept, with no title, model or content.
+- **Remove a tool server:** go to **Settings → Models → Tool servers** and select the remove button next to it. After a confirmation, this deletes its settings, the secrets and sign-in saved for it in your keychain, and the "Allow in this chat" approvals for its tools. Chats that used its tools keep their history.
 - **Remove an API key:** go to **Settings → Models → Provider keys** and select **Remove key**. The key is removed from the keychain straight away and held in memory for a few seconds, so you can undo.
 - **Delete everything:** go to **Settings → General** and select **Delete all local data**. After a confirmation that lists what will go, it deletes the database (every chat, including recently deleted ones and their deletion records, your settings and tool history), downloaded models, the keys and sign-ins Demios saved in your keychain, and the app window's own storage. This can't be undone.
 - **Uninstalling** removes the app but not your data folder, your models or your keychain entries. Use **Delete all local data** first, or delete them yourself.
