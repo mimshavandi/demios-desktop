@@ -5,7 +5,7 @@
 // custom licences (D-020).
 
 import { Copy, Cpu, Download, Pause, Play, RotateCcw, TriangleAlert } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Api } from "../ipc/commands";
 import { errorMessage, type FitStatus, type LocalModelRow } from "../ipc/types";
 import { Badge, Button, ICON, IconButton, InlineMessage } from "./primitives";
@@ -46,17 +46,33 @@ export function LocalModelsCard({
   onReady: () => void;
 }) {
   const [rows, setRows] = useState<LocalModelRow[]>(initial);
+  const [announce, setAnnounce] = useState("");
+  // Rows updated by events before the snapshot arrived: the snapshot must not undo them.
+  const fresh = useRef<Set<string>>(new Set());
+  const prev = useRef<Map<string, string>>(new Map(initial.map((r) => [r.id, r.state.state])));
 
   useEffect(() => {
     let alive = true;
     void api
       .watchLocalModels((ev) => {
         if (!alive) return;
+        fresh.current.add(ev.row.id);
         setRows((list) => list.map((r) => (r.id === ev.row.id ? ev.row : r)));
-        if (ev.row.state.state === "ready") onReady();
+        const was = prev.current.get(ev.row.id);
+        prev.current.set(ev.row.id, ev.row.state.state);
+        if (ev.row.state.state === "ready" && was !== "ready") {
+          onReady();
+          // Polite, once per finished download (design-system §7).
+          setAnnounce("");
+          window.setTimeout(() => setAnnounce(`${ev.row.name} downloaded`), 50);
+        }
       })
       .then((list) => {
-        if (alive) setRows(list);
+        if (!alive) return;
+        setRows((current) =>
+          list.map((r) => (fresh.current.has(r.id) ? (current.find((c) => c.id === r.id) ?? r) : r)),
+        );
+        for (const r of list) if (!fresh.current.has(r.id)) prev.current.set(r.id, r.state.state);
       })
       .catch(() => {});
     return () => {
@@ -75,6 +91,9 @@ export function LocalModelsCard({
       {rows.map((r) => (
         <LocalModelRowView key={r.id} api={api} row={r} />
       ))}
+      <div className="dn-visually-hidden" role="status" aria-live="polite">
+        {announce}
+      </div>
     </section>
   );
 }
@@ -162,7 +181,9 @@ function LocalModelRowView({ api, row }: { api: Api; row: LocalModelRow }) {
           )}
         {s.state === "paused" && progress(s.done, s.total, `Paused at ${formatBytes(s.done)} of ${formatBytes(s.total)}`)}
         {s.state === "verifying" && <span className="dn-help">Checking the file…</span>}
-        {s.state === "queued" && <span className="dn-help">Starting…</span>}
+        {s.state === "queued" && (
+          <span className="dn-help">{s.resuming ? "Checking the partial download…" : "Starting…"}</span>
+        )}
         {s.state === "failed" && (
           <InlineMessage tone="error">{s.message}</InlineMessage>
         )}

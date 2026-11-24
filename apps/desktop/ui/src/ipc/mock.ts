@@ -317,7 +317,7 @@ export function createMockApi(): Api {
         emitRow(r);
         timersDl.set(id, window.setTimeout(tick, 200));
       };
-      r.state = { state: "queued" };
+      r.state = { state: "queued", resuming: done > 0 };
       emitRow(r);
       timersDl.set(id, window.setTimeout(tick, 200));
       return null;

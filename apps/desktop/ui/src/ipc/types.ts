@@ -174,7 +174,8 @@ export interface ProviderInfo {
 /** Where a catalogue model is (design-system §4, Download row). */
 export type DownloadState =
   | { state: "not_downloaded" }
-  | { state: "queued" }
+  /** `resuming`: a partial file is re-checked before the transfer continues. */
+  | { state: "queued"; resuming: boolean }
   | { state: "downloading"; done: number; total: number; bytes_per_sec: number }
   | { state: "paused"; done: number; total: number }
   | { state: "verifying"; total: number }

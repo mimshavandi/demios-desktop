@@ -474,7 +474,11 @@ describe("App", () => {
     expect(await screen.findByText("Couldn't reach Hugging Face.")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
 
+    act(() => f.local({ type: "changed", row: { ...base, state: { state: "queued", resuming: true } } }));
+    expect(await screen.findByText("Checking the partial download…")).toBeTruthy();
+
     act(() => f.local({ type: "changed", row: { ...base, state: { state: "ready" } } }));
     expect(await screen.findByText("On this device", { selector: ".dn-badge" })).toBeTruthy();
+    expect(await screen.findByText("Tiny Model downloaded")).toBeTruthy();
   });
 });

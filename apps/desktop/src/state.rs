@@ -189,7 +189,7 @@ impl AppState {
             manifest: agent.manifest.clone(),
         });
         let mut models = ModelRegistry::with_builtin();
-        models.local = Some(Arc::new(crate::local::LocalModels::open()));
+        models.local = Some(crate::local::LocalModels::open());
         let mut state = Self::new(conn, models, keys);
         state.agent = agent;
         state.tools = tools;

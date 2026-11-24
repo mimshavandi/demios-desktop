@@ -8,12 +8,13 @@
 use dn_core::chat::ChatModel;
 use dn_core::model::{Capability, FitStatus, ModelRef};
 use dn_core::{CoreError, RecoveryAction};
-use dn_inference::{LlamaCppBackend, LoadOptions, LoadedModel, ModelSpec};
+use dn_inference::{InferenceBackend, LlamaCppBackend, LoadOptions, LoadedModel, ModelSpec};
 use dn_models::download::DownloadError;
 use dn_models::{Catalog, CatalogEntry, FitReport, Gguf, Machine, ModelFootprint};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 
@@ -22,7 +23,10 @@ use std::time::Instant;
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum DownloadState {
     NotDownloaded,
-    Queued,
+    /// Waiting to start. `resuming`: a partial file is re-checked first.
+    Queued {
+        resuming: bool,
+    },
     Downloading {
         done: u64,
         total: u64,
@@ -82,17 +86,88 @@ pub enum LocalModelEvent {
 
 type Sink = Arc<dyn Fn(LocalModelEvent) + Send + Sync>;
 
+/// Progress callback handed to a fetch: (bytes done, bytes total).
+pub type ProgressFn = Box<dyn FnMut(u64, u64) + Send>;
+
+/// How a catalogue file is fetched. The app uses `dn_models::download::pull`; tests swap in
+/// a scripted one.
+pub type FetchFn = Arc<
+    dyn Fn(
+            CatalogEntry,
+            PathBuf,
+            ProgressFn,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<PathBuf, DownloadError>> + Send>,
+        > + Send
+        + Sync,
+>;
+
+fn pull_fetch() -> FetchFn {
+    Arc::new(|entry, dir, mut progress| {
+        Box::pin(async move {
+            let client = dn_models::download::client()?;
+            dn_models::download::pull(&client, &entry, &dir, &mut *progress).await
+        })
+    })
+}
+
+/// A running download. `generation` identifies it: callbacks and the finishing task of an
+/// older (paused) run must not touch a newer one.
+struct Task {
+    generation: u64,
+    handle: tauri::async_runtime::JoinHandle<()>,
+}
+
+/// A loaded model that is unloaded from its backend when its last user lets go. A switch
+/// replaces the app's reference at once; a reply still streaming from the old model keeps it
+/// until that reply ends, then its weights are freed (no copies pile up).
+pub struct Resident<B: InferenceBackend> {
+    model: Option<LoadedModel<B>>,
+}
+
+impl<B: InferenceBackend> Resident<B> {
+    pub fn new(model: LoadedModel<B>) -> Self {
+        Self { model: Some(model) }
+    }
+}
+
+impl<B: InferenceBackend> ChatModel for Resident<B> {
+    fn chat(&self, req: dn_core::chat::ChatRequest) -> dn_core::chat::EventStream {
+        self.model
+            .as_ref()
+            .expect("a Resident holds its model until dropped")
+            .chat(req)
+    }
+}
+
+impl<B: InferenceBackend> Drop for Resident<B> {
+    fn drop(&mut self) {
+        if let Some(m) = self.model.take() {
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = m.unload().await {
+                    eprintln!("could not unload a local model: {e}");
+                }
+            });
+        }
+    }
+}
+
 pub struct LocalModels {
     dir: PathBuf,
     catalog: Catalog,
     machine: Machine,
     state: Mutex<HashMap<String, DownloadState>>,
     fits: Mutex<HashMap<String, FitView>>,
-    tasks: Mutex<HashMap<String, tauri::async_runtime::JoinHandle<()>>>,
+    tasks: Mutex<HashMap<String, Task>>,
+    /// One download per model at a time across pause/resume: a resumed run waits until the
+    /// paused one has fully stopped (and released the file lock).
+    model_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    next_generation: AtomicU64,
+    fetch: FetchFn,
     sink: Mutex<Option<Sink>>,
     backend: Arc<LlamaCppBackend>,
-    /// The one loaded local model.
-    loaded: tokio::sync::Mutex<Option<(String, Arc<LoadedModel<LlamaCppBackend>>)>>,
+    /// The one local model the app holds (others may live on briefly in running replies).
+    loaded: tokio::sync::Mutex<Option<(String, Arc<Resident<LlamaCppBackend>>)>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -174,8 +249,17 @@ pub fn download_error_message(e: &DownloadError) -> String {
         DownloadError::Status(s) if *s == 404 => {
             "The model file isn't on Hugging Face at the pinned version anymore.".into()
         }
+        DownloadError::Status(s) if *s == 401 || *s == 403 => {
+            "This model needs access: accept its licence on the model page, or add a Hugging Face token, then retry.".into()
+        }
+        DownloadError::Status(s) if *s == 429 => {
+            "Hugging Face is limiting downloads right now. Wait a few minutes, then retry.".into()
+        }
         DownloadError::Status(_) | DownloadError::Http(_) => {
             "Couldn't reach Hugging Face. Check your connection, then retry.".into()
+        }
+        DownloadError::Io(e) if e.kind() == std::io::ErrorKind::StorageFull => {
+            "The disk filled up during the download. Free up space, then retry; it resumes where it stopped.".into()
         }
         DownloadError::Io(_) => "Couldn't write the model file. Check the disk, then retry.".into(),
     }
@@ -183,6 +267,10 @@ pub fn download_error_message(e: &DownloadError) -> String {
 
 impl LocalModels {
     pub fn new(dir: PathBuf, catalog: Catalog, machine: Machine) -> Self {
+        Self::with_fetch(dir, catalog, machine, pull_fetch())
+    }
+
+    pub fn with_fetch(dir: PathBuf, catalog: Catalog, machine: Machine, fetch: FetchFn) -> Self {
         let lm = Self {
             dir,
             catalog,
@@ -190,6 +278,9 @@ impl LocalModels {
             state: Mutex::new(HashMap::new()),
             fits: Mutex::new(HashMap::new()),
             tasks: Mutex::new(HashMap::new()),
+            model_locks: Mutex::new(HashMap::new()),
+            next_generation: AtomicU64::new(1),
+            fetch,
             sink: Mutex::new(None),
             backend: Arc::new(LlamaCppBackend::new()),
             loaded: tokio::sync::Mutex::new(None),
@@ -198,22 +289,34 @@ impl LocalModels {
         lm
     }
 
-    /// The app's instance: built-in catalogue, shared models dir, this machine.
-    pub fn open() -> Self {
-        Self::new(
+    /// The app's instance: built-in catalogue, shared models dir, this machine. Exact fits
+    /// (GGUF header reads) are computed in the background, off the setup thread.
+    pub fn open() -> Arc<Self> {
+        let lm = Arc::new(Self::new(
             dn_models::download::default_models_dir(),
             Catalog::builtin(),
             dn_models::detect_machine(),
-        )
+        ));
+        let bg = Arc::clone(&lm);
+        tauri::async_runtime::spawn_blocking(move || bg.refresh_exact_fits());
+        lm
     }
 
     fn path(&self, e: &CatalogEntry) -> PathBuf {
         self.dir.join(&e.file)
     }
 
-    /// Reads what is on disk: verified file → Ready; partial file → Paused.
+    fn partial_len(&self, e: &CatalogEntry) -> u64 {
+        std::fs::metadata(suffixed(&self.path(e), ".part"))
+            .map(|m| m.len())
+            .unwrap_or(0)
+    }
+
+    /// Reads what is on disk (cheap: sizes and checksum markers, no hashing): verified file →
+    /// Ready; partial file → Paused. Fits start as estimates.
     fn scan(&self) {
         let mut state = lock(&self.state);
+        let mut fits = lock(&self.fits);
         for e in &self.catalog.models {
             if !e.has_plain_file_name() {
                 continue;
@@ -222,9 +325,7 @@ impl LocalModels {
             let verified = std::fs::metadata(&p).is_ok_and(|m| m.len() == e.size)
                 && std::fs::read_to_string(suffixed(&p, ".sha256"))
                     .is_ok_and(|m| m.trim().eq_ignore_ascii_case(&e.sha256));
-            let partial = std::fs::metadata(suffixed(&p, ".part"))
-                .map(|m| m.len())
-                .unwrap_or(0);
+            let partial = self.partial_len(e);
             let s = if verified {
                 DownloadState::Ready
             } else if partial > 0 {
@@ -236,32 +337,37 @@ impl LocalModels {
                 DownloadState::NotDownloaded
             };
             state.insert(e.id.clone(), s);
-        }
-        drop(state);
-        for e in &self.catalog.models {
-            self.refresh_fit(e);
+            fits.insert(e.id.clone(), self.estimated_fit(e));
         }
     }
 
-    /// Exact fit from the GGUF header when the file is here, else an estimate.
-    fn refresh_fit(&self, e: &CatalogEntry) {
-        let ready = matches!(lock(&self.state).get(&e.id), Some(DownloadState::Ready));
-        let exact = ready
-            .then(|| Gguf::open(&self.path(e)).ok())
-            .flatten()
-            .map(|g| {
-                fit_view(
-                    &dn_models::fit(&ModelFootprint::from_gguf(&g), &self.machine),
-                    false,
-                )
-            });
-        let view = exact.unwrap_or_else(|| {
+    fn estimated_fit(&self, e: &CatalogEntry) -> FitView {
+        fit_view(
+            &dn_models::fit(&estimated_footprint(e), &self.machine),
+            true,
+        )
+    }
+
+    /// Exact fit from the GGUF header (blocking file read).
+    fn exact_fit(&self, e: &CatalogEntry) -> Option<FitView> {
+        Gguf::open(&self.path(e)).ok().map(|g| {
             fit_view(
-                &dn_models::fit(&estimated_footprint(e), &self.machine),
-                true,
+                &dn_models::fit(&ModelFootprint::from_gguf(&g), &self.machine),
+                false,
             )
-        });
-        lock(&self.fits).insert(e.id.clone(), view);
+        })
+    }
+
+    /// Replaces the estimates of downloaded models with exact fits. Blocking.
+    pub fn refresh_exact_fits(&self) {
+        for e in &self.catalog.models {
+            if self.is_ready(&e.id)
+                && let Some(view) = self.exact_fit(e)
+            {
+                lock(&self.fits).insert(e.id.clone(), view);
+                self.emit(e);
+            }
+        }
     }
 
     fn row(&self, e: &CatalogEntry) -> LocalModelRow {
@@ -269,12 +375,10 @@ impl LocalModels {
             .get(&e.id)
             .cloned()
             .unwrap_or(DownloadState::NotDownloaded);
-        let fit = lock(&self.fits).get(&e.id).cloned().unwrap_or_else(|| {
-            fit_view(
-                &dn_models::fit(&estimated_footprint(e), &self.machine),
-                true,
-            )
-        });
+        let fit = lock(&self.fits)
+            .get(&e.id)
+            .cloned()
+            .unwrap_or_else(|| self.estimated_fit(e));
         LocalModelRow {
             id: e.id.clone(),
             model_ref: format!("local:{}", e.id),
@@ -301,7 +405,14 @@ impl LocalModels {
         matches!(lock(&self.state).get(id), Some(DownloadState::Ready))
     }
 
-    /// Ready models, for the resolver and the slot pickers.
+    /// The model is too big for this machine: never auto-picked, never loaded.
+    pub fn wont_fit(&self, id: &str) -> bool {
+        lock(&self.fits)
+            .get(id)
+            .is_some_and(|f| f.status == FitStatus::MemoryBlocked)
+    }
+
+    /// Downloaded models, for the resolver and the slot pickers.
     pub fn ready(&self) -> Vec<&CatalogEntry> {
         self.catalog
             .models
@@ -314,20 +425,46 @@ impl LocalModels {
         &self.catalog.models
     }
 
+    pub fn name(&self, id: &str) -> Option<&str> {
+        self.catalog.get(id).map(|e| e.name.as_str())
+    }
+
     pub fn watch(&self, sink: Sink) -> Vec<LocalModelRow> {
         *lock(&self.sink) = Some(sink);
         self.rows()
     }
 
+    fn emit(&self, e: &CatalogEntry) {
+        let row = self.row(e);
+        let sink = lock(&self.sink).clone();
+        if let Some(sink) = sink {
+            sink(LocalModelEvent::Changed { row });
+        }
+    }
+
     fn set(&self, id: &str, s: DownloadState) {
         lock(&self.state).insert(id.to_string(), s);
         if let Some(e) = self.catalog.get(id) {
-            let row = self.row(e);
-            let sink = lock(&self.sink).clone();
-            if let Some(sink) = sink {
-                sink(LocalModelEvent::Changed { row });
-            }
+            self.emit(e);
         }
+    }
+
+    fn is_current(&self, id: &str, generation: u64) -> bool {
+        lock(&self.tasks)
+            .get(id)
+            .is_some_and(|t| t.generation == generation)
+    }
+
+    /// Updates the row only while `generation` is still the model's running download, so a
+    /// paused run's late progress never overwrites "Paused".
+    fn set_if_current(&self, id: &str, generation: u64, s: DownloadState) {
+        if self.is_current(id, generation) {
+            self.set(id, s);
+        }
+    }
+
+    fn model_lock(&self, id: &str) -> Arc<tokio::sync::Mutex<()>> {
+        Arc::clone(lock(&self.model_locks).entry(id.to_string()).or_default())
     }
 
     /// Starts (or resumes) a download. A no-op while one is running.
@@ -340,54 +477,76 @@ impl LocalModels {
         if self.is_ready(id) {
             return Ok(());
         }
+        // Held across spawn + insert, so the task can't check `is_current` before it exists.
         let mut tasks = lock(&self.tasks);
         if tasks.contains_key(id) {
             return Ok(());
         }
-        self.set(id, DownloadState::Queued);
+        let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
+        let resuming = self.partial_len(&e) > 0;
+        lock(&self.state).insert(id.to_string(), DownloadState::Queued { resuming });
         let this = Arc::clone(self);
+        let model_lock = self.model_lock(id);
+        let entry = e.clone();
         let handle = tauri::async_runtime::spawn(async move {
-            let result = this.run_download(&e).await;
-            lock(&this.tasks).remove(&e.id);
+            let e = entry;
+            // Wait until an earlier (paused) run of this model has fully stopped.
+            let _one_at_a_time = model_lock.lock_owned().await;
+            if !this.is_current(&e.id, generation) {
+                return;
+            }
+            let result = this.run_download(&e, generation).await;
+            let current = this.is_current(&e.id, generation);
             match result {
-                Ok(()) => {
-                    this.set(&e.id, DownloadState::Ready);
+                Ok(_) => {
+                    // A finished file is finished even if a pause raced it.
                     let lm = Arc::clone(&this);
                     let entry = e.clone();
-                    let _ =
-                        tauri::async_runtime::spawn_blocking(move || lm.refresh_fit(&entry)).await;
+                    let exact =
+                        tauri::async_runtime::spawn_blocking(move || lm.exact_fit(&entry)).await;
+                    if let Ok(Some(view)) = exact {
+                        lock(&this.fits).insert(e.id.clone(), view);
+                    }
+                    if current {
+                        lock(&this.tasks).remove(&e.id);
+                    }
                     this.set(&e.id, DownloadState::Ready);
                 }
-                Err(err) => {
+                Err(err) if current => {
                     eprintln!("download of `{}` failed: {err}", e.id);
-                    let done = std::fs::metadata(suffixed(&this.path(&e), ".part"))
-                        .map(|m| m.len())
-                        .unwrap_or(0);
+                    lock(&this.tasks).remove(&e.id);
                     this.set(
                         &e.id,
                         DownloadState::Failed {
                             message: download_error_message(&err),
-                            done,
+                            done: this.partial_len(&e),
                             total: e.size,
                         },
                     );
                 }
+                // Paused (or superseded) while failing: the pause already set the row.
+                Err(_) => {}
             }
         });
-        tasks.insert(id.to_string(), handle);
+        tasks.insert(id.to_string(), Task { generation, handle });
+        drop(tasks);
+        self.emit(&e);
         Ok(())
     }
 
-    async fn run_download(self: &Arc<Self>, e: &CatalogEntry) -> Result<(), DownloadError> {
-        let client = dn_models::download::client()?;
+    async fn run_download(
+        self: &Arc<Self>,
+        e: &CatalogEntry,
+        generation: u64,
+    ) -> Result<PathBuf, DownloadError> {
         let this = Arc::clone(self);
         let id = e.id.clone();
         let mut last_emit = Instant::now() - std::time::Duration::from_secs(1);
         let mut window: (Instant, u64) = (Instant::now(), 0);
         let mut rate = 0u64;
-        let mut progress = move |done: u64, total: u64| {
+        let progress: ProgressFn = Box::new(move |done: u64, total: u64| {
             if done >= total {
-                this.set(&id, DownloadState::Verifying { total });
+                this.set_if_current(&id, generation, DownloadState::Verifying { total });
                 return;
             }
             let now = Instant::now();
@@ -403,8 +562,9 @@ impl LocalModels {
             }
             if now.duration_since(last_emit).as_millis() >= 250 {
                 last_emit = now;
-                this.set(
+                this.set_if_current(
                     &id,
+                    generation,
                     DownloadState::Downloading {
                         done,
                         total,
@@ -412,25 +572,27 @@ impl LocalModels {
                     },
                 );
             }
-        };
-        dn_models::download::pull(&client, e, &self.dir, &mut progress).await?;
-        Ok(())
+        });
+        (self.fetch)(e.clone(), self.dir.clone(), progress).await
     }
 
-    /// Pauses a running download: the task is dropped (which stops the transfer) and the
-    /// partial file is kept, so the next download resumes from it.
+    /// Pauses a running download: the task is aborted (which drops the transfer and its file
+    /// lock) and the partial file is kept. A later download waits for the abort to finish.
     pub fn pause(&self, id: &str) {
-        let Some(handle) = lock(&self.tasks).remove(id) else {
+        let Some(task) = lock(&self.tasks).remove(id) else {
             return;
         };
-        handle.abort();
-        let total = self.catalog.get(id).map_or(0, |e| e.size);
-        let done = self
-            .catalog
-            .get(id)
-            .and_then(|e| std::fs::metadata(suffixed(&self.path(e), ".part")).ok())
-            .map_or(0, |m| m.len());
-        self.set(id, DownloadState::Paused { done, total });
+        task.handle.abort();
+        let Some(e) = self.catalog.get(id) else {
+            return;
+        };
+        self.set(
+            id,
+            DownloadState::Paused {
+                done: self.partial_len(e),
+                total: e.size,
+            },
+        );
     }
 
     /// Stops every download (app exit). Partial files stay for the next start.
@@ -441,8 +603,8 @@ impl LocalModels {
         }
     }
 
-    /// The `ChatModel` for `local:<id>`: loads the file (unloading the previous local
-    /// model) on first use. Async; callers on a blocking thread use `block_on`.
+    /// The `ChatModel` for `local:<id>`: loads the file on first use. Switching models drops
+    /// the app's reference to the previous one; it is unloaded as soon as no reply uses it.
     pub async fn chat_model(&self, id: &str) -> Result<Arc<dyn ChatModel>, CoreError> {
         let e = self
             .catalog
@@ -464,6 +626,19 @@ impl LocalModels {
                 }],
             });
         }
+        if self.wont_fit(id) {
+            return Err(CoreError::ModelUnavailable {
+                user_message: format!(
+                    "{} won't fit in this computer's memory. Choose a smaller model.",
+                    e.name
+                ),
+                developer_message: format!("{id}: fit MemoryBlocked"),
+                recovery: vec![RecoveryAction::ChooseModelForSlot {
+                    agent_id: crate::agent::AGENT_ID.into(),
+                    slot_id: "primary".into(),
+                }],
+            });
+        }
         let mut loaded = self.loaded.lock().await;
         if let Some((cur, m)) = loaded.as_ref()
             && cur == id
@@ -471,12 +646,9 @@ impl LocalModels {
             let m: Arc<dyn ChatModel> = m.clone();
             return Ok(m);
         }
-        // One local model in memory at a time.
-        if let Some((_, old)) = loaded.take()
-            && let Ok(old) = Arc::try_unwrap(old)
-        {
-            let _ = old.unload().await;
-        }
+        // Let go of the previous model first: if no reply holds it, it unloads now, before
+        // the new weights are read.
+        *loaded = None;
         let m = LoadedModel::load(
             Arc::clone(&self.backend),
             &ModelSpec::gguf(self.path(e)),
@@ -491,7 +663,7 @@ impl LocalModels {
                 slot_id: "primary".into(),
             }],
         })?;
-        let m = Arc::new(m);
+        let m = Arc::new(Resident::new(m));
         *loaded = Some((id.to_string(), Arc::clone(&m)));
         let m: Arc<dyn ChatModel> = m;
         Ok(m)
@@ -617,5 +789,289 @@ mod tests {
             rows.iter()
                 .all(|r| r.card_url.starts_with("https://huggingface.co/"))
         );
+    }
+
+    // ---- review fixes: model unload, download races, fit, errors
+
+    use dn_inference::{BackendCaps, ModelHandle, TokenStream};
+    use std::sync::atomic::{AtomicBool, AtomicUsize};
+
+    /// Backend that counts loads and unloads.
+    #[derive(Default)]
+    struct Counting {
+        loads: AtomicUsize,
+        unloads: AtomicUsize,
+    }
+
+    impl InferenceBackend for Counting {
+        fn name(&self) -> &'static str {
+            "counting"
+        }
+        fn capabilities(&self) -> BackendCaps {
+            BackendCaps::default()
+        }
+        async fn load(
+            &self,
+            spec: &ModelSpec,
+            _: &LoadOptions,
+        ) -> dn_inference::Result<ModelHandle> {
+            let n = self.loads.fetch_add(1, Ordering::SeqCst) as u64;
+            Ok(ModelHandle::new(n + 1, spec.model_id.clone()))
+        }
+        async fn chat(
+            &self,
+            h: &ModelHandle,
+            _: dn_core::chat::ChatRequest,
+        ) -> dn_inference::Result<TokenStream> {
+            Err(dn_inference::InferenceError::UnknownHandle(h.id()))
+        }
+        async fn embed(
+            &self,
+            _: &ModelHandle,
+            _: &[String],
+        ) -> dn_inference::Result<Vec<Vec<f32>>> {
+            Ok(vec![])
+        }
+        async fn unload(&self, _: ModelHandle) -> dn_inference::Result<()> {
+            self.unloads.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    async fn settle() {
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_switched_model_unloads_once_its_last_reply_ends() {
+        let backend = Arc::new(Counting::default());
+        let first = LoadedModel::load(
+            Arc::clone(&backend),
+            &ModelSpec::gguf("a.gguf"),
+            &LoadOptions::default(),
+        )
+        .await
+        .unwrap();
+        let app_ref: Arc<dyn ChatModel> = Arc::new(Resident::new(first));
+        // A reply in flight holds its own reference.
+        let in_flight = Arc::clone(&app_ref);
+        // The user switches models: the app lets go of the old one.
+        drop(app_ref);
+        settle().await;
+        assert_eq!(
+            backend.unloads.load(Ordering::SeqCst),
+            0,
+            "still in use by the reply"
+        );
+        drop(in_flight);
+        settle().await;
+        assert_eq!(
+            backend.unloads.load(Ordering::SeqCst),
+            1,
+            "unloaded when the reply ended"
+        );
+
+        // Switching back and forth never accumulates loaded copies.
+        for _ in 0..3 {
+            let m = LoadedModel::load(
+                Arc::clone(&backend),
+                &ModelSpec::gguf("b.gguf"),
+                &LoadOptions::default(),
+            )
+            .await
+            .unwrap();
+            drop(Arc::new(Resident::new(m)));
+        }
+        settle().await;
+        assert_eq!(
+            backend.loads.load(Ordering::SeqCst),
+            backend.unloads.load(Ordering::SeqCst),
+            "every load is matched by an unload"
+        );
+    }
+
+    /// A scripted network: emits progress in steps and holds a "file lock" while running,
+    /// like dn_models::download (a second concurrent fetch gets Busy).
+    struct Net {
+        locked: AtomicBool,
+        busy_seen: AtomicBool,
+        step_ms: u64,
+        steps: u64,
+    }
+
+    struct LockGuard(Arc<Net>);
+    impl Drop for LockGuard {
+        fn drop(&mut self) {
+            self.0.locked.store(false, Ordering::SeqCst);
+        }
+    }
+
+    fn scripted(net: Arc<Net>) -> FetchFn {
+        Arc::new(move |e, dir, mut progress| {
+            let net = Arc::clone(&net);
+            Box::pin(async move {
+                if net.locked.swap(true, Ordering::SeqCst) {
+                    net.busy_seen.store(true, Ordering::SeqCst);
+                    return Err(DownloadError::Busy(dir.join(&e.file)));
+                }
+                let _guard = LockGuard(Arc::clone(&net));
+                for i in 1..=net.steps {
+                    tokio::time::sleep(std::time::Duration::from_millis(net.step_ms)).await;
+                    progress(e.size * i / (net.steps + 1), e.size);
+                }
+                progress(e.size, e.size);
+                Ok(dir.join(&e.file))
+            })
+        })
+    }
+
+    fn racing(net: &Arc<Net>) -> (Dir, Arc<LocalModels>) {
+        let dir = Dir(std::env::temp_dir().join(format!("dn-local-race-{}", dn_core::Id::new())));
+        std::fs::create_dir_all(&dir.0).unwrap();
+        let catalog = Catalog {
+            version: 1,
+            models: vec![entry("m", 1_000, "aa")],
+        };
+        let lm = Arc::new(LocalModels::with_fetch(
+            dir.0.clone(),
+            catalog,
+            Machine::cpu_only(16 << 30),
+            scripted(Arc::clone(net)),
+        ));
+        (dir, lm)
+    }
+
+    fn state_of(lm: &LocalModels) -> DownloadState {
+        lm.rows()[0].state.clone()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn late_progress_never_overwrites_paused() {
+        let net = Arc::new(Net {
+            locked: AtomicBool::new(false),
+            busy_seen: AtomicBool::new(false),
+            step_ms: 40,
+            steps: 50,
+        });
+        let (_d, lm) = racing(&net);
+        lm.download("m").unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        assert!(
+            matches!(state_of(&lm), DownloadState::Downloading { .. }),
+            "{:?}",
+            state_of(&lm)
+        );
+        lm.pause("m");
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        assert!(
+            matches!(state_of(&lm), DownloadState::Paused { .. }),
+            "{:?}",
+            state_of(&lm)
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn resume_right_after_pause_waits_instead_of_reporting_busy() {
+        let net = Arc::new(Net {
+            locked: AtomicBool::new(false),
+            busy_seen: AtomicBool::new(false),
+            step_ms: 10,
+            steps: 20,
+        });
+        let (_d, lm) = racing(&net);
+        lm.download("m").unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        lm.pause("m");
+        lm.download("m").unwrap(); // immediately
+        for _ in 0..100 {
+            if state_of(&lm) == DownloadState::Ready {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert_eq!(state_of(&lm), DownloadState::Ready);
+        assert!(
+            !net.busy_seen.load(Ordering::SeqCst),
+            "the resumed run waited for the paused one"
+        );
+        assert!(
+            lock(&lm.tasks).is_empty(),
+            "the finished run removed only its own task"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_paused_run_finishing_late_does_not_remove_the_new_run() {
+        let net = Arc::new(Net {
+            locked: AtomicBool::new(false),
+            busy_seen: AtomicBool::new(false),
+            step_ms: 15,
+            steps: 10,
+        });
+        let (_d, lm) = racing(&net);
+        lm.download("m").unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        lm.pause("m");
+        lm.download("m").unwrap();
+        let second = lock(&lm.tasks).get("m").map(|t| t.generation);
+        assert!(second.is_some());
+        tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+        // The new run is still registered (or already done) — never removed by the old one.
+        let now = lock(&lm.tasks).get("m").map(|t| t.generation);
+        assert!(now.is_none() || now == second);
+    }
+
+    #[test]
+    fn a_model_that_wont_fit_is_not_offered_or_loaded() {
+        let dir = Dir(std::env::temp_dir().join(format!("dn-local-fit-{}", dn_core::Id::new())));
+        std::fs::create_dir_all(&dir.0).unwrap();
+        let mut huge = entry("huge", 5, "aa");
+        huge.params_b = 400.0;
+        huge.size = 5;
+        std::fs::write(dir.0.join("huge.gguf"), b"12345").unwrap();
+        std::fs::write(dir.0.join("huge.gguf.sha256"), "aa").unwrap();
+        let lm = LocalModels::new(
+            dir.0.clone(),
+            Catalog {
+                version: 1,
+                models: vec![huge],
+            },
+            Machine::cpu_only(1 << 30),
+        );
+        // Force the exact-fit outcome a real 400B GGUF would give.
+        lock(&lm.fits).insert(
+            "huge".into(),
+            FitView {
+                status: FitStatus::MemoryBlocked,
+                estimated: false,
+                reason: String::new(),
+                suggested_quant: None,
+            },
+        );
+        assert!(lm.is_ready("huge"));
+        assert!(lm.wont_fit("huge"));
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let err = rt.block_on(lm.chat_model("huge")).err().expect("refused");
+        assert!(
+            matches!(err, CoreError::ModelUnavailable { ref user_message, .. } if user_message.contains("won't fit"))
+        );
+
+        let mut reg = crate::models::ModelRegistry::default();
+        reg.local = Some(Arc::new(lm));
+        let keys = crate::secrets::Keys::memory();
+        let src = reg.sources(&keys);
+        let s = src
+            .iter()
+            .find(|s| s.model.to_string() == "local:huge")
+            .unwrap();
+        assert_eq!(s.readiness, dn_core::model::Readiness::Disabled);
+    }
+
+    #[test]
+    fn access_and_storage_errors_say_what_to_do() {
+        assert!(download_error_message(&DownloadError::Status(401)).contains("Hugging Face token"));
+        assert!(download_error_message(&DownloadError::Status(403)).contains("licence"));
+        let full = std::io::Error::new(std::io::ErrorKind::StorageFull, "full");
+        assert!(download_error_message(&DownloadError::Io(full)).contains("disk filled up"));
     }
 }

@@ -93,11 +93,20 @@ fn title_from(text: &str) -> String {
 }
 
 /// The model for the next turn and its backend. Blocking (settings, keychain).
+/// The model for the next turn and its backend. Blocking (settings, keychain, and loading
+/// a local model's weights).
+///
+/// When no chat model is chosen, the resolver's automatic pick is saved as the choice, so a
+/// later download or key never silently changes which model answers.
 fn model_for_turn(state: &AppState) -> IpcResult<(ModelRef, Arc<dyn ChatModel>)> {
-    let settings = state.settings()?;
+    let mut settings = state.settings()?;
     let model = state
         .agent
         .resolve_model(&settings, &state.models, &state.keys)?;
+    if settings.slot("chat").is_none() {
+        settings.slots.insert("chat".into(), model.to_string());
+        state.save_settings(&settings)?;
+    }
     let backend = state.models.get(&model, &state.keys).map_err(model_error)?;
     Ok((model, backend))
 }
@@ -115,8 +124,10 @@ pub fn send(
     if text.trim().is_empty() {
         return Err(IpcError::invalid("Message is empty."));
     }
-    let (model, backend) = model_for_turn(state)?;
+    // Reserve first: loading a local model can take seconds, and a second send meanwhile
+    // must get "busy", not load the weights again.
     let reservation = state.reserve(conversation_id)?;
+    let (model, backend) = model_for_turn(state)?;
     let (user, assistant, title, history) = {
         let db = state.db()?;
         let conv = store::get_conversation(&db, conversation_id)?;
@@ -157,8 +168,10 @@ pub fn regenerate(
     conversation_id: Id,
     sink: impl EventSink,
 ) -> IpcResult<TurnStarted> {
-    let (model, backend) = model_for_turn(state)?;
+    // Reserve first: loading a local model can take seconds, and a second send meanwhile
+    // must get "busy", not load the weights again.
     let reservation = state.reserve(conversation_id)?;
+    let (model, backend) = model_for_turn(state)?;
     let (assistant, history) = {
         let db = state.db()?;
         let msgs = store::list_messages(&db, conversation_id)?;
@@ -963,6 +976,37 @@ mod tests {
         let tool = tool.expect("tool result stored");
         assert_eq!(tool.status, MessageStatus::Error);
         assert!(tool.text().contains("calculator offline"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_automatic_pick_is_saved_so_later_downloads_dont_change_it() {
+        let mut models = crate::models::ModelRegistry::default();
+        models.register(
+            "local:dev-fake".parse().unwrap(),
+            Arc::new(FakeChatModel {
+                delay: Duration::from_millis(0),
+            }),
+        );
+        let mut s = AppState::in_memory().unwrap();
+        s.models = models;
+        let st = Arc::new(s);
+        assert!(
+            st.settings().unwrap().slot("chat").is_none(),
+            "nothing chosen yet"
+        );
+        let conv = st.create_conversation().unwrap();
+        let (_e, s1) = sink();
+        send(&st, conv.id, "hi".into(), s1).unwrap();
+        wait_idle(&st, conv.id).await;
+        assert_eq!(
+            st.settings()
+                .unwrap()
+                .slot("chat")
+                .map(|m| m.to_string())
+                .as_deref(),
+            Some("local:dev-fake"),
+            "the first automatic pick became the saved choice"
+        );
     }
 
     #[test]

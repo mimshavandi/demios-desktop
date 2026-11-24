@@ -157,10 +157,13 @@ impl ModelRegistry {
                         model_id: e.id.clone(),
                     },
                     capabilities: e.capabilities.clone(),
-                    readiness: if local.is_ready(&e.id) {
-                        Readiness::Ready
-                    } else {
+                    // A model too big for this machine is never picked automatically.
+                    readiness: if !local.is_ready(&e.id) {
                         Readiness::Missing
+                    } else if local.wont_fit(&e.id) {
+                        Readiness::Disabled
+                    } else {
+                        Readiness::Ready
                     },
                 });
             }
@@ -289,13 +292,14 @@ pub fn catalog(registry: &ModelRegistry, keys: &Keys, settings: &Settings) -> Mo
     }
     if let Some(local) = &registry.local {
         for e in local.ready() {
+            let fits = !local.wont_fit(&e.id);
             models.push(ModelOption {
                 model_ref: format!("local:{}", e.id),
                 label: format!("{} · {}", e.name, e.quant),
                 source: ModelSource::Local,
                 capabilities: e.capabilities.clone(),
-                available: true,
-                note: None,
+                available: fits,
+                note: (!fits).then(|| "Won't fit in this computer's memory".into()),
             });
         }
     }
