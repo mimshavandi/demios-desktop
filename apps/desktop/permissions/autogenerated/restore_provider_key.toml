@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-restore-provider-key"
+description = "Enables the restore_provider_key command without any pre-configured scope."
+commands.allow = ["restore_provider_key"]
+
+[[permission]]
+identifier = "deny-restore-provider-key"
+description = "Denies the restore_provider_key command without any pre-configured scope."
+commands.deny = ["restore_provider_key"]
