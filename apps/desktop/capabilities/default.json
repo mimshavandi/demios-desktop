@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The main window may call the app's own chat, history and settings commands and drag the window by its title bar; nothing else (no fs, shell or http plugins; the opener plugin is present for Rust-side use but not granted to the webview).",
-  "windows": [
+  "description": "The app's main webview (label `main`) may call the app's own chat, history and settings commands and drag the window by its title bar; nothing else (no fs, shell or http plugins; the opener plugin is present for Rust-side use but not granted to the webview).",
+  "webviews": [
     "main"
   ],
   "permissions": [
