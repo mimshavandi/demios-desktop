@@ -99,7 +99,9 @@ jobs:
           key: tauri-driver-${{ env.TAURI_DRIVER_VERSION }}-${{ runner.os }}
       - name: Install tauri-driver
         if: steps.tauri-driver-cache.outputs.cache-hit != 'true'
-        run: cargo install tauri-driver --version ${{ env.TAURI_DRIVER_VERSION }} --locked
+        # --force: rust-cache may already have restored ~/.cargo/bin with the binary in it
+        # when this cache entry has been evicted ("binary already exists in destination").
+        run: cargo install tauri-driver --version ${{ env.TAURI_DRIVER_VERSION }} --locked --force
       - name: Build the UI
         working-directory: apps/desktop
         run: |
@@ -120,7 +122,6 @@ jobs:
   e2e-windows:
     runs-on: windows-latest
     timeout-minutes: 25
-    continue-on-error: true
     env:
       TAURI_DRIVER_VERSION: 2.0.6
     steps:
@@ -144,7 +145,9 @@ jobs:
           key: tauri-driver-${{ env.TAURI_DRIVER_VERSION }}-${{ runner.os }}
       - name: Install tauri-driver
         if: steps.tauri-driver-cache.outputs.cache-hit != 'true'
-        run: cargo install tauri-driver --version ${{ env.TAURI_DRIVER_VERSION }} --locked
+        # --force: rust-cache may already have restored ~/.cargo/bin with the binary in it
+        # when this cache entry has been evicted ("binary already exists in destination").
+        run: cargo install tauri-driver --version ${{ env.TAURI_DRIVER_VERSION }} --locked --force
       - name: msedgedriver matching WebView2 (verbose log)
         shell: pwsh
         run: |
@@ -172,8 +175,26 @@ jobs:
         run: |
           npm ci
           npm run build
-      - name: Build the app (debug, dev fake model, embedded UI)
-        run: cargo build -p demios-desktop --features dev-fake-model,custom-protocol
+      # msedgedriver turns on WebView2 remote debugging through the
+      # WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS env var, but wry always sets
+      # AdditionalBrowserArguments through the WebView2 API, and the API value wins: the
+      # port never opens and session creation fails with "DevToolsActivePort file doesn't
+      # exist" (T-SHELL-06, see apps/desktop/e2e/README.md). So this e2e build gets the
+      # switches in its window config, generated from tauri.conf.json at build time
+      # (TAURI_CONFIG); the app's real config and release builds are unchanged.
+      - name: Build the app (debug, dev fake model, embedded UI, WebView2 DevTools on)
+        shell: pwsh
+        run: |
+          $debug = '--remote-debugging-port=0 --enable-automation'
+          $wryDefault = '--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection'
+          $conf = Get-Content apps/desktop/tauri.conf.json -Raw | ConvertFrom-Json
+          $windows = @($conf.app.windows | ForEach-Object {
+            $base = if ($_.additionalBrowserArgs) { $_.additionalBrowserArgs } else { $wryDefault }
+            $_ | Add-Member -NotePropertyName additionalBrowserArgs -NotePropertyValue "$base $debug" -Force -PassThru
+          })
+          $env:TAURI_CONFIG = @{ app = @{ windows = $windows } } | ConvertTo-Json -Depth 10 -Compress
+          Write-Host "TAURI_CONFIG=$env:TAURI_CONFIG"
+          cargo build -p demios-desktop --features dev-fake-model,custom-protocol
       - name: Install e2e deps
         working-directory: apps/desktop/e2e
         run: npm ci
