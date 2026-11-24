@@ -115,13 +115,15 @@ impl<'c> WriteTx<'c> {
         })
     }
 
+    /// On failure (e.g. `SQLITE_BUSY` at COMMIT) `done` stays false, so drop rolls back and the
+    /// connection is never left inside a half-finished transaction.
     fn commit(mut self) -> Result<()> {
-        self.done = true;
         self.conn.execute_batch(if self.savepoint {
             "RELEASE dn_artifact_write"
         } else {
             "COMMIT"
         })?;
+        self.done = true;
         Ok(())
     }
 }
@@ -923,6 +925,106 @@ pub(crate) mod tests {
         conn.execute_batch("ROLLBACK").unwrap();
         // The caller rolled back, so nothing was kept.
         assert!(store.list(conv).unwrap().is_empty());
+    }
+
+    /// A file database (two connections need one); removed on drop.
+    struct TempDb(std::path::PathBuf);
+    impl TempDb {
+        fn new(journal_mode: &str) -> Self {
+            let path = std::env::temp_dir().join(format!("dn-artifacts-test-{}.db", Id::new()));
+            let conn = Connection::open(&path).unwrap();
+            conn.pragma_update(None, "journal_mode", journal_mode)
+                .unwrap();
+            for m in migrations() {
+                conn.execute_batch(m).unwrap();
+            }
+            Self(path)
+        }
+        fn open(&self) -> Connection {
+            Connection::open(&self.0).unwrap()
+        }
+    }
+    impl Drop for TempDb {
+        fn drop(&mut self) {
+            for ext in ["", "-wal", "-shm", "-journal"] {
+                let _ = std::fs::remove_file(format!("{}{ext}", self.0.display()));
+            }
+        }
+    }
+
+    #[test]
+    fn failed_commit_rolls_back_and_leaves_no_open_transaction() {
+        // Rollback-journal mode: COMMIT needs an exclusive lock, so a reader holding a shared
+        // lock makes it fail with SQLITE_BUSY.
+        let db = TempDb::new("DELETE");
+        let writer = db.open();
+        writer.busy_timeout(std::time::Duration::ZERO).unwrap();
+        let reader = db.open();
+        reader
+            .execute_batch("BEGIN; SELECT COUNT(*) FROM artifact_artifacts;")
+            .unwrap();
+        let store = ArtifactStore::new(&writer);
+        let conv = Id::new();
+        let err = store
+            .create(
+                conv,
+                &ArtifactType::Html,
+                "t",
+                "x",
+                None,
+                &OpContext::user(),
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("locked"), "{err}");
+        assert!(
+            writer.is_autocommit(),
+            "transaction left open after failed COMMIT"
+        );
+        reader.execute_batch("COMMIT").unwrap();
+        assert!(store.list(conv).unwrap().is_empty());
+        // The connection is usable again.
+        store
+            .create(
+                conv,
+                &ArtifactType::Html,
+                "t",
+                "x",
+                None,
+                &OpContext::user(),
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn writes_take_the_write_lock_before_reading() {
+        // WAL mode. Another connection holds the write lock and commits a change while our
+        // update waits. With BEGIN IMMEDIATE our update waits for the lock and then reads fresh
+        // data, so it succeeds. With a DEFERRED transaction it would read a stale snapshot first
+        // and fail with SQLITE_BUSY_SNAPSHOT when upgrading to write.
+        let db = TempDb::new("WAL");
+        let conv = Id::new();
+        let (a, b) = {
+            let c = db.open();
+            let s = ArtifactStore::new(&c);
+            (create(&s, conv, "a1"), create(&s, conv, "b1"))
+        };
+        let other = db.open();
+        other.execute_batch("BEGIN IMMEDIATE").unwrap();
+        ArtifactStore::new(&other)
+            .rewrite(conv, b, "b2", &OpContext::user())
+            .unwrap();
+        let path = db.0.clone();
+        let handle = std::thread::spawn(move || {
+            let conn = Connection::open(path).unwrap();
+            conn.busy_timeout(std::time::Duration::from_secs(10))
+                .unwrap();
+            ArtifactStore::new(&conn)
+                .update(conv, a, "a1", "a2", &OpContext::user())
+                .map(|v| v.version.n)
+        });
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        other.execute_batch("COMMIT").unwrap();
+        assert_eq!(handle.join().unwrap().unwrap(), 2);
     }
 
     #[test]
