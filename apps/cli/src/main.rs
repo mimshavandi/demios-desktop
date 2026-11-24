@@ -73,6 +73,13 @@ enum ModelsCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Show what a `demios://models/add?…` link points at and ask before downloading
+    /// (never downloads without an interactive "y").
+    Open {
+        link: String,
+        #[arg(long)]
+        dir: Option<PathBuf>,
+    },
     /// Download a catalogue model, or a Hugging Face repo's quant (`owner/name --quant Q4_K_M`).
     /// Resumable; every file is checked against its SHA-256.
     Pull {
@@ -700,9 +707,80 @@ async fn hub_pull(
     Ok(())
 }
 
+async fn open_link(link: &str, dir: Option<PathBuf>) -> Result<(), String> {
+    use dn_models::link::{AddModelLink, PlanWarning};
+    use std::io::{BufRead, IsTerminal};
+    let l = AddModelLink::parse(link).map_err(|e| e.to_string())?;
+    let hub = hub_client().await?;
+    let plan = l.resolve(&hub).await.map_err(|e| e.to_string())?;
+    println!("{} @ {}", plan.info.id, plan.info.sha);
+    println!("{}", license_line(&plan.info.license, &plan.info.card_url));
+    for w in &plan.warnings {
+        match w {
+            PlanWarning::Gated => {
+                println!("⚠ gated: needs your Hugging Face token and accepted terms")
+            }
+            PlanWarning::Unverifiable => println!("⚠ no sha256 on the Hub: cannot be downloaded"),
+            PlanWarning::License(_) => {}
+        }
+    }
+    let Some(v) = plan.selected_variant() else {
+        println!("\nthe link doesn't pick one variant; choose with:");
+        for v in plan
+            .variants
+            .iter()
+            .filter(|v| v.kind == VariantKind::Model)
+        {
+            println!(
+                "  dn models pull {} --variant {} --revision {}   ({:.2} GB)",
+                plan.info.id,
+                v.name,
+                plan.info.sha,
+                v.total_size as f64 / 1e9
+            );
+        }
+        return Ok(());
+    };
+    println!(
+        "\n{}  {:.2} GB in {} file(s)",
+        v.name,
+        v.total_size as f64 / 1e9,
+        v.files.len()
+    );
+    if plan.warnings.contains(&PlanWarning::Unverifiable) {
+        return Err("refusing: a file has no sha256".into());
+    }
+    if !std::io::stdin().is_terminal() {
+        println!("not downloading: confirm interactively (run in a terminal)");
+        return Ok(());
+    }
+    eprint!("download? [y/N] ");
+    let mut answer = String::new();
+    std::io::stdin()
+        .lock()
+        .read_line(&mut answer)
+        .map_err(|e| e.to_string())?;
+    if !answer.trim().eq_ignore_ascii_case("y") {
+        println!("cancelled");
+        return Ok(());
+    }
+    let dir = dir.unwrap_or_else(dn_models::download::default_models_dir);
+    let mut print = progress_printer();
+    let p = hub
+        .pull(&plan.info, v, &dir, &mut |pr: PullProgress| {
+            print(pr.done_bytes, pr.total_bytes)
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+    eprintln!();
+    println!("{}", p.display());
+    Ok(())
+}
+
 async fn models_cmd(cmd: ModelsCmd) -> Result<(), String> {
     let cat = Catalog::builtin();
     match cmd {
+        ModelsCmd::Open { link, dir } => open_link(&link, dir).await,
         ModelsCmd::Search {
             text,
             sort,
