@@ -7,7 +7,7 @@
 import { Copy, Cpu, Download, Pause, Play, Plus, RotateCcw, TriangleAlert } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Api } from "../ipc/commands";
-import { errorMessage, type FitStatus, type LocalModelRow } from "../ipc/types";
+import { errorMessage, type AddModelLink, type FitStatus, type LocalModelRow } from "../ipc/types";
 import { Badge, Button, ICON, IconButton, InlineMessage } from "./primitives";
 import { useToast } from "./toast";
 import { AddFromHub } from "./AddFromHub";
@@ -40,11 +40,16 @@ export function LocalModelsCard({
   api,
   initial,
   onReady,
+  link = null,
+  onLinkClosed,
 }: {
   api: Api;
   initial: LocalModelRow[];
   /** A model finished downloading: refresh pickers and the composer state. */
   onReady: () => void;
+  /** A demios:// link to confirm (opens the add panel on it). */
+  link?: AddModelLink | null;
+  onLinkClosed?: () => void;
 }) {
   const [rows, setRows] = useState<LocalModelRow[]>(initial);
   const [adding, setAdding] = useState(false);
@@ -93,7 +98,7 @@ export function LocalModelsCard({
     <section className="card" aria-labelledby="local-h">
       <div className="card-head">
         <h2 id="local-h">On this device</h2>
-        {!adding && (
+        {!adding && link === null && (
           <Button ref={addRef} size="sm" icon={<Plus {...ICON} aria-hidden="true" />} onClick={() => setAdding(true)}>
             Add from Hugging Face
           </Button>
@@ -103,7 +108,17 @@ export function LocalModelsCard({
         Runs on this computer; nothing leaves it. Downloads resume if interrupted and are checked
         against their published checksum.
       </p>
-      {adding && (
+      {link !== null && (
+        <AddFromHub
+          api={api}
+          link={link}
+          onClose={() => {
+            onLinkClosed?.();
+            requestAnimationFrame(() => addRef.current?.focus());
+          }}
+        />
+      )}
+      {adding && link === null && (
         <AddFromHub
           api={api}
           onClose={() => {

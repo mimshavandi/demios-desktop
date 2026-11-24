@@ -30,6 +30,7 @@ import type {
   HubSearchPage,
   HubSort,
   HubPullProgress,
+  AddModelLink,
 } from "./types";
 
 interface Commands {
@@ -55,6 +56,9 @@ interface Commands {
   hub_pull: { args: { repo: string; sha: string; variant: string; onEvent: Channel<HubPullEvent> }; ret: string };
   hub_cancel: { args: { repo: string; sha: string; variant: string }; ret: boolean };
   hub_pull_status: { args: { repo: string; sha: string; variants: string[] }; ret: Record<string, HubPullProgress> };
+  watch_add_links: { args: { onEvent: Channel<AddModelLink> }; ret: AddModelLink | null };
+  add_link_done: { args: Record<string, never>; ret: null };
+  hub_resolve_link: { args: { link: AddModelLink }; ret: HubRepoView };
   hf_token_status: { args: Record<string, never>; ret: boolean };
   set_hf_token: { args: { token: string }; ret: boolean };
   delete_hf_token: { args: Record<string, never>; ret: boolean };
@@ -135,6 +139,12 @@ export const api = {
   hubCancel: (repo: string, sha: string, variant: string) => call("hub_cancel", { repo, sha, variant }),
   /** Progress of running downloads of these variants (for a screen that came back). */
   hubPullStatus: (repo: string, sha: string, variants: string[]) => call("hub_pull_status", { repo, sha, variants }),
+  /** demios://models/add links from the OS; resolves to one that arrived before subscribing. */
+  watchAddLinks: (onEvent: (l: AddModelLink) => void) => call("watch_add_links", { onEvent: channel(onEvent) }),
+  /** The link's confirmation closed: the next link may open it. */
+  addLinkDone: () => call("add_link_done", {}),
+  /** What a link asks for, for the confirmation screen. Downloads nothing. */
+  hubResolveLink: (link: AddModelLink) => call("hub_resolve_link", { link }),
   hfTokenStatus: () => call("hf_token_status", {}),
   setHfToken: (token: string) => call("set_hf_token", { token }),
   deleteHfToken: () => call("delete_hf_token", {}),

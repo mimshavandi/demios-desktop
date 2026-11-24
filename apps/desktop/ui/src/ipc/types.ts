@@ -288,6 +288,18 @@ export interface HubRepoView {
   license: HubLicense;
   card_url: string;
   variants: HubVariant[];
+  /** The variant a demios:// link chose, if it chose exactly one. */
+  selected: string | null;
+  /** The fit couldn't be worked out (header unreadable). */
+  fit_unknown: boolean;
+}
+
+/** A demios://models/add link, validated by the backend (T-INF-12). */
+export interface AddModelLink {
+  repo: string;
+  file: string | null;
+  quant: string | null;
+  revision: string | null;
 }
 
 export interface HubPullProgress {

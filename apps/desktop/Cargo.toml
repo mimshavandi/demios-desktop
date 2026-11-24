@@ -54,6 +54,9 @@ tauri-plugin-dialog = "2"
 url = "2"
 # Fingerprints of MCP tools, to flag ones that change after review (T-SHELL-11).
 sha2.workspace = true
+# demios://models/add links (T-INF-12): the OS hands the URL to the running app; Rust only.
+tauri-plugin-deep-link = "2"
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 tokio = { workspace = true, features = ["sync", "macros", "time", "rt"] }
 
 [dev-dependencies]

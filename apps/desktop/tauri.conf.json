@@ -58,5 +58,14 @@
     "resources": {
       "../../skills/": "skills/"
     }
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": [
+          "demios"
+        ]
+      }
+    }
   }
 }

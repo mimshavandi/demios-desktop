@@ -95,6 +95,35 @@ macOS has no WebDriver for WKWebView, so run this before every release, on a sig
 - [ ] Network stays off: in the frame console, `fetch("https://example.com")` is blocked by CSP. **Allow network for this artifact** asks a second time before it turns on.
 - [ ] Links in answers don't navigate the window (the navigation guard logs "blocked navigation").
 
+## demios:// links: manual checks per OS (T-INF-12)
+
+These need an installed build, so CI can't run them. On every OS, open these from a browser or terminal:
+- a valid link: `demios://models/add?repo=Qwen/Qwen2.5-0.5B-Instruct-GGUF&quant=Q4_K_M`;
+- an invalid link: `demios://models/add?repo=x&download=1`.
+
+Expect:
+- The valid link opens Settings › Models on the confirmation, with the Q4_K_M version first and "Chosen by the link". **Nothing downloads until you click Download.**
+- The invalid link is ignored; the app logs "ignored a demios:// link".
+- A second valid link while the confirmation is open is ignored. After "Not now", a new link opens again.
+- A composer draft you were typing is still there when you go back to the chat.
+
+**macOS (.app / DMG)**
+- `Contents/Info.plist` › `CFBundleURLTypes` lists **only** the `demios` scheme.
+- With the app running, a link brings the same window forward. No second window or Dock icon appears.
+- Cold start: quit the app, then open a link. The app starts and shows the confirmation, not the last chat.
+
+**Windows (MSI and NSIS)**
+- The installer registers **only** `HKCU\Software\Classes\demios`, with no other keys or file associations. Check with `reg query HKCU\Software\Classes\demios /s`.
+- Uninstalling removes that key.
+- With the app running, a link focuses it, and no second process stays in Task Manager.
+- Cold start shows the confirmation.
+
+**Linux (.deb / .rpm / AppImage / Flatpak)**
+- The `.desktop` file's `MimeType=` is **only** `x-scheme-handler/demios;`. `xdg-mime query default x-scheme-handler/demios` names Demios.
+- A packaged release doesn't rewrite `~/.local/share/applications` at launch. Only dev builds and the AppImage register the scheme at run time.
+- Single instance works over D-Bus: a link while the app runs focuses the existing window, and `pgrep -c demios-desktop` stays 1.
+- Flatpak: a link from the host browser reaches the sandboxed app through the portal and opens the confirmation.
+
 ## Windows: artifacts are off (threat model R8)
 WebView2 runs the app's init scripts in sub-frames too, and Tauri defines its IPC object there so that it can't be removed. The artifact frame shell refuses to run artifact code in a frame that can still reach the app's IPC. So for now artifacts are saved but not shown on Windows, and the pane says "Artifacts aren't available on Windows yet". On Windows the `artifact` scheme serves an inert page with no script. `e2e-windows` asserts the gate message and that no artifact frame is created. Making artifacts safe on WebView2 is tracked in #75.
 
