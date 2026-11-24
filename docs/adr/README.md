@@ -14,3 +14,4 @@ Format: Context → Decision → Options (table) → Trade-offs → Consequences
 | [0008](0008-team-server-and-sync.md) | Team server and sync | Proposed | D-009 |
 | [0009](0009-security-baseline.md) | Security and supply-chain baseline | Proposed | – |
 | [0010](0010-design-system.md) | One design system: tokens + headless primitives | Accepted | – |
+| [0011](0011-model-sources.md) | Model sources: Hugging Face Hub first, no in-house registry | Proposed | D-019..D-021 |
