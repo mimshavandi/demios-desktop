@@ -75,6 +75,12 @@ pub fn tools() -> Vec<Tool> {
             "annotations": {"readOnlyHint": true}
         })),
         tool(serde_json::json!({
+            "name": "spawn_grandchild",
+            "description": "Starts `sleep 30` as a child of the server (Unix) and returns its pid",
+            "inputSchema": {"type": "object"},
+            "annotations": {"readOnlyHint": true}
+        })),
+        tool(serde_json::json!({
             "name": "pid",
             "description": "Returns the server process id",
             "inputSchema": {"type": "object"},
@@ -130,6 +136,13 @@ impl ServerHandler for Fixture {
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 self.writes.fetch_add(1, Ordering::SeqCst);
                 CallToolResult::success(vec![ContentBlock::text("slow write done")])
+            }
+            "spawn_grandchild" => {
+                let child = std::process::Command::new("sleep")
+                    .arg("30")
+                    .spawn()
+                    .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+                CallToolResult::success(vec![ContentBlock::text(child.id().to_string())])
             }
             "env_names" => {
                 let mut names: Vec<String> = std::env::vars_os()

@@ -15,10 +15,11 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "sync", "time", "process", "net", "io-util"] }
 rusqlite.workspace = true
+process-wrap.workspace = true
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 rmcp = { version = "3.11", default-features = false, features = [
     "client",
-    "transport-child-process",
+    "transport-async-rw",
     "transport-streamable-http-client-reqwest",
     "auth",
     "reqwest",

@@ -25,6 +25,7 @@ dn-core = { path = "crates/dn-core", version = "0.1.0" }
 rusqlite = { version = "0.43", features = ["bundled"] }
 dn-store = { path = "crates/dn-store", version = "0.1.0" }
 dn-agent = { path = "crates/dn-agent", version = "0.1.0" }
+process-wrap = { version = "10", default-features = false, features = ["tokio1", "process-group", "job-object"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

@@ -62,8 +62,10 @@ results, or changes its tool list after approval ("rug pull").*
   `LOGNAME`, `LANG`, `LC_*`, `TMPDIR`; on Windows `SystemRoot`, `windir`, `APPDATA`,
   `LOCALAPPDATA`, `USERPROFILE`, `ComSpec`, `PATHEXT`, `TEMP`, `TMP`) plus its configured env,
   so provider keys and other app secrets in our environment never reach servers.
-- **Open item:** kill the whole process group/job on shutdown (an `npx` launcher's grandchild
-  can outlive it); needs `process-wrap` as a direct dependency.
+- Each stdio server leads its own process group (Unix) or job object (Windows). Shutdown closes
+  its stdin, sends SIGTERM to the group (Unix), then kills the group/job, so grandchildren
+  (an `npx` launcher's `node`) don't outlive it. Dropping the client kills the group too.
+  Environment variable names are matched case-insensitively (Windows spells `PATH` as `Path`).
 - Results: rmcp caps JSON responses (16 MiB) and SSE event size; calls have a request timeout
   (default 60 s) and connect timeout (30 s). stderr is kept as a 40-line tail; developer
   messages include at most 10 lines of 300 chars, with this server's resolved secret values

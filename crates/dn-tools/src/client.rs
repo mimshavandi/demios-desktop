@@ -99,6 +99,56 @@ pub trait HttpAuthProvider: Send + Sync {
 
 type Service = RunningService<RoleClient, ()>;
 
+/// Owns a stdio server's process. The child leads its own process group (Unix) or job object
+/// (Windows), so terminating it also stops grandchildren (e.g. the node process an `npx`
+/// launcher starts).
+struct ChildGuard {
+    child: Option<Box<dyn process_wrap::tokio::ChildWrapper>>,
+}
+
+impl ChildGuard {
+    /// Ask the group to exit (SIGTERM on Unix), then kill whatever is left.
+    async fn terminate(&mut self) {
+        let Some(mut child) = self.child.take() else {
+            return;
+        };
+        #[cfg(unix)]
+        {
+            const SIGTERM: i32 = 15;
+            let _ = child.signal(SIGTERM);
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(2), child.wait()).await;
+        }
+        // Kills the whole group/job, including members still running after the leader exited.
+        let _ = child.start_kill();
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), child.wait()).await;
+    }
+}
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            let _ = child.start_kill();
+        }
+    }
+}
+
+/// A live connection: the rmcp service plus, for stdio, the server process.
+struct Conn {
+    service: Service,
+    child: Option<ChildGuard>,
+}
+
+impl Conn {
+    async fn close(mut self) {
+        // Closing the session closes the child's stdin (MCP stdio shutdown), then the group
+        // is terminated.
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(3), self.service.close()).await;
+        if let Some(mut c) = self.child.take() {
+            c.terminate().await;
+        }
+    }
+}
+
 const STDERR_TAIL_LINES: usize = 40;
 /// Lines / characters of stderr included in developer messages.
 const STDERR_MESSAGE_LINES: usize = 10;
@@ -140,7 +190,7 @@ pub struct McpClient {
     config: McpServerConfig,
     secrets: Arc<dyn SecretStore>,
     auth: Option<Arc<dyn HttpAuthProvider>>,
-    service: Mutex<Option<Service>>,
+    service: Mutex<Option<Conn>>,
     status: StdMutex<ConnectionStatus>,
     stderr_tail: Arc<StdMutex<VecDeque<String>>>,
     /// Secret values resolved for this server, scrubbed from diagnostics.
@@ -259,12 +309,12 @@ impl McpClient {
     pub async fn connect(&self) -> Result<(), ToolError> {
         let mut guard = self.service.lock().await;
         if let Some(s) = guard.as_ref()
-            && !s.is_closed()
+            && !s.service.is_closed()
         {
             return Ok(());
         }
-        if let Some(mut old) = guard.take() {
-            let _ = old.close().await;
+        if let Some(old) = guard.take() {
+            old.close().await;
         }
         match tokio::time::timeout(self.config.connect_timeout(), self.open()).await {
             Ok(Ok(service)) => {
@@ -308,13 +358,13 @@ impl McpClient {
 
     pub async fn shutdown(&self) {
         let mut guard = self.service.lock().await;
-        if let Some(mut s) = guard.take() {
-            let _ = s.close().await;
+        if let Some(s) = guard.take() {
+            s.close().await;
         }
         self.set_status(ConnectionStatus::Disconnected);
     }
 
-    async fn open(&self) -> Result<Service, ToolError> {
+    async fn open(&self) -> Result<Conn, ToolError> {
         match &self.config.transport {
             McpTransport::Stdio {
                 command,
@@ -333,15 +383,28 @@ impl McpClient {
                 if let Some(cwd) = cwd {
                     cmd.current_dir(cwd);
                 }
-                let (transport, stderr) = rmcp::transport::TokioChildProcess::builder(cmd)
-                    .stderr(std::process::Stdio::piped())
-                    .spawn()
-                    .map_err(|e| {
-                        self.err(
-                            ToolErrorKind::Connection,
-                            format!("failed to spawn `{command}`: {e}"),
-                        )
-                    })?;
+                cmd.stdin(std::process::Stdio::piped())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped());
+                let mut wrapped = process_wrap::tokio::CommandWrap::from(cmd);
+                #[cfg(unix)]
+                wrapped.wrap(process_wrap::tokio::ProcessGroup::leader());
+                #[cfg(windows)]
+                wrapped.wrap(process_wrap::tokio::JobObject);
+                let mut child = wrapped.spawn().map_err(|e| {
+                    self.err(
+                        ToolErrorKind::Connection,
+                        format!("failed to spawn `{command}`: {e}"),
+                    )
+                })?;
+                let stdin = child.stdin().take();
+                let stdout = child.stdout().take();
+                let stderr = child.stderr().take();
+                let mut guard = ChildGuard { child: Some(child) };
+                let (Some(stdin), Some(stdout)) = (stdin, stdout) else {
+                    guard.terminate().await;
+                    return Err(self.err(ToolErrorKind::Connection, "child stdio not piped"));
+                };
                 if let Some(stderr) = stderr {
                     let tail = self.stderr_tail.clone();
                     tokio::spawn(async move {
@@ -356,13 +419,20 @@ impl McpClient {
                         }
                     });
                 }
-                ().serve(transport).await.map_err(|e| {
-                    let tail = self.diagnostic_tail();
-                    self.err(
-                        ToolErrorKind::Connection,
-                        format!("initialize failed: {e}; stderr: {tail}"),
-                    )
-                })
+                match ().serve((stdout, stdin)).await {
+                    Ok(service) => Ok(Conn {
+                        service,
+                        child: Some(guard),
+                    }),
+                    Err(e) => {
+                        guard.terminate().await;
+                        let tail = self.diagnostic_tail();
+                        Err(self.err(
+                            ToolErrorKind::Connection,
+                            format!("initialize failed: {e}; stderr: {tail}"),
+                        ))
+                    }
+                }
             }
             McpTransport::StreamableHttp {
                 url,
@@ -404,16 +474,21 @@ impl McpClient {
                     ().serve(StreamableHttpClientTransport::with_client(http, cfg))
                         .await
                 };
-                result.map_err(|e| {
-                    if e.is_authorization_required() {
-                        self.err(
-                            ToolErrorKind::AuthRequired,
-                            format!("server requires authorization: {e}"),
-                        )
-                    } else {
-                        self.err(ToolErrorKind::Connection, format!("initialize failed: {e}"))
-                    }
-                })
+                result
+                    .map(|service| Conn {
+                        service,
+                        child: None,
+                    })
+                    .map_err(|e| {
+                        if e.is_authorization_required() {
+                            self.err(
+                                ToolErrorKind::AuthRequired,
+                                format!("server requires authorization: {e}"),
+                            )
+                        } else {
+                            self.err(ToolErrorKind::Connection, format!("initialize failed: {e}"))
+                        }
+                    })
             }
         }
     }
@@ -423,7 +498,7 @@ impl McpClient {
         let guard = self.service.lock().await;
         guard
             .as_ref()
-            .map(|s| s.peer().clone())
+            .map(|s| s.service.peer().clone())
             .ok_or_else(|| self.err(ToolErrorKind::Connection, "not connected"))
     }
 
@@ -466,8 +541,9 @@ impl McpClient {
                 if dead {
                     // The process/session is gone even if rmcp hasn't noticed yet: drop it so
                     // the next request reconnects (restart handling).
-                    if let Some(mut s) = self.service.lock().await.take() {
-                        let _ = s.close().await;
+                    let dead = self.service.lock().await.take();
+                    if let Some(s) = dead {
+                        s.close().await;
                     }
                 }
                 Err(err)

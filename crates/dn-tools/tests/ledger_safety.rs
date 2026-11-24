@@ -219,10 +219,26 @@ async fn cancel_or_timeout_mid_write_is_unknown_not_failed() {
     assert_eq!(entry.status, RunStatus::Unknown);
 }
 
+/// Re-runs this test binary with a planted secret in the *parent* environment (setting env
+/// vars in-process needs `unsafe`, which the workspace forbids), then checks the child.
 #[tokio::test]
 async fn stdio_child_gets_only_allow_listed_env() {
-    // Cargo sets CARGO_MANIFEST_DIR for the test process; it must not reach the server.
-    assert!(std::env::var_os("CARGO_MANIFEST_DIR").is_some());
+    const PLANTED: &str = "DN_TEST_SECRET";
+    if std::env::var_os(PLANTED).is_none() {
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "stdio_child_gets_only_allow_listed_env",
+                "--test-threads=1",
+                "--nocapture",
+            ])
+            .env(PLANTED, "planted-value-should-not-leak")
+            .status()
+            .unwrap();
+        assert!(status.success(), "child test run failed");
+        return;
+    }
+
     let mut cfg = stdio_cfg();
     if let dn_tools::McpTransport::Stdio { env, .. } = &mut cfg.transport {
         env.insert("FIXTURE_FLAG".into(), ValueRef::plain("on"));
@@ -233,17 +249,59 @@ async fn stdio_child_gets_only_allow_listed_env() {
         .await
         .unwrap()
         .text();
-    let names: Vec<&str> = names.split(',').collect();
-    assert!(names.contains(&"FIXTURE_FLAG"), "{names:?}");
-    assert!(names.contains(&"PATH"), "{names:?}");
-    assert!(!names.contains(&"CARGO_MANIFEST_DIR"), "{names:?}");
+    let names: Vec<String> = names.split(',').map(str::to_owned).collect();
+    let has = |n: &str| names.iter().any(|x| x.eq_ignore_ascii_case(n));
+    assert!(has("FIXTURE_FLAG"), "{names:?}");
+    // Windows spells it `Path`; env names are case-insensitive there.
+    assert!(has("PATH"), "{names:?}");
+    assert!(!has(PLANTED), "planted parent secret leaked: {names:?}");
+    assert!(!has("CARGO_MANIFEST_DIR"), "{names:?}");
+    let allowed: Vec<String> = dn_tools::client::inherited_env()
+        .into_iter()
+        .filter_map(|(k, _)| k.into_string().ok())
+        .collect();
+    let unexpected: Vec<&String> = names
+        .iter()
+        .filter(|n| {
+            !n.eq_ignore_ascii_case("FIXTURE_FLAG")
+                && !allowed.iter().any(|a| a.eq_ignore_ascii_case(n))
+                // set by the OS/loader on some platforms even with an empty environment
+                && !n.starts_with("__CF")
+        })
+        .collect();
     assert!(
-        names.iter().all(|n| dn_tools::client::inherited_env()
-            .iter()
-            .any(|(k, _)| k.to_str() == Some(n))
-            || *n == "FIXTURE_FLAG"
-            // set by the OS/loader on some platforms even with an empty environment
-            || n.starts_with("__CF")),
-        "unexpected vars leaked: {names:?}"
+        unexpected.is_empty(),
+        "unexpected vars leaked: {unexpected:?}"
     );
+}
+
+/// Shutdown stops grandchildren too (process group), as with `npx` → `node`.
+#[cfg(unix)]
+#[tokio::test]
+async fn shutdown_kills_grandchildren() {
+    let c = client(stdio_cfg());
+    let pid = c
+        .call_tool("spawn_grandchild", serde_json::json!({}))
+        .await
+        .unwrap()
+        .text();
+    let alive = |pid: &str| {
+        std::process::Command::new("kill")
+            .args(["-0", pid])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    };
+    assert!(alive(&pid), "grandchild {pid} should be running");
+    c.shutdown().await;
+    let mut gone = false;
+    for _ in 0..40 {
+        if !alive(&pid) {
+            gone = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(gone, "grandchild {pid} survived shutdown");
 }
