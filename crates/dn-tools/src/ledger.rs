@@ -296,6 +296,25 @@ pub fn resolve(conn: &Connection, key: &str, resolution: &Resolution) -> Result<
     Ok(())
 }
 
+/// Key of an `unknown` row for `capability_id` in `scope` (the `conversation_id` column), if
+/// any. While one exists, new calls to that capability in that scope are refused: the model
+/// would otherwise retry with a fresh call id (= fresh key) and repeat the side effect.
+pub fn unknown_in_scope(
+    conn: &Connection,
+    capability_id: &str,
+    scope: &str,
+) -> Result<Option<String>, LedgerError> {
+    Ok(conn
+        .query_row(
+            "SELECT idempotency_key FROM tool_ledger_runs
+             WHERE status = 'unknown' AND capability_id = ?1 AND conversation_id = ?2
+             ORDER BY created_at_ms LIMIT 1",
+            params![capability_id, scope],
+            |r| r.get(0),
+        )
+        .optional()?)
+}
+
 /// Rows waiting for the user to resolve, oldest first.
 pub fn list_unknown(conn: &Connection) -> Result<Vec<LedgerEntry>, LedgerError> {
     let mut stmt = conn.prepare(

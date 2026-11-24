@@ -200,7 +200,9 @@ async fn cancel_or_timeout_mid_write_is_unknown_not_failed() {
     let entry = ledger::get(&db.lock().unwrap(), &key).unwrap().unwrap();
     assert_eq!(entry.status, RunStatus::Unknown);
 
-    // Cancel during the call.
+    // Cancel during the call (another conversation: the unknown row above now blocks new
+    // calls to this capability in the first one).
+    let ctx = ctx_in("other", Id::new());
     let w = call("c1", "mcp.fixture.slow_write", serde_json::json!({}));
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
     let ex2 = ex.clone();
@@ -304,4 +306,108 @@ async fn shutdown_kills_grandchildren() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     assert!(gone, "grandchild {pid} survived shutdown");
+}
+
+/// Items A + B of the second review: an "allow for this chat" grant never lets a write with an
+/// unknown outcome run again — neither the same call nor a retry with a fresh call id — until
+/// the user resolves it. The model only sees the user-facing message.
+#[tokio::test]
+async fn unknown_outcome_blocks_ask_once_grant_and_fresh_call_ids() {
+    use dn_agent::{CancelToken, ToolContext, ToolExecutor};
+    let (ex, mut rx, _db) = executor_with_ledger();
+    ex.set_overrides(HashMap::from([(
+        "mcp.fixture.slow_write".to_owned(),
+        CapabilityOverride {
+            approval: Some(dn_core::capability::ApprovalPolicy::AskOncePerConversation),
+            ..Default::default()
+        },
+    )]));
+    let mut cfg = stdio_cfg();
+    cfg.request_timeout_ms = 300;
+    ex.add_server(client(cfg)).await.unwrap();
+    let conv = Id::new();
+    let run = Id::new();
+    let ctx = ctx_in(&conv.to_string(), run);
+
+    // First call: user grants "allow for this chat"; the call times out after sending → unknown.
+    let ex2 = ex.clone();
+    let c2 = ctx.clone();
+    let first = tokio::spawn(async move {
+        ex2.execute(
+            &c2,
+            &call("c1", "mcp.fixture.slow_write", serde_json::json!({})),
+        )
+        .await
+    });
+    rx.recv()
+        .await
+        .unwrap()
+        .respond(ApprovalDecision::ApproveForConversation);
+    assert!(first.await.unwrap().is_err());
+    assert_eq!(ex.unknown_outcomes().unwrap().len(), 1);
+    assert!(ex.gate().is_satisfied(
+        &ctx.scope(),
+        "mcp.fixture.slow_write",
+        dn_core::capability::ApprovalPolicy::AskOncePerConversation
+    ));
+
+    // (A) Same call again: refused despite the grant, no prompt.
+    let e = ex
+        .execute(
+            &ctx,
+            &call("c1", "mcp.fixture.slow_write", serde_json::json!({})),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&e, CoreError::Capability { developer_message, .. } if developer_message.contains("unknown outcome")),
+        "{e:?}"
+    );
+
+    // (B) The model retries with a new call id through the agent contract: still refused,
+    // model-visible, telling it to ask the user; no developer detail leaks.
+    let tctx = ToolContext {
+        agent_id: "assistant.default".into(),
+        caller: "chat.reply".into(),
+        conversation_id: Some(conv),
+        run_id: run,
+        step: 1,
+        cancel: CancelToken::new(),
+    };
+    let out = ToolExecutor::execute(
+        ex.as_ref(),
+        &call("c2", "mcp__fixture__slow_write", serde_json::json!({})),
+        &tctx,
+    )
+    .await
+    .unwrap();
+    assert!(out.is_error);
+    let dn_core::chat::ContentPart::Text { text } = &out.content[0] else {
+        panic!("text expected")
+    };
+    assert!(text.contains("confirm"), "{text}");
+    assert!(!text.contains("key `"), "developer detail leaked: {text}");
+    assert!(rx.try_recv().is_err(), "no prompt while blocked");
+    assert!(
+        ex.recent_diagnostics()
+            .iter()
+            .any(|d| d.developer_message.contains("unresolved unknown outcome"))
+    );
+
+    // Resolve → the fresh call goes to the server again (grant still valid, so no prompt);
+    // here it times out again, proving it was sent rather than refused.
+    let key = ex.unknown_outcomes().unwrap()[0].idempotency_key.clone();
+    ex.resolve_unknown(&key, &Resolution::DidNotHappen).unwrap();
+    let e = ex
+        .execute(
+            &ctx,
+            &call("c2", "mcp.fixture.slow_write", serde_json::json!({})),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&e, CoreError::Capability { developer_message, .. } if developer_message.contains("did not answer")),
+        "{e:?}"
+    );
+    assert!(rx.try_recv().is_err());
 }

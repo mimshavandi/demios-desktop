@@ -54,6 +54,11 @@ results, or changes its tool list after approval ("rug pull").*
   tools never share a name (a name collision could otherwise route a call to the wrong tool).
 - Tool descriptions are shown to the model. They can contain injection; the UI should show the
   descriptions in server settings, and descriptions are not trusted for approval decisions.
+- Failed calls show the model only the user-facing message, plus our own hints (missing
+  fields) or the tool's own `isError` content (which MCP intends for the model, like any
+  result). Developer detail — stderr, JSON-RPC error text, paths — stays local
+  (`Executor::recent_diagnostics`, capped): it can carry injected text and would otherwise be
+  sent to a remote model provider.
 - `refresh` rebuilds a server's capabilities from scratch; overrides are keyed by capability id
   and re-applied. **Open item:** surface a diff to the user when a refreshed tool's schema or
   annotations change (tool-definition pinning), before it can auto-run again.
@@ -120,6 +125,9 @@ an error message echoes a header.*
   the request was sent, transport closed mid-call, execute future dropped) is stored as
   `unknown`, not `failed`. Claims on an `unknown` key are refused — even under an "allow for
   this chat" grant — until the user resolves it (`Resolution::Happened` / `DidNotHappen`).
+  While a capability has an `unknown` row in a scope (conversation or run), *every* new call to
+  it in that scope is refused with a model-visible "ask the user to confirm" error, because a
+  model retry carries a fresh call id (a fresh key) and would otherwise repeat the write.
 
 ## Out of scope (wave 1)
 Sandboxing stdio servers (OS sandbox profiles), signed server registries, Twin approvals

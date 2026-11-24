@@ -286,12 +286,15 @@ impl McpClient {
         refs: &std::collections::BTreeMap<String, crate::config::ValueRef>,
         resolved: &[(String, String)],
     ) {
+        // Replace, not extend: each (re)connect resolves the full set again.
         if let Ok(mut v) = self.secret_values.lock() {
-            for (name, value) in resolved {
-                if matches!(refs.get(name), Some(crate::config::ValueRef::Secret { .. })) {
-                    v.push(value.clone());
-                }
-            }
+            *v = resolved
+                .iter()
+                .filter(|(name, _)| {
+                    matches!(refs.get(name), Some(crate::config::ValueRef::Secret { .. }))
+                })
+                .map(|(_, value)| value.clone())
+                .collect();
         }
     }
 

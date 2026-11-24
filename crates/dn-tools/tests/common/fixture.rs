@@ -18,7 +18,7 @@ pub struct Fixture {
     /// Calls to `flaky` that fail before it succeeds.
     pub flaky_failures: Arc<AtomicU32>,
     /// Extra tools (JSON) advertised in addition to [`tools`]; they echo their name.
-    pub extra_tools: Arc<Vec<serde_json::Value>>,
+    pub extra_tools: Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
 }
 
 fn tool(v: serde_json::Value) -> Tool {
@@ -100,7 +100,7 @@ impl ServerHandler for Fixture {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         let mut all = tools();
-        all.extend(self.extra_tools.iter().cloned().map(tool));
+        all.extend(self.extra_tools.lock().unwrap().iter().cloned().map(tool));
         Ok(serde_json::from_value(serde_json::json!({ "tools": all })).expect("list"))
     }
 
@@ -154,7 +154,14 @@ impl ServerHandler for Fixture {
             "pid" => {
                 CallToolResult::success(vec![ContentBlock::text(std::process::id().to_string())])
             }
-            other if self.extra_tools.iter().any(|t| t["name"] == other) => {
+            other
+                if self
+                    .extra_tools
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|t| t["name"] == other) =>
+            {
                 CallToolResult::success(vec![ContentBlock::text(other.to_owned())])
             }
             other => {

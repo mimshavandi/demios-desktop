@@ -163,11 +163,11 @@ async fn colliding_llm_names_get_distinct_suffixes() {
     let lossy = dn_tools::capability::llm_tool_name("remote", "a.b");
     let literal = lossy.trim_start_matches("mcp__remote__").to_owned();
     let fixture = Fixture {
-        extra_tools: Arc::new(vec![
+        extra_tools: Arc::new(std::sync::Mutex::new(vec![
             serde_json::json!({"name": "a.b", "inputSchema": {"type": "object"}, "annotations": {"readOnlyHint": true}}),
             serde_json::json!({"name": "a/b", "inputSchema": {"type": "object"}, "annotations": {"readOnlyHint": true}}),
             serde_json::json!({"name": literal, "inputSchema": {"type": "object"}, "annotations": {"readOnlyHint": true}}),
-        ]),
+        ])),
         ..Fixture::default()
     };
     let url = spawn_http_fixture(fixture).await;
@@ -201,4 +201,41 @@ async fn colliding_llm_names_get_distinct_suffixes() {
             cap.llm_name
         );
     }
+}
+
+#[tokio::test]
+async fn refresh_never_renames_existing_tools() {
+    // A tool literally named like `a.b`'s suffixed name exists first; when `a.b` appears on a
+    // later refresh, the existing tool keeps its name and the newcomer is suffixed.
+    let lossy = dn_tools::capability::llm_tool_name("remote", "a.b");
+    let literal = lossy.trim_start_matches("mcp__remote__").to_owned();
+    let extra = Arc::new(std::sync::Mutex::new(vec![serde_json::json!({
+        "name": literal, "inputSchema": {"type": "object"}, "annotations": {"readOnlyHint": true}
+    })]));
+    let fixture = Fixture {
+        extra_tools: extra.clone(),
+        ..Fixture::default()
+    };
+    let url = spawn_http_fixture(fixture).await;
+    let (ex, _rx) = executor();
+    let mut cfg = McpServerConfig::http("remote", url);
+    cfg.trust_annotations = Some(true);
+    ex.add_server(McpClient::new(cfg, Arc::new(MemorySecretStore::new())).unwrap())
+        .await
+        .unwrap();
+    let name_of = |tool: &str| {
+        ex.capabilities()
+            .into_iter()
+            .find(|c| c.tool_name == tool)
+            .map(|c| c.llm_name)
+            .unwrap()
+    };
+    let before = name_of(&literal);
+    assert_eq!(before, lossy);
+    extra.lock().unwrap().push(serde_json::json!({
+        "name": "a.b", "inputSchema": {"type": "object"}, "annotations": {"readOnlyHint": true}
+    }));
+    ex.refresh("remote").await.unwrap();
+    assert_eq!(name_of(&literal), before, "existing tool was renamed");
+    assert_ne!(name_of("a.b"), before);
 }

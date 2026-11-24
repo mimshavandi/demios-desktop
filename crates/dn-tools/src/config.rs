@@ -103,7 +103,7 @@ fn looks_secret(name: &str) -> bool {
         "PASSWORD",
         "PASSWD",
         "CREDENTIAL",
-        "AUTH",
+        "AUTHORIZATION",
         "COOKIE",
         "SESSION",
         "PRIVATE",
@@ -112,6 +112,9 @@ fn looks_secret(name: &str) -> bool {
     ]
     .iter()
     .any(|s| n.contains(s))
+        // `AUTH` as a whole word only, so `GIT_AUTHOR_NAME` isn't flagged.
+        || n.split(|c: char| !c.is_ascii_alphanumeric())
+            .any(|w| w == "AUTH" || w == "OAUTH" || w == "BASICAUTH")
         || n == "DSN"
         || n.ends_with("_DSN")
         || n == "PAT"
@@ -288,7 +291,16 @@ mod tests {
         ] {
             assert!(looks_secret(n), "{n}");
         }
-        for n in ["LOG_LEVEL", "PATH", "REGION", "PATTERN"] {
+        assert!(looks_secret("PROXY_AUTH"));
+        assert!(looks_secret("AUTH_HEADER"));
+        for n in [
+            "LOG_LEVEL",
+            "PATH",
+            "REGION",
+            "PATTERN",
+            "GIT_AUTHOR_NAME",
+            "AUTHOR",
+        ] {
             assert!(!looks_secret(n), "{n}");
         }
     }

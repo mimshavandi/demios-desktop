@@ -78,7 +78,20 @@ pub struct Executor {
     gate: Arc<ApprovalGate>,
     ledger: Arc<Mutex<rusqlite::Connection>>,
     retry: RetryPolicy,
+    diagnostics: Mutex<std::collections::VecDeque<ToolDiagnostic>>,
 }
+
+/// Developer detail of a failed call, kept locally (not sent to the model).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ToolDiagnostic {
+    pub capability_id: String,
+    pub kind: String,
+    /// Capped at [`DIAGNOSTIC_CHARS`]; stdio stderr is already scrubbed of resolved secrets.
+    pub developer_message: String,
+}
+
+const DIAGNOSTICS_KEPT: usize = 100;
+pub const DIAGNOSTIC_CHARS: usize = 2000;
 
 impl std::fmt::Debug for Executor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -125,6 +138,7 @@ impl Executor {
             gate,
             ledger,
             retry: RetryPolicy::default(),
+            diagnostics: Mutex::default(),
         }
     }
 
@@ -237,19 +251,33 @@ impl Executor {
             .collect())
     }
 
-    /// Assign unique LLM names across all servers. Capabilities are visited in id order, so the
-    /// result doesn't depend on registration order; a name already taken gets a hash suffix of
-    /// the capability id.
+    /// Assign unique LLM names across all servers. Capabilities that already had a name keep it
+    /// (a tool is never renamed mid-conversation); newcomers are visited in id order and get a
+    /// hash suffix of their capability id when their name is taken.
     fn reindex_names(&self) {
         let (Ok(mut all), Ok(mut names)) = (self.capabilities.write(), self.llm_names.write())
         else {
             return;
         };
+        let previous: HashMap<String, String> =
+            names.drain().map(|(name, id)| (id, name)).collect();
         let mut ids: Vec<String> = all.keys().cloned().collect();
         ids.sort();
         let mut taken: HashSet<String> = HashSet::new();
-        names.clear();
+        let mut newcomers = Vec::new();
         for id in ids {
+            match previous.get(&id) {
+                Some(name) if all.contains_key(&id) => {
+                    taken.insert(name.clone());
+                    names.insert(name.clone(), id.clone());
+                    if let Some(cap) = all.get_mut(&id) {
+                        cap.llm_name = name.clone();
+                    }
+                }
+                _ => newcomers.push(id),
+            }
+        }
+        for id in newcomers {
             let Some(cap) = all.get_mut(&id) else {
                 continue;
             };
@@ -395,7 +423,32 @@ impl Executor {
         cancel: impl std::future::Future<Output = ()> + Send,
     ) -> Result<ToolOutcome, ToolError> {
         let cancel = std::pin::pin!(cancel);
-        self.execute_inner(ctx, call, cancel).await
+        let result = self.execute_inner(ctx, call, cancel).await;
+        if let Err(e) = &result {
+            self.record_diagnostic(e);
+        }
+        result
+    }
+
+    fn record_diagnostic(&self, e: &ToolError) {
+        if let Ok(mut d) = self.diagnostics.lock() {
+            if d.len() == DIAGNOSTICS_KEPT {
+                d.pop_front();
+            }
+            d.push_back(ToolDiagnostic {
+                capability_id: e.capability_id.clone(),
+                kind: format!("{:?}", e.kind),
+                developer_message: e.developer_message.chars().take(DIAGNOSTIC_CHARS).collect(),
+            });
+        }
+    }
+
+    /// Developer detail of recent failures, newest last (for a local diagnostics view/log).
+    pub fn recent_diagnostics(&self) -> Vec<ToolDiagnostic> {
+        self.diagnostics
+            .lock()
+            .map(|d| d.iter().cloned().collect())
+            .unwrap_or_default()
     }
 
     async fn execute_inner(
@@ -420,11 +473,10 @@ impl Executor {
                 return Err(ToolError::new(&id, ToolErrorKind::Blocked, reason));
             }
             Preflight::NeedsInput { missing_fields } => {
-                return Err(ToolError::new(
-                    &id,
-                    ToolErrorKind::InvalidInput,
-                    format!("missing required fields: {missing_fields:?}"),
-                ));
+                let msg = format!("missing required fields: {}", missing_fields.join(", "));
+                return Err(
+                    ToolError::new(&id, ToolErrorKind::InvalidInput, &msg).with_model_message(msg)
+                );
             }
             Preflight::NeedsConnection { .. } => {
                 // A failed server may have come back; try once before giving up.
@@ -488,9 +540,27 @@ impl Executor {
             }
         }
 
+        // An earlier call to this write in this scope has an unknown outcome: refuse new calls
+        // (they would get a fresh key and could repeat the side effect, even under an
+        // "allow for this chat" grant) until the user confirms what happened.
+        if is_write
+            && let Some(pending) =
+                self.with_ledger(&id, |c| ledger::unknown_in_scope(c, &id, &scope))?
+        {
+            return Err(ToolError::new(
+                &id,
+                ToolErrorKind::OutcomeUnknown,
+                format!("capability has an unresolved unknown outcome (key `{pending}`)"),
+            )
+            .with_model_message(
+                "An earlier call of this tool may or may not have taken effect. Don't retry; \
+                 ask the user to check and confirm what happened first.",
+            ));
+        }
+
         let approval = self.gate.check(ApprovalPrompt {
             request_id: Id::new(),
-            conversation_id: scope.clone(),
+            scope: scope.clone(),
             capability_id: id.clone(),
             title: cap.title.clone().unwrap_or_else(|| cap.tool_name.clone()),
             description: cap.spec.description.clone(),
@@ -603,7 +673,8 @@ impl Executor {
                     &id,
                     ToolErrorKind::ToolFailed,
                     format!("tool reported error: {}", out.text()),
-                ))
+                )
+                .with_model_message(out.text()))
             } else {
                 Ok(out)
             }

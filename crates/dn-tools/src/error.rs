@@ -12,6 +12,10 @@ pub struct ToolError {
     /// The request reached (or may have reached) the server before failing, e.g. a timeout or
     /// a closed transport mid-call. For writes the outcome is then unknown.
     pub maybe_executed: bool,
+    /// Extra text the model may see: our own hints (e.g. which fields are missing) or the
+    /// tool's own `isError` content (which MCP intends for the model). Never stderr, paths or
+    /// transport errors — those stay in `developer_message`.
+    pub model_message: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,7 +60,14 @@ impl ToolError {
             kind,
             developer_message: developer_message.into(),
             maybe_executed: false,
+            model_message: None,
         }
+    }
+
+    /// Attach text the model may see (see [`Self::model_message`]).
+    pub fn with_model_message(mut self, msg: impl Into<String>) -> Self {
+        self.model_message = Some(msg.into());
+        self
     }
 
     /// Mark that the request may have been executed by the server.
@@ -83,7 +94,8 @@ impl ToolError {
         matches!(self.kind, ToolErrorKind::AuthRequired)
     }
 
-    fn user_message(&self) -> String {
+    /// Plain-language message for the user (and the model).
+    pub fn user_message(&self) -> String {
         let tool = display_name(&self.capability_id);
         match self.kind {
             ToolErrorKind::Config => format!("The tool \"{tool}\" is not set up correctly."),

@@ -33,7 +33,7 @@ pub struct ApprovalPrompt {
     pub request_id: Id,
     /// Grant scope: `conv:<conversation id>`, or `run:<run id>` for runs without a chat.
     /// "Allow for this chat" grants are remembered per scope.
-    pub conversation_id: String,
+    pub scope: String,
     pub capability_id: String,
     pub title: String,
     pub description: String,
@@ -128,14 +128,10 @@ impl ApprovalGate {
 
     /// Ask if the policy requires it and wait for the answer.
     pub async fn check(&self, prompt: ApprovalPrompt) -> GateOutcome {
-        if self.is_satisfied(
-            &prompt.conversation_id,
-            &prompt.capability_id,
-            prompt.policy,
-        ) {
+        if self.is_satisfied(&prompt.scope, &prompt.capability_id, prompt.policy) {
             return GateOutcome::AutoAllowed;
         }
-        let key = (prompt.conversation_id.clone(), prompt.capability_id.clone());
+        let key = (prompt.scope.clone(), prompt.capability_id.clone());
         let policy = prompt.policy;
         let (responder, answer) = oneshot::channel();
         if self
@@ -176,7 +172,7 @@ mod tests {
     fn prompt(policy: ApprovalPolicy) -> ApprovalPrompt {
         ApprovalPrompt {
             request_id: Id::new(),
-            conversation_id: "c1".into(),
+            scope: "c1".into(),
             capability_id: "mcp.fs.write_file".into(),
             title: "write_file".into(),
             description: String::new(),
