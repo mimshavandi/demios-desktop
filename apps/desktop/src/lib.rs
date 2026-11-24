@@ -77,6 +77,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::app_info,
+            commands::delete_all_local_data,
+            commands::local_data_summary,
             commands::list_conversations,
             commands::create_conversation,
             commands::rename_conversation,
