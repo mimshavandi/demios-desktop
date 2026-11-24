@@ -1894,6 +1894,16 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn empty_range_makes_no_request() {
+        let s = serve(HashMap::new()).await;
+        let c = client(&s.url, None);
+        let url = c.file_url("o/n", SHA, "m.gguf").unwrap();
+        assert!(c.fetch_range(&url, 5, 5).await.unwrap().is_empty());
+        assert!(c.fetch_range(&url, 9, 3).await.unwrap().is_empty());
+        assert!(s.requests.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn file_without_lfs_sha_refused() {
         let c = client("http://127.0.0.1:9", None);
         let info = RepoInfo {
