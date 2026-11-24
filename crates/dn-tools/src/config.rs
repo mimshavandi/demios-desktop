@@ -20,6 +20,11 @@ pub struct McpServerConfig {
     /// Connect + initialize timeout. Default 30 s.
     #[serde(default = "default_connect_timeout_ms")]
     pub connect_timeout_ms: u64,
+    /// Whether tool annotations (`readOnlyHint`…) may seed a tier below `LowWrite`, i.e. let
+    /// tools auto-run. `None` = default: trusted for stdio servers the user installed locally,
+    /// untrusted for HTTP servers. See [`crate::capability::seed_risk`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trust_annotations: Option<bool>,
 }
 
 fn default_request_timeout_ms() -> u64 {
@@ -37,8 +42,10 @@ pub enum McpTransport {
         command: String,
         #[serde(default)]
         args: Vec<String>,
-        /// Extra environment. The child does **not** inherit secrets from ours beyond the
-        /// normal process environment; put credentials here as `secret` refs.
+        /// Environment for the child. The child does **not** inherit our environment: it gets
+        /// only an allow-list (`PATH`, `HOME`, `USER`, `LANG`/`LC_*`, `TMPDIR`, and on Windows
+        /// `SystemRoot`, `APPDATA`, `LOCALAPPDATA`, `USERPROFILE`, `ComSpec`, `PATHEXT`,
+        /// `TEMP`, `TMP`) plus these entries. Put credentials here as `secret` refs.
         #[serde(default)]
         env: BTreeMap<String, ValueRef>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -88,7 +95,7 @@ impl ValueRef {
 
 /// Names that must never hold a plain value.
 fn looks_secret(name: &str) -> bool {
-    let n = name.to_ascii_uppercase();
+    let n = name.to_ascii_uppercase().replace('-', "_");
     [
         "KEY",
         "TOKEN",
@@ -96,11 +103,19 @@ fn looks_secret(name: &str) -> bool {
         "PASSWORD",
         "PASSWD",
         "CREDENTIAL",
-        "AUTHORIZATION",
+        "AUTH",
         "COOKIE",
+        "SESSION",
+        "PRIVATE",
+        "DATABASE_URL",
+        "CONNECTION_STRING",
     ]
     .iter()
     .any(|s| n.contains(s))
+        || n == "DSN"
+        || n.ends_with("_DSN")
+        || n == "PAT"
+        || n.ends_with("_PAT")
 }
 
 impl McpServerConfig {
@@ -116,6 +131,7 @@ impl McpServerConfig {
             },
             request_timeout_ms: default_request_timeout_ms(),
             connect_timeout_ms: default_connect_timeout_ms(),
+            trust_annotations: None,
         }
     }
 
@@ -130,7 +146,14 @@ impl McpServerConfig {
             },
             request_timeout_ms: default_request_timeout_ms(),
             connect_timeout_ms: default_connect_timeout_ms(),
+            trust_annotations: None,
         }
+    }
+
+    /// Effective annotation trust (see [`Self::trust_annotations`]).
+    pub fn trusts_annotations(&self) -> bool {
+        self.trust_annotations
+            .unwrap_or(matches!(self.transport, McpTransport::Stdio { .. }))
     }
 
     pub fn request_timeout(&self) -> Duration {
@@ -250,6 +273,33 @@ mod tests {
             env.insert("GITHUB_TOKEN".into(), ValueRef::secret("mcp.gh.token"));
         }
         c.validate().unwrap();
+    }
+
+    #[test]
+    fn secret_name_heuristics() {
+        for n in [
+            "GITHUB_PAT",
+            "X-Auth-Token",
+            "DATABASE_URL",
+            "SENTRY_DSN",
+            "DSN",
+            "OPENAI_API_KEY",
+            "SESSION_ID",
+        ] {
+            assert!(looks_secret(n), "{n}");
+        }
+        for n in ["LOG_LEVEL", "PATH", "REGION", "PATTERN"] {
+            assert!(!looks_secret(n), "{n}");
+        }
+    }
+
+    #[test]
+    fn annotation_trust_defaults() {
+        assert!(McpServerConfig::stdio("a", "x", vec![]).trusts_annotations());
+        let mut h = McpServerConfig::http("a", "https://x/mcp");
+        assert!(!h.trusts_annotations());
+        h.trust_annotations = Some(true);
+        assert!(h.trusts_annotations());
     }
 
     #[test]

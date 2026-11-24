@@ -11,10 +11,10 @@ use dn_tools::{
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
+static RUN: std::sync::LazyLock<dn_core::Id> = std::sync::LazyLock::new(dn_core::Id::new);
+
 fn ctx() -> CallContext {
-    CallContext {
-        conversation_id: "conv-http".into(),
-    }
+    CallContext::new(Some("conv-http".into()), *RUN)
 }
 
 #[tokio::test]
@@ -23,11 +23,9 @@ async fn http_read_auto_runs_write_waits_and_replays() {
     let writes = fixture.writes.clone();
     let url = spawn_http_fixture(fixture).await;
     let (ex, mut rx) = executor();
-    let client = McpClient::new(
-        McpServerConfig::http("remote", url),
-        Arc::new(MemorySecretStore::new()),
-    )
-    .unwrap();
+    let mut cfg = McpServerConfig::http("remote", url);
+    cfg.trust_annotations = Some(true);
+    let client = McpClient::new(cfg, Arc::new(MemorySecretStore::new())).unwrap();
     let caps = ex.add_server(client).await.unwrap();
     assert!(
         caps.iter()
@@ -126,4 +124,81 @@ async fn http_headers_come_from_secret_refs() {
     let c = McpClient::new(cfg, secrets).unwrap();
     let tools = c.list_tools().await.unwrap();
     assert!(tools.iter().any(|t| t.name == "echo"));
+}
+
+#[tokio::test]
+async fn http_annotations_untrusted_by_default() {
+    let url = spawn_http_fixture(Fixture::default()).await;
+    let (ex, mut rx) = executor();
+    let client = McpClient::new(
+        McpServerConfig::http("remote", url),
+        Arc::new(MemorySecretStore::new()),
+    )
+    .unwrap();
+    let caps = ex.add_server(client).await.unwrap();
+    let echo = caps.iter().find(|c| c.tool_name == "echo").unwrap();
+    // readOnlyHint from an untrusted (HTTP) server can't make a tool auto-run.
+    assert_eq!(echo.spec.risk, RiskTier::LowWrite);
+    let delete = caps.iter().find(|c| c.tool_name == "delete_all").unwrap();
+    assert_eq!(delete.spec.risk, RiskTier::Destructive);
+
+    let ex2 = ex.clone();
+    let task = tokio::spawn(async move {
+        ex2.execute(
+            &ctx(),
+            &call("u1", "mcp.remote.echo", serde_json::json!({"text": "t"})),
+        )
+        .await
+    });
+    let req = rx.recv().await.unwrap();
+    assert_eq!(req.prompt.capability_id, "mcp.remote.echo");
+    req.respond(ApprovalDecision::Approve);
+    task.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn colliding_llm_names_get_distinct_suffixes() {
+    // `a.b` and `a/b` sanitise to the same `a_b`; a third tool is literally named like the
+    // first one's suffixed name. All three must stay distinct and resolvable.
+    let lossy = dn_tools::capability::llm_tool_name("remote", "a.b");
+    let literal = lossy.trim_start_matches("mcp__remote__").to_owned();
+    let fixture = Fixture {
+        extra_tools: Arc::new(vec![
+            serde_json::json!({"name": "a.b", "inputSchema": {"type": "object"}, "annotations": {"readOnlyHint": true}}),
+            serde_json::json!({"name": "a/b", "inputSchema": {"type": "object"}, "annotations": {"readOnlyHint": true}}),
+            serde_json::json!({"name": literal, "inputSchema": {"type": "object"}, "annotations": {"readOnlyHint": true}}),
+        ]),
+        ..Fixture::default()
+    };
+    let url = spawn_http_fixture(fixture).await;
+    let (ex, _rx) = executor();
+    let mut cfg = McpServerConfig::http("remote", url);
+    cfg.trust_annotations = Some(true);
+    ex.add_server(McpClient::new(cfg, Arc::new(MemorySecretStore::new())).unwrap())
+        .await
+        .unwrap();
+    let specs = ex.tool_specs();
+    let mut names: Vec<&str> = specs.iter().map(|t| t.name.as_str()).collect();
+    let total = names.len();
+    names.sort();
+    names.dedup();
+    assert_eq!(names.len(), total, "duplicate LLM tool names: {names:?}");
+    for tool in ["a.b", "a/b", literal.as_str()] {
+        let cap = ex
+            .capabilities()
+            .into_iter()
+            .find(|c| c.tool_name == tool)
+            .unwrap();
+        assert!(cap.llm_name.len() <= 64);
+        let out = ex
+            .execute(&ctx(), &call(tool, &cap.llm_name, serde_json::json!({})))
+            .await
+            .unwrap();
+        assert_eq!(
+            out.output.text(),
+            tool,
+            "{} resolved to the wrong tool",
+            cap.llm_name
+        );
+    }
 }

@@ -28,9 +28,10 @@ the approval gate, the side-effect ledger and MCP OAuth. Decision record: ADR-00
   (`RiskTier::default_approval`). Writes ask (`ask_once_per_conversation` for low writes,
   `always_ask` for external/destructive/sensitive).
 - The approval prompt carries the **exact arguments** (`ApprovalPrompt::arguments`); the UI
-  must show them, not a model-written summary. Dropped or unanswered prompts deny.
-- "Allow for this chat" grants are scoped to one conversation and one capability, and never
-  apply to `always_ask`.
+  must show them, not a model-written summary. Dropped prompts, a closed UI channel and
+  prompts unanswered after 10 minutes (`DEFAULT_APPROVAL_TIMEOUT`) deny.
+- "Allow for this chat" grants are scoped to one conversation (or, for runs without a chat,
+  one agent run) and one capability, and never apply to `always_ask`.
 - Ledger replay never bypasses a decision: a replay returns the output of a run that was
   already approved and executed; it performs no new side effect.
 - **Residual:** reads auto-run, and a read can exfiltrate through its *arguments* to an
@@ -40,22 +41,33 @@ the approval gate, the side-effect ledger and MCP OAuth. Decision record: ADR-00
 ### T2. Malicious or compromised server
 *A server lies in `readOnlyHint`, ships a poisoned tool description, returns huge or hostile
 results, or changes its tool list after approval ("rug pull").*
-- Annotations are treated as **hints** (MCP spec): they only seed the risk tier. A server that
-  marks a write as read-only gets it auto-run — so installing a server is a trust decision, and
-  the server settings screen must show each tool's seeded tier with an override.
+- Annotations are treated as **hints** (MCP spec): they only seed the risk tier, and the most
+  dangerous hint wins (`destructiveHint: true` beats `readOnlyHint: true`). Annotation trust is
+  per server (`McpServerConfig::trust_annotations`): by default only locally installed stdio
+  servers may seed `Read` (auto-run); for HTTP servers the seeded tier is never below
+  `LowWrite`, so nothing auto-runs without the user opting in. A trusted server that marks a
+  write as read-only still gets it auto-run, so the server settings screen must show each
+  tool's seeded tier with an override.
 - Capabilities are namespaced `mcp.<server_id>.<tool>`; one server cannot shadow another's
-  tools or a builtin.
+  tools or a builtin. Model-facing names (`mcp__<server>__<tool>`) that lose information when
+  sanitised or truncated get a hash suffix, and any remaining collision is suffixed, so two
+  tools never share a name (a name collision could otherwise route a call to the wrong tool).
 - Tool descriptions are shown to the model. They can contain injection; the UI should show the
   descriptions in server settings, and descriptions are not trusted for approval decisions.
 - `refresh` rebuilds a server's capabilities from scratch; overrides are keyed by capability id
   and re-applied. **Open item:** surface a diff to the user when a refreshed tool's schema or
   annotations change (tool-definition pinning), before it can auto-run again.
 - Stdio servers run as the user with the user's permissions; dn-tools does not sandbox them.
-  The child gets the parent environment plus configured env. **Open item:** start children with
-  a cleared environment plus an allow-list (PATH, HOME, locale) so app secrets in env vars never
-  reach servers.
+  The child starts with a **cleared environment** plus an allow-list (`PATH`, `HOME`, `USER`,
+  `LOGNAME`, `LANG`, `LC_*`, `TMPDIR`; on Windows `SystemRoot`, `windir`, `APPDATA`,
+  `LOCALAPPDATA`, `USERPROFILE`, `ComSpec`, `PATHEXT`, `TEMP`, `TMP`) plus its configured env,
+  so provider keys and other app secrets in our environment never reach servers.
+- **Open item:** kill the whole process group/job on shutdown (an `npx` launcher's grandchild
+  can outlive it); needs `process-wrap` as a direct dependency.
 - Results: rmcp caps JSON responses (16 MiB) and SSE event size; calls have a request timeout
-  (default 60 s) and connect timeout (30 s). stderr is kept as a 40-line tail only.
+  (default 60 s) and connect timeout (30 s). stderr is kept as a 40-line tail; developer
+  messages include at most 10 lines of 300 chars, with this server's resolved secret values
+  replaced by `[redacted]`.
 - HTTP redirects are not followed for MCP traffic (`redirect::Policy::none`).
 
 ### T3. Secret exfiltration via arguments and configs
@@ -63,7 +75,8 @@ results, or changes its tool list after approval ("rug pull").*
 an error message echoes a header.*
 - Configs hold **secret ids**, never values (`ValueRef::Secret`). `McpServerConfig::validate`
   rejects plain values for names that look like credentials (`*KEY*`, `*TOKEN*`, `*SECRET*`,
-  `*PASSWORD*`, `AUTHORIZATION`, `COOKIE`…). Configs are safe to sync or export.
+  `*PASSWORD*`, `*AUTH*`, `*COOKIE*`, `*SESSION*`, `*PRIVATE*`, `*_PAT`, `DATABASE_URL`,
+  `*DSN`…). Configs are safe to sync or export.
 - Header values resolved from secrets are marked sensitive (`HeaderValue::set_sensitive`).
 - OAuth tokens are stored through `SecretStore`; `Debug` impls in dn-tools never print values.
 - The model never sees secret values: they are resolved at connect time inside dn-tools and are
@@ -84,17 +97,27 @@ an error message echoes a header.*
   addresses; loopback authorization servers are allowed only for loopback MCP servers.
 - Plain `http://` MCP URLs are rejected unless the host is loopback.
 - The loopback redirect listener binds `127.0.0.1` on an ephemeral port, serves one
-  `/callback`, then closes. A local attacker racing the port only gets a code bound to our
-  PKCE verifier, which it does not have.
+  `/callback`, then closes; connections that don't send a request within 5 s are dropped and
+  `wait_timeout` bounds the whole wait. A local attacker racing the port only gets a code bound
+  to our PKCE verifier, which it does not have. The redirect page doesn't claim success; the
+  app reports the result of the token exchange.
 - Tokens are scoped per server (`OAuthSettings::credential_secret_id`) — no token reuse across
   servers. Never fall back silently to another connection (ADR-0006).
 
 ### T5. Duplicate or lost side effects
-- Writes are recorded in the ledger before they run (`claim → running`). A succeeded key
-  replays; a running key blocks; reused keys with different arguments are rejected.
-- Only retry-safe capabilities (reads, or writes with an idempotency key field) auto-retry.
-- After a crash, `ledger::mark_interrupted` turns `running` rows into `failed/interrupted`;
-  the UI should ask before re-running them (the side effect may have happened).
+- Writes are recorded in the ledger before they run (`claim → running`, `BEGIN IMMEDIATE`). A
+  succeeded key replays; a running key blocks; reused keys with different arguments are
+  rejected.
+- Keys are scoped so one context can't replay another's output: `(capability, run_id,
+  call id)` by default (model call ids like `call_0` repeat across runs), or `(capability,
+  conversation, token)` when an idempotency field is configured. That field must be a
+  per-request unique token, not a resource id.
+- Only retry-safe capabilities (reads, or writes with an idempotency key field) auto-retry;
+  retrying such a write relies on the server deduplicating by that token.
+- A write whose outcome isn't known (app crash → `mark_interrupted`, cancel or timeout after
+  the request was sent, transport closed mid-call, execute future dropped) is stored as
+  `unknown`, not `failed`. Claims on an `unknown` key are refused — even under an "allow for
+  this chat" grant — until the user resolves it (`Resolution::Happened` / `DidNotHappen`).
 
 ## Out of scope (wave 1)
 Sandboxing stdio servers (OS sandbox profiles), signed server registries, Twin approvals

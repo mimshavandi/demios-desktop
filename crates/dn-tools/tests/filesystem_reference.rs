@@ -65,9 +65,7 @@ async fn reference_filesystem_server() {
         .expect("write tool");
     assert_ne!(write.spec.risk, RiskTier::Read);
 
-    let ctx = CallContext {
-        conversation_id: "fs".into(),
-    };
+    let ctx = CallContext::new(Some("fs".into()), dn_core::Id::new());
     let path = root.join("hello.txt").to_string_lossy().to_string();
     let out = ex
         .execute(

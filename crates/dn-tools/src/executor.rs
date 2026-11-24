@@ -1,10 +1,10 @@
 //! Tool executor: registry of MCP servers + capabilities, preflight, approval, ledger, retry.
 //!
-//! This is dn-tools' own API. When `dn-agent` publishes its `ToolExecutor` trait, the adapter is
-//! a thin shim over [`Executor::tool_specs`] and [`Executor::execute`].
+//! This is dn-tools' own API. The `dn_agent::ToolExecutor` adapter is a thin shim over
+//! [`Executor::tool_specs`] and [`Executor::execute_with_cancel`].
 
 use crate::approval::{ApprovalGate, ApprovalPrompt, GateOutcome};
-use crate::capability::{CapabilityOverride, McpCapability, preflight};
+use crate::capability::{CapabilityOverride, McpCapability, preflight, with_hash_suffix};
 use crate::client::{McpCallOutput, McpClient};
 use crate::error::{ToolError, ToolErrorKind};
 use crate::ledger::{self, Claim};
@@ -13,13 +13,35 @@ use dn_core::Id;
 use dn_core::capability::{Preflight, RiskTier};
 use dn_core::chat::{ToolCall, ToolSpec};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, RwLock};
 
 /// Per-call context from the agent loop.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CallContext {
-    pub conversation_id: String,
+    /// The chat this run belongs to. `None` = a one-off run with no persistent chat.
+    pub conversation_id: Option<String>,
+    /// Fresh id per agent run (UUIDv7). Model tool-call ids repeat across runs (`call_0`, ""),
+    /// so ledger keys use `(run_id, call.id)`.
+    pub run_id: Id,
+}
+
+impl CallContext {
+    pub fn new(conversation_id: Option<String>, run_id: Id) -> Self {
+        Self {
+            conversation_id,
+            run_id,
+        }
+    }
+
+    /// Scope for "allow for this chat" grants and field-based idempotency keys: the
+    /// conversation, or the run when there is none (so grants never leak across chats).
+    pub fn scope(&self) -> String {
+        match &self.conversation_id {
+            Some(c) => format!("conv:{c}"),
+            None => format!("run:{}", self.run_id),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -64,8 +86,36 @@ impl std::fmt::Debug for Executor {
     }
 }
 
+/// Marks a claimed ledger row `unknown` if the execute future is dropped (or panics) between
+/// claim and record, so the key doesn't stay `running` (→ in flight) until restart.
+struct ClaimGuard {
+    ledger: Arc<Mutex<rusqlite::Connection>>,
+    key: String,
+    armed: bool,
+}
+
+impl ClaimGuard {
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for ClaimGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let conn = match self.ledger.lock() {
+            Ok(c) => c,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let _ = ledger::mark_unknown(&conn, &self.key, "dropped before the result was recorded");
+    }
+}
+
 impl Executor {
-    /// `ledger` is a connection to the app database with [`ledger::migrations`] applied.
+    /// `ledger` is a dedicated connection to the app database (WAL mode) with
+    /// [`ledger::migrations`] applied. Don't share the chat connection.
     pub fn new(gate: Arc<ApprovalGate>, ledger: Arc<Mutex<rusqlite::Connection>>) -> Self {
         Self {
             clients: RwLock::default(),
@@ -91,21 +141,30 @@ impl Executor {
         self.clients.read().ok()?.get(server_id).cloned()
     }
 
+    fn trusts(&self, server_id: &str) -> bool {
+        self.client(server_id)
+            .is_some_and(|c| c.config().trusts_annotations())
+    }
+
     /// Set user overrides (risk, approval, idempotency field, disabled), keyed by capability id.
-    /// Applied on the next [`Self::refresh`]; also re-applied to known capabilities now.
+    /// Re-applied to known capabilities now and on every [`Self::refresh`].
     pub fn set_overrides(&self, overrides: HashMap<String, CapabilityOverride>) {
         if let Ok(mut o) = self.overrides.write() {
             *o = overrides;
         }
-        let servers: Vec<String> = self
+        let ov = self.overrides.read().map(|o| o.clone()).unwrap_or_default();
+        let trust: HashMap<String, bool> = self
             .clients
             .read()
-            .map(|c| c.keys().cloned().collect())
+            .map(|c| {
+                c.iter()
+                    .map(|(id, c)| (id.clone(), c.config().trusts_annotations()))
+                    .collect()
+            })
             .unwrap_or_default();
-        let ov = self.overrides.read().map(|o| o.clone()).unwrap_or_default();
         if let Ok(mut caps) = self.capabilities.write() {
             for cap in caps.values_mut() {
-                if servers.contains(&cap.server_id) {
+                if let Some(trusted) = trust.get(&cap.server_id) {
                     let tool = crate::client::McpTool {
                         name: cap.tool_name.clone(),
                         title: cap.title.clone(),
@@ -114,10 +173,16 @@ impl Executor {
                         output_schema: cap.spec.output_schema.clone(),
                         hints: cap.hints,
                     };
-                    *cap = McpCapability::from_tool(&cap.server_id, &tool, ov.get(&cap.spec.id));
+                    *cap = McpCapability::from_tool(
+                        &cap.server_id,
+                        &tool,
+                        ov.get(&cap.spec.id),
+                        *trusted,
+                    );
                 }
             }
         }
+        self.reindex_names();
     }
 
     /// Register a server and load its tools.
@@ -141,10 +206,7 @@ impl Executor {
         if let Ok(mut caps) = self.capabilities.write() {
             caps.retain(|_, c| c.server_id != server_id);
         }
-        if let Ok(mut names) = self.llm_names.write() {
-            let prefix = format!("mcp.{server_id}.");
-            names.retain(|_, id| !id.starts_with(&prefix));
-        }
+        self.reindex_names();
     }
 
     /// Re-list a server's tools (after connect, restart or `tools/list_changed`).
@@ -157,24 +219,50 @@ impl Executor {
             ))
         })?;
         let tools = client.list_tools().await?;
+        let trusted = self.trusts(server_id);
         let ov = self.overrides.read().map(|o| o.clone()).unwrap_or_default();
-        let caps: Vec<McpCapability> = tools
-            .iter()
-            .map(|t| {
-                let id = crate::capability::capability_id(server_id, &t.name);
-                McpCapability::from_tool(server_id, t, ov.get(&id))
-            })
-            .collect();
-        if let (Ok(mut all), Ok(mut names)) = (self.capabilities.write(), self.llm_names.write()) {
+        if let Ok(mut all) = self.capabilities.write() {
             all.retain(|_, c| c.server_id != server_id);
-            let prefix = format!("mcp.{server_id}.");
-            names.retain(|_, id| !id.starts_with(&prefix));
-            for c in &caps {
-                names.insert(c.llm_name(), c.spec.id.clone());
-                all.insert(c.spec.id.clone(), c.clone());
+            for t in &tools {
+                let id = crate::capability::capability_id(server_id, &t.name);
+                let cap = McpCapability::from_tool(server_id, t, ov.get(&id), trusted);
+                all.insert(id, cap);
             }
         }
-        Ok(caps)
+        self.reindex_names();
+        Ok(self
+            .capabilities()
+            .into_iter()
+            .filter(|c| c.server_id == server_id)
+            .collect())
+    }
+
+    /// Assign unique LLM names across all servers. Capabilities are visited in id order, so the
+    /// result doesn't depend on registration order; a name already taken gets a hash suffix of
+    /// the capability id.
+    fn reindex_names(&self) {
+        let (Ok(mut all), Ok(mut names)) = (self.capabilities.write(), self.llm_names.write())
+        else {
+            return;
+        };
+        let mut ids: Vec<String> = all.keys().cloned().collect();
+        ids.sort();
+        let mut taken: HashSet<String> = HashSet::new();
+        names.clear();
+        for id in ids {
+            let Some(cap) = all.get_mut(&id) else {
+                continue;
+            };
+            let mut name = crate::capability::llm_tool_name(&cap.server_id, &cap.tool_name);
+            let mut n = 0u32;
+            while taken.contains(&name) {
+                n += 1;
+                name = with_hash_suffix(&name, &format!("{id}#{n}"));
+            }
+            taken.insert(name.clone());
+            names.insert(name.clone(), id.clone());
+            cap.llm_name = name;
+        }
     }
 
     pub fn capabilities(&self) -> Vec<McpCapability> {
@@ -187,14 +275,14 @@ impl Executor {
         v
     }
 
-    /// Tool specs for the model, using LLM-safe names (`mcp__<server>__<tool>`).
+    /// Tool specs for the model, using unique LLM-safe names (`mcp__<server>__<tool>`).
     /// Disabled capabilities are left out.
     pub fn tool_specs(&self) -> Vec<ToolSpec> {
         self.capabilities()
             .into_iter()
             .filter(|c| !c.disabled)
             .map(|c| ToolSpec {
-                name: c.llm_name(),
+                name: c.llm_name.clone(),
                 description: c.spec.description.clone(),
                 input_schema: c.spec.input_schema.clone(),
             })
@@ -230,12 +318,20 @@ impl Executor {
             .unwrap_or(crate::client::ConnectionStatus::Disconnected);
         let ok = self
             .gate
-            .is_satisfied(&ctx.conversation_id, &cap.spec.id, cap.approval);
+            .is_satisfied(&ctx.scope(), &cap.spec.id, cap.approval);
         Ok(preflight(&cap, &call.arguments, &status, ok))
     }
 
-    /// Idempotency key for a write: the capability's key field when set and present, otherwise
-    /// the conversation + tool-call id (so re-executing the *same* model call replays).
+    /// Ledger key for a write.
+    ///
+    /// - With [`CapabilitySpec::idempotency_key_field`](dn_core::capability::CapabilitySpec)
+    ///   set and present: `(capability, scope, field value)`. The field must hold a
+    ///   **per-request unique token** (e.g. a client request id), not a resource id such as a
+    ///   path: the same token replays the first result, and reusing it with different
+    ///   arguments is rejected. Auto-retry of such writes relies on the *server* deduplicating
+    ///   by that token.
+    /// - Otherwise `(capability, run_id, tool-call id)`: re-executing the same model call in
+    ///   the same run replays; a new run never does.
     pub fn idempotency_key(cap: &McpCapability, ctx: &CallContext, call: &ToolCall) -> String {
         if let Some(field) = &cap.spec.idempotency_key_field
             && let Some(v) = call.arguments.get(field)
@@ -244,9 +340,9 @@ impl Executor {
                 .as_str()
                 .map(str::to_owned)
                 .unwrap_or_else(|| v.to_string());
-            return format!("{}|field:{field}={v}", cap.spec.id);
+            return format!("{}|{}|field:{field}={v}", cap.spec.id, ctx.scope());
         }
-        format!("{}|call:{}:{}", cap.spec.id, ctx.conversation_id, call.id)
+        format!("{}|run:{}|call:{}", cap.spec.id, ctx.run_id, call.id)
     }
 
     fn with_ledger<T>(
@@ -281,8 +377,7 @@ impl Executor {
 
     /// Like [`Self::execute`], but stops when `cancel` resolves: the approval wait and the
     /// tool call are abandoned and the result is [`CoreError::Cancelled`]. A write cancelled
-    /// mid-call is recorded as failed (`cancelled`) in the ledger; its side effect may or may
-    /// not have happened.
+    /// mid-call is recorded as `unknown` in the ledger (its side effect may have happened).
     pub async fn execute_with_cancel(
         &self,
         ctx: &CallContext,
@@ -303,13 +398,12 @@ impl Executor {
             .resolve(&call.name)
             .ok_or_else(|| Self::not_found(&call.name))?;
         let id = cap.spec.id.clone();
+        let scope = ctx.scope();
         let client = self
             .client(&cap.server_id)
             .ok_or_else(|| ToolError::new(&id, ToolErrorKind::NotFound, "server removed"))?;
 
-        let approved_already = self
-            .gate
-            .is_satisfied(&ctx.conversation_id, &id, cap.approval);
+        let approved_already = self.gate.is_satisfied(&scope, &id, cap.approval);
         match preflight(&cap, &call.arguments, &client.status(), approved_already) {
             Preflight::Ready | Preflight::ApprovalRequired => {}
             Preflight::Blocked { reason } => {
@@ -324,9 +418,7 @@ impl Executor {
             }
             Preflight::NeedsConnection { .. } => {
                 // A failed server may have come back; try once before giving up.
-                if let Err(e) = client.connect().await {
-                    return Err(ToolError::new(&id, e.kind, e.developer_message));
-                }
+                client.connect().await.map_err(|e| e.for_capability(&id))?;
             }
             Preflight::ScopeMissing { scopes } => {
                 return Err(ToolError::new(
@@ -341,16 +433,23 @@ impl Executor {
         let key = is_write.then(|| Self::idempotency_key(&cap, ctx, call));
 
         // A succeeded write replays without asking again: no new side effect happens.
-        if let Some(key) = &key {
-            match self.with_ledger(&id, |c| ledger::get(c, key))? {
-                Some(e) if e.status == ledger::RunStatus::Succeeded => {
-                    if e.arguments != call.arguments {
-                        return Err(ToolError::new(
-                            &id,
-                            ToolErrorKind::InvalidInput,
-                            "idempotency key reused with different arguments",
-                        ));
-                    }
+        if let Some(key) = &key
+            && let Some(e) = self.with_ledger(&id, |c| ledger::get(c, key))?
+        {
+            if e.arguments != call.arguments
+                && matches!(
+                    e.status,
+                    ledger::RunStatus::Succeeded | ledger::RunStatus::Unknown
+                )
+            {
+                return Err(ToolError::new(
+                    &id,
+                    ToolErrorKind::InvalidInput,
+                    "idempotency key reused with different arguments",
+                ));
+            }
+            match e.status {
+                ledger::RunStatus::Succeeded => {
                     return Ok(ToolOutcome {
                         capability_id: id,
                         output: decode_output(&cap, e.output)?,
@@ -358,20 +457,30 @@ impl Executor {
                         attempts: e.attempts,
                     });
                 }
-                Some(e) if e.status == ledger::RunStatus::Running => {
+                ledger::RunStatus::Running => {
                     return Err(ToolError::new(
                         &id,
                         ToolErrorKind::InFlight,
                         format!("key `{key}` is already running"),
                     ));
                 }
-                _ => {}
+                ledger::RunStatus::Unknown => {
+                    return Err(ToolError::new(
+                        &id,
+                        ToolErrorKind::OutcomeUnknown,
+                        format!(
+                            "key `{key}` has an unknown outcome ({}); resolve it first",
+                            e.error.unwrap_or_default()
+                        ),
+                    ));
+                }
+                ledger::RunStatus::Failed => {}
             }
         }
 
         let approval = self.gate.check(ApprovalPrompt {
             request_id: Id::new(),
-            conversation_id: ctx.conversation_id.clone(),
+            conversation_id: scope.clone(),
             capability_id: id.clone(),
             title: cap.title.clone().unwrap_or_else(|| cap.tool_name.clone()),
             description: cap.spec.description.clone(),
@@ -382,7 +491,11 @@ impl Executor {
         let outcome = tokio::select! {
             o = approval => o,
             () = cancel.as_mut() => {
-                return Err(ToolError::new(&id, ToolErrorKind::Cancelled, "cancelled while waiting for approval"));
+                return Err(ToolError::new(
+                    &id,
+                    ToolErrorKind::Cancelled,
+                    "cancelled while waiting for approval",
+                ));
             }
         };
         match outcome {
@@ -394,17 +507,25 @@ impl Executor {
                 return Err(ToolError::new(
                     &id,
                     ToolErrorKind::Denied,
-                    "approval not answered",
+                    "approval not answered (timed out or UI gone)",
                 ));
             }
         }
 
+        let mut guard = None;
         let attempt_base = match &key {
             Some(key) => {
-                match self.with_ledger(&id, |c| {
-                    ledger::claim(c, key, &id, &ctx.conversation_id, &call.arguments)
-                })? {
-                    Claim::Acquired { attempt } => attempt,
+                match self
+                    .with_ledger(&id, |c| ledger::claim(c, key, &id, &scope, &call.arguments))?
+                {
+                    Claim::Acquired { attempt } => {
+                        guard = Some(ClaimGuard {
+                            ledger: self.ledger.clone(),
+                            key: key.clone(),
+                            armed: true,
+                        });
+                        attempt
+                    }
                     Claim::Replay { output } => {
                         return Ok(ToolOutcome {
                             capability_id: id,
@@ -418,6 +539,16 @@ impl Executor {
                             &id,
                             ToolErrorKind::InFlight,
                             format!("key `{key}` is already running"),
+                        ));
+                    }
+                    Claim::OutcomeUnknown { error } => {
+                        return Err(ToolError::new(
+                            &id,
+                            ToolErrorKind::OutcomeUnknown,
+                            format!(
+                                "key `{key}` has an unknown outcome ({}); resolve it first",
+                                error.unwrap_or_default()
+                            ),
                         ));
                     }
                 }
@@ -443,7 +574,7 @@ impl Executor {
                         tokio::time::sleep(self.retry.backoff * tries).await;
                         continue;
                     }
-                    Err(e) => break Err(ToolError::new(&id, e.kind, e.developer_message)),
+                    Err(e) => break Err(e.for_capability(&id)),
                 }
             }
         };
@@ -453,7 +584,7 @@ impl Executor {
                 &id,
                 ToolErrorKind::Cancelled,
                 "cancelled during the tool call; outcome unknown",
-            )),
+            ).maybe_executed()),
         };
 
         let result = result.and_then(|out| {
@@ -475,9 +606,15 @@ impl Executor {
                         .map_err(|e| ToolError::new(&id, ToolErrorKind::Ledger, e.to_string()))?;
                     self.with_ledger(&id, |c| ledger::succeed(c, key, &v))?;
                 }
+                Err(e) if e.maybe_executed => {
+                    self.with_ledger(&id, |c| ledger::mark_unknown(c, key, &e.developer_message))?;
+                }
                 Err(e) => {
                     self.with_ledger(&id, |c| ledger::fail(c, key, &e.developer_message))?;
                 }
+            }
+            if let Some(g) = guard.as_mut() {
+                g.disarm();
             }
         }
 
@@ -487,6 +624,20 @@ impl Executor {
             replayed: false,
             attempts: attempt_base + tries - 1,
         })
+    }
+
+    /// Resolve a write whose outcome is unknown (UI: "did this go through?").
+    pub fn resolve_unknown(
+        &self,
+        key: &str,
+        resolution: &ledger::Resolution,
+    ) -> Result<(), CoreError> {
+        Ok(self.with_ledger(key, |c| ledger::resolve(c, key, resolution))?)
+    }
+
+    /// Writes waiting for the user to resolve.
+    pub fn unknown_outcomes(&self) -> Result<Vec<ledger::LedgerEntry>, CoreError> {
+        Ok(self.with_ledger("ledger", ledger::list_unknown)?)
     }
 }
 

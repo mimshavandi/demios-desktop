@@ -294,22 +294,39 @@ impl LoopbackRedirect {
         &self.redirect_uri
     }
 
-    /// Wait for the browser to hit `/callback`; returns the full redirect URL.
-    /// Requests to other paths (favicon…) get a 404 and are ignored.
+    /// Like [`Self::wait`], giving up with `TimedOut` after `timeout` (the user closed the
+    /// browser tab, …).
+    pub async fn wait_timeout(self, timeout: std::time::Duration) -> std::io::Result<String> {
+        tokio::time::timeout(timeout, self.wait())
+            .await
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "no OAuth redirect"))?
+    }
+
+    /// Wait for the browser to hit `/callback`; returns the full redirect URL. The page only
+    /// says to return to the app: whether sign-in worked is known after
+    /// [`PendingAuthorization::complete`]. Requests to other paths (favicon…) get a 404, and a
+    /// connection that doesn't send a request line within 5 s is dropped.
     pub async fn wait(self) -> std::io::Result<String> {
         loop {
             let (mut sock, _) = self.listener.accept().await?;
             let mut buf = vec![0u8; 8192];
             let mut len = 0;
-            while len < buf.len() {
-                let n = sock.read(&mut buf[len..]).await?;
-                if n == 0 {
-                    break;
+            let read_head = async {
+                while len < buf.len() {
+                    let n = sock.read(&mut buf[len..]).await?;
+                    if n == 0 {
+                        break;
+                    }
+                    len += n;
+                    if buf[..len].windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
                 }
-                len += n;
-                if buf[..len].windows(4).any(|w| w == b"\r\n\r\n") {
-                    break;
-                }
+                Ok::<(), std::io::Error>(())
+            };
+            match tokio::time::timeout(std::time::Duration::from_secs(5), read_head).await {
+                Ok(Ok(())) => {}
+                Ok(Err(_)) | Err(_) => continue,
             }
             let head = String::from_utf8_lossy(&buf[..len]);
             let target = head
@@ -319,8 +336,8 @@ impl LoopbackRedirect {
                 .unwrap_or("")
                 .to_owned();
             if target.starts_with("/callback") {
-                let body = "<html><body>Signed in. You can close this window and return to \
-                            Demios.</body></html>";
+                let body = "<html><body>Demios received the sign-in response. You can close \
+                            this window and return to the app.</body></html>";
                 let resp = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\
                      Content-Length: {}\r\nConnection: close\r\n\r\n{body}",

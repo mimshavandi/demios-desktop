@@ -1,10 +1,12 @@
 //! Side-effect ledger (T-CON-03), ported semantics from the Demios `run_side_effects` ledger:
-//! `claim → running → succeeded | failed`.
+//! `claim → running → succeeded | failed | unknown`.
 //!
 //! - Replaying a **succeeded** key returns the cached output (no second side effect).
-//! - A **running** key blocks (another attempt is in flight, or the app died mid-call; see
-//!   [`mark_interrupted`]).
-//! - A **failed** key may be claimed again (a new attempt).
+//! - A **running** key blocks (another attempt is in flight).
+//! - A **failed** key may be claimed again (a new attempt): the side effect did not happen.
+//! - An **unknown** key (interrupted, cancelled, dropped or timed out mid-call: the side
+//!   effect may or may not have happened) refuses new claims until the user decides with
+//!   [`resolve`].
 //! - Reads are not recorded (unkeyed).
 //!
 //! Functions take a `&rusqlite::Connection` the app passes in; tables are prefixed
@@ -21,7 +23,7 @@ CREATE TABLE IF NOT EXISTS tool_ledger_runs (
     capability_id   TEXT NOT NULL,
     conversation_id TEXT NOT NULL,
     arguments_json  TEXT NOT NULL,
-    status          TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'failed')),
+    status          TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'failed', 'unknown')),
     output_json     TEXT,
     error           TEXT,
     attempts        INTEGER NOT NULL DEFAULT 1,
@@ -30,6 +32,8 @@ CREATE TABLE IF NOT EXISTS tool_ledger_runs (
 );
 CREATE INDEX IF NOT EXISTS tool_ledger_runs_conversation
     ON tool_ledger_runs (conversation_id, created_at_ms);
+CREATE INDEX IF NOT EXISTS tool_ledger_runs_unknown
+    ON tool_ledger_runs (status) WHERE status = 'unknown';
 "#]
 }
 
@@ -39,6 +43,8 @@ pub enum RunStatus {
     Running,
     Succeeded,
     Failed,
+    /// Outcome not known; blocks re-runs until [`resolve`]d.
+    Unknown,
 }
 
 impl RunStatus {
@@ -47,6 +53,7 @@ impl RunStatus {
             Self::Running => "running",
             Self::Succeeded => "succeeded",
             Self::Failed => "failed",
+            Self::Unknown => "unknown",
         }
     }
     fn parse(s: &str) -> Result<Self, LedgerError> {
@@ -54,6 +61,7 @@ impl RunStatus {
             "running" => Ok(Self::Running),
             "succeeded" => Ok(Self::Succeeded),
             "failed" => Ok(Self::Failed),
+            "unknown" => Ok(Self::Unknown),
             other => Err(LedgerError::Corrupt(format!("unknown status `{other}`"))),
         }
     }
@@ -71,6 +79,8 @@ pub enum LedgerError {
     ArgumentsMismatch(String),
     #[error("idempotency key `{0}` is not running")]
     NotRunning(String),
+    #[error("idempotency key `{0}` has no unknown outcome to resolve")]
+    NotUnknown(String),
 }
 
 /// Outcome of [`claim`].
@@ -80,8 +90,10 @@ pub enum Claim {
     Acquired { attempt: u32 },
     /// Already succeeded; here is the cached output. Do not run again.
     Replay { output: serde_json::Value },
-    /// Another attempt is running (or was interrupted and not yet resolved).
+    /// Another attempt is running.
     InFlight,
+    /// An earlier attempt has an unknown outcome; the user must [`resolve`] it first.
+    OutcomeUnknown { error: Option<String> },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -154,7 +166,9 @@ pub fn claim(
     conversation_id: &str,
     arguments: &serde_json::Value,
 ) -> Result<Claim, LedgerError> {
-    let tx = conn.unchecked_transaction()?;
+    // IMMEDIATE takes the write lock up front, so two connections can't both read "absent"
+    // and race to insert.
+    let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)?;
     let existing = get(&tx, key)?;
     let now = now_ms();
     let claim = match existing {
@@ -183,6 +197,7 @@ pub fn claim(
                     output: e.output.unwrap_or(serde_json::Value::Null),
                 },
                 RunStatus::Running => Claim::InFlight,
+                RunStatus::Unknown => Claim::OutcomeUnknown { error: e.error },
                 RunStatus::Failed => {
                     tx.execute(
                         "UPDATE tool_ledger_runs
@@ -230,20 +245,69 @@ pub fn succeed(
     finish(conn, key, RunStatus::Succeeded, Some(output), None)
 }
 
-/// Record failure; the key may be claimed again.
+/// Record a failure where the side effect did **not** happen; the key may be claimed again.
 pub fn fail(conn: &Connection, key: &str, error: &str) -> Result<(), LedgerError> {
     finish(conn, key, RunStatus::Failed, None, Some(error))
 }
 
-/// At startup, mark rows left `running` by a previous process as failed with
-/// `interrupted`. The side effect may or may not have happened; the UI should show these to the
-/// user before re-running. Returns how many rows changed.
+/// Record that the attempt ended without a known outcome (see module docs).
+pub fn mark_unknown(conn: &Connection, key: &str, reason: &str) -> Result<(), LedgerError> {
+    finish(conn, key, RunStatus::Unknown, None, Some(reason))
+}
+
+/// At startup, mark rows left `running` by a previous process as `unknown` (`interrupted`).
+/// They block re-runs until the user resolves them. Returns how many rows changed.
 pub fn mark_interrupted(conn: &Connection) -> Result<usize, LedgerError> {
     Ok(conn.execute(
-        "UPDATE tool_ledger_runs SET status = 'failed', error = 'interrupted', updated_at_ms = ?1
+        "UPDATE tool_ledger_runs SET status = 'unknown', error = 'interrupted', updated_at_ms = ?1
          WHERE status = 'running'",
         params![now_ms()],
     )?)
+}
+
+/// The user's answer for an `unknown` row.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "resolution", rename_all = "snake_case")]
+pub enum Resolution {
+    /// It happened. Future replays of this key return `output` (no re-run).
+    Happened { output: serde_json::Value },
+    /// It did not happen; the key may run again (with a new approval as policy requires).
+    DidNotHappen,
+}
+
+/// Resolve an `unknown` row (UI: "did this go through?").
+pub fn resolve(conn: &Connection, key: &str, resolution: &Resolution) -> Result<(), LedgerError> {
+    let (status, output, error) = match resolution {
+        Resolution::Happened { output } => (
+            RunStatus::Succeeded,
+            Some(serde_json::to_string(output)?),
+            None,
+        ),
+        Resolution::DidNotHappen => (RunStatus::Failed, None, Some("resolved: did not happen")),
+    };
+    let n = conn.execute(
+        "UPDATE tool_ledger_runs SET status = ?2, output_json = ?3, error = ?4, updated_at_ms = ?5
+         WHERE idempotency_key = ?1 AND status = 'unknown'",
+        params![key, status.as_str(), output, error, now_ms()],
+    )?;
+    if n == 0 {
+        return Err(LedgerError::NotUnknown(key.to_owned()));
+    }
+    Ok(())
+}
+
+/// Rows waiting for the user to resolve, oldest first.
+pub fn list_unknown(conn: &Connection) -> Result<Vec<LedgerEntry>, LedgerError> {
+    let mut stmt = conn.prepare(
+        "SELECT idempotency_key FROM tool_ledger_runs WHERE status = 'unknown'
+         ORDER BY created_at_ms, idempotency_key",
+    )?;
+    let keys: Vec<String> = stmt
+        .query_map([], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
+    keys.iter()
+        .filter_map(|k| get(conn, k).transpose())
+        .collect()
 }
 
 /// Entries for one conversation, oldest first (audit view).
@@ -312,12 +376,38 @@ mod tests {
     }
 
     #[test]
-    fn interrupted_runs_become_failed() {
+    fn interrupted_runs_are_unknown_until_resolved() {
         let db = test_db();
         claim(&db, "k", "cap", "c", &json!({})).unwrap();
         assert_eq!(mark_interrupted(&db).unwrap(), 1);
         let e = get(&db, "k").unwrap().unwrap();
-        assert_eq!(e.status, RunStatus::Failed);
+        assert_eq!(e.status, RunStatus::Unknown);
         assert_eq!(e.error.as_deref(), Some("interrupted"));
+        assert_eq!(list_unknown(&db).unwrap().len(), 1);
+        assert!(matches!(
+            claim(&db, "k", "cap", "c", &json!({})).unwrap(),
+            Claim::OutcomeUnknown { .. }
+        ));
+        resolve(&db, "k", &Resolution::DidNotHappen).unwrap();
+        assert_eq!(
+            claim(&db, "k", "cap", "c", &json!({})).unwrap(),
+            Claim::Acquired { attempt: 2 }
+        );
+        mark_unknown(&db, "k", "cancelled").unwrap();
+        resolve(
+            &db,
+            "k",
+            &Resolution::Happened {
+                output: json!("done"),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            claim(&db, "k", "cap", "c", &json!({})).unwrap(),
+            Claim::Replay {
+                output: json!("done")
+            }
+        );
+        assert!(resolve(&db, "k", &Resolution::DidNotHappen).is_err());
     }
 }

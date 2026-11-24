@@ -12,6 +12,10 @@ use std::sync::Mutex;
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 
+/// How long a call waits for an answer before it is denied (unless changed with
+/// [`ApprovalGate::with_timeout`]).
+pub const DEFAULT_APPROVAL_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ApprovalDecision {
@@ -27,6 +31,8 @@ pub enum ApprovalDecision {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ApprovalPrompt {
     pub request_id: Id,
+    /// Grant scope: `conv:<conversation id>`, or `run:<run id>` for runs without a chat.
+    /// "Allow for this chat" grants are remembered per scope.
     pub conversation_id: String,
     pub capability_id: String,
     pub title: String,
@@ -83,13 +89,13 @@ impl ApprovalGate {
             Self {
                 tx,
                 grants: Mutex::new(HashSet::new()),
-                timeout: None,
+                timeout: Some(DEFAULT_APPROVAL_TIMEOUT),
             },
             rx,
         )
     }
 
-    /// Give up (deny) when the user doesn't answer in time. Default: wait forever.
+    /// Deny when the user doesn't answer in time. Default: [`DEFAULT_APPROVAL_TIMEOUT`].
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
         self
@@ -112,7 +118,8 @@ impl ApprovalGate {
         }
     }
 
-    /// Forget "allow for this chat" grants for a conversation (e.g. when it is closed).
+    /// Forget "allow for this chat" grants for a scope (`CallContext::scope()`, e.g. when the
+    /// conversation is closed).
     pub fn clear_conversation(&self, conversation_id: &str) {
         if let Ok(mut g) = self.grants.lock() {
             g.retain(|(c, _)| c != conversation_id);
@@ -205,6 +212,21 @@ mod tests {
             "mcp.fs.write_file",
             ApprovalPolicy::AskOncePerConversation
         ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn default_timeout_denies_after_ten_minutes() {
+        let (gate, mut rx) = ApprovalGate::new(4);
+        assert_eq!(gate.timeout, Some(DEFAULT_APPROVAL_TIMEOUT));
+        let _ui = tokio::spawn(async move {
+            let _req = rx.recv().await; // never answered
+            std::future::pending::<()>().await;
+        });
+        // Paused clock: the runtime auto-advances to the 10-minute deadline.
+        assert_eq!(
+            gate.check(prompt(ApprovalPolicy::AlwaysAsk)).await,
+            GateOutcome::Unanswered
+        );
     }
 
     #[tokio::test]

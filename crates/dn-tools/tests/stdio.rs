@@ -12,10 +12,10 @@ use dn_tools::{
 use std::sync::Arc;
 use std::time::Duration;
 
+static RUN: std::sync::LazyLock<dn_core::Id> = std::sync::LazyLock::new(dn_core::Id::new);
+
 fn ctx() -> CallContext {
-    CallContext {
-        conversation_id: "conv-1".into(),
-    }
+    CallContext::new(Some("conv-1".into()), *RUN)
 }
 
 fn client(cfg: McpServerConfig) -> McpClient {

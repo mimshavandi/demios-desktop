@@ -38,8 +38,23 @@ pub fn ledger_db() -> Arc<Mutex<rusqlite::Connection>> {
 }
 
 pub fn executor() -> (Arc<Executor>, mpsc::Receiver<ApprovalRequest>) {
+    let (ex, rx, _db) = executor_with_ledger();
+    (ex, rx)
+}
+
+pub fn executor_with_ledger() -> (
+    Arc<Executor>,
+    mpsc::Receiver<ApprovalRequest>,
+    Arc<Mutex<rusqlite::Connection>>,
+) {
     let (gate, rx) = ApprovalGate::new(8);
-    (Arc::new(Executor::new(Arc::new(gate), ledger_db())), rx)
+    let db = ledger_db();
+    (Arc::new(Executor::new(Arc::new(gate), db.clone())), rx, db)
+}
+
+/// Context for conversation `conv` in a fixed run (one run per test unless a test says so).
+pub fn ctx_in(conv: &str, run: dn_core::Id) -> dn_tools::CallContext {
+    dn_tools::CallContext::new(Some(conv.to_owned()), run)
 }
 
 pub fn call(id: &str, name: &str, args: serde_json::Value) -> dn_core::chat::ToolCall {

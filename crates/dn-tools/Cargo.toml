@@ -24,7 +24,7 @@ rmcp = { version = "3.11", default-features = false, features = [
 ] }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread", "process", "net", "io-util", "io-std"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "process", "net", "io-util", "io-std", "test-util"] }
 axum = { version = "0.8", default-features = false, features = ["tokio", "http1", "json", "form", "query"] }
 rmcp = { version = "3.11", default-features = false, features = [
     "server",

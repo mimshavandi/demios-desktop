@@ -100,6 +100,41 @@ pub trait HttpAuthProvider: Send + Sync {
 type Service = RunningService<RoleClient, ()>;
 
 const STDERR_TAIL_LINES: usize = 40;
+/// Lines / characters of stderr included in developer messages.
+const STDERR_MESSAGE_LINES: usize = 10;
+const STDERR_LINE_CHARS: usize = 300;
+
+/// Environment variables a stdio child inherits from us; everything else is cleared so provider
+/// keys and other app secrets in our environment never reach servers.
+const INHERITED_ENV: &[&str] = &[
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "LANG",
+    "TMPDIR",
+    // Windows: needed by most runtimes (node/npx, python) to start at all.
+    "SystemRoot",
+    "windir",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "USERPROFILE",
+    "ComSpec",
+    "PATHEXT",
+    "TEMP",
+    "TMP",
+];
+
+/// The inherited part of a stdio child's environment (see [`INHERITED_ENV`], plus `LC_*`).
+pub fn inherited_env() -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
+    std::env::vars_os()
+        .filter(|(k, _)| {
+            k.to_str().is_some_and(|k| {
+                INHERITED_ENV.iter().any(|a| a.eq_ignore_ascii_case(k)) || k.starts_with("LC_")
+            })
+        })
+        .collect()
+}
 
 pub struct McpClient {
     config: McpServerConfig,
@@ -108,6 +143,8 @@ pub struct McpClient {
     service: Mutex<Option<Service>>,
     status: StdMutex<ConnectionStatus>,
     stderr_tail: Arc<StdMutex<VecDeque<String>>>,
+    /// Secret values resolved for this server, scrubbed from diagnostics.
+    secret_values: StdMutex<Vec<String>>,
     connects: std::sync::atomic::AtomicU32,
 }
 
@@ -130,6 +167,7 @@ impl McpClient {
             service: Mutex::new(None),
             status: StdMutex::new(ConnectionStatus::Disconnected),
             stderr_tail: Arc::new(StdMutex::new(VecDeque::new())),
+            secret_values: StdMutex::new(Vec::new()),
             connects: std::sync::atomic::AtomicU32::new(0),
         })
     }
@@ -166,6 +204,45 @@ impl McpClient {
             .lock()
             .map(|t| t.iter().cloned().collect())
             .unwrap_or_default()
+    }
+
+    /// Short, secret-scrubbed stderr excerpt for developer messages.
+    fn diagnostic_tail(&self) -> String {
+        let secrets = self
+            .secret_values
+            .lock()
+            .map(|v| v.clone())
+            .unwrap_or_default();
+        let tail = self.stderr_tail();
+        let start = tail.len().saturating_sub(STDERR_MESSAGE_LINES);
+        tail[start..]
+            .iter()
+            .map(|l| {
+                let mut l = l.clone();
+                for s in secrets.iter().filter(|s| !s.is_empty()) {
+                    l = l.replace(s.as_str(), "[redacted]");
+                }
+                if l.chars().count() > STDERR_LINE_CHARS {
+                    l = l.chars().take(STDERR_LINE_CHARS).collect::<String>() + "…";
+                }
+                l
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn remember_secrets(
+        &self,
+        refs: &std::collections::BTreeMap<String, crate::config::ValueRef>,
+        resolved: &[(String, String)],
+    ) {
+        if let Ok(mut v) = self.secret_values.lock() {
+            for (name, value) in resolved {
+                if matches!(refs.get(name), Some(crate::config::ValueRef::Secret { .. })) {
+                    v.push(value.clone());
+                }
+            }
+        }
     }
 
     fn set_status(&self, s: ConnectionStatus) {
@@ -246,9 +323,13 @@ impl McpClient {
                 cwd,
             } => {
                 let prefix = format!("mcp.{}", self.config.id);
-                let env = resolve_values(&prefix, env, self.secrets.as_ref())?;
+                let resolved = resolve_values(&prefix, env, self.secrets.as_ref())?;
+                self.remember_secrets(env, &resolved);
                 let mut cmd = tokio::process::Command::new(command);
-                cmd.args(args).envs(env);
+                cmd.env_clear()
+                    .envs(inherited_env())
+                    .args(args)
+                    .envs(resolved);
                 if let Some(cwd) = cwd {
                     cmd.current_dir(cwd);
                 }
@@ -270,13 +351,13 @@ impl McpClient {
                                 if t.len() == STDERR_TAIL_LINES {
                                     t.pop_front();
                                 }
-                                t.push_back(line);
+                                t.push_back(line.chars().take(4 * STDERR_LINE_CHARS).collect());
                             }
                         }
                     });
                 }
                 ().serve(transport).await.map_err(|e| {
-                    let tail = self.stderr_tail().join("\n");
+                    let tail = self.diagnostic_tail();
                     self.err(
                         ToolErrorKind::Connection,
                         format!("initialize failed: {e}; stderr: {tail}"),
@@ -292,7 +373,9 @@ impl McpClient {
                 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
                 let prefix = format!("mcp.{}", self.config.id);
                 let mut custom = HashMap::new();
-                for (name, value) in resolve_values(&prefix, headers, self.secrets.as_ref())? {
+                let resolved = resolve_values(&prefix, headers, self.secrets.as_ref())?;
+                self.remember_secrets(headers, &resolved);
+                for (name, value) in resolved {
                     let n = reqwest::header::HeaderName::from_bytes(name.as_bytes())
                         .map_err(|e| self.err(ToolErrorKind::Config, format!("header: {e}")))?;
                     let mut v = reqwest::header::HeaderValue::from_str(&value)
@@ -357,7 +440,7 @@ impl McpClient {
             ServiceError::Timeout { .. } => self.err(ToolErrorKind::Timeout, e.to_string()),
             ServiceError::TransportClosed | ServiceError::TransportSend(_) => {
                 self.set_status(ConnectionStatus::Disconnected);
-                let tail = self.stderr_tail().join("\n");
+                let tail = self.diagnostic_tail();
                 self.err(
                     ToolErrorKind::Connection,
                     format!("{e}; stderr tail: {tail}"),
@@ -435,7 +518,16 @@ impl McpClient {
         params.arguments = args;
         let result = self
             .with_timeout("tools/call", peer.call_tool(params))
-            .await?;
+            .await
+            .map_err(|e| {
+                // The request was handed to the transport: a timeout or a dropped connection
+                // doesn't tell us whether the server acted on it.
+                if matches!(e.kind, ToolErrorKind::Timeout | ToolErrorKind::Connection) {
+                    e.maybe_executed()
+                } else {
+                    e
+                }
+            })?;
         let v = serde_json::to_value(&result)
             .map_err(|e| self.err(ToolErrorKind::ToolFailed, e.to_string()))?;
         Ok(McpCallOutput {

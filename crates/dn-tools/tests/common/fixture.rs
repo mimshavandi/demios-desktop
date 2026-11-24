@@ -17,6 +17,8 @@ pub struct Fixture {
     pub writes: Arc<AtomicU32>,
     /// Calls to `flaky` that fail before it succeeds.
     pub flaky_failures: Arc<AtomicU32>,
+    /// Extra tools (JSON) advertised in addition to [`tools`]; they echo their name.
+    pub extra_tools: Arc<Vec<serde_json::Value>>,
 }
 
 fn tool(v: serde_json::Value) -> Tool {
@@ -62,6 +64,17 @@ pub fn tools() -> Vec<Tool> {
             "annotations": {"readOnlyHint": true}
         })),
         tool(serde_json::json!({
+            "name": "slow_write",
+            "description": "A write that takes 5 seconds (no annotations: external write)",
+            "inputSchema": {"type": "object"}
+        })),
+        tool(serde_json::json!({
+            "name": "env_names",
+            "description": "Comma-separated names of the server's environment variables",
+            "inputSchema": {"type": "object"},
+            "annotations": {"readOnlyHint": true}
+        })),
+        tool(serde_json::json!({
             "name": "pid",
             "description": "Returns the server process id",
             "inputSchema": {"type": "object"},
@@ -80,7 +93,9 @@ impl ServerHandler for Fixture {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        Ok(serde_json::from_value(serde_json::json!({ "tools": tools() })).expect("list"))
+        let mut all = tools();
+        all.extend(self.extra_tools.iter().cloned().map(tool));
+        Ok(serde_json::from_value(serde_json::json!({ "tools": all })).expect("list"))
     }
 
     async fn call_tool(
@@ -111,8 +126,23 @@ impl ServerHandler for Fixture {
                 CallToolResult::success(vec![ContentBlock::text("done")])
             }
             "crash" => std::process::exit(3),
+            "slow_write" => {
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                self.writes.fetch_add(1, Ordering::SeqCst);
+                CallToolResult::success(vec![ContentBlock::text("slow write done")])
+            }
+            "env_names" => {
+                let mut names: Vec<String> = std::env::vars_os()
+                    .filter_map(|(k, _)| k.into_string().ok())
+                    .collect();
+                names.sort();
+                CallToolResult::success(vec![ContentBlock::text(names.join(","))])
+            }
             "pid" => {
                 CallToolResult::success(vec![ContentBlock::text(std::process::id().to_string())])
+            }
+            other if self.extra_tools.iter().any(|t| t["name"] == other) => {
+                CallToolResult::success(vec![ContentBlock::text(other.to_owned())])
             }
             other => {
                 return Err(ErrorData::invalid_params(

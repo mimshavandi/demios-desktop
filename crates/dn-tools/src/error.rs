@@ -9,6 +9,9 @@ pub struct ToolError {
     pub capability_id: String,
     pub kind: ToolErrorKind,
     pub developer_message: String,
+    /// The request reached (or may have reached) the server before failing, e.g. a timeout or
+    /// a closed transport mid-call. For writes the outcome is then unknown.
+    pub maybe_executed: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +40,9 @@ pub enum ToolErrorKind {
     Ledger,
     /// The run was cancelled (becomes [`CoreError::Cancelled`]).
     Cancelled,
+    /// A previous attempt of this write ended without a known outcome (interrupted, cancelled
+    /// or timed out mid-call). It won't run again until the user resolves it.
+    OutcomeUnknown,
 }
 
 impl ToolError {
@@ -49,7 +55,20 @@ impl ToolError {
             capability_id: capability_id.into(),
             kind,
             developer_message: developer_message.into(),
+            maybe_executed: false,
         }
+    }
+
+    /// Mark that the request may have been executed by the server.
+    pub fn maybe_executed(mut self) -> Self {
+        self.maybe_executed = true;
+        self
+    }
+
+    /// Re-attribute to a (more specific) capability id, keeping kind and flags.
+    pub fn for_capability(mut self, capability_id: &str) -> Self {
+        self.capability_id = capability_id.to_owned();
+        self
     }
 
     /// Whether retrying the same call may succeed (callers still check `retry_safe`).
@@ -83,6 +102,10 @@ impl ToolError {
             ToolErrorKind::InFlight => format!("\"{tool}\" is already running this action."),
             ToolErrorKind::Ledger => format!("Couldn't record the result of \"{tool}\"."),
             ToolErrorKind::Cancelled => format!("\"{tool}\" was stopped."),
+            ToolErrorKind::OutcomeUnknown => format!(
+                "An earlier \"{tool}\" action may or may not have gone through. Check it and \
+                 confirm before running it again."
+            ),
         }
     }
 }
