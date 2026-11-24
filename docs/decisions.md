@@ -18,6 +18,9 @@ Each decision: ID, question, options, recommendation, status, decided-by/date. S
 | D-012 | Core dependency set | Approve: tauri 2, tokio, serde/serde_yaml, llama-cpp-2, rmcp, rusqlite or sqlx, keyring, reqwest, axum (team) · review one by one | Approve the set; anything else asks the lead first | decided |
 | D-013 | Codebase-conversion tooling | craft-anything · TrustGraph · direct Claude Code sessions per module | **Direct sessions against written contracts**; don't use craft-anything or TrustGraph for the port (R-01) | decided |
 | D-014 | Visual direction of the design standard (ADR-0010) | Quiet neutral chrome + Demios indigo accent + mint for on-device, system fonts · other direction | As proposed in `docs/design/design-system.md`; preview shared for review | decided |
+| D-016 | Store / distribution targets for Demios Desktop | macOS direct + notarized · Mac App Store · Microsoft Store · Linux Flathub | macOS direct (Developer ID + notarization), Microsoft Store (MSIX), Flathub; Mac App Store not now | decided |
+| D-017 | Developer accounts and signing | Apple Developer Program · Microsoft Partner Center · Windows code-signing cert · none yet | None yet: prepare configs and docs, sign/submit nothing; no credentials in the repo | decided |
+| D-018 | Does the free personal product go into stores | list it · direct download only · decide after audit | List it | decided |
 | D-015 | How to test the real desktop app | tauri-driver + WebdriverIO e2e in CI on Linux + Windows · Playwright over WebView2 (Windows only) · manual / computer-use on macOS | tauri-driver + WebdriverIO `e2e` job (Linux, Windows); macOS by a documented manual release checklist | decided |
 
 ## Decided
@@ -30,3 +33,5 @@ Each decision: ID, question, options, recommendation, status, decided-by/date. S
 **2026-11-24 — owner approved D-014** (visual direction as in `docs/design/preview.html`); ADR-0010 accepted.
 
 **2026-11-24 — owner approved D-015** and merging #14 on automated tests; new dev deps `@wdio/*` and `tauri-driver` approved for T-SHELL-05.
+
+**2026-11-24 — owner decided D-016, D-017, D-018** (answers to the lead's question); T-STORE work started with worker W-store.
