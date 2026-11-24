@@ -9,6 +9,8 @@ pub struct Reply {
     pub status: u16,
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
+    /// Answer `Range: bytes=a-b` with a 206 slice.
+    pub ranges: bool,
     /// Omit `Content-Length` (body delimited by closing the connection).
     pub no_length: bool,
 }
@@ -19,6 +21,7 @@ impl Reply {
             status: 200,
             headers: vec![("content-type".into(), "application/json".into())],
             body: body.as_bytes().to_vec(),
+            ranges: false,
             no_length: false,
         }
     }
@@ -28,6 +31,7 @@ impl Reply {
             status: 200,
             headers: vec![],
             body,
+            ranges: false,
             no_length: false,
         }
     }
@@ -37,12 +41,18 @@ impl Reply {
             status,
             headers: vec![],
             body: vec![],
+            ranges: false,
             no_length: false,
         }
     }
 
     pub fn without_length(mut self) -> Self {
         self.no_length = true;
+        self
+    }
+
+    pub fn with_ranges(mut self) -> Self {
+        self.ranges = true;
         self
     }
 
@@ -84,7 +94,27 @@ pub async fn serve(routes: HashMap<String, Reply>) -> Server {
                 let head = String::from_utf8_lossy(&buf).to_string();
                 let target = head.split_whitespace().nth(1).unwrap_or("/").to_string();
                 log.lock().unwrap().push(head.to_lowercase());
-                let r = routes.get(&target).cloned().unwrap_or(Reply::status(404));
+                let mut r = routes.get(&target).cloned().unwrap_or(Reply::status(404));
+                let range = head.lines().find_map(|l| {
+                    let l = l.to_ascii_lowercase();
+                    let v = l.strip_prefix("range: bytes=")?.trim().to_string();
+                    let (a, b) = v.split_once('-')?;
+                    let a: usize = a.parse().ok()?;
+                    let b: usize = b.parse().unwrap_or(usize::MAX);
+                    Some((a, b))
+                });
+                if let (true, Some((a, b))) = (r.ranges, range) {
+                    let len = r.body.len();
+                    let end = b.saturating_add(1).min(len);
+                    if a < len {
+                        r.headers.push((
+                            "content-range".into(),
+                            format!("bytes {a}-{}/{len}", end - 1),
+                        ));
+                        r.body = r.body[a..end].to_vec();
+                        r.status = 206;
+                    }
+                }
                 let mut out = if r.no_length {
                     format!("HTTP/1.1 {} X\r\nconnection: close\r\n", r.status)
                 } else {

@@ -11,6 +11,7 @@ import {
   type SlotInfo,
 } from "../ipc/types";
 import { Badge, Button, ICON, InlineMessage, Select, Skeleton, Switch, TextField, type SelectGroup } from "./primitives";
+import { LocalModelsCard } from "./LocalModels";
 import { useToast } from "./toast";
 
 export type SettingsSection = "models" | "general";
@@ -164,7 +165,13 @@ function ModelsPage({
   onSave: (s: Settings, what: string) => void;
 }) {
   const s = catalog.settings;
-  const hasAnyModel = catalog.models.length > 0;
+  // A download finished: pickers and the composer should see the new model.
+  const refreshCatalog = useCallback(() => {
+    void api
+      .listModels()
+      .then(onCatalog)
+      .catch(() => {});
+  }, [api, onCatalog]);
   return (
     <>
       <section className="card" aria-labelledby="slots-h">
@@ -186,36 +193,24 @@ function ModelsPage({
         ))}
       </section>
 
-      <section className="card" aria-labelledby="local-h">
-        <h2 id="local-h">On this device</h2>
-        {!hasAnyModel && catalog.local_models.length === 0 && (
-          <p className="dn-help">Download a model or add a key.</p>
-        )}
-        {info?.dev_fake_model === true && (
+      {info?.dev_fake_model === true && (
+        <section className="card" aria-labelledby="dev-h">
+          <h2 id="dev-h">Development</h2>
           <div className="row">
             <div className="row-main">
               <span className="row-title">Dev fake model</span>
               <span className="dn-help">
-                Streams a canned reply so the app works before real models are connected. Development builds only.
+                Streams a canned reply so the app works without a real model. Development builds only.
               </span>
             </div>
             <Badge tone="local" icon={<Cpu size={12} strokeWidth={1.5} aria-hidden="true" />}>
               Ready
             </Badge>
           </div>
-        )}
-        {catalog.local_models.map((m) => (
-          <div className="row" key={m.model_id}>
-            <div className="row-main">
-              <span className="row-title">
-                {m.label} <span className="dn-help">{m.size}</span>
-              </span>
-              <span className="dn-help">{m.note}</span>
-            </div>
-            <Badge>Coming soon</Badge>
-          </div>
-        ))}
-      </section>
+        </section>
+      )}
+
+      <LocalModelsCard api={api} initial={catalog.local_models} onReady={refreshCatalog} />
 
       {servers.length > 0 && (
         <section className="card" aria-labelledby="servers-h">

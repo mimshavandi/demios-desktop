@@ -21,6 +21,9 @@ const COMMANDS: &[&str] = &[
     "respond_approval",
     "list_unknown_outcomes",
     "resolve_unknown_outcome",
+    "watch_local_models",
+    "download_model",
+    "pause_download",
 ];
 
 fn main() {
