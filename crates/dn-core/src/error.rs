@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 /// Something the UI can offer the user to fix an error.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum RecoveryAction {
     DownloadModel { capability: Capability },
@@ -16,6 +17,7 @@ pub enum RecoveryAction {
 }
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "code", rename_all = "snake_case")]
 pub enum CoreError {
     /// No model is configured for this capability. Never fall back silently to another source.

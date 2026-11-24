@@ -12,6 +12,12 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
+ts-rs = { workspace = true, optional = true }
+
+[features]
+# Derive `ts_rs::TS` on the public types so the UI can import generated bindings
+# (`cargo test -p dn-core --features ts` checks `bindings/` is current). Off by default.
+ts = ["dep:ts-rs"]
 
 [lints]
 workspace = true
