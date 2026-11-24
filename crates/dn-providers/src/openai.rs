@@ -4,7 +4,7 @@ use crate::adapter::{Inner, ModelInfo, ProviderAdapter, ProviderKind, text_of};
 use crate::http::{self, Call, OptionalParam, bad_response, stream_error};
 use crate::policy::is_reasoning_model;
 use crate::util::{BoxFuture, Emit, event_stream};
-use crate::{emit, finish_tool_args, send_done};
+use crate::{emit, finish_tool_args, new_call_id, send_done};
 use dn_core::CoreError;
 use dn_core::chat::{
     ChatMessage, ChatModel, ChatRequest, EventStream, FinishReason, Role, StreamEvent, ToolCall,
@@ -20,18 +20,35 @@ const OPTIONAL: &[OptionalParam] = &[
     OptionalParam::new("temperature"),
     OptionalParam::new("reasoning_effort"),
     OptionalParam {
-        path: "max_tokens",
-        aliases: &[],
         rename_to: Some("max_completion_tokens"),
+        ..OptionalParam::new("max_tokens")
     },
     OptionalParam::new("max_completion_tokens"),
     OptionalParam::new("stream_options"),
+    // Never dropped silently: the schema moves into the system prompt instead.
     OptionalParam {
-        path: "response_format",
         aliases: &["json_schema"],
-        rename_to: None,
+        fallback: Some(schema_to_system_message),
+        ..OptionalParam::new("response_format")
     },
 ];
+
+/// `response_format` rejected → same schema as a system instruction.
+fn schema_to_system_message(body: &mut Value, removed: Value) {
+    let instruction = http::schema_instruction(&removed["json_schema"]["schema"]);
+    let Some(msgs) = body["messages"].as_array_mut() else {
+        return;
+    };
+    // Extend the leading system message (some servers allow only one), else add one.
+    if let Some(first) = msgs.first_mut()
+        && first["role"] == "system"
+        && let Some(text) = first["content"].as_str()
+    {
+        first["content"] = json!(format!("{text}\n\n{instruction}"));
+    } else {
+        msgs.insert(0, json!({"role": "system", "content": instruction}));
+    }
+}
 
 impl OpenAi {
     fn headers(&self) -> Vec<(&'static str, String)> {
@@ -148,10 +165,13 @@ pub(crate) async fn run(inner: Arc<Inner>, req: ChatRequest, tx: Emit) {
         .await?;
         let mut calls: BTreeMap<u64, PartialCall> = BTreeMap::new();
         let mut finish = None;
+        // `[DONE]` or a `finish_reason` ends a complete stream; EOF before either is a cut-off.
+        let mut terminal = false;
         let mut usage = Usage::default();
         let mut sse = http::SseReader::new(&id, resp);
         while let Some(ev) = sse.next().await? {
             if ev.data.trim() == "[DONE]" {
+                terminal = true;
                 break;
             }
             let v: Value = serde_json::from_str(&ev.data).map_err(|e| bad_response(&id, e))?;
@@ -188,6 +208,7 @@ pub(crate) async fn run(inner: Arc<Inner>, req: ChatRequest, tx: Emit) {
                 }
             }
             if let Some(f) = choice["finish_reason"].as_str() {
+                terminal = true;
                 finish = Some(match f {
                     "length" => FinishReason::Length,
                     "tool_calls" | "function_call" => FinishReason::ToolCalls,
@@ -195,12 +216,20 @@ pub(crate) async fn run(inner: Arc<Inner>, req: ChatRequest, tx: Emit) {
                 });
             }
         }
-        let mut any_call = false;
-        for (n, p) in calls {
-            any_call = true;
+        if !terminal {
+            return Err(http::truncated(&id, "`[DONE]` or a finish_reason"));
+        }
+        // Hitting the token limit can cut tool-call arguments off mid-JSON: keep `Length`
+        // and drop the calls instead of running half-formed ones.
+        if finish == Some(FinishReason::Length) {
+            send_done(&tx, FinishReason::Length, usage).await;
+            return Ok(());
+        }
+        let any_call = !calls.is_empty();
+        for p in calls.into_values() {
             let call = ToolCall {
                 id: if p.id.is_empty() {
-                    format!("call_{n}")
+                    new_call_id("call")
                 } else {
                     p.id
                 },

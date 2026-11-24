@@ -29,6 +29,12 @@ pub use util::{BoxFuture, next_event};
 use dn_core::chat::{FinishReason, StreamEvent, Usage};
 use util::Emit;
 
+/// Fresh, globally unique tool-call id for providers that send none (UUIDv7), so ids
+/// never repeat across model calls in a conversation.
+pub(crate) fn new_call_id(prefix: &str) -> String {
+    format!("{prefix}_{}", dn_core::Id::new())
+}
+
 /// Sends one event; `Err(Cancelled)` if the consumer dropped the stream.
 pub(crate) async fn emit(tx: &Emit, ev: StreamEvent) -> Result<(), CoreError> {
     tx.send(Ok(ev)).await.map_err(|_| CoreError::Cancelled)

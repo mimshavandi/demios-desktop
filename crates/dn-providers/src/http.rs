@@ -14,6 +14,9 @@ pub(crate) struct OptionalParam {
     pub aliases: &'static [&'static str],
     /// Rename instead of dropping when the error suggests the new name.
     pub rename_to: Option<&'static str>,
+    /// Called with the removed value, so a param that must not silently disappear (a
+    /// response schema) can be replaced by something equivalent (a prompt instruction).
+    pub fallback: Option<fn(&mut Value, Value)>,
 }
 
 impl OptionalParam {
@@ -22,9 +25,21 @@ impl OptionalParam {
             path,
             aliases: &[],
             rename_to: None,
+            fallback: None,
         }
     }
 }
+
+/// Instruction used when a provider can't enforce a response schema natively.
+pub(crate) fn schema_instruction(schema: &Value) -> String {
+    format!(
+        "Reply with only a JSON value (no prose, no code fences) that matches this JSON Schema:\n{schema}"
+    )
+}
+
+/// Header names whose values are credentials: marked sensitive so they never show up in
+/// `Debug` output or HTTP/2 header tables.
+const SENSITIVE: &[&str] = &["authorization", "x-api-key", "x-goog-api-key"];
 
 pub(crate) struct Call<'a> {
     pub client: &'a reqwest::Client,
@@ -45,7 +60,15 @@ pub(crate) async fn send(mut call: Call<'_>) -> Result<reqwest::Response, CoreEr
     loop {
         let mut rb = call.client.request(call.method.clone(), &call.url);
         for (k, v) in &call.headers {
-            rb = rb.header(*k, v);
+            let mut hv = reqwest::header::HeaderValue::from_str(v).map_err(|_| {
+                unavailable(
+                    "The API key contains characters that can't be sent.",
+                    format!("{}: invalid value for header `{k}`", call.provider_id),
+                    vec![RecoveryAction::AddProviderKey],
+                )
+            })?;
+            hv.set_sensitive(SENSITIVE.contains(k));
+            rb = rb.header(*k, hv);
         }
         if let Some(body) = &call.body {
             rb = rb
@@ -105,6 +128,8 @@ fn drop_unsupported(body: &mut Value, optional: &[OptionalParam], error_text: &s
             && err.contains(new)
         {
             set_path(body, new, value);
+        } else if let Some(f) = p.fallback {
+            f(body, value);
         }
         return true;
     }
@@ -226,6 +251,17 @@ pub(crate) fn stream_error(provider_id: &str, detail: &str, secret: Option<&str>
     )
 }
 
+/// The body ended cleanly but without the provider's end-of-stream marker.
+pub(crate) fn truncated(provider_id: &str, missing: &str) -> CoreError {
+    unavailable(
+        format!("The response from {provider_id} was cut off."),
+        format!("{provider_id}: stream ended without {missing}"),
+        vec![RecoveryAction::Retry {
+            after_seconds: None,
+        }],
+    )
+}
+
 pub(crate) fn bad_response(provider_id: &str, detail: impl std::fmt::Display) -> CoreError {
     unavailable(
         format!("{provider_id} sent a response we couldn't read."),
@@ -297,13 +333,12 @@ mod tests {
             OptionalParam::new("temperature"),
             OptionalParam {
                 path: "max_tokens",
-                aliases: &[],
                 rename_to: Some("max_completion_tokens"),
+                ..OptionalParam::new("max_tokens")
             },
             OptionalParam {
-                path: "generationConfig.thinkingConfig",
                 aliases: &["thinking"],
-                rename_to: None,
+                ..OptionalParam::new("generationConfig.thinkingConfig")
             },
         ];
         let mut b = json!({"temperature": 0.2, "max_tokens": 10});

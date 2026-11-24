@@ -70,6 +70,50 @@ impl Server {
     }
 }
 
+/// Reads one HTTP/1.1 request (headers + `content-length` body).
+pub async fn read_request(sock: &mut tokio::net::TcpStream) -> Recorded {
+    let mut buf = Vec::new();
+    let mut tmp = [0u8; 4096];
+    let header_end = loop {
+        let n = sock.read(&mut tmp).await.unwrap();
+        assert!(n > 0, "client closed before sending headers");
+        buf.extend_from_slice(&tmp[..n]);
+        if let Some(p) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+            break p + 4;
+        }
+    };
+    let head = String::from_utf8_lossy(&buf[..header_end]).to_string();
+    let mut lines = head.split("\r\n");
+    let mut start = lines.next().unwrap().split(' ');
+    let method = start.next().unwrap().to_string();
+    let path = start.next().unwrap().to_string();
+    let headers: Vec<(String, String)> = lines
+        .filter_map(|l| l.split_once(':'))
+        .map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_string()))
+        .collect();
+    let len: usize = headers
+        .iter()
+        .find(|(k, _)| k == "content-length")
+        .map(|(_, v)| v.parse().unwrap())
+        .unwrap_or(0);
+    while buf.len() < header_end + len {
+        let n = sock.read(&mut tmp).await.unwrap();
+        buf.extend_from_slice(&tmp[..n]);
+    }
+    let body_bytes = &buf[header_end..header_end + len];
+    let body = if body_bytes.is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::from_slice(body_bytes).unwrap()
+    };
+    Recorded {
+        method,
+        path,
+        headers,
+        body,
+    }
+}
+
 pub async fn serve(replies: Vec<Reply>) -> Server {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -78,46 +122,8 @@ pub async fn serve(replies: Vec<Reply>) -> Server {
     tokio::spawn(async move {
         for reply in replies {
             let (mut sock, _) = listener.accept().await.unwrap();
-            let mut buf = Vec::new();
-            let mut tmp = [0u8; 4096];
-            let header_end = loop {
-                let n = sock.read(&mut tmp).await.unwrap();
-                assert!(n > 0, "client closed before sending headers");
-                buf.extend_from_slice(&tmp[..n]);
-                if let Some(p) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
-                    break p + 4;
-                }
-            };
-            let head = String::from_utf8_lossy(&buf[..header_end]).to_string();
-            let mut lines = head.split("\r\n");
-            let mut start = lines.next().unwrap().split(' ');
-            let method = start.next().unwrap().to_string();
-            let path = start.next().unwrap().to_string();
-            let headers: Vec<(String, String)> = lines
-                .filter_map(|l| l.split_once(':'))
-                .map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_string()))
-                .collect();
-            let len: usize = headers
-                .iter()
-                .find(|(k, _)| k == "content-length")
-                .map(|(_, v)| v.parse().unwrap())
-                .unwrap_or(0);
-            while buf.len() < header_end + len {
-                let n = sock.read(&mut tmp).await.unwrap();
-                buf.extend_from_slice(&tmp[..n]);
-            }
-            let body_bytes = &buf[header_end..header_end + len];
-            let body = if body_bytes.is_empty() {
-                serde_json::Value::Null
-            } else {
-                serde_json::from_slice(body_bytes).unwrap()
-            };
-            rec.lock().unwrap().push(Recorded {
-                method,
-                path,
-                headers,
-                body,
-            });
+            let recorded = read_request(&mut sock).await;
+            rec.lock().unwrap().push(recorded);
             let head = format!(
                 "HTTP/1.1 {} X\r\ncontent-type: {}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
                 reply.status,

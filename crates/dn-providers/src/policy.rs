@@ -44,12 +44,16 @@ impl ReasoningPolicy {
             })
     }
 
-    /// Whether to ask a reasoning-capable model to think for this request.
+    /// Whether to ask a reasoning-capable model to think for this request. Structured
+    /// output (`response_schema`) always turns thinking off, even with `Reasoning::On`.
     pub fn thinking(&self, req: &ChatRequest) -> bool {
+        if req.response_schema.is_some() {
+            return false;
+        }
         match req.reasoning {
             Reasoning::On => true,
             Reasoning::Off => false,
-            Reasoning::Auto => req.response_schema.is_none() && self.is_prose_caller(&req.caller),
+            Reasoning::Auto => self.is_prose_caller(&req.caller),
         }
     }
 }
@@ -116,7 +120,8 @@ mod tests {
         assert!(!p.thinking(&req("artifactx.y", Reasoning::Auto, false)));
         assert!(!p.thinking(&req("chat.title", Reasoning::Auto, false)));
         assert!(!p.thinking(&req("chat.reply", Reasoning::Auto, true)));
-        assert!(p.thinking(&req("chat.title", Reasoning::On, true)));
+        assert!(p.thinking(&req("chat.title", Reasoning::On, false)));
+        assert!(!p.thinking(&req("chat.title", Reasoning::On, true)));
         assert!(!p.thinking(&req("chat.reply", Reasoning::Off, false)));
     }
 

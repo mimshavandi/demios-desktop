@@ -7,10 +7,20 @@ no keys.
 - `*.sse`: streaming chat responses (`text/event-stream`), one file per scenario.
 - `*.json`: non-streaming responses (`/models`, error bodies).
 
-**Provenance.** These files are written to match each provider's documented streaming
-wire format: real field names, event order and chunking (tool-call arguments split across
-deltas, for example). Ids, signatures and key fragments are `REDACTED`. They are not raw
-captures. To refresh one from a real response, capture it with `curl -N` against the API,
-scrub ids and keys, and diff it against the old file. `tests/live.rs` (ignored; reads keys
-from env vars) checks the adapters against the real APIs. Never commit a file that contains
-a key: gitleaks runs in CI.
+**Provenance: doc-derived, not captured.** These files were written by hand from each
+provider's API documentation. They use real field names, event order and chunking (for
+example, tool-call arguments split across deltas), with ids, signatures and key fragments
+set to `REDACTED`. They are **not** recordings of real API traffic. They test our parsing
+against the documented format; they don't prove the live APIs still match it.
+
+**Recording real captures** (once keys are available): `tests/live.rs` is `#[ignore]` and
+reads keys from env vars. With `DN_RECORD_FIXTURES=1` it routes the adapter through a local
+proxy that forwards to the real API and writes `<provider>/text.recorded.sse`. The key and
+every `id`, `responseId`, `signature` and `thoughtSignature` are replaced with `REDACTED`.
+
+```bash
+OPENAI_API_KEY=... DN_RECORD_FIXTURES=1 cargo test -p dn-providers --test live -- --ignored
+```
+
+Review the recorded file by hand before committing it. gitleaks runs in CI, but don't rely
+on it.

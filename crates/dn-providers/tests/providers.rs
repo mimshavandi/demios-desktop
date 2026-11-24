@@ -604,3 +604,215 @@ fn hosted_provider_without_key_needs_add_provider_key() {
         "needs base_url"
     );
 }
+
+// ---------- review: robustness ----------
+
+fn assert_retryable_unavailable(err: CoreError) {
+    match err {
+        CoreError::ModelUnavailable { recovery, .. } => {
+            assert!(
+                matches!(recovery[0], RecoveryAction::Retry { .. }),
+                "{recovery:?}"
+            )
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn openai_parallel_tool_calls_keep_order_and_ids() {
+    let srv = serve(vec![Reply::sse("openai/parallel_tool_calls.sse")]).await;
+    let p = build(cfg("openai", ProviderKind::OpenAi, &srv.base)).unwrap();
+    let mut req = request("byok:openai:gpt-4o-mini", "chat.reply");
+    req.tools = vec![weather_tool()];
+    let evs = collect(&*p, req).await.unwrap();
+    let c = calls(&evs);
+    let got: Vec<(&str, &serde_json::Value)> =
+        c.iter().map(|c| (c.id.as_str(), &c.arguments)).collect();
+    assert_eq!(
+        got,
+        [
+            ("call_REDACTED_A", &json!({"city": "Berlin"})),
+            ("call_REDACTED_B", &json!({"city": "Paris"}))
+        ]
+    );
+    assert_eq!(done(&evs).0, FinishReason::ToolCalls);
+}
+
+#[tokio::test]
+async fn missing_call_ids_get_unique_ids_across_calls() {
+    let srv = serve(vec![
+        Reply::sse("openai_compat/no_ids_tool_calls.sse"),
+        Reply::sse("openai_compat/no_ids_tool_calls.sse"),
+        Reply::sse("gemini/parallel_tool_calls.sse"),
+        Reply::sse("gemini/parallel_tool_calls.sse"),
+    ])
+    .await;
+    let compat = build(
+        ProviderConfig::new("ollama", ProviderKind::OpenAiCompatible).with_base_url(&srv.base),
+    )
+    .unwrap();
+    let gem = build(cfg("gemini", ProviderKind::Gemini, &srv.base)).unwrap();
+    let mut ids = Vec::new();
+    for _ in 0..2 {
+        let evs = collect(&*compat, request("remote:ollama:qwen3:8b", "chat.reply"))
+            .await
+            .unwrap();
+        ids.extend(calls(&evs).into_iter().map(|c| c.id));
+    }
+    for _ in 0..2 {
+        let evs = collect(&*gem, request("byok:gemini:gemini-2.0-flash", "chat.reply"))
+            .await
+            .unwrap();
+        let c = calls(&evs);
+        assert_eq!(c.len(), 2);
+        assert_eq!(c[1].arguments, json!({"city": "Paris"}));
+        ids.extend(c.into_iter().map(|c| c.id));
+    }
+    assert_eq!(ids.len(), 6);
+    let unique: std::collections::HashSet<&String> = ids.iter().collect();
+    assert_eq!(unique.len(), 6, "ids repeat: {ids:?}");
+    assert!(
+        ids[0].starts_with("call_") && ids[2].starts_with("gm_"),
+        "{ids:?}"
+    );
+}
+
+#[tokio::test]
+async fn mid_stream_errors_surface_after_partial_text() {
+    let srv = serve(vec![
+        Reply::sse("openai/midstream_error.sse"),
+        Reply::sse("gemini/midstream_error.sse"),
+    ])
+    .await;
+    let oa = build(cfg("openai", ProviderKind::OpenAi, &srv.base)).unwrap();
+    let gm = build(cfg("gemini", ProviderKind::Gemini, &srv.base)).unwrap();
+    for (p, model) in [
+        (&oa, "byok:openai:gpt-4o-mini"),
+        (&gm, "byok:gemini:gemini-2.5-flash"),
+    ] {
+        let mut s = p.chat(request(model, "chat.reply"));
+        assert_eq!(
+            next_event(&mut s).await.unwrap().unwrap(),
+            StreamEvent::TextDelta { text: "Hel".into() }
+        );
+        assert_retryable_unavailable(next_event(&mut s).await.unwrap().unwrap_err());
+        assert!(next_event(&mut s).await.is_none());
+    }
+}
+
+#[tokio::test]
+async fn clean_eof_without_end_marker_is_an_error_for_every_provider() {
+    let srv = serve(vec![
+        Reply::sse("openai/truncated.sse"),
+        Reply::sse("anthropic/truncated.sse"),
+        Reply::sse("gemini/truncated.sse"),
+    ])
+    .await;
+    for (id, kind, model) in [
+        ("openai", ProviderKind::OpenAi, "byok:openai:gpt-4o-mini"),
+        (
+            "anthropic",
+            ProviderKind::Anthropic,
+            "byok:anthropic:claude-3-5-haiku-latest",
+        ),
+        (
+            "gemini",
+            ProviderKind::Gemini,
+            "byok:gemini:gemini-2.5-flash",
+        ),
+    ] {
+        let p = build(cfg(id, kind, &srv.base)).unwrap();
+        let mut s = p.chat(request(model, "chat.title"));
+        let mut got_text = false;
+        let err = loop {
+            match next_event(&mut s).await {
+                Some(Ok(StreamEvent::TextDelta { .. })) => got_text = true,
+                Some(Ok(StreamEvent::Done { .. })) => {
+                    panic!("{id}: truncated stream reported Done")
+                }
+                Some(Ok(_)) => {}
+                Some(Err(e)) => break e,
+                None => panic!("{id}: stream ended without error"),
+            }
+        };
+        assert!(got_text, "{id}");
+        assert_retryable_unavailable(err);
+    }
+}
+
+#[tokio::test]
+async fn length_finish_keeps_length_and_drops_partial_tool_calls() {
+    let srv = serve(vec![Reply::sse("openai/length_tool_call.sse")]).await;
+    let p = build(cfg("openai", ProviderKind::OpenAi, &srv.base)).unwrap();
+    let evs = collect(&*p, request("byok:openai:gpt-4o-mini", "chat.reply"))
+        .await
+        .unwrap();
+    assert!(calls(&evs).is_empty());
+    assert_eq!(done(&evs).0, FinishReason::Length);
+}
+
+#[tokio::test]
+async fn gemini_malformed_function_call_is_error_finish() {
+    let srv = serve(vec![Reply::sse("gemini/malformed_call.sse")]).await;
+    let p = build(cfg("gemini", ProviderKind::Gemini, &srv.base)).unwrap();
+    let evs = collect(&*p, request("byok:gemini:gemini-2.5-flash", "chat.reply"))
+        .await
+        .unwrap();
+    assert_eq!(done(&evs).0, FinishReason::Error);
+}
+
+#[tokio::test]
+async fn rejected_response_schema_moves_into_the_prompt_instead_of_vanishing() {
+    let srv = serve(vec![
+        Reply::json(400, "openai/schema_unsupported.json"),
+        Reply::sse("openai/text.sse"),
+        Reply::json(400, "gemini/schema_unsupported.json"),
+        Reply::sse("gemini/text.sse"),
+    ])
+    .await;
+    let schema = json!({"type": "object", "properties": {"title": {"type": "string"}}});
+    let oa = build(cfg("openai", ProviderKind::OpenAi, &srv.base)).unwrap();
+    let mut r = request("byok:openai:gpt-4o-mini", "chat.title");
+    r.response_schema = Some(schema.clone());
+    collect(&*oa, r).await.unwrap();
+    let gm = build(cfg("gemini", ProviderKind::Gemini, &srv.base)).unwrap();
+    let mut r = request("byok:gemini:gemini-2.5-flash", "chat.title");
+    r.response_schema = Some(schema.clone());
+    collect(&*gm, r).await.unwrap();
+    let reqs = srv.requests();
+    let schema_text = schema.to_string();
+    // OpenAI: retried without response_format, schema appended to the system message.
+    assert!(reqs[0].body.get("response_format").is_some());
+    assert!(reqs[1].body.get("response_format").is_none());
+    let sys = reqs[1].body["messages"][0]["content"].as_str().unwrap();
+    assert!(
+        sys.starts_with("Be brief.") && sys.contains(&schema_text),
+        "{sys}"
+    );
+    // Gemini: same, in systemInstruction.
+    assert!(
+        reqs[3].body["generationConfig"]
+            .get("responseJsonSchema")
+            .is_none()
+    );
+    let parts = &reqs[3].body["systemInstruction"]["parts"];
+    assert!(
+        parts[1]["text"].as_str().unwrap().contains(&schema_text),
+        "{parts}"
+    );
+}
+
+#[tokio::test]
+async fn reasoning_on_with_schema_does_not_think() {
+    let srv = serve(vec![Reply::sse("gemini/text.sse")]).await;
+    let p = build(cfg("gemini", ProviderKind::Gemini, &srv.base)).unwrap();
+    let mut r = request("byok:gemini:gemini-2.5-flash", "chat.reply");
+    r.reasoning = Reasoning::On;
+    r.response_schema = Some(json!({"type": "object"}));
+    collect(&*p, r).await.unwrap();
+    assert_eq!(
+        srv.requests()[0].body["generationConfig"]["thinkingConfig"]["thinkingBudget"],
+        0
+    );
+}

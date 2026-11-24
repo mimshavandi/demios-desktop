@@ -4,7 +4,7 @@ use crate::adapter::{Inner, ModelInfo, ProviderAdapter, ProviderKind, text_of};
 use crate::http::{self, Call, OptionalParam, bad_response, stream_error};
 use crate::policy::is_reasoning_model;
 use crate::util::{BoxFuture, Emit, event_stream};
-use crate::{emit, send_done};
+use crate::{emit, new_call_id, send_done};
 use dn_core::CoreError;
 use dn_core::chat::{
     ChatModel, ChatRequest, EventStream, FinishReason, Role, StreamEvent, ToolCall, Usage,
@@ -22,17 +22,26 @@ const SIG_SEP: char = '~';
 
 const OPTIONAL: &[OptionalParam] = &[
     OptionalParam {
-        path: "generationConfig.thinkingConfig",
         aliases: &["thinking", "thinking_budget"],
-        rename_to: None,
+        ..OptionalParam::new("generationConfig.thinkingConfig")
     },
     OptionalParam::new("generationConfig.temperature"),
+    // Never dropped silently: the schema moves into the system instruction instead.
     OptionalParam {
-        path: "generationConfig.responseJsonSchema",
         aliases: &["response_schema", "responseSchema"],
-        rename_to: None,
+        fallback: Some(schema_to_system_instruction),
+        ..OptionalParam::new("generationConfig.responseJsonSchema")
     },
 ];
+
+/// `responseJsonSchema` rejected → same schema as a system instruction.
+fn schema_to_system_instruction(body: &mut Value, removed: Value) {
+    let part = json!({"text": crate::http::schema_instruction(&removed)});
+    match body["systemInstruction"]["parts"].as_array_mut() {
+        Some(parts) => parts.push(part),
+        None => body["systemInstruction"] = json!({"parts": [part]}),
+    }
+}
 
 fn headers(inner: &Inner, accept: &str) -> Vec<(&'static str, String)> {
     let mut h = vec![("accept", accept.to_string())];
@@ -156,6 +165,7 @@ async fn run(inner: Arc<Inner>, req: ChatRequest, tx: Emit) {
         let mut usage = Usage::default();
         let mut finish = FinishReason::Stop;
         let mut n_calls = 0u32;
+        let mut finished = false;
         let mut sse = http::SseReader::new(&id, resp);
         while let Some(ev) = sse.next().await? {
             let v: Value = serde_json::from_str(&ev.data).map_err(|e| bad_response(&id, e))?;
@@ -182,8 +192,9 @@ async fn run(inner: Arc<Inner>, req: ChatRequest, tx: Emit) {
                 if let Some(fc) = part.get("functionCall") {
                     let mut call_id = fc["id"]
                         .as_str()
+                        .filter(|s| !s.is_empty())
                         .map(String::from)
-                        .unwrap_or_else(|| format!("gm{n_calls}"));
+                        .unwrap_or_else(|| new_call_id("gm"));
                     if let Some(sig) = part["thoughtSignature"].as_str() {
                         call_id = format!("{call_id}{SIG_SEP}{sig}");
                     }
@@ -204,17 +215,24 @@ async fn run(inner: Arc<Inner>, req: ChatRequest, tx: Emit) {
                 }
             }
             if let Some(f) = cand["finishReason"].as_str() {
+                finished = true;
                 finish = match f {
                     "MAX_TOKENS" => FinishReason::Length,
                     "STOP" | "FINISH_REASON_UNSPECIFIED" => FinishReason::Stop,
-                    "SAFETY" | "RECITATION" | "BLOCKLIST" | "PROHIBITED_CONTENT" | "SPII" => {
-                        FinishReason::Error
-                    }
+                    "SAFETY"
+                    | "RECITATION"
+                    | "BLOCKLIST"
+                    | "PROHIBITED_CONTENT"
+                    | "SPII"
+                    | "MALFORMED_FUNCTION_CALL" => FinishReason::Error,
                     _ => FinishReason::Stop,
                 };
             }
         }
-        if n_calls > 0 {
+        if !finished {
+            return Err(http::truncated(&id, "a finishReason"));
+        }
+        if n_calls > 0 && finish == FinishReason::Stop {
             finish = FinishReason::ToolCalls;
         }
         send_done(&tx, finish, usage).await;

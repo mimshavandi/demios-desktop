@@ -21,9 +21,8 @@ const DEFAULT_MAX_TOKENS: u32 = 8192;
 const OPTIONAL: &[OptionalParam] = &[
     OptionalParam::new("temperature"),
     OptionalParam {
-        path: "thinking",
         aliases: &["budget_tokens"],
-        rename_to: None,
+        ..OptionalParam::new("thinking")
     },
 ];
 
@@ -78,9 +77,7 @@ pub(crate) fn body(inner: &Inner, model: &str, req: &ChatRequest) -> Value {
         }
     }
     if let Some(schema) = &req.response_schema {
-        system.push(format!(
-            "Reply with only a JSON value (no prose, no code fences) that matches this JSON Schema:\n{schema}"
-        ));
+        system.push(http::schema_instruction(schema));
     }
     // Thinking blocks carry signatures that dn-core messages can't hold yet, so a
     // tool-result continuation runs without thinking (Anthropic accepts that).
@@ -151,6 +148,7 @@ async fn run(inner: Arc<Inner>, req: ChatRequest, tx: Emit) {
         let mut usage = Usage::default();
         let mut finish = FinishReason::Stop;
         let mut any_call = false;
+        let mut stopped = false;
         let mut sse = http::SseReader::new(&id, resp);
         while let Some(ev) = sse.next().await? {
             let v: Value = serde_json::from_str(&ev.data).map_err(|e| bad_response(&id, e))?;
@@ -224,14 +222,22 @@ async fn run(inner: Arc<Inner>, req: ChatRequest, tx: Emit) {
                         _ => FinishReason::Stop,
                     };
                 }
-                "message_stop" => break,
+                "message_stop" => {
+                    stopped = true;
+                    break;
+                }
                 "error" => {
                     return Err(stream_error(&id, &v["error"].to_string(), inner.key()));
                 }
                 _ => {} // ping
             }
         }
-        if any_call {
+        if !stopped {
+            return Err(http::truncated(&id, "`message_stop`"));
+        }
+        // A tool_use block is only emitted once complete, but at the token limit the
+        // turn is unfinished: report `Length` so the loop doesn't run the calls.
+        if any_call && finish != FinishReason::Length {
             finish = FinishReason::ToolCalls;
         }
         send_done(&tx, finish, usage).await;
