@@ -45,6 +45,15 @@ Every direct dependency is listed here with why and its licence (ADR-0009). Appr
 | lucide-react | icons, 16 px / 1.5 stroke (design standard §4) | ISC | T-SHELL-01 |
 | dev: typescript 7, vite 8, @vitejs/plugin-react, vitest, @testing-library/react, jsdom, @types/react(-dom), @types/node 22, @tauri-apps/cli ~2.11 | strict typecheck, build, unit tests, `tauri dev/build` | MIT / Apache-2.0 | T-SHELL-01 |
 
+### Licence tooling (T-STORE-07; lead approved 2026-11-24)
+
+| Tool | Where | Why | Licence |
+|---|---|---|---|
+| cargo-about 0.9.3 (`--features cli`) | CI job `licences`, release builds; not a crate dependency | licence texts for the app's Rust graph (`about.toml`, accepted list mirrors deny.toml) → Settings › About › Open-source licences | MIT OR Apache-2.0 |
+| `apps/desktop/scripts/npm-licenses.mjs`, `licenses.mjs` | our code, zero dependencies | npm production licences, hand-listed bundled C/C++ (`licenses-extra.json`), validation, `ui/src/generated/licenses.json` (gitignored; bundled as a lazy module, no fetch) | Apache-2.0 (this repo) |
+
+Release builds (`tauri build` without `--debug`, i.e. `TAURI_ENV_DEBUG=false`, or `DEMIOS_REQUIRE_LICENSES=1`) fail if cargo-about is missing. Dev, test and debug builds skip the list with a warning.
+
 ### e2e (`apps/desktop/e2e`, dev only; D-015)
 
 | Package | Why | Licence | Added in |

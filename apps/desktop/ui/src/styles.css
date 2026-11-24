@@ -415,6 +415,22 @@ pre.code .code-copy { position: absolute; top: var(--dn-space-1); right: var(--d
 .data-flow { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--dn-space-3); }
 .data-flow li { display: grid; gap: calc(var(--dn-space-1) / 2); }
 
+/* ---------- open-source licences (T-STORE-07) ---------- */
+.licences { display: grid; gap: var(--dn-space-3); padding-top: var(--dn-space-3); border-top: 1px solid var(--dn-color-border); }
+.licences-head { display: flex; align-items: center; justify-content: space-between; }
+.licences-list { list-style: none; margin: 0; padding: 0; max-height: 360px; overflow: auto; border: 1px solid var(--dn-color-border); border-radius: var(--dn-radius-md); }
+.licences-list li + li { border-top: 1px solid var(--dn-color-border); }
+.licences-item { display: flex; width: 100%; justify-content: space-between; gap: var(--dn-space-3); padding: var(--dn-space-2) var(--dn-space-3); background: transparent; border: 0; color: var(--dn-color-text); text-align: left; cursor: pointer; font: inherit; }
+.licences-item:hover { background: var(--dn-color-surface-sunken); }
+.licences-item:focus-visible { outline: 2px solid var(--dn-color-focus); outline-offset: -2px; }
+.licences-name { min-width: 0; overflow-wrap: anywhere; }
+.licences-version, .licences-licence { color: var(--dn-color-text-subtle); font-size: var(--dn-text-sm); }
+.licences-licence { flex-shrink: 0; max-width: 45%; text-align: right; overflow-wrap: anywhere; }
+.licences-text { display: grid; gap: var(--dn-space-2); justify-items: start; }
+.licences-text h4 { font-weight: var(--dn-weight-semibold); }
+.licences-text h4:focus { outline: none; }
+.licences-pre { width: 100%; max-height: 420px; overflow: auto; margin: 0; padding: var(--dn-space-3); background: var(--dn-color-surface-sunken); border-radius: var(--dn-radius-md); font-size: var(--dn-text-xs); line-height: var(--dn-leading-xs); white-space: pre-wrap; overflow-wrap: anywhere; }
+
 /* ---------- dialog, alert variant (§4) ---------- */
 .dn-dialog-overlay { position: fixed; inset: 0; background: var(--dn-color-overlay); z-index: var(--dn-z-dialog); animation: dn-fade-in var(--dn-motion-base) var(--dn-motion-ease); }
 .dn-dialog {
