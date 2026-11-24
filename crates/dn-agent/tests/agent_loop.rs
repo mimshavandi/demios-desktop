@@ -526,3 +526,73 @@ async fn length_finish_never_runs_tool_calls() {
     assert!(out.messages[0].tool_calls.is_empty());
     assert_eq!(out.usage.output_tokens, 64);
 }
+
+#[tokio::test]
+async fn ids_already_in_history_are_never_reused() {
+    // A previous run of a local backend already used `call_0` and `call_0_0`.
+    let mut h = history();
+    for id in ["call_0", "call_0_0"] {
+        h.push(ChatMessage {
+            role: Role::Assistant,
+            content: vec![],
+            tool_calls: vec![ToolCall {
+                id: id.into(),
+                name: "search".into(),
+                arguments: json!({}),
+            }],
+            tool_call_id: None,
+        });
+        h.push(ChatMessage {
+            role: Role::Tool,
+            content: vec![ContentPart::Text { text: "x".into() }],
+            tool_calls: vec![],
+            tool_call_id: Some(id.into()),
+        });
+    }
+    let model = ScriptedModel::new(vec![
+        vec![
+            call("call_0", "search", json!({})),
+            // A duplicate carrying a Gemini-style signature suffix keeps the suffix.
+            call("gm~c2lnLVJFREFDVEVE", "search", json!({})),
+            call("gm~c2lnLVJFREFDVEVE", "search", json!({})),
+            done(FinishReason::ToolCalls, 1, 1),
+        ],
+        vec![text("done"), done(FinishReason::Stop, 1, 1)],
+    ]);
+    let tools = NotesTools::default();
+    let out = run_loop(
+        &model,
+        &tools,
+        &cfg(),
+        h.clone(),
+        &CancelToken::new(),
+        &mut |_| {},
+    )
+    .await
+    .unwrap();
+    let ids: Vec<String> = out.messages[0]
+        .tool_calls
+        .iter()
+        .map(|c| c.id.clone())
+        .collect();
+    // `call_0_0` is taken by history, so the first rewrite moves on.
+    assert_eq!(
+        ids,
+        [
+            "call_0_0_",
+            "gm~c2lnLVJFREFDVEVE",
+            "call_0_2~c2lnLVJFREFDVEVE"
+        ]
+    );
+    let all: Vec<&str> = h
+        .iter()
+        .chain(&out.messages)
+        .flat_map(|m| m.tool_calls.iter().map(|c| c.id.as_str()))
+        .collect();
+    let unique: std::collections::HashSet<&&str> = all.iter().collect();
+    assert_eq!(
+        unique.len(),
+        all.len(),
+        "duplicate ids in conversation: {all:?}"
+    );
+}

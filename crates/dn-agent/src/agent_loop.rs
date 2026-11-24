@@ -125,7 +125,12 @@ pub async fn run_loop(
     let specs = tools.tools();
     // One id per run: the idempotency scope for tool calls (see `ToolContext::run_id`).
     let run_id = dn_core::Id::new();
-    let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // Seeded from the conversation so far: a backend that reuses `call_0` across runs must
+    // not put a duplicate tool-call id into the history (Anthropic rejects those).
+    let mut seen_ids: std::collections::HashSet<String> = history
+        .iter()
+        .flat_map(|m| m.tool_calls.iter().map(|c| c.id.clone()))
+        .collect();
     let mut messages = history;
     let start = messages.len();
     let mut usage = Usage::default();
@@ -236,10 +241,16 @@ pub async fn run_loop(
         // rewritten call is the one stored, executed and answered, so results line up.
         for (i, c) in calls.iter_mut().enumerate() {
             if c.id.is_empty() || !seen_ids.insert(c.id.clone()) {
-                c.id = format!("call_{step}_{i}");
-                while !seen_ids.insert(c.id.clone()) {
-                    c.id.push('_');
+                // Keep a provider suffix after `~` (Gemini's thought signature rides there).
+                let suffix =
+                    c.id.find('~')
+                        .map(|i| c.id[i..].to_string())
+                        .unwrap_or_default();
+                let mut base = format!("call_{step}_{i}");
+                while !seen_ids.insert(format!("{base}{suffix}")) {
+                    base.push('_');
                 }
+                c.id = format!("{base}{suffix}");
             }
         }
         final_text = text.clone();
