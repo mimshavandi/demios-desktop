@@ -37,7 +37,7 @@ fn migrations_run_under_dn_store_and_are_idempotent() {
             &OpContext::model(None),
         )
         .unwrap();
-    let rb = store.rollback(id, 1, &OpContext::user()).unwrap();
+    let rb = store.rollback(conv, id, 1, &OpContext::user()).unwrap();
     assert_eq!((rb.version.n, rb.version.parent_n), (3, Some(1)));
     assert_eq!(store.latest(id).unwrap().content, "# One");
 }

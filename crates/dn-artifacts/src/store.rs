@@ -42,7 +42,100 @@ BEFORE UPDATE ON artifact_versions
 BEGIN
     SELECT RAISE(ABORT, 'artifact_versions is append-only');
 END;
+
+-- Versions can only go away together with their artifact (ON DELETE CASCADE runs after the
+-- parent row is gone, so the WHEN clause lets it through).
+CREATE TRIGGER artifact_versions_no_delete
+BEFORE DELETE ON artifact_versions
+WHEN EXISTS (SELECT 1 FROM artifact_artifacts WHERE id = OLD.artifact_id)
+BEGIN
+    SELECT RAISE(ABORT, 'artifact_versions is append-only; delete the artifact instead');
+END;
 "#]
+}
+
+/// Largest artifact content, `new_str` or tool argument accepted (bytes).
+pub const MAX_CONTENT_BYTES: usize = 2 * 1024 * 1024;
+/// Longest title accepted (characters).
+pub const MAX_TITLE_CHARS: usize = 200;
+
+pub(crate) fn check_content(what: &'static str, s: &str) -> Result<()> {
+    if s.len() > MAX_CONTENT_BYTES {
+        return Err(ArtifactError::TooLarge {
+            what,
+            max: MAX_CONTENT_BYTES,
+            actual: s.len(),
+        });
+    }
+    Ok(())
+}
+
+pub(crate) fn check_title(title: &str) -> Result<()> {
+    let n = title.chars().count();
+    if n > MAX_TITLE_CHARS {
+        return Err(ArtifactError::TitleTooLong {
+            max: MAX_TITLE_CHARS,
+            actual: n,
+        });
+    }
+    Ok(())
+}
+
+/// Artifacts are stored with `\n` line endings, so patches match regardless of how the model
+/// or the user's editor wrote them.
+pub(crate) fn normalise_newlines(s: &str) -> std::borrow::Cow<'_, str> {
+    if s.contains('\r') {
+        std::borrow::Cow::Owned(s.replace("\r\n", "\n").replace('\r', "\n"))
+    } else {
+        std::borrow::Cow::Borrowed(s)
+    }
+}
+
+/// A write transaction that nests: `BEGIN IMMEDIATE` (takes the write lock up front, so two
+/// writers can't both read `MAX(n)`) when the connection is in autocommit mode, otherwise a
+/// savepoint inside the caller's transaction. Rolls back on drop unless committed.
+struct WriteTx<'c> {
+    conn: &'c Connection,
+    savepoint: bool,
+    done: bool,
+}
+
+impl<'c> WriteTx<'c> {
+    fn begin(conn: &'c Connection) -> Result<Self> {
+        let savepoint = !conn.is_autocommit();
+        conn.execute_batch(if savepoint {
+            "SAVEPOINT dn_artifact_write"
+        } else {
+            "BEGIN IMMEDIATE"
+        })?;
+        Ok(Self {
+            conn,
+            savepoint,
+            done: false,
+        })
+    }
+
+    fn commit(mut self) -> Result<()> {
+        self.done = true;
+        self.conn.execute_batch(if self.savepoint {
+            "RELEASE dn_artifact_write"
+        } else {
+            "COMMIT"
+        })?;
+        Ok(())
+    }
+}
+
+impl Drop for WriteTx<'_> {
+    fn drop(&mut self) {
+        if !self.done {
+            let _ = self.conn.execute_batch(if self.savepoint {
+                "ROLLBACK TO dn_artifact_write; RELEASE dn_artifact_write"
+            } else {
+                "ROLLBACK"
+            });
+        }
+    }
 }
 
 /// Who made a change and in reply to which message.
@@ -100,8 +193,8 @@ impl<'c> ArtifactStore<'c> {
         Self { conn }
     }
 
-    /// Apply a model operation inside `conversation_id`. Update/Rewrite of an artifact that
-    /// belongs to another conversation fails with [`ArtifactError::NotFound`].
+    /// Apply a model operation inside `conversation_id`. Every write checks that the artifact
+    /// belongs to the conversation; another conversation's artifact is [`ArtifactError::NotFound`].
     pub fn apply(&self, conversation_id: Id, op: &ArtifactOp, ctx: &OpContext) -> Result<Applied> {
         match op {
             ArtifactOp::Create {
@@ -113,14 +206,8 @@ impl<'c> ArtifactStore<'c> {
                 id,
                 old_str,
                 new_str,
-            } => {
-                self.ensure_in_conversation(*id, conversation_id)?;
-                self.update(*id, old_str, new_str, ctx)
-            }
-            ArtifactOp::Rewrite { id, content } => {
-                self.ensure_in_conversation(*id, conversation_id)?;
-                self.rewrite(*id, content, ctx)
-            }
+            } => self.update(conversation_id, *id, old_str, new_str, ctx),
+            ArtifactOp::Rewrite { id, content } => self.rewrite(conversation_id, *id, content, ctx),
         }
     }
 
@@ -135,11 +222,14 @@ impl<'c> ArtifactStore<'c> {
         alias: Option<&str>,
         ctx: &OpContext,
     ) -> Result<Applied> {
+        check_title(title)?;
+        check_content("content", content)?;
+        let content = normalise_newlines(content);
         let id = Id::new();
         let type_json = serde_json::to_string(artifact_type)
             .map_err(|e| ArtifactError::Corrupt(e.to_string()))?;
-        let tx = self.conn.unchecked_transaction()?;
-        tx.execute(
+        let tx = WriteTx::begin(self.conn)?;
+        tx.conn.execute(
             &format!(
                 "INSERT INTO artifact_artifacts
                     (id, conversation_id, artifact_type, title, alias, created_at, updated_at)
@@ -153,7 +243,7 @@ impl<'c> ArtifactStore<'c> {
                 alias
             ],
         )?;
-        let version = insert_version(&tx, id, 1, content, None, ctx)?;
+        let version = insert_version(tx.conn, id, 1, &content, None, ctx)?;
         tx.commit()?;
         Ok(Applied {
             artifact_id: id,
@@ -164,13 +254,24 @@ impl<'c> ArtifactStore<'c> {
 
     /// Exact-match patch: `old_str` must occur exactly once in the latest version
     /// (occurrences are counted overlapping, so `"aa"` in `"aaa"` is ambiguous).
-    pub fn update(&self, id: Id, old_str: &str, new_str: &str, ctx: &OpContext) -> Result<Applied> {
+    pub fn update(
+        &self,
+        conversation_id: Id,
+        id: Id,
+        old_str: &str,
+        new_str: &str,
+        ctx: &OpContext,
+    ) -> Result<Applied> {
         if old_str.is_empty() {
             return Err(ArtifactError::EmptyOldStr);
         }
-        let tx = self.conn.unchecked_transaction()?;
-        let latest = latest_version(&tx, id)?;
-        let at = match find_unique(&latest.content, old_str) {
+        check_content("new_str", new_str)?;
+        let old_str = normalise_newlines(old_str);
+        let new_str = normalise_newlines(new_str);
+        let tx = WriteTx::begin(self.conn)?;
+        ensure_in(tx.conn, id, conversation_id)?;
+        let latest = latest_version(tx.conn, id)?;
+        let at = match find_unique(&latest.content, &old_str) {
             Matches::None => return Err(ArtifactError::NoMatch { id, n: latest.n }),
             Matches::Many(count) => {
                 return Err(ArtifactError::AmbiguousMatch {
@@ -184,10 +285,11 @@ impl<'c> ArtifactStore<'c> {
         let mut content =
             String::with_capacity(latest.content.len() - old_str.len() + new_str.len());
         content.push_str(&latest.content[..at]);
-        content.push_str(new_str);
+        content.push_str(&new_str);
         content.push_str(&latest.content[at + old_str.len()..]);
-        let version = insert_version(&tx, id, latest.n + 1, &content, Some(latest.n), ctx)?;
-        let title = touch(&tx, id)?;
+        check_content("the updated content", &content)?;
+        let version = insert_version(tx.conn, id, latest.n + 1, &content, Some(latest.n), ctx)?;
+        let title = touch(tx.conn, id)?;
         tx.commit()?;
         Ok(Applied {
             artifact_id: id,
@@ -197,11 +299,20 @@ impl<'c> ArtifactStore<'c> {
     }
 
     /// Replace the whole content with a new version.
-    pub fn rewrite(&self, id: Id, content: &str, ctx: &OpContext) -> Result<Applied> {
-        let tx = self.conn.unchecked_transaction()?;
-        let latest_n = latest_n(&tx, id)?;
-        let version = insert_version(&tx, id, latest_n + 1, content, Some(latest_n), ctx)?;
-        let title = touch(&tx, id)?;
+    pub fn rewrite(
+        &self,
+        conversation_id: Id,
+        id: Id,
+        content: &str,
+        ctx: &OpContext,
+    ) -> Result<Applied> {
+        check_content("content", content)?;
+        let content = normalise_newlines(content);
+        let tx = WriteTx::begin(self.conn)?;
+        ensure_in(tx.conn, id, conversation_id)?;
+        let latest_n = latest_n(tx.conn, id)?;
+        let version = insert_version(tx.conn, id, latest_n + 1, &content, Some(latest_n), ctx)?;
+        let title = touch(tx.conn, id)?;
         tx.commit()?;
         Ok(Applied {
             artifact_id: id,
@@ -211,12 +322,26 @@ impl<'c> ArtifactStore<'c> {
     }
 
     /// Restore version `to_n` as a new latest version whose `parent_n` is `to_n`.
-    pub fn rollback(&self, id: Id, to_n: u32, ctx: &OpContext) -> Result<Applied> {
-        let tx = self.conn.unchecked_transaction()?;
-        let latest_n = latest_n(&tx, id)?;
-        let restored = version(&tx, id, to_n)?;
-        let version = insert_version(&tx, id, latest_n + 1, &restored.content, Some(to_n), ctx)?;
-        let title = touch(&tx, id)?;
+    pub fn rollback(
+        &self,
+        conversation_id: Id,
+        id: Id,
+        to_n: u32,
+        ctx: &OpContext,
+    ) -> Result<Applied> {
+        let tx = WriteTx::begin(self.conn)?;
+        ensure_in(tx.conn, id, conversation_id)?;
+        let latest_n = latest_n(tx.conn, id)?;
+        let restored = version(tx.conn, id, to_n)?;
+        let version = insert_version(
+            tx.conn,
+            id,
+            latest_n + 1,
+            &restored.content,
+            Some(to_n),
+            ctx,
+        )?;
+        let title = touch(tx.conn, id)?;
         tx.commit()?;
         Ok(Applied {
             artifact_id: id,
@@ -329,14 +454,16 @@ impl<'c> ArtifactStore<'c> {
             .optional()?
             .is_some())
     }
+}
 
-    fn ensure_in_conversation(&self, id: Id, conversation_id: Id) -> Result<()> {
-        if self.exists_in(id, conversation_id)? {
-            Ok(())
-        } else {
-            Err(ArtifactError::NotFound { id })
-        }
-    }
+fn ensure_in(conn: &Connection, id: Id, conversation_id: Id) -> Result<()> {
+    conn.query_row(
+        "SELECT 1 FROM artifact_artifacts WHERE id = ?1 AND conversation_id = ?2",
+        params![id.to_string(), conversation_id.to_string()],
+        |_| Ok(()),
+    )
+    .optional()?
+    .ok_or(ArtifactError::NotFound { id })
 }
 
 enum Matches {
@@ -687,7 +814,7 @@ pub(crate) mod tests {
         let id = create(&store, conv, "v1");
         update(&store, conv, id, "v1", "v2").unwrap();
         update(&store, conv, id, "v2", "v3").unwrap();
-        let rb = store.rollback(id, 1, &OpContext::user()).unwrap();
+        let rb = store.rollback(conv, id, 1, &OpContext::user()).unwrap();
         assert_eq!(rb.version.n, 4);
         assert_eq!(rb.version.parent_n, Some(1));
         assert_eq!(rb.version.content, "v1");
@@ -707,7 +834,7 @@ pub(crate) mod tests {
         let store = ArtifactStore::new(&conn);
         let conv = Id::new();
         let id = create(&store, conv, "v1");
-        let err = store.rollback(id, 7, &OpContext::user()).unwrap_err();
+        let err = store.rollback(conv, id, 7, &OpContext::user()).unwrap_err();
         assert!(matches!(err, ArtifactError::VersionNotFound { n: 7, .. }));
         assert_eq!(store.get(id).unwrap().versions.len(), 1);
     }
@@ -766,6 +893,101 @@ pub(crate) mod tests {
         assert_eq!(ids, [a, b]);
         assert_eq!(list[1].latest_n, 2);
         assert!(store.list(Id::new()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn rollback_checks_the_conversation() {
+        let conn = db();
+        let store = ArtifactStore::new(&conn);
+        let (conv, other) = (Id::new(), Id::new());
+        let id = create(&store, conv, "v1");
+        update(&store, conv, id, "v1", "v2").unwrap();
+        let err = store
+            .rollback(other, id, 1, &OpContext::user())
+            .unwrap_err();
+        assert!(matches!(err, ArtifactError::NotFound { .. }));
+        assert_eq!(store.get(id).unwrap().versions.len(), 2);
+    }
+
+    #[test]
+    fn writes_nest_inside_a_callers_transaction() {
+        let conn = db();
+        let store = ArtifactStore::new(&conn);
+        let conv = Id::new();
+        conn.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let id = create(&store, conv, "v1");
+        // A failed write inside the caller's transaction rolls back only itself.
+        assert!(update(&store, conv, id, "missing", "x").is_err());
+        update(&store, conv, id, "v1", "v2").unwrap();
+        assert!(!conn.is_autocommit());
+        conn.execute_batch("ROLLBACK").unwrap();
+        // The caller rolled back, so nothing was kept.
+        assert!(store.list(conv).unwrap().is_empty());
+    }
+
+    #[test]
+    fn versions_cannot_be_deleted_but_cascade_with_their_artifact() {
+        let conn = db();
+        let store = ArtifactStore::new(&conn);
+        let conv = Id::new();
+        let id = create(&store, conv, "v1");
+        let err = conn
+            .execute(
+                "DELETE FROM artifact_versions WHERE artifact_id = ?1",
+                [id.to_string()],
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("append-only"));
+        conn.execute(
+            "DELETE FROM artifact_artifacts WHERE id = ?1",
+            [id.to_string()],
+        )
+        .unwrap();
+        let left: i64 = conn
+            .query_row("SELECT COUNT(*) FROM artifact_versions", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(left, 0);
+    }
+
+    #[test]
+    fn size_limits_are_enforced_with_clear_errors() {
+        let conn = db();
+        let store = ArtifactStore::new(&conn);
+        let conv = Id::new();
+        let ctx = OpContext::model(None);
+        let big = "x".repeat(MAX_CONTENT_BYTES + 1);
+        let err = store
+            .create(conv, &ArtifactType::Html, "t", &big, None, &ctx)
+            .unwrap_err();
+        assert!(matches!(err, ArtifactError::TooLarge { .. }));
+        assert!(err.to_string().contains("limited to"));
+        let long_title = "t".repeat(MAX_TITLE_CHARS + 1);
+        assert!(matches!(
+            store
+                .create(conv, &ArtifactType::Html, &long_title, "x", None, &ctx)
+                .unwrap_err(),
+            ArtifactError::TitleTooLong { .. }
+        ));
+        // The patched result is capped too, not only new_str.
+        let id = create(
+            &store,
+            conv,
+            &format!("a{}", "y".repeat(MAX_CONTENT_BYTES - 2)),
+        );
+        let err = update(&store, conv, id, "a", "aaaa").unwrap_err();
+        assert!(matches!(err, ArtifactError::TooLarge { .. }));
+        assert_eq!(store.get(id).unwrap().versions.len(), 1);
+    }
+
+    #[test]
+    fn crlf_is_normalised_so_patches_match() {
+        let conn = db();
+        let store = ArtifactStore::new(&conn);
+        let conv = Id::new();
+        let id = create(&store, conv, "a\r\nb\r\n");
+        assert_eq!(store.latest(id).unwrap().content, "a\nb\n");
+        let v = update(&store, conv, id, "a\r\nb", "c\r\nd").unwrap();
+        assert_eq!(v.version.content, "c\nd\n");
     }
 
     #[test]
@@ -840,6 +1062,7 @@ mod vector_tests {
                 )
                 .unwrap();
             let got = store.update(
+                conv,
                 created.artifact_id,
                 case["old_str"].as_str().unwrap(),
                 case["new_str"].as_str().unwrap(),

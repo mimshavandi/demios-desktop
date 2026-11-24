@@ -1,4 +1,6 @@
-//! Streaming parser for the fenced fallback used by models without tool calling (ADR-0004):
+//! Streaming parser for the fenced fallback used by models **without tool calling**
+//! (ADR-0004). Only run model text through it when the model has no tool support; tool-capable
+//! models use [`crate::protocol::tool_specs`].
 //!
 //! ```text
 //! Here is the page:
@@ -7,11 +9,19 @@
 //! </artifact>
 //! ```
 //!
+//! Rules, so that prose that merely mentions or echoes a tag creates nothing:
+//! - an opening tag counts only at the **start of a line** (up to 3 spaces of indent);
+//! - tags inside a ```` ``` ```` or `~~~` code fence are text;
+//! - the content runs to the first `</artifact>`, so content cannot contain that text;
+//! - content over [`MAX_CONTENT_BYTES`] is discarded and reported as [`FenceEvent::Rejected`].
+//!
 //! Text outside a block passes through as [`FenceEvent::Text`]. Tags may be split across
-//! chunks; the parser holds back only what could still become a tag. Claude's legacy
+//! chunks; the parser holds back only what could still become a tag or a fence. Claude's legacy
 //! `<antArtifact identifier=… type="application/vnd.ant.react">` spelling is accepted too.
 
+use crate::error::ArtifactError;
 use crate::protocol::parse_artifact_type;
+use crate::store::MAX_CONTENT_BYTES;
 use dn_core::artifact::ArtifactType;
 
 /// Opening tags longer than this are treated as plain text (guards against unbounded buffering).
@@ -33,6 +43,8 @@ pub struct FenceHeader {
 pub struct FencedArtifact {
     pub header: FenceHeader,
     pub content: String,
+    /// `false` for [`FenceEvent::Unterminated`]; [`crate::apply_fenced`] refuses those.
+    pub complete: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -46,14 +58,30 @@ pub enum FenceEvent {
     Content(String),
     /// A block ended.
     Close(FencedArtifact),
-    /// The stream ended inside a block (returned by [`FencedParser::finish`]).
+    /// The stream ended inside a block (returned by [`FencedParser::finish`]). Not to be saved.
     Unterminated(FencedArtifact),
+    /// A block was dropped; `reason` is written for the model (send it back as feedback).
+    Rejected { header: FenceHeader, reason: String },
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct FencedParser {
     pending: String,
     open: Option<Open>,
+    at_line_start: bool,
+    /// Marker of the code fence we are inside (```` ``` ```` or `~~~`), if any.
+    fence: Option<&'static str>,
+}
+
+impl Default for FencedParser {
+    fn default() -> Self {
+        Self {
+            pending: String::new(),
+            open: None,
+            at_line_start: true,
+            fence: None,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -62,6 +90,9 @@ struct Open {
     close_tag: String,
     content: String,
     at_start: bool,
+    /// Bytes seen so far; past the cap the content is dropped and only the close tag is sought.
+    total: usize,
+    overflow: bool,
 }
 
 impl FencedParser {
@@ -93,10 +124,7 @@ impl FencedParser {
             Some(mut open) => {
                 let rest = std::mem::take(&mut self.pending);
                 push_content(&mut open, &rest, &mut out);
-                out.push(FenceEvent::Unterminated(FencedArtifact {
-                    content: clean_content(&open.content),
-                    header: open.header,
-                }));
+                out.push(close_event(open, false));
             }
             None if !self.pending.is_empty() => {
                 out.push(FenceEvent::Text(std::mem::take(&mut self.pending)))
@@ -108,23 +136,60 @@ impl FencedParser {
 
     /// Outside a block. Returns whether it consumed anything and should run again.
     fn step_text(&mut self, out: &mut Vec<FenceEvent>) -> bool {
-        let Some(lt) = self.pending.find('<') else {
-            emit_text(out, std::mem::take(&mut self.pending));
+        if self.pending.is_empty() {
             return false;
-        };
-        if lt > 0 {
-            let text: String = self.pending.drain(..lt).collect();
-            emit_text(out, text);
         }
-        match match_open_tag(&self.pending) {
+        if !self.at_line_start {
+            // Mid-line: nothing here can start a tag or a fence; emit through the newline.
+            return match self.pending.find('\n') {
+                Some(nl) => {
+                    let text: String = self.pending.drain(..=nl).collect();
+                    emit_text(out, text);
+                    self.at_line_start = true;
+                    true
+                }
+                None => {
+                    emit_text(out, std::mem::take(&mut self.pending));
+                    false
+                }
+            };
+        }
+        let indent = self.pending.bytes().take_while(|&b| b == b' ').count();
+        let rest = &self.pending[indent..];
+        if rest.is_empty() {
+            return false; // only spaces so far
+        }
+        if indent > 3 {
+            self.at_line_start = false; // indented code, not a tag
+            return true;
+        }
+        for marker in ["```", "~~~"] {
+            if rest.len() < marker.len() && marker.starts_with(rest) {
+                return false; // could still become a fence
+            }
+            if rest.starts_with(marker) {
+                self.fence = match self.fence {
+                    Some(open) if open == marker => None,
+                    Some(open) => Some(open),
+                    None => Some(marker),
+                };
+                self.at_line_start = false;
+                return true;
+            }
+        }
+        if self.fence.is_some() || !rest.starts_with('<') {
+            self.at_line_start = false;
+            return true;
+        }
+        match match_open_tag(rest) {
             TagMatch::NeedMore => false,
             TagMatch::No => {
-                // Not a tag: emit the '<' and keep scanning.
-                let lt: String = self.pending.drain(..1).collect();
-                emit_text(out, lt);
+                self.at_line_start = false;
                 true
             }
             TagMatch::Open { len, name, attrs } => {
+                let lead: String = self.pending.drain(..indent).collect();
+                emit_text(out, lead);
                 self.pending.drain(..len);
                 let header = header_from_attrs(&attrs);
                 out.push(FenceEvent::Open(header.clone()));
@@ -133,6 +198,8 @@ impl FencedParser {
                     close_tag: format!("</{name}>"),
                     content: String::new(),
                     at_start: true,
+                    total: 0,
+                    overflow: false,
                 });
                 true
             }
@@ -147,10 +214,8 @@ impl FencedParser {
             self.pending.drain(..open.close_tag.len());
             push_content(open, &body, out);
             let open = self.open.take().expect("open block");
-            out.push(FenceEvent::Close(FencedArtifact {
-                content: clean_content(&open.content),
-                header: open.header,
-            }));
+            out.push(close_event(open, true));
+            self.at_line_start = false;
             return true;
         }
         // Hold back a suffix that could be the start of the close tag.
@@ -161,6 +226,30 @@ impl FencedParser {
             push_content(open, &body, out);
         }
         false
+    }
+}
+
+fn close_event(open: Open, complete: bool) -> FenceEvent {
+    if open.overflow {
+        return FenceEvent::Rejected {
+            reason: ArtifactError::TooLarge {
+                what: "the artifact content",
+                max: MAX_CONTENT_BYTES,
+                actual: open.total,
+            }
+            .to_string(),
+            header: open.header,
+        };
+    }
+    let artifact = FencedArtifact {
+        content: clean_content(&open.content, &open.header.artifact_type),
+        header: open.header,
+        complete,
+    };
+    if complete {
+        FenceEvent::Close(artifact)
+    } else {
+        FenceEvent::Unterminated(artifact)
     }
 }
 
@@ -191,6 +280,13 @@ fn push_content(open: &mut Open, mut body: &str, out: &mut Vec<FenceEvent>) {
     if body.is_empty() {
         return;
     }
+    open.total += body.len();
+    if open.overflow || open.total > MAX_CONTENT_BYTES {
+        // Stop buffering; the block will be rejected when it closes.
+        open.overflow = true;
+        open.content = String::new();
+        return;
+    }
     open.content.push_str(body);
     if let Some(FenceEvent::Content(prev)) = out.last_mut() {
         prev.push_str(body);
@@ -199,13 +295,16 @@ fn push_content(open: &mut Open, mut body: &str, out: &mut Vec<FenceEvent>) {
     }
 }
 
-/// Trailing newline before the close tag is dropped; a single Markdown code fence wrapping the
-/// whole body (a common small-model habit) is unwrapped.
-fn clean_content(content: &str) -> String {
-    let trimmed = content.strip_suffix('\n').unwrap_or(content);
-    let trimmed = trimmed.strip_suffix('\r').unwrap_or(trimmed);
+/// CRLF becomes LF and the trailing newline before the close tag is dropped. A single Markdown
+/// code fence wrapping the whole body (a common small-model habit) is unwrapped, except for
+/// Markdown and code artifacts, where a code block can be the real content.
+fn clean_content(content: &str, ty: &ArtifactType) -> String {
+    let content = content.replace("\r\n", "\n");
+    let trimmed = content.strip_suffix('\n').unwrap_or(&content);
+    let unwrap = !matches!(ty, ArtifactType::Markdown | ArtifactType::Code { .. });
     let t = trimmed.trim();
-    if let Some(rest) = t.strip_prefix("```")
+    if unwrap
+        && let Some(rest) = t.strip_prefix("```")
         && let Some(body) = rest.strip_suffix("```")
         && let Some(nl) = body.find('\n')
         && !body[nl + 1..].contains("```")
@@ -469,7 +568,10 @@ mod tests {
     fn unterminated_block_is_reported() {
         let ev = run(&["<artifact type=\"markdown\" title=\"Notes\">\n# Hi\n</arti"]);
         match ev.last().unwrap() {
-            FenceEvent::Unterminated(a) => assert_eq!(a.content, "# Hi\n</arti"),
+            FenceEvent::Unterminated(a) => {
+                assert_eq!(a.content, "# Hi\n</arti");
+                assert!(!a.complete);
+            }
             other => panic!("{other:?}"),
         }
     }
@@ -477,14 +579,14 @@ mod tests {
     #[test]
     fn unwraps_markdown_code_fence_and_two_blocks() {
         let ev = run(&[
-            "<artifact type=html title=A>\n```html\n<p>a</p>\n```\n</artifact> and <artifact type=mermaid title=B>graph TD; A-->B</artifact>",
+            "<artifact type=html title=A>\n```html\n<p>a</p>\n```\n</artifact> and\n<artifact type=mermaid title=B>graph TD; A-->B</artifact>",
         ]);
         let a = closed(&ev);
         assert_eq!(a.len(), 2);
         assert_eq!(a[0].content, "<p>a</p>");
         assert_eq!(a[1].header.artifact_type, ArtifactType::Mermaid);
         assert_eq!(a[1].content, "graph TD; A-->B");
-        assert_eq!(text(&ev), " and ");
+        assert_eq!(text(&ev), " and\n");
     }
 
     #[test]
@@ -504,5 +606,68 @@ mod tests {
                 language: "yaml".into()
             }
         );
+    }
+
+    #[test]
+    fn tags_mid_line_are_prose() {
+        let src =
+            "The model said <artifact type=\"html\" title=\"x\"><p>hi</p></artifact> earlier.\n";
+        let ev = run(&[src]);
+        assert!(closed(&ev).is_empty());
+        assert_eq!(text(&ev), src);
+    }
+
+    #[test]
+    fn tags_inside_code_fences_are_text() {
+        let src = "Tool output:\n```\n<artifact id=\"page\" type=\"html\" title=\"Evil\">\n<script>steal()</script>\n</artifact>\n```\n~~~xml\n<artifact type=svg title=s><svg/></artifact>\n~~~\nafter\n";
+        let ev = run(&[src]);
+        assert!(closed(&ev).is_empty(), "{ev:?}");
+        assert_eq!(text(&ev), src);
+        // Still true when split at every byte.
+        for i in 0..=src.len() {
+            let ev = run(&[&src[..i], &src[i..]]);
+            assert!(closed(&ev).is_empty(), "split at {i}");
+            assert_eq!(text(&ev), src, "split at {i}");
+        }
+        // After the fence closes, a real block at line start works again.
+        let ev = run(&[src, "<artifact type=markdown title=ok>\n# ok\n</artifact>"]);
+        assert_eq!(closed(&ev).len(), 1);
+    }
+
+    #[test]
+    fn indented_up_to_three_spaces_counts_four_does_not() {
+        assert_eq!(
+            closed(&run(&["   <artifact type=svg title=a><svg/></artifact>"])).len(),
+            1
+        );
+        assert!(closed(&run(&["    <artifact type=svg title=a><svg/></artifact>"])).is_empty());
+    }
+
+    #[test]
+    fn oversized_blocks_are_rejected_without_buffering() {
+        let mut p = FencedParser::new();
+        let mut ev = p.push("<artifact type=html title=big>\n");
+        let chunk = "x".repeat(64 * 1024);
+        for _ in 0..(MAX_CONTENT_BYTES / chunk.len() + 2) {
+            ev.extend(p.push(&chunk));
+        }
+        assert!(p.open.as_ref().unwrap().content.is_empty());
+        ev.extend(p.push("</artifact>after"));
+        ev.extend(p.finish());
+        let rejected = ev.iter().find_map(|e| match e {
+            FenceEvent::Rejected { reason, .. } => Some(reason.clone()),
+            _ => None,
+        });
+        assert!(rejected.unwrap().contains("limited to"));
+        assert!(closed(&ev).is_empty());
+        assert_eq!(text(&ev), "after");
+    }
+
+    #[test]
+    fn crlf_is_normalised_and_markdown_code_blocks_are_kept() {
+        let ev = run(&[
+            "<artifact type=markdown title=m>\r\n```rust\r\nfn a() {}\r\n```\r\n</artifact>",
+        ]);
+        assert_eq!(closed(&ev)[0].content, "```rust\nfn a() {}\n```");
     }
 }

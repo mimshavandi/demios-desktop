@@ -27,6 +27,34 @@ pub enum ArtifactError {
     )]
     AmbiguousMatch { id: Id, n: u32, count: usize },
 
+    #[error(
+        "{what} is {actual} bytes; artifacts are limited to {max} bytes. Make it smaller or split \
+         it into several artifacts"
+    )]
+    TooLarge {
+        what: &'static str,
+        max: usize,
+        actual: usize,
+    },
+
+    #[error("title is {actual} characters; use a short title (at most {max})")]
+    TitleTooLong { max: usize, actual: usize },
+
+    #[error(
+        "artifact {id} is a {existing} artifact, not {requested}; keep the type, or use a new id \
+         to create a different artifact"
+    )]
+    TypeMismatch {
+        id: Id,
+        existing: String,
+        requested: String,
+    },
+
+    #[error(
+        "the <artifact> block was not closed with </artifact>, so it was not saved; write it again in full"
+    )]
+    Unterminated,
+
     #[error("invalid input for tool `{tool}`: {reason}")]
     InvalidToolInput { tool: String, reason: String },
 
