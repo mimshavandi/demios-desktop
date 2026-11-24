@@ -28,6 +28,23 @@ export function McpServersCard({ api, live }: { api: Api; live: McpServerStatus[
   const [removeError, setRemoveError] = useState<string | null>(null);
   const addRef = useRef<HTMLButtonElement>(null);
   const removeTrigger = useRef<HTMLButtonElement | null>(null);
+  const cardRef = useRef<HTMLElement>(null);
+  // Where focus goes when the form closes: the button that opened it (§7).
+  const returnFocus = useRef<string | null>(null);
+
+  const closeForm = () => {
+    setEditing(null);
+    const label = returnFocus.current;
+    requestAnimationFrame(() => {
+      const el =
+        label === null
+          ? addRef.current
+          : [...(cardRef.current?.querySelectorAll<HTMLButtonElement>("button[aria-label]") ?? [])].find(
+              (b) => b.getAttribute("aria-label") === label,
+            );
+      (el ?? addRef.current)?.focus();
+    });
+  };
 
   const load = useCallback(async () => {
     setLoadError(null);
@@ -76,15 +93,15 @@ export function McpServersCard({ api, live }: { api: Api; live: McpServerStatus[
 
   if (editing !== null && view !== null) {
     return (
-      <section className="card" aria-labelledby="servers-h">
+      <section className="card" aria-labelledby="mcp-form-h" ref={cardRef}>
         <ServerForm
           server={editing.server}
           localAllowed={view.local_servers_allowed}
-          onCancel={() => setEditing(null)}
+          onCancel={closeForm}
           onSave={async (input) => {
             const v = await api.saveMcpServer(input, editing.server?.id ?? null);
             setView(v);
-            setEditing(null);
+            closeForm();
             toast({ tone: "success", title: `${input.name ?? input.id} saved. Connecting…` });
           }}
         />
@@ -93,11 +110,19 @@ export function McpServersCard({ api, live }: { api: Api; live: McpServerStatus[
   }
 
   return (
-    <section className="card" aria-labelledby="servers-h">
+    <section className="card" aria-labelledby="servers-h" ref={cardRef}>
       <div className="card-head">
         <h2 id="servers-h">Tool servers</h2>
         {view !== null && view.servers.length > 0 && (
-          <Button ref={addRef} size="sm" icon={<Plus {...ICON} aria-hidden="true" />} onClick={() => setEditing({ server: null })}>
+          <Button
+            ref={addRef}
+            size="sm"
+            icon={<Plus {...ICON} aria-hidden="true" />}
+            onClick={() => {
+              returnFocus.current = null;
+              setEditing({ server: null });
+            }}
+          >
             Add server
           </Button>
         )}
@@ -127,7 +152,14 @@ export function McpServersCard({ api, live }: { api: Api; live: McpServerStatus[
         <EmptyState
           title="No tool servers yet"
           action={
-            <Button ref={addRef} icon={<Plus {...ICON} aria-hidden="true" />} onClick={() => setEditing({ server: null })}>
+            <Button
+              ref={addRef}
+              icon={<Plus {...ICON} aria-hidden="true" />}
+              onClick={() => {
+                returnFocus.current = null;
+                setEditing({ server: null });
+              }}
+            >
               Add server
             </Button>
           }
@@ -151,7 +183,9 @@ export function McpServersCard({ api, live }: { api: Api; live: McpServerStatus[
                       ? [s.transport.command, ...s.transport.args].join(" ")
                       : s.transport.url}
                   </span>
-                  <span className="dn-help">{statusText(st)}</span>
+                  <span className="dn-help" aria-live="polite">
+                    {statusText(st)}
+                  </span>
                 </div>
                 <div className="row-actions mcp-actions">
                   <StatusBadge status={st} />
@@ -193,7 +227,14 @@ export function McpServersCard({ api, live }: { api: Api; live: McpServerStatus[
                       <RotateCcw {...ICON} aria-hidden="true" />
                     </IconButton>
                   )}
-                  <IconButton size="sm" label={`Edit ${s.name}`} onClick={() => setEditing({ server: s })}>
+                  <IconButton
+                    size="sm"
+                    label={`Edit ${s.name}`}
+                    onClick={() => {
+                      returnFocus.current = `Edit ${s.name}`;
+                      setEditing({ server: s });
+                    }}
+                  >
                     <Pencil {...ICON} aria-hidden="true" />
                   </IconButton>
                   <IconButton
@@ -234,6 +275,7 @@ export function McpServersCard({ api, live }: { api: Api; live: McpServerStatus[
           {removing?.transport.type === "streamable_http" && removing.transport.oauth?.signed_in === true && (
             <li>its sign-in</li>
           )}
+          <li>"Allow in this chat" approvals for its tools</li>
         </ul>
         <p>
           <strong>This can't be undone.</strong> Chats that used its tools keep their history.
@@ -330,7 +372,16 @@ function ServerForm({
   const [clientId, setClientId] = useState(t?.type === "streamable_http" ? (t.oauth?.client_id ?? "") : "");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
   const headingRef = useRef<HTMLHeadingElement>(null);
+  const initial = useRef<string | null>(null);
+  const snapshot = JSON.stringify([kind, name, id, command, args, env, url, headers, oauth, scopes, clientId]);
+  if (initial.current === null) initial.current = snapshot;
+  const dirty = snapshot !== initial.current;
+  // Saved secrets aren't reused for a new address or program: they must be typed again.
+  const moved =
+    t !== undefined &&
+    (t.type === "stdio" ? command.trim() !== t.command : url.trim() !== t.url);
 
   useEffect(() => {
     headingRef.current?.focus();
@@ -462,7 +513,7 @@ function ServerForm({
               One per line.
             </span>
           </div>
-          <ValueRows label="Environment variables" what="variable" rows={env} onChange={setEnv} />
+          <ValueRows label="Environment variables" what="variable" rows={env} onChange={setEnv} moved={moved} />
         </>
       ) : (
         <>
@@ -474,7 +525,7 @@ function ServerForm({
             spellCheck={false}
             onChange={(e) => setUrl(e.target.value)}
           />
-          <ValueRows label="Headers" what="header" rows={headers} onChange={setHeaders} />
+          <ValueRows label="Headers" what="header" rows={headers} onChange={setHeaders} moved={moved} />
           <Switch
             label="Sign in with the server's account (OAuth)"
             description="After saving, use Sign in to open the server's sign-in page in your browser."
@@ -497,8 +548,25 @@ function ServerForm({
       )}
 
       {error !== null && <InlineMessage tone="error">{error}</InlineMessage>}
+      {confirmDiscard && (
+        <InlineMessage
+          tone="warning"
+          action={
+            <>
+              <Button size="sm" variant="danger" onClick={onCancel}>
+                Discard changes
+              </Button>
+              <Button size="sm" onClick={() => setConfirmDiscard(false)}>
+                Keep editing
+              </Button>
+            </>
+          }
+        >
+          You have unsaved changes.
+        </InlineMessage>
+      )}
       <div className="mcp-form-actions">
-        <Button variant="ghost" onClick={onCancel}>
+        <Button variant="ghost" onClick={() => (dirty ? setConfirmDiscard(true) : onCancel())}>
           Cancel
         </Button>
         <Button type="submit" variant="primary" loading={saving}>
@@ -514,11 +582,14 @@ function ValueRows({
   what,
   rows,
   onChange,
+  moved = false,
 }: {
   label: string;
   what: string;
   rows: ValueRow[];
   onChange: (rows: ValueRow[]) => void;
+  /** The address or program changed: saved secrets must be typed again. */
+  moved?: boolean;
 }) {
   const set = (key: number, patch: Partial<ValueRow>) =>
     onChange(
@@ -548,7 +619,7 @@ function ValueRows({
             autoComplete="off"
             spellCheck={false}
             value={r.value}
-            placeholder={r.secret && r.stored ? "Saved" : ""}
+            placeholder={r.secret && r.stored ? (moved ? "Type it again" : "Saved") : ""}
             onChange={(e) => set(r.key, { value: e.target.value })}
           />
           <label className="mcp-secret">
@@ -574,7 +645,9 @@ function ValueRows({
         Add {what}
       </Button>
       <p className="dn-help">
-        Secret values are kept in your system keychain and are never shown again. Leave a saved one empty to keep it.
+        {moved
+          ? "The address or program changed, so saved secrets aren't reused: type them again."
+          : "Secret values are kept in your system keychain and are never shown again. Leave a saved one empty to keep it."}
       </p>
     </fieldset>
   );

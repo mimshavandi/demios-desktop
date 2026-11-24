@@ -136,6 +136,11 @@ fn values(
         if name.is_empty() {
             return Err(invalid(format!("Give every {what} a name.")));
         }
+        if !valid_value_name(name, what == "header") {
+            return Err(invalid(format!(
+                "The {what} name {name:?} has characters it can't contain."
+            )));
+        }
         if out.contains_key(name) {
             return Err(invalid(format!("The {what} {name} is listed twice.")));
         }
@@ -155,6 +160,108 @@ fn values(
         out.insert(name.to_owned(), r);
     }
     Ok(out)
+}
+
+/// What starting a local server will run, as the confirmation shows it. Env var values are
+/// left out (they can be secrets); their names are part of what's approved.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct LaunchRequest {
+    pub server_name: String,
+    pub command: String,
+    pub args: Vec<String>,
+    pub env_names: Vec<String>,
+}
+
+impl LaunchRequest {
+    pub fn of(cfg: &McpServerConfig) -> Option<Self> {
+        match &cfg.transport {
+            McpTransport::Stdio {
+                command, args, env, ..
+            } => Some(Self {
+                server_name: cfg.display_name.clone().unwrap_or_else(|| cfg.id.clone()),
+                command: command.clone(),
+                args: args.clone(),
+                env_names: env.keys().cloned().collect(),
+            }),
+            McpTransport::StreamableHttp { .. } => None,
+        }
+    }
+
+    /// What an approval is remembered for: the exact program, arguments and env var names.
+    pub fn command_line(&self) -> String {
+        serde_json::to_string(&(&self.command, &self.args, &self.env_names)).unwrap_or_default()
+    }
+
+    /// The native dialog's text: every argument on its own line, quoted, so nothing hides.
+    pub fn dialog_text(&self) -> String {
+        let mut t = format!(
+            "Demios is about to start this program for the tool server \"{}\":\n\n{:?}",
+            self.server_name, self.command
+        );
+        for a in &self.args {
+            t.push_str(&format!("\n    {a:?}"));
+        }
+        if !self.env_names.is_empty() {
+            t.push_str(&format!(
+                "\n\nEnvironment variables: {}",
+                self.env_names.join(", ")
+            ));
+        }
+        t.push_str(
+            "\n\nIt runs with your permissions and can read and change your files. Allow it only if you trust it. You'll be asked again if the command changes.",
+        );
+        t
+    }
+}
+
+/// Asks the user, outside the webview, whether a local server may start.
+pub trait LaunchApprover: Send + Sync {
+    fn ask(
+        &self,
+        request: LaunchRequest,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>>;
+}
+
+/// Env var and header names: no control characters (NUL, CR, LF…) or `=`; header names are
+/// HTTP tokens (no spaces or `:`).
+pub fn valid_value_name(name: &str, header: bool) -> bool {
+    !name.is_empty()
+        && name.chars().all(|c| {
+            !c.is_control()
+                && c != '='
+                && !(header && (c.is_whitespace() || c == ':' || !c.is_ascii()))
+        })
+}
+
+/// Where a server's data goes: its URL, or the program it starts. When this changes, stored
+/// secrets and the sign-in must not follow it.
+pub fn destination(cfg: &McpServerConfig) -> String {
+    match &cfg.transport {
+        McpTransport::Stdio { command, .. } => format!("stdio:{command}"),
+        McpTransport::StreamableHttp { url, .. } => format!("http:{}", url.trim()),
+    }
+}
+
+/// An edit keeps what the form doesn't show: timeouts, annotation trust and the working
+/// directory stay as they were.
+pub fn merge_edit(existing: &McpServerConfig, edited: McpServerConfig) -> McpServerConfig {
+    let mut out = existing.clone();
+    out.display_name = edited.display_name;
+    out.transport = match (edited.transport, &existing.transport) {
+        (
+            McpTransport::Stdio {
+                command, args, env, ..
+            },
+            McpTransport::Stdio { cwd, .. },
+        ) => McpTransport::Stdio {
+            command,
+            args,
+            env,
+            cwd: cwd.clone(),
+        },
+        (t, _) => t,
+    };
+    out
 }
 
 /// Builds the config from the form and the secret writes it needs. Validates with dn-tools'
@@ -319,7 +426,7 @@ impl AppState {
                 .iter()
                 .map(|c| view(c, &has, statuses.get(&c.id).cloned()))
                 .collect(),
-            local_servers_allowed: local_servers_allowed(),
+            local_servers_allowed: self.local_servers,
         })
     }
 
@@ -349,8 +456,29 @@ impl AppState {
             }
             _ => {}
         }
-        let (cfg, writes) =
-            config_from_input(input, self.mcp_has_stored(), local_servers_allowed())?;
+        let existing = editing.and_then(|old| servers.iter().find(|s| s.id == old).cloned());
+        let (edited, writes) = config_from_input(input, self.mcp_has_stored(), self.local_servers)?;
+        let moved = existing
+            .as_ref()
+            .is_some_and(|e| destination(e) != destination(&edited));
+        if let Some(e) = &existing {
+            if std::mem::discriminant(&e.transport) != std::mem::discriminant(&edited.transport) {
+                return Err(invalid(
+                    "A server can't switch between running on this computer and remote. Remove it and add it again.",
+                ));
+            }
+            // Saved secrets were given for the old address or program; never send them to a
+            // new one. The user types them again.
+            if moved && let Some(name) = kept_secret(input) {
+                return Err(invalid(format!(
+                    "The server's address or program changed, so saved secrets aren't reused. Type {name} again."
+                )));
+            }
+        }
+        let cfg = match &existing {
+            Some(e) => merge_edit(e, edited),
+            None => edited,
+        };
         let store = self.mcp_secret_store();
         for (sid, value) in &writes {
             store.set(sid, value).map_err(|e| {
@@ -366,7 +494,27 @@ impl AppState {
             None => servers.push(cfg.clone()),
         }
         self.set_mcp_servers(servers)?;
+        if moved {
+            // The sign-in and "allow in this chat" grants were for the old destination.
+            self.forget_mcp_sign_in(&cfg.id)?;
+            self.clear_mcp_grants(&cfg.id);
+        }
         Ok(cfg)
+    }
+
+    /// Deletes the stored OAuth token of a server id (whether or not it uses sign-in now).
+    pub fn forget_mcp_sign_in(&self, id: &str) -> IpcResult<()> {
+        let sid = oauth_secret_id(id);
+        self.keys.store.delete(&dn_secrets::SecretId::mcp(&sid))?;
+        crate::settings::forget_mcp_secret_id(&*self.db()?, &sid)?;
+        Ok(())
+    }
+
+    /// Forgets "allow in this chat" grants for every tool of a server.
+    pub fn clear_mcp_grants(&self, id: &str) {
+        if let Some(exec) = &self.executor {
+            exec.gate().clear_capability_prefix(&format!("mcp.{id}."));
+        }
     }
 
     /// Removes a server from the list and deletes its secrets and sign-in. Blocking; the
@@ -379,6 +527,9 @@ impl AppState {
             return Err(IpcError::new("not_found", "That server no longer exists."));
         }
         self.set_mcp_servers(servers)?;
+        self.forget_mcp_sign_in(id)?;
+        self.clear_mcp_grants(id);
+        crate::settings::forget_mcp_launches(&*self.db()?, id)?;
         self.clear_mcp_status(id);
         Ok(())
     }
@@ -405,26 +556,32 @@ impl AppState {
 
 /// The sign-in page comes from the server's OAuth metadata: open it only if it is https, or
 /// http on this computer (local test servers).
-pub fn safe_sign_in_url(url: &str) -> bool {
-    let Some((scheme, rest)) = url.split_once("://") else {
+pub fn safe_sign_in_url(raw: &str) -> bool {
+    let Ok(u) = url::Url::parse(raw) else {
         return false;
     };
-    let host = rest
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or("")
-        .rsplit('@')
-        .next()
-        .unwrap_or("");
-    let host = host
-        .strip_prefix('[')
-        .and_then(|h| h.split(']').next())
-        .unwrap_or_else(|| host.split(':').next().unwrap_or(""));
-    match scheme.to_ascii_lowercase().as_str() {
-        "https" => !host.is_empty(),
-        "http" => matches!(host, "127.0.0.1" | "localhost" | "::1"),
+    if !u.username().is_empty() || u.password().is_some() {
+        return false;
+    }
+    match (u.scheme(), u.host()) {
+        ("https", Some(url::Host::Domain(d))) => !d.is_empty(),
+        ("https", Some(_)) => true,
+        ("http", Some(url::Host::Domain(d))) => d.eq_ignore_ascii_case("localhost"),
+        ("http", Some(url::Host::Ipv4(ip))) => ip.is_loopback(),
+        ("http", Some(url::Host::Ipv6(ip))) => ip.is_loopback(),
         _ => false,
     }
+}
+
+/// The first secret the form keeps (no new value), if any.
+fn kept_secret(input: &ServerInput) -> Option<String> {
+    let vals = match &input.transport {
+        TransportInput::Stdio { env, .. } => env,
+        TransportInput::StreamableHttp { headers, .. } => headers,
+    };
+    vals.iter()
+        .find(|v| v.secret && v.value.as_deref().is_none_or(|x| x.trim().is_empty()))
+        .map(|v| v.name.trim().to_owned())
 }
 
 pub fn oauth_id(cfg: &McpServerConfig) -> Option<String> {
@@ -664,5 +821,354 @@ mod tests {
             .unwrap();
         assert!(st.sign_out_mcp_server("plain").is_err());
         assert!(st.sign_out_mcp_server("missing").is_err());
+    }
+
+    // ---- review fixes
+
+    /// App state with a tool executor; the returned receiver answers approval requests.
+    fn app_with_exec() -> (
+        Arc<AppState>,
+        Arc<dn_tools::Executor>,
+        crate::secrets::Keys,
+        tokio::sync::mpsc::Receiver<dn_tools::ApprovalRequest>,
+    ) {
+        let conn = dn_store::open_in_memory(&crate::state::migration_sets()).unwrap();
+        let keys = crate::secrets::Keys::memory();
+        let mut st = AppState::new(conn, crate::models::ModelRegistry::default(), keys.clone());
+        let ledger = dn_store::open_in_memory(&crate::state::migration_sets()).unwrap();
+        let (gate, rx) = dn_tools::ApprovalGate::new(4);
+        let exec = Arc::new(dn_tools::Executor::new(
+            Arc::new(gate),
+            Arc::new(std::sync::Mutex::new(ledger)),
+        ));
+        st.executor = Some(Arc::clone(&exec));
+        (Arc::new(st), exec, keys, rx)
+    }
+
+    /// Grants "allow in this chat" for `cap` in `conv` through the real gate.
+    async fn grant(
+        exec: &dn_tools::Executor,
+        rx: &mut tokio::sync::mpsc::Receiver<dn_tools::ApprovalRequest>,
+        conv: &str,
+        cap: &str,
+    ) {
+        use dn_core::capability::{ApprovalPolicy, RiskTier};
+        let prompt = dn_tools::ApprovalPrompt {
+            request_id: dn_core::Id::new(),
+            scope: conv.into(),
+            capability_id: cap.into(),
+            title: cap.into(),
+            description: String::new(),
+            risk: RiskTier::LowWrite,
+            policy: ApprovalPolicy::AskOncePerConversation,
+            arguments: serde_json::json!({}),
+        };
+        let (_, req) = tokio::join!(exec.gate().check(prompt), rx.recv());
+        let _ = req;
+    }
+
+    fn granted(exec: &dn_tools::Executor, conv: &str, cap: &str) -> bool {
+        exec.gate().is_satisfied(
+            conv,
+            cap,
+            dn_core::capability::ApprovalPolicy::AskOncePerConversation,
+        )
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_new_address_needs_secrets_retyped_and_drops_sign_in_and_grants() {
+        let (st, exec, keys, mut rx) = app_with_exec();
+        let responder = tokio::spawn(async move {
+            while let Some(r) = rx.recv().await {
+                r.respond(dn_tools::ApprovalDecision::ApproveForConversation);
+            }
+        });
+        st.save_mcp_server(
+            &http(
+                "work",
+                vec![secret("Authorization", Some("Bearer t0k"))],
+                true,
+            ),
+            None,
+        )
+        .unwrap();
+        st.mcp_secret_store().set("mcp.work.oauth", "{}").unwrap();
+        let mut dummy = tokio::sync::mpsc::channel(1).1;
+        grant(&exec, &mut dummy, "conv:a", "mcp.work.write").await;
+        assert!(granted(&exec, "conv:a", "mcp.work.write"));
+
+        let moved = |headers| ServerInput {
+            id: "work".into(),
+            name: None,
+            transport: TransportInput::StreamableHttp {
+                url: "https://evil.example/mcp".into(),
+                headers,
+                oauth: true,
+                scopes: vec![],
+                client_id: None,
+            },
+        };
+        // Keeping the saved secret for a new host is refused (it would be sent there).
+        let err = st
+            .save_mcp_server(&moved(vec![secret("Authorization", None)]), Some("work"))
+            .unwrap_err();
+        assert!(
+            err.message.contains("Type Authorization again"),
+            "{}",
+            err.message
+        );
+        assert!(has(&keys, "mcp.work.oauth"), "nothing changed on refusal");
+
+        // Retyped: saved, and the old sign-in and chat grants are gone.
+        st.save_mcp_server(
+            &moved(vec![secret("Authorization", Some("Bearer new"))]),
+            Some("work"),
+        )
+        .unwrap();
+        assert!(!has(&keys, "mcp.work.oauth"));
+        assert!(!granted(&exec, "conv:a", "mcp.work.write"));
+        responder.abort();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn removing_a_server_clears_its_grants() {
+        let (st, exec, _keys, mut rx) = app_with_exec();
+        let responder = tokio::spawn(async move {
+            while let Some(r) = rx.recv().await {
+                r.respond(dn_tools::ApprovalDecision::ApproveForConversation);
+            }
+        });
+        st.save_mcp_server(&http("work", vec![], false), None)
+            .unwrap();
+        let mut dummy = tokio::sync::mpsc::channel(1).1;
+        grant(&exec, &mut dummy, "conv:a", "mcp.work.write").await;
+        grant(&exec, &mut dummy, "conv:a", "mcp.other.write").await;
+        st.remove_mcp_server_config("work").unwrap();
+        assert!(!granted(&exec, "conv:a", "mcp.work.write"));
+        assert!(granted(&exec, "conv:a", "mcp.other.write"));
+        responder.abort();
+    }
+
+    #[test]
+    fn an_edit_keeps_hidden_settings_and_never_flips_trust() {
+        let (st, _) = app();
+        let mut cfg = McpServerConfig::http("work", "https://mcp.example.test/mcp");
+        cfg.trust_annotations = Some(false);
+        cfg.request_timeout_ms = 5_000;
+        let mut local = McpServerConfig::stdio("files", "/bin/mcp-files", vec![]);
+        if let McpTransport::Stdio { cwd, .. } = &mut local.transport {
+            *cwd = Some("/srv".into());
+        }
+        st.set_mcp_servers(vec![cfg, local]).unwrap();
+
+        st.save_mcp_server(&http("work", vec![], false), Some("work"))
+            .unwrap();
+        let w = st.mcp_server("work").unwrap();
+        assert_eq!(w.trust_annotations, Some(false));
+        assert_eq!(w.request_timeout_ms, 5_000);
+        assert_eq!(w.display_name.as_deref(), Some("Work"));
+
+        let edit = ServerInput {
+            id: "files".into(),
+            name: None,
+            transport: TransportInput::Stdio {
+                command: "/bin/mcp-files".into(),
+                args: vec!["-v".into()],
+                env: vec![],
+            },
+        };
+        st.save_mcp_server(&edit, Some("files")).unwrap();
+        let McpTransport::Stdio { cwd, args, .. } = st.mcp_server("files").unwrap().transport
+        else {
+            panic!()
+        };
+        assert_eq!(cwd.as_deref(), Some("/srv"));
+        assert_eq!(args, ["-v"]);
+
+        // Switching kind is refused.
+        let err = st
+            .save_mcp_server(&http("files", vec![], false), Some("files"))
+            .unwrap_err();
+        assert!(err.message.contains("can't switch"));
+    }
+
+    #[test]
+    fn names_with_control_characters_or_equals_are_refused() {
+        assert!(valid_value_name("API_TOKEN", false));
+        assert!(valid_value_name("X-Team", true));
+        for bad in ["A=B", "A\nB", "A\rB", "A\0B"] {
+            assert!(!valid_value_name(bad, false), "{bad:?}");
+        }
+        assert!(!valid_value_name("X Team", true));
+        assert!(!valid_value_name("X:Team", true));
+        let input = http("work", vec![secret("X\r\nInjected", Some("v"))], false);
+        assert!(config_from_input(&input, |_| false, true).is_err());
+    }
+
+    #[test]
+    fn sign_in_urls_are_parsed_not_split() {
+        assert!(!safe_sign_in_url("http://evil.com\\\u{ff20}127.0.0.1/"));
+        assert!(!safe_sign_in_url("http://evil.com\\@127.0.0.1/"));
+        assert!(!safe_sign_in_url("https://user:pw@auth.example.com/"));
+        assert!(safe_sign_in_url("https://auth.example.com/authorize"));
+        assert!(safe_sign_in_url("http://[::1]:9/cb"));
+    }
+
+    /// Answers every launch question with `allow` and counts the questions.
+    struct FakeApprover {
+        allow: bool,
+        asked: std::sync::atomic::AtomicUsize,
+    }
+
+    impl LaunchApprover for FakeApprover {
+        fn ask(
+            &self,
+            _request: LaunchRequest,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>> {
+            self.asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let allow = self.allow;
+            Box::pin(async move { allow })
+        }
+    }
+
+    fn local(id: &str, args: &[&str]) -> McpServerConfig {
+        // A program that doesn't exist: connecting fails fast after the approval step.
+        McpServerConfig::stdio(
+            id,
+            "/nonexistent/demios-test-mcp",
+            args.iter().map(|a| a.to_string()).collect(),
+        )
+    }
+
+    fn state_of(st: &AppState, id: &str) -> Option<McpServerStatus> {
+        st.mcp_statuses().get(id).cloned()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_local_server_starts_only_after_a_native_yes_per_command_line() {
+        let (st, exec, _keys, _rx) = app_with_exec();
+        let approver = Arc::new(FakeApprover {
+            allow: false,
+            asked: Default::default(),
+        });
+        let _ = st.launch_approver.set(approver.clone());
+        st.set_mcp_servers(vec![local("files", &["--root", "/tmp"])])
+            .unwrap();
+        let epoch = st.mcp_epoch_now();
+
+        st.connect_mcp_server(&exec, local("files", &["--root", "/tmp"]), epoch)
+            .await;
+        assert_eq!(approver.asked.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let s = state_of(&st, "files").unwrap();
+        assert_eq!(s.state, "failed");
+        assert!(s.message.unwrap().contains("didn't allow"));
+        assert!(exec.client("files").is_none(), "never started");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_approval_is_remembered_until_the_command_line_changes() {
+        let (st, exec, _keys, _rx) = app_with_exec();
+        let approver = Arc::new(FakeApprover {
+            allow: true,
+            asked: Default::default(),
+        });
+        let _ = st.launch_approver.set(approver.clone());
+        let asked = || approver.asked.load(std::sync::atomic::Ordering::SeqCst);
+        let epoch = st.mcp_epoch_now();
+
+        st.set_mcp_servers(vec![local("files", &["--root", "/tmp"])])
+            .unwrap();
+        st.connect_mcp_server(&exec, local("files", &["--root", "/tmp"]), epoch)
+            .await;
+        st.connect_mcp_server(&exec, local("files", &["--root", "/tmp"]), epoch)
+            .await;
+        assert_eq!(asked(), 1, "remembered for the same command line");
+
+        st.set_mcp_servers(vec![local("files", &["--root", "/"])])
+            .unwrap();
+        st.connect_mcp_server(&exec, local("files", &["--root", "/"]), epoch)
+            .await;
+        assert_eq!(asked(), 2, "a changed argument asks again");
+
+        // Removing the server forgets its approvals.
+        st.remove_mcp_server_config("files").unwrap();
+        assert!(
+            !crate::settings::mcp_launch_approved(
+                &st.db().unwrap(),
+                "files",
+                &LaunchRequest::of(&local("files", &["--root", "/"]))
+                    .unwrap()
+                    .command_line()
+            )
+            .unwrap()
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn no_local_server_starts_where_programs_cant_run_or_without_an_approver() {
+        let (st, exec, _keys, _rx) = app_with_exec();
+        st.set_mcp_servers(vec![local("files", &[])]).unwrap();
+        // No approver installed: refused, not started.
+        st.connect_mcp_server(&exec, local("files", &[]), st.mcp_epoch_now())
+            .await;
+        assert_eq!(state_of(&st, "files").unwrap().state, "failed");
+
+        let mut flat = AppState::new(
+            dn_store::open_in_memory(&crate::state::migration_sets()).unwrap(),
+            crate::models::ModelRegistry::default(),
+            crate::secrets::Keys::memory(),
+        );
+        flat.local_servers = false;
+        let flat = Arc::new(flat);
+        let approver = Arc::new(FakeApprover {
+            allow: true,
+            asked: Default::default(),
+        });
+        let _ = flat.launch_approver.set(approver.clone());
+        flat.set_mcp_servers(vec![local("files", &[])]).unwrap();
+        flat.connect_mcp_server(&exec, local("files", &[]), flat.mcp_epoch_now())
+            .await;
+        let s = state_of(&flat, "files").unwrap();
+        assert_eq!(s.state, "failed");
+        assert!(s.message.unwrap().contains("can't start programs"));
+        assert_eq!(approver.asked.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_connect_for_a_changed_or_removed_server_does_nothing() {
+        let (st, exec, _keys, _rx) = app_with_exec();
+        let approver = Arc::new(FakeApprover {
+            allow: true,
+            asked: Default::default(),
+        });
+        let _ = st.launch_approver.set(approver.clone());
+        st.set_mcp_servers(vec![local("files", &["new"])]).unwrap();
+        // A stale config (e.g. a save's background connect after another edit).
+        st.connect_mcp_server(&exec, local("files", &["old"]), st.mcp_epoch_now())
+            .await;
+        // Not in settings at all.
+        st.connect_mcp_server(&exec, local("gone", &[]), st.mcp_epoch_now())
+            .await;
+        assert_eq!(approver.asked.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert!(state_of(&st, "files").is_none() && state_of(&st, "gone").is_none());
+    }
+
+    #[test]
+    fn the_launch_dialog_shows_every_argument_and_no_env_values() {
+        let mut cfg = local("files", &["--root", "/tmp; rm -rf ~", ""]);
+        if let McpTransport::Stdio { env, .. } = &mut cfg.transport {
+            env.insert(
+                "API_TOKEN".into(),
+                ValueRef::secret("mcp.files.env.API_TOKEN"),
+            );
+            env.insert("LOG".into(), ValueRef::plain("hidden-plain-value"));
+        }
+        let r = LaunchRequest::of(&cfg).unwrap();
+        let t = r.dialog_text();
+        assert!(t.contains("\"/nonexistent/demios-test-mcp\""));
+        assert!(t.contains("\"/tmp; rm -rf ~\""), "{t}");
+        assert!(t.contains("\"\""), "an empty argument is visible");
+        assert!(t.contains("API_TOKEN, LOG"));
+        assert!(!t.contains("hidden-plain-value"));
     }
 }

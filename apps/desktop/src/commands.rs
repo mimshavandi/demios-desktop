@@ -648,7 +648,27 @@ pub async fn sign_in_mcp_server(
         pending.complete(&callback).await.map_err(|e| {
             eprintln!("oauth complete for `{}`: {e}", cfg.id);
             IpcError::new("sign_in", "Sign-in didn't finish. Try again.")
+        })?;
+        // The token is for the server as it was when sign-in started. If it was removed or
+        // changed meanwhile, throw the token away instead of connecting.
+        let id = cfg.id.clone();
+        let expected = cfg.clone();
+        let st2 = Arc::clone(&st);
+        let still_same = tauri::async_runtime::spawn_blocking(move || {
+            match st2.mcp_server(&id) {
+                Ok(now) if now == expected => Ok(true),
+                _ => st2.forget_mcp_sign_in(&id).map(|()| false),
+            }
         })
+        .await
+        .map_err(|_| IpcError::new("internal", "Something went wrong. Try again."))??;
+        if !still_same {
+            return Err(IpcError::new(
+                "changed",
+                "The server was changed or removed while you were signing in, so that sign-in was discarded.",
+            ));
+        }
+        Ok(())
     }
     .await;
     match result {
@@ -658,7 +678,10 @@ pub async fn sign_in_mcp_server(
             Ok(())
         }
         Err(e) => {
-            set("needs_auth", Some(e.message.clone()));
+            // A server removed meanwhile gets no status back.
+            if e.code != "changed" {
+                set("needs_auth", Some(e.message.clone()));
+            }
             Err(e)
         }
     }

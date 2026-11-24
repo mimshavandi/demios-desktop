@@ -172,6 +172,38 @@ describe("McpServersCard", () => {
     expect(await screen.findByText("No tool servers yet")).toBeTruthy();
   });
 
+  it("returns focus to the trigger, asks before discarding changes, and asks to retype secrets for a new address", async () => {
+    const { api } = fake({ servers: [tracker], local_servers_allowed: true });
+    ui(api);
+    const editBtn = await screen.findByRole("button", { name: "Edit Issue tracker" });
+    fireEvent.click(editBtn);
+    // Unchanged: Cancel closes at once and focus goes back to Edit.
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(document.activeElement?.getAttribute("aria-label")).toBe("Edit Issue tracker"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit Issue tracker" }));
+    fireEvent.change(screen.getByLabelText("Server address"), { target: { value: "https://new.example/mcp" } });
+    expect((screen.getByLabelText("Secret value") as HTMLInputElement).placeholder).toBe("Type it again");
+    expect(screen.getByText(/saved secrets aren't reused/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByText("You have unsaved changes.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
+    expect((screen.getByLabelText("Server address") as HTMLInputElement).value).toBe("https://new.example/mcp");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Discard changes" }));
+    expect(await screen.findByRole("button", { name: "Edit Issue tracker" })).toBeTruthy();
+  });
+
+  it("the remove confirm lists the chat approvals that go too", async () => {
+    const { api } = fake({ servers: [tracker], local_servers_allowed: true });
+    ui(api);
+    fireEvent.click(await screen.findByRole("button", { name: "Remove Issue tracker" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog.textContent).toContain("This stops the server");
+    expect(dialog.textContent).toContain('"Allow in this chat" approvals for its tools');
+  });
+
   it("offers only remote servers where local programs can't run", async () => {
     const { api } = fake({ servers: [], local_servers_allowed: false });
     ui(api);

@@ -58,6 +58,32 @@ fn navigation_guard<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
         .build()
 }
 
+/// Asks with a native dialog (outside the webview) before a local MCP server starts.
+struct NativeLaunchApprover(tauri::AppHandle);
+
+impl mcp::LaunchApprover for NativeLaunchApprover {
+    fn ask(
+        &self,
+        request: mcp::LaunchRequest,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>> {
+        use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.0
+            .dialog()
+            .message(request.dialog_text())
+            .title("Start a tool server?")
+            .kind(MessageDialogKind::Warning)
+            .buttons(MessageDialogButtons::OkCancelCustom(
+                "Allow and start".into(),
+                "Don't start".into(),
+            ))
+            .show(move |allowed| {
+                let _ = tx.send(allowed);
+            });
+        Box::pin(async move { rx.await.unwrap_or(false) })
+    }
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(navigation_guard())
@@ -68,19 +94,27 @@ pub fn run() {
                 .open_js_links_on_click(false)
                 .build(),
         )
+        // Native "start this program?" confirm for local MCP servers, shown from Rust only;
+        // none of the dialog plugin's JS commands are granted (see capabilities).
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             use tauri::Manager;
             let dir = data_dir().ok_or("no home directory to keep app data in")?;
             let resources = app.path().resource_dir().ok();
             let skills = agent::skills_dir(resources.as_deref());
-            let state =
-                state::AppState::open(&dir.join(dn_store::paths::DB_FILE), skills.as_deref())
-                    .map_err(|e| {
-                        format!(
-                            "could not open the local database in {}: {e}",
-                            dir.display()
-                        )
-                    })?;
+            let state = state::AppState::open_with(
+                &dir.join(dn_store::paths::DB_FILE),
+                skills.as_deref(),
+                Some(std::sync::Arc::new(NativeLaunchApprover(
+                    app.handle().clone(),
+                ))),
+            )
+            .map_err(|e| {
+                format!(
+                    "could not open the local database in {}: {e}",
+                    dir.display()
+                )
+            })?;
             app.manage(state);
             Ok(())
         })

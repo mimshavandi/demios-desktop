@@ -181,6 +181,10 @@ pub struct AppState {
     /// Bumped by "Delete all local data": a background MCP connect started before it must
     /// not add its server afterwards.
     mcp_epoch: AtomicU64,
+    /// Whether this build may start local (stdio) MCP servers (not in Flatpak).
+    pub local_servers: bool,
+    /// Asks before a local MCP server starts (native dialog in the app; tests set a fake).
+    pub launch_approver: std::sync::OnceLock<Arc<dyn crate::mcp::LaunchApprover>>,
 }
 
 /// A reserved generation slot. Dropping it without [`Reservation::into_parts`] releases
@@ -232,6 +236,8 @@ impl AppState {
             removed_keys: Mutex::new(HashMap::new()),
             next_token: AtomicU64::new(1),
             mcp_epoch: AtomicU64::new(0),
+            local_servers: crate::mcp::local_servers_allowed(),
+            launch_approver: std::sync::OnceLock::new(),
         }
     }
 
@@ -242,6 +248,16 @@ impl AppState {
     pub fn open(
         path: &std::path::Path,
         skills: Option<&std::path::Path>,
+    ) -> dn_store::Result<Arc<Self>> {
+        Self::open_with(path, skills, None)
+    }
+
+    /// [`Self::open`] with the launch approver for local MCP servers, set before the saved
+    /// servers start connecting.
+    pub fn open_with(
+        path: &std::path::Path,
+        skills: Option<&std::path::Path>,
+        launch_approver: Option<Arc<dyn crate::mcp::LaunchApprover>>,
     ) -> dn_store::Result<Arc<Self>> {
         let conn = dn_store::open(path, &migration_sets())?;
         let n = store::recover_interrupted(&conn)?;
@@ -281,6 +297,9 @@ impl AppState {
         state.agent = agent;
         state.tools = tools;
         state.executor = Some(Arc::clone(&executor));
+        if let Some(a) = launch_approver {
+            let _ = state.launch_approver.set(a);
+        }
         let state = Arc::new(state);
         state.start_approval_bridge(approvals);
         state.connect_mcp_servers(executor);
@@ -780,7 +799,34 @@ impl AppState {
             message,
             tools,
         };
+        // Connect only what is saved now: the server may have been removed or edited while
+        // this was waiting (a save's background connect, a sign-in).
+        match self.mcp_server(&id) {
+            Ok(current) if current == cfg => {}
+            _ => return true,
+        }
         executor.remove_server(&id).await;
+        if let Some(req) = crate::mcp::LaunchRequest::of(&cfg) {
+            if !self.local_servers {
+                self.set_mcp_status(status(
+                    "failed",
+                    Some("This version of Demios can't start programs on your computer.".into()),
+                    0,
+                ));
+                return true;
+            }
+            if !self.approve_launch(&id, req).await {
+                self.set_mcp_status(status(
+                    "failed",
+                    Some(
+                        "Not started: you didn't allow it to run. Use Reconnect to be asked again."
+                            .into(),
+                    ),
+                    0,
+                ));
+                return true;
+            }
+        }
         self.set_mcp_status(status("connecting", None, 0));
         let secrets = self.mcp_secret_store();
         let client = match dn_tools::McpClient::new(cfg, Arc::clone(&secrets)) {
@@ -819,6 +865,35 @@ impl AppState {
                     self.set_mcp_status(status("failed", Some(msg), 0));
                 }
             }
+        }
+        true
+    }
+
+    /// Whether the user allowed this exact command line for this server, asking (native
+    /// dialog, outside the webview) when they haven't yet. A "yes" is remembered.
+    async fn approve_launch(&self, id: &str, req: crate::mcp::LaunchRequest) -> bool {
+        let line = req.command_line();
+        let known = self
+            .db()
+            .ok()
+            .and_then(|db| settings::mcp_launch_approved(&db, id, &line).ok())
+            .unwrap_or(false);
+        if known {
+            return true;
+        }
+        let Some(approver) = self.launch_approver.get() else {
+            return false;
+        };
+        if !approver.ask(req).await {
+            return false;
+        }
+        match self.db() {
+            Ok(db) => {
+                if let Err(e) = settings::record_mcp_launch(&db, id, &line) {
+                    eprintln!("could not remember a launch approval: {e}");
+                }
+            }
+            Err(_) => eprintln!("could not remember a launch approval"),
         }
         true
     }
