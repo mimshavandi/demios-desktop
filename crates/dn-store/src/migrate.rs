@@ -11,7 +11,7 @@
 //!   (an older app must not write to a newer schema).
 
 use crate::{Result, StoreError};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, TransactionBehavior, params};
 
 /// One crate's ordered migrations.
 #[derive(Clone, Copy, Debug)]
@@ -47,22 +47,23 @@ pub fn run_migrations(conn: &mut Connection, sets: &[MigrationSet]) -> Result<()
     }
     conn.execute(BOOKKEEPING, [])?;
     for set in sets {
-        let applied: i64 = conn.query_row(
-            "SELECT COALESCE(MAX(version), 0) FROM store_migrations WHERE set_name = ?1",
-            [set.name],
-            |r| r.get(0),
-        )?;
         let known = set.migrations.len();
-        if applied > known as i64 {
-            return Err(StoreError::NewerSchema {
-                set: set.name.to_string(),
-                version: applied,
-                known,
-            });
-        }
-        for (i, sql) in set.migrations.iter().enumerate().skip(applied as usize) {
+        for (i, sql) in set.migrations.iter().enumerate() {
             let version = i + 1;
-            let tx = conn.transaction()?;
+            // IMMEDIATE takes the write lock before reading the version, so two
+            // processes opening the same file cannot both apply the same migration.
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let applied = max_version(&tx, set.name)?;
+            if applied > known as i64 {
+                return Err(StoreError::NewerSchema {
+                    set: set.name.to_string(),
+                    version: applied,
+                    known,
+                });
+            }
+            if applied >= version as i64 {
+                continue;
+            }
             let run = tx.execute_batch(sql).and_then(|()| {
                 tx.execute(
                     "INSERT INTO store_migrations (set_name, version, applied_at) VALUES (?1, ?2, ?3)",
@@ -76,17 +77,31 @@ pub fn run_migrations(conn: &mut Connection, sets: &[MigrationSet]) -> Result<()
             })?;
             tx.commit()?;
         }
+        if known == 0 {
+            let applied = max_version(conn, set.name)?;
+            if applied > known as i64 {
+                return Err(StoreError::NewerSchema {
+                    set: set.name.to_string(),
+                    version: applied,
+                    known,
+                });
+            }
+        }
     }
     Ok(())
 }
 
-/// Highest applied migration for `set_name` (0 if none).
-pub fn applied_version(conn: &Connection, set_name: &str) -> Result<i64> {
-    Ok(conn.query_row(
+fn max_version(conn: &Connection, set_name: &str) -> rusqlite::Result<i64> {
+    conn.query_row(
         "SELECT COALESCE(MAX(version), 0) FROM store_migrations WHERE set_name = ?1",
         [set_name],
         |r| r.get(0),
-    )?)
+    )
+}
+
+/// Highest applied migration for `set_name` (0 if none).
+pub fn applied_version(conn: &Connection, set_name: &str) -> Result<i64> {
+    Ok(max_version(conn, set_name)?)
 }
 
 #[cfg(test)]

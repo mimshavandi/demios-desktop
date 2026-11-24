@@ -7,6 +7,7 @@ use crate::{Result, StoreError, now_ms};
 use dn_core::Id;
 use dn_core::chat::{ChatMessage, ContentPart, FinishReason, Role, ToolCall};
 use rusqlite::{Connection, OptionalExtension, Row, params};
+
 use serde::{Deserialize, Serialize};
 
 pub(crate) const MIGRATIONS: &[&str] = &["
@@ -34,7 +35,7 @@ CREATE TABLE store_messages (
     created_at      INTEGER NOT NULL,
     updated_at      INTEGER NOT NULL
 );
-CREATE INDEX store_messages_conversation ON store_messages (conversation_id, id);
+CREATE INDEX store_messages_conversation ON store_messages (conversation_id, created_at, id);
 "];
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -113,6 +114,8 @@ impl StoredMessage {
 pub struct NewMessage {
     pub role: Role,
     pub content: Vec<ContentPart>,
+    /// Required when `role == Tool`: the call this message answers.
+    pub tool_call_id: Option<String>,
     pub model: Option<String>,
     pub status: MessageStatus,
 }
@@ -122,6 +125,18 @@ impl NewMessage {
         Self {
             role: Role::User,
             content: vec![ContentPart::Text { text: text.into() }],
+            tool_call_id: None,
+            model: None,
+            status: MessageStatus::Complete,
+        }
+    }
+
+    /// A tool result answering `tool_call_id`.
+    pub fn tool_result(tool_call_id: impl Into<String>, text: impl Into<String>) -> Self {
+        Self {
+            role: Role::Tool,
+            content: vec![ContentPart::Text { text: text.into() }],
+            tool_call_id: Some(tool_call_id.into()),
             model: None,
             status: MessageStatus::Complete,
         }
@@ -132,6 +147,7 @@ impl NewMessage {
         Self {
             role: Role::Assistant,
             content: vec![],
+            tool_call_id: None,
             model,
             status: MessageStatus::Streaming,
         }
@@ -167,18 +183,14 @@ fn parse_id(s: &str) -> Result<Id> {
         .map_err(|e| StoreError::Invalid(format!("id `{s}`: {e}")))
 }
 
-fn conversation_from_row(r: &Row<'_>) -> rusqlite::Result<(String, Conversation)> {
-    let id: String = r.get(0)?;
-    Ok((
-        id,
-        Conversation {
-            id: Id(uuid::Uuid::nil()),
-            title: r.get(1)?,
-            model: r.get(2)?,
-            created_at: r.get(3)?,
-            updated_at: r.get(4)?,
-        },
-    ))
+fn conversation_from_row(r: &Row<'_>) -> Result<Conversation> {
+    Ok(Conversation {
+        id: parse_id(&r.get::<_, String>(0)?)?,
+        title: r.get(1)?,
+        model: r.get(2)?,
+        created_at: r.get(3)?,
+        updated_at: r.get(4)?,
+    })
 }
 
 const CONVERSATION_COLS: &str = "id, title, model, created_at, updated_at";
@@ -206,29 +218,24 @@ pub fn list_conversations(conn: &Connection) -> Result<Vec<Conversation>> {
         "SELECT {CONVERSATION_COLS} FROM store_conversations
          WHERE deleted_at IS NULL ORDER BY updated_at DESC, id DESC"
     ))?;
-    let rows = stmt.query_map([], conversation_from_row)?;
-    rows.map(|r| {
-        let (id, mut c) = r?;
-        c.id = parse_id(&id)?;
-        Ok(c)
-    })
-    .collect()
+    let mut rows = stmt.query([])?;
+    let mut out = vec![];
+    while let Some(r) = rows.next()? {
+        out.push(conversation_from_row(r)?);
+    }
+    Ok(out)
 }
 
 pub fn get_conversation(conn: &Connection, id: Id) -> Result<Conversation> {
-    let row = conn
-        .query_row(
-            &format!(
-                "SELECT {CONVERSATION_COLS} FROM store_conversations
-                 WHERE id = ?1 AND deleted_at IS NULL"
-            ),
-            [id.to_string()],
-            conversation_from_row,
-        )
-        .optional()?;
-    let (_, mut c) = row.ok_or_else(|| StoreError::NotFound(format!("conversation {id}")))?;
-    c.id = id;
-    Ok(c)
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {CONVERSATION_COLS} FROM store_conversations
+         WHERE id = ?1 AND deleted_at IS NULL"
+    ))?;
+    let mut rows = stmt.query([id.to_string()])?;
+    match rows.next()? {
+        Some(r) => conversation_from_row(r),
+        None => Err(StoreError::NotFound(format!("conversation {id}"))),
+    }
 }
 
 pub fn rename_conversation(conn: &Connection, id: Id, title: &str) -> Result<()> {
@@ -256,20 +263,23 @@ fn touch(conn: &Connection, id: Id, set: &str, value: &str) -> Result<()> {
 /// Soft-deletes a conversation (a tombstone sync can carry) and hard-deletes its messages.
 pub fn delete_conversation(conn: &Connection, id: Id) -> Result<()> {
     let now = now_ms();
-    conn.execute(
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
         "DELETE FROM store_messages WHERE conversation_id = ?1",
         [id.to_string()],
     )?;
-    conn.execute(
+    tx.execute(
         "UPDATE store_conversations SET deleted_at = ?2, updated_at = ?2 WHERE id = ?1",
         params![id.to_string(), now],
     )?;
+    tx.commit()?;
     Ok(())
 }
 
 pub fn add_message(conn: &Connection, conversation_id: Id, m: NewMessage) -> Result<StoredMessage> {
+    let tx = conn.unchecked_transaction()?;
     // Fail with NotFound rather than a foreign-key error.
-    get_conversation(conn, conversation_id)?;
+    get_conversation(&tx, conversation_id)?;
     let now = now_ms();
     let msg = StoredMessage {
         id: Id::new(),
@@ -277,7 +287,7 @@ pub fn add_message(conn: &Connection, conversation_id: Id, m: NewMessage) -> Res
         role: m.role,
         content: m.content,
         tool_calls: vec![],
-        tool_call_id: None,
+        tool_call_id: m.tool_call_id,
         model: m.model,
         status: m.status,
         finish_reason: None,
@@ -285,22 +295,24 @@ pub fn add_message(conn: &Connection, conversation_id: Id, m: NewMessage) -> Res
         created_at: now,
         updated_at: now,
     };
-    conn.execute(
+    tx.execute(
         "INSERT INTO store_messages
            (id, conversation_id, role, content, tool_calls, tool_call_id, model, status,
             finish_reason, error, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, '[]', NULL, ?5, ?6, NULL, NULL, ?7, ?7)",
+         VALUES (?1, ?2, ?3, ?4, '[]', ?5, ?6, ?7, NULL, NULL, ?8, ?8)",
         params![
             msg.id.to_string(),
             conversation_id.to_string(),
             enum_str(&msg.role)?,
             serde_json::to_string(&msg.content)?,
+            msg.tool_call_id,
             msg.model,
             msg.status.as_str(),
             now,
         ],
     )?;
-    bump_conversation(conn, conversation_id, now)?;
+    bump_conversation(&tx, conversation_id, now)?;
+    tx.commit()?;
     Ok(msg)
 }
 
@@ -308,7 +320,8 @@ pub fn add_message(conn: &Connection, conversation_id: Id, m: NewMessage) -> Res
 pub fn finish_message(conn: &Connection, id: Id, o: MessageOutcome) -> Result<()> {
     let now = now_ms();
     let finish = o.finish_reason.as_ref().map(enum_str).transpose()?;
-    let n = conn.execute(
+    let tx = conn.unchecked_transaction()?;
+    let n = tx.execute(
         "UPDATE store_messages
          SET content = ?2, tool_calls = ?3, status = ?4, finish_reason = ?5, error = ?6,
              updated_at = ?7
@@ -326,12 +339,14 @@ pub fn finish_message(conn: &Connection, id: Id, o: MessageOutcome) -> Result<()
     if n == 0 {
         return Err(StoreError::NotFound(format!("message {id}")));
     }
-    let conv: String = conn.query_row(
+    let conv: String = tx.query_row(
         "SELECT conversation_id FROM store_messages WHERE id = ?1",
         [id.to_string()],
         |r| r.get(0),
     )?;
-    bump_conversation(conn, parse_id(&conv)?, now)
+    bump_conversation(&tx, parse_id(&conv)?, now)?;
+    tx.commit()?;
+    Ok(())
 }
 
 fn bump_conversation(conn: &Connection, id: Id, now: i64) -> Result<()> {
@@ -347,7 +362,7 @@ pub fn list_messages(conn: &Connection, conversation_id: Id) -> Result<Vec<Store
     let mut stmt = conn.prepare(
         "SELECT id, conversation_id, role, content, tool_calls, tool_call_id, model, status,
                 finish_reason, error, created_at, updated_at
-         FROM store_messages WHERE conversation_id = ?1 ORDER BY id",
+         FROM store_messages WHERE conversation_id = ?1 ORDER BY created_at, id",
     )?;
     let mut rows = stmt.query([conversation_id.to_string()])?;
     let mut out = vec![];
@@ -378,11 +393,24 @@ pub fn list_messages(conn: &Connection, conversation_id: Id) -> Result<Vec<Store
 /// Deletes `from` and every later message in its conversation (used by regenerate and
 /// edit-and-resend). Returns how many rows were removed.
 pub fn truncate_from(conn: &Connection, conversation_id: Id, from: Id) -> Result<usize> {
-    let n = conn.execute(
-        "DELETE FROM store_messages WHERE conversation_id = ?1 AND id >= ?2",
-        params![conversation_id.to_string(), from.to_string()],
+    let tx = conn.unchecked_transaction()?;
+    let pos: Option<(i64, String)> = tx
+        .query_row(
+            "SELECT created_at, id FROM store_messages WHERE id = ?1 AND conversation_id = ?2",
+            params![from.to_string(), conversation_id.to_string()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    let (created_at, id) = pos.ok_or_else(|| {
+        StoreError::NotFound(format!("message {from} in conversation {conversation_id}"))
+    })?;
+    let n = tx.execute(
+        "DELETE FROM store_messages
+         WHERE conversation_id = ?1 AND (created_at, id) >= (?2, ?3)",
+        params![conversation_id.to_string(), created_at, id],
     )?;
-    bump_conversation(conn, conversation_id, now_ms())?;
+    bump_conversation(&tx, conversation_id, now_ms())?;
+    tx.commit()?;
     Ok(n)
 }
 
@@ -488,9 +516,56 @@ mod tests {
     }
 
     #[test]
+    fn tool_call_id_round_trips() {
+        let c = open_in_memory(&[]).unwrap();
+        let conv = create_conversation(&c, "t").unwrap();
+        add_message(&c, conv.id, NewMessage::tool_result("call_1", "42")).unwrap();
+        let m = &list_messages(&c, conv.id).unwrap()[0];
+        assert_eq!(m.tool_call_id.as_deref(), Some("call_1"));
+        let cm = m.to_chat_message();
+        assert_eq!(cm.role, Role::Tool);
+        assert_eq!(cm.tool_call_id.as_deref(), Some("call_1"));
+    }
+
+    #[test]
+    fn truncate_rejects_message_from_another_conversation() {
+        let c = open_in_memory(&[]).unwrap();
+        let a = create_conversation(&c, "a").unwrap();
+        let b = create_conversation(&c, "b").unwrap();
+        add_message(&c, a.id, NewMessage::user_text("a1")).unwrap();
+        let b1 = add_message(&c, b.id, NewMessage::user_text("b1")).unwrap();
+        add_message(&c, a.id, NewMessage::user_text("a2")).unwrap();
+        assert!(matches!(
+            truncate_from(&c, a.id, b1.id),
+            Err(StoreError::NotFound(_))
+        ));
+        assert_eq!(list_messages(&c, a.id).unwrap().len(), 2);
+        assert_eq!(list_messages(&c, b.id).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn foreign_keys_are_enforced() {
+        let c = open_in_memory(&[]).unwrap();
+        let err = c.execute(
+            "INSERT INTO store_messages (id, conversation_id, role, content, status, created_at, updated_at)
+             VALUES ('x', 'missing', 'user', '[]', 'complete', 0, 0)",
+            [],
+        );
+        assert!(err.is_err());
+    }
+
+    /// Removes the directory even when the test fails.
+    struct TempDir(std::path::PathBuf);
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
     fn history_persists_across_reopen() {
-        let dir = std::env::temp_dir().join(format!("dn-store-test-{}", Id::new()));
-        let path = dir.join("db.sqlite3");
+        let dir = TempDir(std::env::temp_dir().join(format!("dn-store-test-{}", Id::new())));
+        let path = dir.0.join("db.sqlite3");
         let id = {
             let c = crate::open(&path, &[]).unwrap();
             let conv = create_conversation(&c, "kept").unwrap();
@@ -500,8 +575,6 @@ mod tests {
         let c = crate::open(&path, &[]).unwrap();
         assert_eq!(get_conversation(&c, id).unwrap().title, "kept");
         assert_eq!(list_messages(&c, id).unwrap()[0].text(), "remember me");
-        drop(c);
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

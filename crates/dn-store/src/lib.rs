@@ -54,11 +54,28 @@ pub fn migrations() -> &'static [&'static str] {
 /// plus dn-store's own migrations.
 pub fn open(path: &std::path::Path, sets: &[MigrationSet]) -> Result<Connection> {
     if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
+        create_private_dir(dir)?;
     }
     let mut conn = Connection::open(path)?;
     prepare(&mut conn, sets)?;
     Ok(conn)
+}
+
+/// Creates `dir` (and parents); on Unix the leaf is `0700` so other users cannot read
+/// the history.
+fn create_private_dir(dir: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(dir)
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::create_dir_all(dir)
+    }
 }
 
 /// In-memory database with every migration applied (tests, dev mode).

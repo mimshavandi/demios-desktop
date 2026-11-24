@@ -4,13 +4,13 @@
 //! | OS | Directory |
 //! |---|---|
 //! | macOS | `~/Library/Application Support/<app_id>` |
-//! | Windows | `%APPDATA%\<app_id>` |
+//! | Windows | `%LOCALAPPDATA%\<app_id>` (not roaming; matches Tauri `app_local_data_dir`) |
 //! | Linux / other Unix | `$XDG_DATA_HOME/<app_id>` or `~/.local/share/<app_id>` |
 
 use std::path::PathBuf;
 
 /// Reverse-DNS id the desktop app uses for its data directory and bundle.
-pub const APP_ID: &str = "com.demios.desktop";
+pub const APP_ID: &str = dn_core::APP_ID;
 
 /// File name of the main database inside the app-data directory.
 pub const DB_FILE: &str = "demios.sqlite3";
@@ -39,7 +39,7 @@ fn base_data_dir() -> Option<PathBuf> {
 
 #[cfg(windows)]
 fn base_data_dir() -> Option<PathBuf> {
-    env_dir("APPDATA")
+    env_dir("LOCALAPPDATA")
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
