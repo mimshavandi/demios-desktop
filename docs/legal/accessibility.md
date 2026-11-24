@@ -43,7 +43,7 @@ We want Demios Desktop to be usable by everyone, including people who use a keyb
 - **macOS:** WKWebView has no WebDriver, so all macOS checks are manual, from a release checklist.
 - **Screen readers:** no full pass has been done yet with VoiceOver (macOS), NVDA or Narrator (Windows), or Orca (Linux). Until one has, we will not tick any store's "accessible" box.
 - **Generated content:** answers and artifacts (pages, apps and diagrams the model writes) are written by the AI model you choose. We cannot guarantee that they are accessible: an artifact may lack alt text, headings, labels or enough contrast. You can ask the model to fix this.
-- **Links in answers** cannot be opened yet.
+- **Artifacts on Windows** can't be shown yet. On macOS and Linux they are.
 - **Not yet checked:** high-contrast and forced-colours modes, zoom to 200%, and reduced motion.
 
 ## Report a problem

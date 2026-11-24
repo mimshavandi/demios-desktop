@@ -36,13 +36,14 @@ The app keeps its data in a SQLite database called `demios.sqlite3`, in your ope
 The database holds:
 
 - **Conversations:** title, messages, the model that answered, and timestamps.
+- **Artifacts:** the pages, apps, diagrams and documents a model makes in a chat, every version of them, which model or whether you made each version, and timestamps.
 - **Settings:** which model you chose for each task, the tool servers you added, and which local server commands you allowed to start. It stores only the *names* of their credentials, never the credentials themselves.
 - **Tool history:** for each tool call the app makes, the tool name, the arguments, the result or error, and timestamps. This history lets the app avoid repeating an action by accident.
 
 Other things stored locally:
 
 - **Interface preferences**, for example whether the sidebar is open, in the app window's own storage.
-- **Model files** you download: `demios/models/` in your user data folder (`~/Library/Application Support` on macOS, `%LOCALAPPDATA%` on Windows, `~/.local/share` on Linux), or the folder set in `DN_MODELS_DIR`. **Settings → General → About** shows it. The `dn` command-line tool uses the same folder.
+- **Model files** you download: `demios/models/` in your user data folder (`~/Library/Application Support` on macOS, `%LOCALAPPDATA%` on Windows, `~/.local/share` on Linux), or the folder set in `DN_MODELS_DIR`. **Settings → General → About** shows it. The `dn` command-line tool uses the same folder. GGUF models the app finds in your own Hugging Face cache are used where they are; the app never changes or deletes them.
 
 Nothing in these folders is uploaded anywhere by the app.
 
@@ -70,9 +71,9 @@ If you use a **model on this device** instead, the conversation is processed on 
 
 ### Hugging Face (model downloads)
 
-Model files are downloaded directly from Hugging Face (`huggingface.co`). Like any web server, Hugging Face sees your IP address, the file you asked for and standard request headers. No Demios account or Hugging Face account is needed. Before you download, the app shows the model's licence and a link to its model card. Your chats are never sent to Hugging Face. [Hugging Face privacy policy](https://huggingface.co/privacy).
+When you search for a model or download one, the app connects directly to Hugging Face (`huggingface.co`). Hugging Face sees your IP address, your search text, the files you ask for, and standard request headers, including the app's name and version. No Demios account is needed. Before you download, the app shows the model's licence and a link to its model card. Your chats are never sent to Hugging Face. [Hugging Face privacy policy](https://huggingface.co/privacy).
 
-The `dn` command-line tool can also search Hugging Face and download from it, and can use a mirror you set with `HF_ENDPOINT`. Your Hugging Face token, if you set one, is sent only to Hugging Face, not to a mirror unless you opt in.
+Some models need your Hugging Face token. If you save one, it is kept in your system keychain and sent only to Hugging Face. If you set a mirror with `HF_ENDPOINT`, the app and the `dn` tool use it instead, and the token goes to the mirror only if you opt in.
 
 ### Tool servers (MCP)
 
@@ -85,9 +86,13 @@ When the model calls a tool, the server receives the **arguments of that call**.
 
 Tools that change something ask for your approval first: every time, or, for tools that only change local data, once per chat if you choose. Tools a server marks as read-only run **without asking**, so their arguments are sent without a prompt. A remote server is never trusted to mark its own tools read-only, so none of its tools run without asking. Each server's own policy applies.
 
+### Artifacts
+
+Artifacts run in a sealed-off frame with no network access. If an artifact tries to use the network, you can allow it for that one artifact after a confirmation that explains the risk; it can then send what it shows, including text from the chat, to websites it chooses. The permission is turned off again when the model writes a new version.
+
 ### Links in answers
 
-Links in model answers don't open when you select them. The app never opens them on its own.
+The app never opens a link on its own. When you select a link in an answer, a system dialog shows the full address, and the link opens in your web browser only if you select **Open in browser**. The website's own privacy policy then applies.
 
 ### Reporting a problem
 
@@ -101,10 +106,10 @@ The app is not meant for children under 13 (or the minimum age in your country).
 
 Because your data is on your own computer, you control it:
 
-- **Delete a chat:** select the delete button next to it in the sidebar. You can undo this for 10 seconds. At the next start of the app, its messages and its tool history are removed for good. Only the chat's internal id and the time it was deleted are kept, with no title, model or content.
+- **Delete a chat:** select the delete button next to it in the sidebar. You can undo this for 10 seconds. At the next start of the app, its messages, artifacts and tool history are removed for good. Only the chat's internal id and the time it was deleted are kept, with no title, model or content.
 - **Remove a tool server:** go to **Settings → Models → Tool servers** and select the remove button next to it. After a confirmation, this deletes its settings, the secrets and sign-in saved for it in your keychain, and the "Allow in this chat" approvals for its tools. Chats that used its tools keep their history.
 - **Remove an API key:** go to **Settings → Models → Provider keys** and select **Remove key**. The key is removed from the keychain straight away and held in memory for a few seconds, so you can undo.
-- **Delete everything:** go to **Settings → General** and select **Delete all local data**. After a confirmation that lists what will go, it deletes the database (every chat, including recently deleted ones and their deletion records, your settings and tool history), downloaded models, the keys and sign-ins Demios saved in your keychain, and the app window's own storage. This can't be undone.
+- **Delete everything:** go to **Settings → General** and select **Delete all local data**. After a confirmation that lists what will go, it deletes the database (every chat, including recently deleted ones and their deletion records, every artifact, your settings and tool history), downloaded models, the keys, tokens and sign-ins Demios saved in your keychain (including your Hugging Face token), and the app window's own storage. This can't be undone.
 - **Uninstalling** removes the app but not your data folder, your models or your keychain entries. Use **Delete all local data** first, or delete them yourself.
 - **Data held by providers, Hugging Face, tool servers or GitHub** is controlled by them. Use their tools or contact them.
 
