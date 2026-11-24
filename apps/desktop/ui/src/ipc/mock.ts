@@ -207,7 +207,33 @@ export function createMockApi(): Api {
   };
 
   return {
-    appInfo: async () => ({ version: "0.1.0 (browser mock)", dev_fake_model: true, data_dir: null }),
+    appInfo: async () => ({ version: "0.1.0 (browser mock)", dev_fake_model: true, data_dir: null, models_dir: null }),
+    reportProblem: async (kind, messageId) => {
+      console.info("mock: would open the report form", kind, messageId);
+      return null;
+    },
+    localDataSummary: async () => ({
+      conversations: convs.filter((c) => !deleted.has(c.id)).length,
+      data_dir: null,
+      models_dir: null,
+      models_bytes: localRows
+        .filter((r) => r.state.state === "ready")
+        .reduce((n, r) => n + r.size, 0),
+      keychain: [...keys].map((p) => `${p === "anthropic" ? "Anthropic" : p === "openai" ? "OpenAI" : "Google Gemini"} key`),
+    }),
+    deleteAllLocalData: async () => {
+      convs.length = 0;
+      msgs.clear();
+      deleted.clear();
+      keys.clear();
+      removedKeys.clear();
+      settings = { slots: {}, telemetry_enabled: false };
+      for (const r of localRows) {
+        r.state = { state: "not_downloaded" };
+        emitRow(r);
+      }
+      return null;
+    },
     listConversations: async () =>
       convs.filter((c) => !deleted.has(c.id)).sort((x, y) => y.updated_at - x.updated_at),
     createConversation: async () => {

@@ -142,6 +142,7 @@ async fn run(inner: Arc<Inner>, req: ChatRequest, tx: Emit) {
             body: Some(body(&inner, &model, &req)),
             optional: OPTIONAL.to_vec(),
             secret: inner.key(),
+            first_byte: inner.cfg.first_byte_timeout,
         })
         .await?;
         let mut blocks: HashMap<u64, Block> = HashMap::new();
@@ -149,7 +150,7 @@ async fn run(inner: Arc<Inner>, req: ChatRequest, tx: Emit) {
         let mut finish = FinishReason::Stop;
         let mut any_call = false;
         let mut stopped = false;
-        let mut sse = http::SseReader::new(&id, resp);
+        let mut sse = http::SseReader::new(&id, resp, &inner.cfg);
         while let Some(ev) = sse.next().await? {
             let v: Value = serde_json::from_str(&ev.data).map_err(|e| bad_response(&id, e))?;
             match v["type"].as_str().unwrap_or(ev.event.as_str()) {
@@ -279,6 +280,7 @@ impl ProviderAdapter for Anthropic {
                 body: None,
                 optional: vec![],
                 secret: self.0.key(),
+                first_byte: self.0.cfg.first_byte_timeout,
             })
             .await?;
             let v = http::json(id, resp).await?;

@@ -62,7 +62,9 @@ kbd { font-family: var(--dn-font-sans); font-size: var(--dn-text-xs); color: var
 .dn-btn-primary:active { background: var(--dn-color-accent-hover); }
 .dn-btn-ghost { border-color: transparent; background: transparent; color: var(--dn-color-text-muted); }
 .dn-btn-ghost:hover { background: var(--dn-color-surface-sunken); color: var(--dn-color-text); }
-.dn-btn-danger { background: var(--dn-color-danger); border-color: var(--dn-color-danger); color: var(--dn-color-text-on-accent); }
+.dn-btn-danger { background: var(--dn-color-danger); border-color: var(--dn-color-danger); color: var(--dn-color-text-on-danger); }
+.dn-btn-danger:hover, .dn-btn-danger:active { background: var(--dn-color-danger); filter: brightness(0.92); }
+.dn-btn-danger:disabled { filter: none; }
 .dn-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .dn-btn.is-loading { cursor: progress; }
 .dn-spin { animation: dn-spin 0.9s linear infinite; }
@@ -306,7 +308,7 @@ pre.code .code-copy { position: absolute; top: var(--dn-space-1); right: var(--d
 .hljs-title, .hljs-function, .hljs-name, .hljs-tag { color: var(--dn-color-local); }
 
 .composer {
-  margin: 0 auto var(--dn-space-5); width: calc(100% - var(--dn-space-12)); max-width: var(--dn-chat-max-width);
+  margin: 0 auto var(--dn-space-2); width: calc(100% - var(--dn-space-12)); max-width: var(--dn-chat-max-width);
   min-height: var(--dn-composer-min-height);
   display: grid; gap: var(--dn-space-1);
   padding: var(--dn-space-2) var(--dn-space-2) var(--dn-space-2) var(--dn-space-4);
@@ -321,6 +323,7 @@ pre.code .code-copy { position: absolute; top: var(--dn-space-1); right: var(--d
 }
 .composer textarea::placeholder { color: var(--dn-color-text-subtle); }
 .composer-bar { display: flex; align-items: center; gap: var(--dn-space-2); }
+.composer-disclosure { margin: 0 auto var(--dn-space-3); width: calc(100% - var(--dn-space-12)); max-width: var(--dn-chat-max-width); text-align: center; font-size: var(--dn-text-xs); line-height: var(--dn-leading-xs); color: var(--dn-color-text-subtle); }
 .composer-hint { flex: 1; font-size: var(--dn-text-xs); line-height: var(--dn-leading-xs); color: var(--dn-color-text-subtle); }
 .composer-send { background: var(--dn-color-accent); color: var(--dn-color-text-on-accent); }
 .composer-send:hover { background: var(--dn-color-accent-hover); color: var(--dn-color-text-on-accent); }
@@ -407,6 +410,44 @@ pre.code .code-copy { position: absolute; top: var(--dn-space-1); right: var(--d
 .row-main { flex: 1; min-width: 0; display: grid; gap: calc(var(--dn-space-1) / 2); }
 .row-title { font-weight: var(--dn-weight-medium); }
 .row-actions { display: flex; gap: var(--dn-space-2); padding-top: calc(var(--dn-space-6) - var(--dn-space-1)); }
+.row:not(.row-form) > .row-actions { padding-top: 0; }
+.card-subhead { font-size: var(--dn-text-sm); line-height: var(--dn-leading-sm); font-weight: var(--dn-weight-semibold); margin-top: var(--dn-space-2); }
+.data-flow { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--dn-space-3); }
+.data-flow li { display: grid; gap: calc(var(--dn-space-1) / 2); }
+
+/* ---------- open-source licences (T-STORE-07) ---------- */
+.licences { display: grid; gap: var(--dn-space-3); padding-top: var(--dn-space-3); border-top: 1px solid var(--dn-color-border); }
+.licences-head { display: flex; align-items: center; justify-content: space-between; }
+.licences-list { list-style: none; margin: 0; padding: 0; max-height: 360px; overflow: auto; border: 1px solid var(--dn-color-border); border-radius: var(--dn-radius-md); }
+.licences-list li + li { border-top: 1px solid var(--dn-color-border); }
+.licences-item { display: flex; width: 100%; justify-content: space-between; gap: var(--dn-space-3); padding: var(--dn-space-2) var(--dn-space-3); background: transparent; border: 0; color: var(--dn-color-text); text-align: left; cursor: pointer; font: inherit; }
+.licences-item:hover { background: var(--dn-color-surface-sunken); }
+.licences-item:focus-visible { outline: 2px solid var(--dn-color-focus); outline-offset: -2px; }
+.licences-name { min-width: 0; overflow-wrap: anywhere; }
+.licences-version, .licences-licence { color: var(--dn-color-text-subtle); font-size: var(--dn-text-sm); }
+.licences-licence { flex-shrink: 0; max-width: 45%; text-align: right; overflow-wrap: anywhere; }
+.licences-text { display: grid; gap: var(--dn-space-2); justify-items: start; }
+.licences-text h4 { font-weight: var(--dn-weight-semibold); }
+.licences-text h4:focus { outline: none; }
+.licences-pre { width: 100%; max-height: 420px; overflow: auto; margin: 0; padding: var(--dn-space-3); background: var(--dn-color-surface-sunken); border-radius: var(--dn-radius-md); font-size: var(--dn-text-xs); line-height: var(--dn-leading-xs); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* ---------- dialog, alert variant (§4) ---------- */
+.dn-dialog-overlay { position: fixed; inset: 0; background: var(--dn-color-overlay); z-index: var(--dn-z-dialog); animation: dn-fade-in var(--dn-motion-base) var(--dn-motion-ease); }
+.dn-dialog {
+  position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: var(--dn-z-dialog);
+  width: min(480px, calc(100vw - 2 * var(--dn-space-6))); max-height: calc(100vh - 2 * var(--dn-space-6)); overflow: auto;
+  display: grid; gap: var(--dn-space-4); padding: var(--dn-space-6);
+  background: var(--dn-color-surface-raised); color: var(--dn-color-text);
+  border: 1px solid var(--dn-color-border); border-radius: var(--dn-radius-xl); box-shadow: var(--dn-shadow-3);
+  animation: dn-fade-in var(--dn-motion-base) var(--dn-motion-ease);
+}
+.dn-dialog:focus { outline: none; }
+.dn-dialog-title { font-size: var(--dn-text-lg); line-height: var(--dn-leading-lg); font-weight: var(--dn-weight-semibold); }
+.dn-dialog-body { display: grid; gap: var(--dn-space-2); color: var(--dn-color-text-muted); }
+.dn-dialog-body ul { margin: 0; padding-left: var(--dn-space-5); display: grid; gap: var(--dn-space-1); }
+.dn-dialog-body strong { color: var(--dn-color-text); }
+.dn-dialog-actions { display: flex; justify-content: flex-end; gap: var(--dn-space-2); }
+@keyframes dn-fade-in { from { opacity: 0; } }
 
 /* ---------- responsive (§3) ---------- */
 @media (max-width: 1279px) {
@@ -419,5 +460,5 @@ pre.code .code-copy { position: absolute; top: var(--dn-space-1); right: var(--d
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .caret, .dn-skeleton, .dn-spin, .dn-toast { animation: none !important; }
+  .caret, .dn-skeleton, .dn-spin, .dn-toast, .dn-dialog, .dn-dialog-overlay { animation: none !important; }
 }

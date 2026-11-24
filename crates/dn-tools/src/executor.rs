@@ -223,6 +223,29 @@ impl Executor {
         self.reindex_names();
     }
 
+    /// Removes every server and stops it ("Delete all local data"): no tool can run, connect
+    /// or refresh a token afterwards. Concurrent, each bounded by `per_server`; returns how
+    /// many did not stop in time (they are removed either way).
+    pub async fn remove_all_servers(&self, per_server: std::time::Duration) -> usize {
+        let clients: Vec<Arc<McpClient>> = self
+            .clients
+            .write()
+            .map(|mut c| c.drain().map(|(_, v)| v).collect())
+            .unwrap_or_default();
+        if let Ok(mut caps) = self.capabilities.write() {
+            caps.clear();
+        }
+        self.reindex_names();
+        shutdown_concurrently(
+            clients
+                .into_iter()
+                .map(|c| async move { c.shutdown().await })
+                .collect(),
+            per_server,
+        )
+        .await
+    }
+
     /// Stops every server (app exit) concurrently, each bounded by `per_server`, so one
     /// stuck server can't keep the others (and their process trees) alive. Returns how
     /// many servers did not stop in time.
@@ -733,6 +756,28 @@ impl Executor {
         resolution: &ledger::Resolution,
     ) -> Result<(), CoreError> {
         Ok(self.with_ledger(key, |c| ledger::resolve(c, key, resolution))?)
+    }
+
+    /// Drops the finished ledger rows of a purged conversation; unknown ones stay until
+    /// resolved (T-STORE-11).
+    pub fn forget_conversation(&self, conversation_id: &str) -> Result<usize, CoreError> {
+        let scope = format!("conv:{conversation_id}");
+        Ok(self.with_ledger("ledger", |c| ledger::delete_scope(c, &scope))?)
+    }
+
+    /// The ledger row for `key`, if any.
+    pub fn ledger_entry(&self, key: &str) -> Result<Option<ledger::LedgerEntry>, CoreError> {
+        Ok(self.with_ledger(key, |c| ledger::get(c, key))?)
+    }
+
+    /// Deletes one finished ledger row (after resolving a call whose conversation is gone).
+    pub fn forget_call(&self, key: &str) -> Result<bool, CoreError> {
+        Ok(self.with_ledger(key, |c| ledger::delete_finished(c, key))?)
+    }
+
+    /// Deletes the whole ledger ("Delete all local data").
+    pub fn forget_all(&self) -> Result<usize, CoreError> {
+        Ok(self.with_ledger("ledger", ledger::delete_all)?)
     }
 
     /// Writes waiting for the user to resolve.

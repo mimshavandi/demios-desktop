@@ -41,6 +41,20 @@ CREATE INDEX store_messages_conversation ON store_messages (conversation_id, cre
     "
 ALTER TABLE store_conversations ADD COLUMN purged_at INTEGER;
 ",
+    // T-STORE-11: a purged conversation keeps no title, model or content; only its id
+    // and deletion time stay, so sync can carry the deletion (ADR-0008). `purged_at` is
+    // no longer written.
+    "
+CREATE TABLE store_tombstones (
+    id         TEXT    PRIMARY KEY NOT NULL,
+    deleted_at INTEGER NOT NULL
+);
+INSERT OR IGNORE INTO store_tombstones (id, deleted_at)
+    SELECT id, deleted_at FROM store_conversations WHERE purged_at IS NOT NULL;
+DELETE FROM store_messages WHERE conversation_id IN
+    (SELECT id FROM store_conversations WHERE purged_at IS NOT NULL);
+DELETE FROM store_conversations WHERE purged_at IS NOT NULL;
+",
 ];
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -266,8 +280,7 @@ fn touch(conn: &Connection, id: Id, set: &str, value: &str) -> Result<()> {
 }
 
 /// Soft-deletes a conversation: it disappears from lists and can be brought back with
-/// [`restore_conversation`] until [`purge_deleted`] removes its messages. The row stays as
-/// a tombstone sync can carry (ADR-0008).
+/// [`restore_conversation`] until [`purge_deleted`] removes it for good.
 pub fn delete_conversation(conn: &Connection, id: Id) -> Result<()> {
     let now = now_ms();
     let n = conn.execute(
@@ -281,11 +294,11 @@ pub fn delete_conversation(conn: &Connection, id: Id) -> Result<()> {
     Ok(())
 }
 
-/// Undoes [`delete_conversation`] if the messages have not been purged yet.
+/// Undoes [`delete_conversation`] if the conversation has not been purged yet.
 pub fn restore_conversation(conn: &Connection, id: Id) -> Result<()> {
     let n = conn.execute(
         "UPDATE store_conversations SET deleted_at = NULL, updated_at = ?2
-         WHERE id = ?1 AND deleted_at IS NOT NULL AND purged_at IS NULL",
+         WHERE id = ?1 AND deleted_at IS NOT NULL",
         params![id.to_string(), now_ms()],
     )?;
     if n == 0 {
@@ -294,23 +307,81 @@ pub fn restore_conversation(conn: &Connection, id: Id) -> Result<()> {
     Ok(())
 }
 
-/// Permanently removes the messages of conversations deleted at or before `before_ms`
-/// (the tombstone row stays). Returns how many conversations were purged.
-pub fn purge_deleted(conn: &Connection, before_ms: i64) -> Result<usize> {
+/// Permanently removes conversations deleted at or before `before_ms`: the row and its
+/// messages go, and only `store_tombstones(id, deleted_at)` stays, with no title, model or
+/// content, so sync can carry the deletion (ADR-0008). Returns the purged ids, so other
+/// crates can drop their rows for them.
+pub fn purge_deleted(conn: &Connection, before_ms: i64) -> Result<Vec<Id>> {
     let tx = conn.unchecked_transaction()?;
+    let ids = {
+        let mut stmt = tx.prepare(
+            "SELECT id FROM store_conversations
+             WHERE deleted_at IS NOT NULL AND deleted_at <= ?1",
+        )?;
+        let rows = stmt.query_map([before_ms], |r| r.get::<_, String>(0))?;
+        let mut ids = Vec::new();
+        for row in rows {
+            ids.push(parse_id(&row?)?);
+        }
+        ids
+    };
+    tx.execute(
+        "INSERT OR REPLACE INTO store_tombstones (id, deleted_at)
+         SELECT id, deleted_at FROM store_conversations
+         WHERE deleted_at IS NOT NULL AND deleted_at <= ?1",
+        [before_ms],
+    )?;
     tx.execute(
         "DELETE FROM store_messages WHERE conversation_id IN (
              SELECT id FROM store_conversations
-             WHERE deleted_at IS NOT NULL AND deleted_at <= ?1 AND purged_at IS NULL)",
+             WHERE deleted_at IS NOT NULL AND deleted_at <= ?1)",
         [before_ms],
     )?;
-    let n = tx.execute(
-        "UPDATE store_conversations SET purged_at = ?2
-         WHERE deleted_at IS NOT NULL AND deleted_at <= ?1 AND purged_at IS NULL",
-        params![before_ms, now_ms()],
+    tx.execute(
+        "DELETE FROM store_conversations
+         WHERE deleted_at IS NOT NULL AND deleted_at <= ?1",
+        [before_ms],
     )?;
     tx.commit()?;
-    Ok(n)
+    if !ids.is_empty() {
+        crate::checkpoint(conn);
+    }
+    Ok(ids)
+}
+
+/// Ids and deletion times of purged conversations, oldest first.
+pub fn list_tombstones(conn: &Connection) -> Result<Vec<(Id, i64)>> {
+    let mut stmt =
+        conn.prepare("SELECT id, deleted_at FROM store_tombstones ORDER BY deleted_at, id")?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+    let mut out = Vec::new();
+    for row in rows {
+        let (s, at) = row?;
+        out.push((parse_id(&s)?, at));
+    }
+    Ok(out)
+}
+
+/// Whether the conversation with this id (as stored, e.g. from another crate's scope
+/// string) has been purged.
+pub fn is_purged(conn: &Connection, id: &str) -> Result<bool> {
+    Ok(conn
+        .query_row("SELECT 1 FROM store_tombstones WHERE id = ?1", [id], |_| {
+            Ok(())
+        })
+        .optional()?
+        .is_some())
+}
+
+/// Deletes every conversation, message and tombstone ("Delete all local data").
+pub fn delete_all(conn: &Connection) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute("DELETE FROM store_messages", [])?;
+    tx.execute("DELETE FROM store_conversations", [])?;
+    tx.execute("DELETE FROM store_tombstones", [])?;
+    tx.commit()?;
+    crate::checkpoint(conn);
+    Ok(())
 }
 
 pub fn add_message(conn: &Connection, conversation_id: Id, m: NewMessage) -> Result<StoredMessage> {
@@ -395,6 +466,23 @@ fn bump_conversation(conn: &Connection, id: Id, now: i64) -> Result<()> {
 }
 
 /// Messages of a conversation in order (UUIDv7 ids sort by creation time).
+/// One stored message by id (any conversation that is not purged).
+pub fn get_message(conn: &Connection, message_id: Id) -> Result<StoredMessage> {
+    let conversation: Option<String> = conn
+        .query_row(
+            "SELECT conversation_id FROM store_messages WHERE id = ?1",
+            [message_id.to_string()],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let conversation =
+        conversation.ok_or_else(|| StoreError::NotFound(format!("message {message_id}")))?;
+    list_messages(conn, parse_id(&conversation)?)?
+        .into_iter()
+        .find(|m| m.id == message_id)
+        .ok_or_else(|| StoreError::NotFound(format!("message {message_id}")))
+}
+
 pub fn list_messages(conn: &Connection, conversation_id: Id) -> Result<Vec<StoredMessage>> {
     let mut stmt = conn.prepare(
         "SELECT id, conversation_id, role, content, tool_calls, tool_call_id, model, status,
@@ -567,10 +655,154 @@ mod tests {
         assert_eq!(list_messages(&c, conv.id).unwrap()[0].text(), "keep");
 
         delete_conversation(&c, conv.id).unwrap();
-        assert_eq!(purge_deleted(&c, now_ms()).unwrap(), 1);
+        assert_eq!(purge_deleted(&c, now_ms()).unwrap(), vec![conv.id]);
         assert!(list_messages(&c, conv.id).unwrap().is_empty());
         assert!(restore_conversation(&c, conv.id).is_err());
-        assert_eq!(purge_deleted(&c, now_ms()).unwrap(), 0);
+        assert!(purge_deleted(&c, now_ms()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn purge_keeps_only_a_tombstone() {
+        let c = open_in_memory(&[]).unwrap();
+        let conv = create_conversation(&c, "secret title").unwrap();
+        add_message(&c, conv.id, NewMessage::user_text("secret")).unwrap();
+        let other = create_conversation(&c, "kept").unwrap();
+        delete_conversation(&c, conv.id).unwrap();
+        purge_deleted(&c, now_ms()).unwrap();
+
+        let rows: i64 = c
+            .query_row(
+                "SELECT COUNT(*) FROM store_conversations WHERE id = ?1",
+                [conv.id.to_string()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(rows, 0, "the conversation row is gone");
+        let msgs: i64 = c
+            .query_row("SELECT COUNT(*) FROM store_messages", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(msgs, 0);
+        let t = list_tombstones(&c).unwrap();
+        assert_eq!(t.len(), 1);
+        assert_eq!(t[0].0, conv.id);
+        assert!(is_purged(&c, &conv.id.to_string()).unwrap());
+        assert!(!is_purged(&c, &other.id.to_string()).unwrap());
+        assert!(get_conversation(&c, other.id).is_ok());
+    }
+
+    /// Raw bytes of the database file and its WAL/SHM, for "is the text really gone".
+    fn file_bytes(path: &std::path::Path) -> Vec<u8> {
+        let mut out = Vec::new();
+        for suffix in ["", "-wal", "-shm"] {
+            let mut p = path.as_os_str().to_owned();
+            p.push(suffix);
+            if let Ok(b) = std::fs::read(std::path::PathBuf::from(p)) {
+                out.extend(b);
+            }
+        }
+        out
+    }
+
+    fn contains(hay: &[u8], needle: &str) -> bool {
+        hay.windows(needle.len()).any(|w| w == needle.as_bytes())
+    }
+
+    #[test]
+    fn purged_and_wiped_text_is_not_left_in_the_file() {
+        let dir = std::env::temp_dir().join(format!("dn-store-scrub-{}", Id::new()));
+        let path = dir.join("db.sqlite3");
+        let c = crate::open(&path, &[]).unwrap();
+        let gone = create_conversation(&c, "TITLE-gone-7f3a").unwrap();
+        add_message(&c, gone.id, NewMessage::user_text("BODY-gone-9c1e")).unwrap();
+        let kept = create_conversation(&c, "TITLE-kept-41bd").unwrap();
+        add_message(&c, kept.id, NewMessage::user_text("BODY-kept-c0de")).unwrap();
+        // As in real use: some content has already been checkpointed into the main file.
+        crate::checkpoint(&c);
+        assert!(contains(&file_bytes(&path), "BODY-gone-9c1e"));
+
+        delete_conversation(&c, gone.id).unwrap();
+        purge_deleted(&c, now_ms()).unwrap();
+        let bytes = file_bytes(&path);
+        assert!(
+            !contains(&bytes, "TITLE-gone-7f3a"),
+            "title left in the file"
+        );
+        assert!(
+            !contains(&bytes, "BODY-gone-9c1e"),
+            "message left in the file"
+        );
+        assert!(contains(&bytes, "BODY-kept-c0de"));
+
+        delete_all(&c).unwrap();
+        let bytes = file_bytes(&path);
+        assert!(!contains(&bytes, "TITLE-kept-41bd"));
+        assert!(!contains(&bytes, "BODY-kept-c0de"));
+        drop(c);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn purge_ignores_recent_deletions() {
+        let c = open_in_memory(&[]).unwrap();
+        let conv = create_conversation(&c, "t").unwrap();
+        delete_conversation(&c, conv.id).unwrap();
+        assert!(purge_deleted(&c, 0).unwrap().is_empty());
+        restore_conversation(&c, conv.id).unwrap();
+    }
+
+    #[test]
+    fn delete_all_clears_conversations_messages_and_tombstones() {
+        let c = open_in_memory(&[]).unwrap();
+        let a = create_conversation(&c, "a").unwrap();
+        add_message(&c, a.id, NewMessage::user_text("x")).unwrap();
+        let b = create_conversation(&c, "b").unwrap();
+        delete_conversation(&c, b.id).unwrap();
+        purge_deleted(&c, now_ms()).unwrap();
+        delete_all(&c).unwrap();
+        assert!(list_conversations(&c).unwrap().is_empty());
+        assert!(list_tombstones(&c).unwrap().is_empty());
+        let msgs: i64 = c
+            .query_row("SELECT COUNT(*) FROM store_messages", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(msgs, 0);
+    }
+
+    #[test]
+    fn migration_moves_old_purged_rows_to_tombstones() {
+        // A database purged by the old code still has the row with its title.
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(MIGRATIONS[0]).unwrap();
+        c.execute_batch(MIGRATIONS[1]).unwrap();
+        c.execute(
+            "INSERT INTO store_conversations (id, title, model, created_at, updated_at, deleted_at, purged_at)
+             VALUES ('0190a000-0000-7000-8000-000000000001', 'old', 'm', 1, 2, 3, 4)",
+            [],
+        )
+        .unwrap();
+        c.execute_batch(MIGRATIONS[2]).unwrap();
+        let n: i64 = c
+            .query_row("SELECT COUNT(*) FROM store_conversations", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 0);
+        let (id, at): (String, i64) = c
+            .query_row("SELECT id, deleted_at FROM store_tombstones", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(id, "0190a000-0000-7000-8000-000000000001");
+        assert_eq!(at, 3);
+    }
+
+    #[test]
+    fn get_message_by_id() {
+        let c = open_in_memory(&[]).unwrap();
+        let conv = create_conversation(&c, "t").unwrap();
+        let m = add_message(&c, conv.id, NewMessage::user_text("hi")).unwrap();
+        assert_eq!(get_message(&c, m.id).unwrap().text(), "hi");
+        assert!(matches!(
+            get_message(&c, Id::new()),
+            Err(StoreError::NotFound(_))
+        ));
     }
 
     #[test]
@@ -640,6 +872,9 @@ mod tests {
         const OTHER: &[&str] = &["CREATE TABLE artifact_things (id TEXT PRIMARY KEY)"];
         let c = open_in_memory(&[crate::MigrationSet::new("artifact", OTHER)]).unwrap();
         assert_eq!(crate::migrate::applied_version(&c, "artifact").unwrap(), 1);
-        assert_eq!(crate::migrate::applied_version(&c, "store").unwrap(), 2);
+        assert_eq!(
+            crate::migrate::applied_version(&c, "store").unwrap(),
+            MIGRATIONS.len() as i64
+        );
     }
 }
