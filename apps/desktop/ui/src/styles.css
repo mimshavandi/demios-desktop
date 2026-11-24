@@ -243,8 +243,9 @@ kbd { font-family: var(--dn-font-sans); font-size: var(--dn-text-xs); color: var
 .sidebar-foot { display: grid; gap: calc(var(--dn-space-1) / 2); padding-top: var(--dn-space-2); border-top: 1px solid var(--dn-color-border); }
 
 /* ---------- chat ---------- */
-.main { grid-area: main; min-width: 0; min-height: 0; display: flex; background: var(--dn-color-bg); }
-.chat { flex: 1; min-width: 0; display: grid; grid-template-rows: minmax(0, 1fr) auto; }
+.main { grid-area: main; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--dn-color-bg); }
+.approval-elsewhere { padding: var(--dn-space-2) var(--dn-space-6) 0; }
+.chat { flex: 1; min-width: 0; min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr) auto; }
 .messages { overflow-y: auto; padding: var(--dn-space-6) var(--dn-space-6) var(--dn-space-4); }
 .column { max-width: var(--dn-chat-max-width); margin: 0 auto; display: flex; flex-direction: column; gap: var(--dn-space-5); }
 .msg-skeleton { display: grid; gap: var(--dn-space-3); }
@@ -324,6 +325,40 @@ pre.code .code-copy { position: absolute; top: var(--dn-space-1); right: var(--d
 .composer-send { background: var(--dn-color-accent); color: var(--dn-color-text-on-accent); }
 .composer-send:hover { background: var(--dn-color-accent-hover); color: var(--dn-color-text-on-accent); }
 .composer-stop { border: 1px solid var(--dn-color-border-strong); color: var(--dn-color-text); }
+
+/* ---------- tool calls, approvals, unknown outcomes (§4 chat-specific) ---------- */
+.tool-card { border: 1px solid var(--dn-color-border); border-radius: var(--dn-radius-lg); background: var(--dn-color-surface); font-size: var(--dn-text-sm); line-height: var(--dn-leading-sm); }
+.tool-head {
+  display: flex; align-items: center; gap: var(--dn-space-2); width: 100%;
+  min-height: var(--dn-space-8); padding: 0 var(--dn-space-3);
+  border: 0; background: none; cursor: pointer; text-align: left; color: var(--dn-color-text-muted);
+}
+.tool-head:hover { color: var(--dn-color-text); }
+.tool-chevron { transition: transform var(--dn-motion-fast) var(--dn-motion-ease); }
+.tool-head[aria-expanded="true"] .tool-chevron { transform: rotate(90deg); }
+.tool-name { flex: 1; min-width: 0; font-family: var(--dn-font-mono); color: var(--dn-color-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-server { color: var(--dn-color-text-subtle); }
+.tool-status { display: inline-flex; align-items: center; gap: var(--dn-space-1); color: var(--dn-color-text-subtle); white-space: nowrap; }
+.tool-status-error { color: var(--dn-color-danger); }
+.tool-error { border-color: var(--dn-color-danger); }
+.tool-body { padding: 0 var(--dn-space-3) var(--dn-space-3); display: grid; gap: var(--dn-space-1); }
+.tool-label { font-size: var(--dn-text-xs); line-height: var(--dn-leading-xs); color: var(--dn-color-text-subtle); font-weight: var(--dn-weight-medium); }
+.tool-args {
+  margin: 0; padding: var(--dn-space-2) var(--dn-space-3); max-height: calc(var(--dn-space-16) * 3); overflow: auto;
+  background: var(--dn-color-code-bg); border-radius: var(--dn-radius-md);
+  font-family: var(--dn-font-mono); font-size: var(--dn-text-xs); line-height: var(--dn-leading-xs); white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.approval-card {
+  display: grid; gap: var(--dn-space-2); padding: var(--dn-space-3) var(--dn-space-4);
+  border: 1px solid var(--dn-color-warning); border-radius: var(--dn-radius-lg);
+  background: var(--dn-color-surface); box-shadow: var(--dn-shadow-1);
+}
+.approval-card:focus-visible { outline-offset: 2px; }
+.approval-head { display: flex; align-items: center; justify-content: space-between; gap: var(--dn-space-2); }
+.approval-head h3 { font-size: var(--dn-text-base); line-height: var(--dn-leading-base); font-weight: var(--dn-weight-semibold); }
+.approval-actions { display: flex; flex-wrap: wrap; gap: var(--dn-space-2); }
+.approval-actions kbd { color: inherit; opacity: 0.75; }
+.unknown-card { border-color: var(--dn-color-border-strong); }
 
 /* ---------- artifact pane ---------- */
 .artifacts {

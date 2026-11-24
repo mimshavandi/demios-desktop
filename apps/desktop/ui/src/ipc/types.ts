@@ -4,16 +4,29 @@
 //   dn-store:  crates/dn-store/src/chat.rs
 //   app:       apps/desktop/src/{chat,commands,models,settings,error}.rs
 
+import type { ApprovalPolicy } from "@dn-core/ApprovalPolicy";
 import type { Capability } from "@dn-core/Capability";
 import type { ContentPart } from "@dn-core/ContentPart";
 import type { FinishReason } from "@dn-core/FinishReason";
 import type { Id } from "@dn-core/Id";
 import type { RecoveryAction } from "@dn-core/RecoveryAction";
+import type { RiskTier } from "@dn-core/RiskTier";
 import type { Role } from "@dn-core/Role";
 import type { ToolCall } from "@dn-core/ToolCall";
 import type { Usage } from "@dn-core/Usage";
 
-export type { Capability, ContentPart, FinishReason, Id, RecoveryAction, Role, ToolCall, Usage };
+export type {
+  ApprovalPolicy,
+  Capability,
+  ContentPart,
+  FinishReason,
+  Id,
+  RecoveryAction,
+  RiskTier,
+  Role,
+  ToolCall,
+  Usage,
+};
 
 // ---- dn-store ----
 
@@ -47,7 +60,28 @@ export interface StoredMessage {
 export type ChatEvent =
   | { type: "text_delta"; message_id: Id; /** UTF-16 length before this chunk. */ offset: number; text: string }
   | { type: "reasoning_delta"; message_id: Id; text: string }
-  | { type: "done"; message_id: Id; finish_reason: FinishReason; usage: Usage }
+  | {
+      type: "tool_call_started";
+      message_id: Id;
+      call_id: string;
+      name: string;
+      arguments: unknown;
+    }
+  | {
+      type: "tool_call_finished";
+      message_id: Id;
+      call_id: string;
+      is_error: boolean;
+      summary: string;
+    }
+  | {
+      type: "done";
+      message_id: Id;
+      finish_reason: FinishReason;
+      usage: Usage;
+      /** Why the run ended; `step_limit` / `length` may be continued. */
+      stop?: "completed" | "length" | "step_limit" | "cancelled";
+    }
   | { type: "error"; message_id: Id; message: string; recovery: RecoveryAction[] };
 
 export interface TurnStarted {
@@ -56,10 +90,42 @@ export interface TurnStarted {
   title: string | null;
 }
 
+// ---- tools (dn-tools via the app)
+
+/** `dn_tools::ApprovalPrompt`. */
+export interface ApprovalPrompt {
+  request_id: Id;
+  /** `conv:<conversation id>` or `run:<run id>`. */
+  scope: string;
+  capability_id: string;
+  title: string;
+  description: string;
+  risk: RiskTier;
+  policy: ApprovalPolicy;
+  /** Exactly what the tool will receive; always shown. */
+  arguments: unknown;
+}
+
+export type ApprovalEvent =
+  | { type: "requested"; prompt: ApprovalPrompt }
+  | { type: "resolved"; request_id: Id };
+
+export type ApprovalDecision = "approve" | "approve_for_conversation" | "deny";
+
+export interface UnknownOutcome {
+  key: string;
+  capability_id: string;
+  arguments: unknown;
+  error: string | null;
+  updated_at_ms: number;
+}
+
 export interface Settings {
   /** slot id → ModelRef string (`local:…`, `byok:…:…`, `remote:…:…`). */
   slots: Record<string, string>;
   telemetry_enabled: boolean;
+  /** Passed through untouched (no screen edits MCP servers yet). */
+  mcp_servers?: unknown[];
 }
 
 export interface SlotInfo {

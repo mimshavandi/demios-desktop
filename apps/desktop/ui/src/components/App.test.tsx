@@ -1,7 +1,16 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Api } from "../ipc/commands";
-import type { ChatEvent, Conversation, ModelCatalog, Settings, StoredMessage } from "../ipc/types";
+import type {
+  ApprovalEvent,
+  ApprovalPrompt,
+  ChatEvent,
+  Conversation,
+  ModelCatalog,
+  Settings,
+  StoredMessage,
+  UnknownOutcome,
+} from "../ipc/types";
 import { App } from "./App";
 
 afterEach(cleanup);
@@ -10,6 +19,10 @@ afterEach(cleanup);
 function fakeApi() {
   const convs: Conversation[] = [];
   const trash: Conversation[] = [];
+  let approvalSink: ((e: ApprovalEvent) => void) | null = null;
+  const responses: [string, string][] = [];
+  const resolved: [string, boolean][] = [];
+  const unknowns: UnknownOutcome[] = [];
   const msgs = new Map<string, StoredMessage[]>();
   let settings: Settings = { slots: {}, telemetry_enabled: false };
   let n = 0;
@@ -84,8 +97,30 @@ function fakeApi() {
     setProviderKey: async () => catalog(),
     deleteProviderKey: async () => catalog(),
     restoreProviderKey: async () => catalog(),
+    watchApprovals: async (onEvent) => {
+      approvalSink = onEvent;
+      return [];
+    },
+    respondApproval: async (requestId, decision) => {
+      responses.push([requestId, decision]);
+      return null;
+    },
+    listUnknownOutcomes: async () => [...unknowns],
+    resolveUnknownOutcome: async (key, happened) => {
+      resolved.push([key, happened]);
+      unknowns.splice(0);
+      return null;
+    },
   };
-  return { api, emit: (ev: ChatEvent) => listener?.(ev), msgs };
+  return {
+    api,
+    emit: (ev: ChatEvent) => listener?.(ev),
+    msgs,
+    approve: (e: ApprovalEvent) => approvalSink?.(e),
+    responses,
+    resolved,
+    unknowns,
+  };
 }
 
 describe("App", () => {
@@ -181,5 +216,91 @@ describe("App", () => {
     expect(await screen.findByText(/No model connected/)).toBeTruthy();
     expect((screen.getByLabelText("Message") as HTMLTextAreaElement).disabled).toBe(true);
     expect(screen.getAllByRole("button", { name: "Connect a model" }).length).toBeGreaterThan(0);
+  });
+
+  it("shows an approval card with the exact arguments and never auto-allows", async () => {
+    const f = fakeApi();
+    const c = await f.api.createConversation();
+    render(<App api={f.api} />);
+    await screen.findByRole("button", { name: "New chat" });
+    const prompt = (risk: ApprovalPrompt["risk"]): ApprovalPrompt => ({
+      request_id: `r-${risk}`,
+      scope: `conv:${c.id}`,
+      capability_id: "mcp.files.write_file",
+      title: "Write to notes/todo.md",
+      description: "Replaces the file.",
+      risk,
+      policy: "ask_once_per_conversation",
+      arguments: { path: "notes/todo.md", content: "milk" },
+    });
+    act(() => f.approve({ type: "requested", prompt: prompt("low_write") }));
+    const card = await screen.findByTestId("approval-card");
+    expect(card.textContent).toContain('"path": "notes/todo.md"');
+    expect(screen.getByText("Changes local data")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Always allow in this chat/ })).toBeTruthy();
+    expect(f.responses).toEqual([]);
+    // ⌘↵ / Ctrl+↵ allows once.
+    fireEvent.keyDown(card, { key: "Enter", metaKey: true, ctrlKey: true });
+    await waitFor(() => expect(f.responses).toEqual([["r-low_write", "approve"]]));
+    await waitFor(() => expect(screen.queryByTestId("approval-card")).toBeNull());
+
+    // Destructive: no "always allow"; Esc denies.
+    act(() => f.approve({ type: "requested", prompt: prompt("destructive") }));
+    const card2 = await screen.findByTestId("approval-card");
+    expect(screen.queryByRole("button", { name: /Always allow in this chat/ })).toBeNull();
+    fireEvent.keyDown(card2, { key: "Escape" });
+    await waitFor(() => expect(f.responses[1]).toEqual(["r-destructive", "deny"]));
+  });
+
+  it("asks the user to resolve an unknown outcome", async () => {
+    const f = fakeApi();
+    await f.api.createConversation();
+    f.unknowns.push({
+      key: "k1",
+      capability_id: "mcp.mail.send",
+      arguments: { to: "pat@example.com" },
+      error: "interrupted",
+      updated_at_ms: 1,
+    });
+    render(<App api={f.api} />);
+    expect(await screen.findByText("Did this go through?")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "It didn't happen" }));
+    await waitFor(() => expect(f.resolved).toEqual([["k1", false]]));
+    await waitFor(() => expect(screen.queryByText("Did this go through?")).toBeNull());
+  });
+
+  it("renders stored tool calls as cards with their results", async () => {
+    const f = fakeApi();
+    const c = await f.api.createConversation();
+    const base = {
+      conversation_id: c.id,
+      tool_call_id: null,
+      model: "byok:anthropic:claude-sonnet-5-5",
+      status: "complete" as const,
+      error: null,
+      created_at: 1,
+      updated_at: 1,
+    };
+    f.msgs.set(c.id, [
+      { ...base, id: "u", role: "user", content: [{ type: "text", text: "save it" }], tool_calls: [], finish_reason: null },
+      {
+        ...base,
+        id: "a1",
+        role: "assistant",
+        content: [],
+        tool_calls: [{ id: "call_1", name: "mcp__files__write_file", arguments: { path: "x.md" } }],
+        finish_reason: "tool_calls",
+      },
+      { ...base, id: "t", role: "tool", tool_call_id: "call_1", content: [{ type: "text", text: "Wrote 1 file." }], tool_calls: [], finish_reason: null },
+      { ...base, id: "a2", role: "assistant", content: [{ type: "text", text: "Saved." }], tool_calls: [], finish_reason: "stop" },
+    ]);
+    render(<App api={f.api} />);
+    const card = await screen.findByTestId("tool-call-card");
+    expect(card.textContent).toContain("files · write_file");
+    expect(card.textContent).toContain("Done");
+    expect(screen.queryByText("Wrote 1 file.")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /write_file/ }));
+    expect(await screen.findByText("Wrote 1 file.")).toBeTruthy();
+    expect(screen.getByText("Saved.")).toBeTruthy();
   });
 });
