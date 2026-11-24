@@ -87,6 +87,9 @@ pub struct Settings {
     /// Unused: no telemetry exists, and the switch was removed (T-STORE-11). Kept so older
     /// saved settings round-trip.
     pub telemetry_enabled: bool,
+    /// The user dismissed the first-run AI notice (T-STORE-09). "Delete all local data"
+    /// clears it, so the notice shows again.
+    pub ai_notice_seen: bool,
     /// MCP servers the tool runtime connects to at startup (secret *ids* only).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub mcp_servers: Vec<dn_tools::McpServerConfig>,
@@ -160,6 +163,7 @@ mod tests {
         let c = db();
         let s = load(&c).unwrap();
         assert!(!s.telemetry_enabled);
+        assert!(!s.ai_notice_seen);
         assert!(s.slots.is_empty());
     }
 
