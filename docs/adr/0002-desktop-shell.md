@@ -1,12 +1,12 @@
 # ADR-0002: Desktop shell — Tauri 2
 
-**Status:** Proposed · **Date:** 2026-11-24 · **Deciders:** project owner (D-006)
+**Status:** Proposed · **Date:** 2026-11-24 · **Deciders:** project owner
 
 ## Context
 "Everything in Rust", desktop on macOS, Windows and Linux, a Claude-style chat UI, and **artifacts that render arbitrary model-generated HTML/React in a sandbox**. Rendering HTML is the hard requirement: a pure-Rust GUI cannot render web artifacts without embedding a webview anyway.
 
 ## Decision
-**Tauri 2** with a Rust backend (all logic in crates) and a thin web UI. UI framework: **Leptos** (Rust → WASM) if D-006 chooses "Rust all the way", otherwise **SolidJS/React + TypeScript (strict)**. Artifacts render in a separate, locked-down webview / sandboxed iframe with its own origin and CSP (ADR-0004).
+**Tauri 2** with a Rust backend (all logic in crates) and a thin web UI. UI framework: **Leptos** (Rust → WASM) if the maintainers choose "Rust all the way", otherwise **SolidJS/React + TypeScript (strict)**. Artifacts render in a separate, locked-down webview / sandboxed iframe with its own origin and CSP (ADR-0004).
 
 ## Options considered
 
@@ -25,7 +25,7 @@
 ## Consequences
 - Easier: one codebase for 3 OSes, small installers, built-in updater and code signing hooks, capability-scoped IPC.
 - Harder: webview quirks; Linux WebKitGTK performance.
-- Revisit: mobile (Tauri 2 supports iOS/Android) for the Twin's approval app.
+- Revisit: mobile (Tauri 2 supports iOS/Android) for a companion app.
 
 ## Action items
 - T-SHELL-01 shell skeleton with chat screen and streaming; T-SHELL-02 settings/models screen.

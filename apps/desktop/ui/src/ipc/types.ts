@@ -204,7 +204,7 @@ export interface LocalModelRow {
   params_b: number;
   capabilities: Capability[];
   license: string;
-  /** Missing, non-commercial or custom licence (D-020). */
+  /** Missing, non-commercial or custom licence. */
   license_warning: boolean;
   card_url: string;
   notes: string;
