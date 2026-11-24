@@ -20,7 +20,10 @@ pub mod resolver;
 pub mod sse;
 mod util;
 
-pub use adapter::{ModelCaps, ModelInfo, ProviderAdapter, ProviderConfig, ProviderKind, build};
+pub use adapter::{
+    ModelCaps, ModelInfo, ProviderAdapter, ProviderConfig, ProviderKind, ServerFamily, build,
+    detect_server_family,
+};
 pub use dn_core::CoreError;
 pub use policy::ReasoningPolicy;
 pub use resolver::{ModelResolver, Resolved, ResolvedFrom, SourceEntry};
