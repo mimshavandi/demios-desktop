@@ -7,6 +7,8 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+keyring.workspace = true
+thiserror.workspace = true
 
 [lints]
 workspace = true
