@@ -1,0 +1,6 @@
+id: assistant.default.system
+active_version: v1
+versions:
+  - version: v1
+    file: v1.md
+    variables: [user_name, today]
