@@ -557,6 +557,23 @@ async fn gemini_list_models_and_caps() {
 
 // ---------- config ----------
 
+#[tokio::test]
+async fn key_from_async_store() {
+    let store = dn_secrets::AsyncSecrets::new(Arc::new(MemoryStore::with([(
+        SecretId::provider("gemini"),
+        Secret::new(FAKE_KEY),
+    )])));
+    let c = ProviderConfig::new("gemini", ProviderKind::Gemini)
+        .with_key_from_async(&store)
+        .await
+        .unwrap();
+    assert_eq!(c.api_key.unwrap().expose(), FAKE_KEY);
+    let missing = ProviderConfig::new("openai", ProviderKind::OpenAi)
+        .with_key_from_async(&store)
+        .await;
+    assert!(matches!(missing, Err(CoreError::ModelUnavailable { .. })));
+}
+
 #[test]
 fn hosted_provider_without_key_needs_add_provider_key() {
     let store = MemoryStore::new();

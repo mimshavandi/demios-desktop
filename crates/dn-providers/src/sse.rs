@@ -81,25 +81,95 @@ impl SseDecoder {
 mod tests {
     use super::*;
 
-    #[test]
-    fn splits_across_chunks_and_handles_crlf() {
+    fn ev(event: &str, data: &str) -> SseEvent {
+        SseEvent {
+            event: event.into(),
+            data: data.into(),
+        }
+    }
+
+    fn all(chunks: &[&[u8]]) -> Vec<SseEvent> {
         let mut d = SseDecoder::new();
-        assert!(d.feed(b"event: ping\r\ndata: {\"a\"").is_empty());
-        let ev = d.feed(b":1}\r\n\r\n: keep-alive\n\ndata: x\ndata: y\n\n");
+        let mut out = Vec::new();
+        for c in chunks {
+            out.extend(d.feed(c));
+        }
+        out.extend(d.finish());
+        out
+    }
+
+    #[test]
+    fn single_event_with_type() {
         assert_eq!(
-            ev,
-            vec![
-                SseEvent {
-                    event: "ping".into(),
-                    data: "{\"a\":1}".into()
-                },
-                SseEvent {
-                    event: "".into(),
-                    data: "x\ny".into()
-                }
-            ]
+            all(&[b"event: message_start\ndata: {\"a\":1}\n\n"]),
+            vec![ev("message_start", "{\"a\":1}")]
         );
-        assert!(d.feed(b"data: tail").is_empty());
-        assert_eq!(d.finish()[0].data, "tail");
+    }
+
+    #[test]
+    fn multi_line_data_is_joined_with_newlines() {
+        assert_eq!(
+            all(&[b"data: first\ndata: second\ndata:\ndata: fourth\n\n"]),
+            vec![ev("", "first\nsecond\n\nfourth")]
+        );
+    }
+
+    #[test]
+    fn comments_and_keep_alives_are_ignored() {
+        assert_eq!(
+            all(&[b": keep-alive\n\n:another\ndata: x\n: inline comment\n\n"]),
+            vec![ev("", "x")]
+        );
+    }
+
+    #[test]
+    fn crlf_and_lf_line_endings() {
+        assert_eq!(
+            all(&[b"event: a\r\ndata: 1\r\n\r\nevent: b\ndata: 2\n\n"]),
+            vec![ev("a", "1"), ev("b", "2")]
+        );
+    }
+
+    #[test]
+    fn crlf_split_between_chunks() {
+        assert_eq!(all(&[b"data: 1\r", b"\n\r", b"\n"]), vec![ev("", "1")]);
+    }
+
+    #[test]
+    fn events_split_across_chunks_at_every_byte() {
+        let body = b"event: delta\ndata: {\"text\":\"h\xc3\xa9llo\"}\n\ndata: [DONE]\n\n";
+        let want = vec![ev("delta", "{\"text\":\"h\u{e9}llo\"}"), ev("", "[DONE]")];
+        // Every split point, including inside the two-byte UTF-8 `é`.
+        for cut in 0..body.len() {
+            assert_eq!(all(&[&body[..cut], &body[cut..]]), want, "cut at {cut}");
+        }
+        // One byte at a time.
+        let bytes: Vec<&[u8]> = body.chunks(1).collect();
+        assert_eq!(all(&bytes), want);
+    }
+
+    #[test]
+    fn field_value_space_rules() {
+        // Only one leading space is stripped; no colon means empty value.
+        assert_eq!(
+            all(&[b"data:  two\n\ndata\n\n"]),
+            vec![ev("", " two"), ev("", "")]
+        );
+    }
+
+    #[test]
+    fn unknown_fields_and_empty_events_are_dropped() {
+        assert_eq!(
+            all(&[b"id: 7\nretry: 100\n\nevent: ping\n\ndata: ok\n\n"]),
+            vec![ev("", "ok")]
+        );
+    }
+
+    #[test]
+    fn final_event_without_trailing_blank_line_is_flushed() {
+        assert_eq!(
+            all(&[b"data: a\n\ndata: tail"]),
+            vec![ev("", "a"), ev("", "tail")]
+        );
     }
 }

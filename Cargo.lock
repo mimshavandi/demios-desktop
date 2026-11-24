@@ -501,8 +501,11 @@ dependencies = [
 name = "dn-secrets"
 version = "0.1.0"
 dependencies = [
+ "dn-core",
  "keyring",
  "thiserror",
+ "tokio",
+ "zeroize",
 ]
 
 [[package]]

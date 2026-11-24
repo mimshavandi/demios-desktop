@@ -7,7 +7,7 @@ use crate::{anthropic, gemini, openai};
 use dn_core::chat::{ChatModel, ChatRequest, ContentPart};
 use dn_core::model::ModelRef;
 use dn_core::{CoreError, RecoveryAction};
-use dn_secrets::{Secret, SecretId, SecretStore};
+use dn_secrets::{AsyncSecrets, Secret, SecretId, SecretStore};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
@@ -81,9 +81,25 @@ impl ProviderConfig {
 
     /// Loads the key from the keychain (`provider/<provider_id>`). A missing key for a
     /// hosted provider is `ModelUnavailable` with `AddProviderKey`.
-    pub fn with_key_from(mut self, store: &dyn SecretStore) -> Result<Self, CoreError> {
-        let id = SecretId::provider(&self.provider_id);
-        let key = store.get(&id).map_err(|e| {
+    ///
+    /// Blocking: from async code use [`with_key_from_async`](Self::with_key_from_async)
+    /// (the Linux keychain backend panics inside a Tokio runtime).
+    pub fn with_key_from(self, store: &dyn SecretStore) -> Result<Self, CoreError> {
+        let key = store.get(&SecretId::provider(&self.provider_id));
+        self.apply_key(key)
+    }
+
+    /// [`with_key_from`](Self::with_key_from) for async callers (runs on the blocking pool).
+    pub async fn with_key_from_async(self, store: &AsyncSecrets) -> Result<Self, CoreError> {
+        let key = store.get(SecretId::provider(&self.provider_id)).await;
+        self.apply_key(key)
+    }
+
+    fn apply_key(
+        mut self,
+        key: Result<Option<Secret>, dn_secrets::SecretError>,
+    ) -> Result<Self, CoreError> {
+        let key = key.map_err(|e| {
             unavailable(
                 "Couldn't read the API key from the system keychain.",
                 format!("{}: {e}", self.provider_id),
