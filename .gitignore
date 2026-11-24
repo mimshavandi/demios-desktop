@@ -5,3 +5,7 @@
 *.safetensors
 .env
 .env.*
+
+# Tauri desktop app
+/apps/desktop/dist
+/apps/desktop/gen
