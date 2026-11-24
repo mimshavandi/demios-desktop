@@ -91,6 +91,12 @@ pub struct Gguf {
 
 const MAX_STR: u64 = 16 << 20;
 const MAX_ITEMS: u64 = 1 << 26;
+/// Real models have a few dozen metadata keys and at most tens of thousands of tensors.
+pub const MAX_KV: u64 = 65_536;
+pub const MAX_TENSORS: u64 = 1 << 20;
+/// Whole header (metadata + tensor infos). The largest real ones (big vocabularies) are
+/// ~10 MiB; anything past this is refused rather than read.
+pub const MAX_HEADER_BYTES: u64 = 64 << 20;
 
 struct R<T> {
     inner: T,
@@ -217,15 +223,28 @@ impl Gguf {
         }
         let n_tensors = r.u64()?;
         let n_kv = r.u64()?;
-        if n_tensors > MAX_ITEMS || n_kv > MAX_ITEMS {
-            return Err(GgufError::Malformed("too many entries".into()));
+        if n_tensors > MAX_TENSORS || n_kv > MAX_KV {
+            return Err(GgufError::Malformed(format!(
+                "{n_kv} metadata keys / {n_tensors} tensors"
+            )));
         }
+        let budget = |pos: u64| {
+            if pos > MAX_HEADER_BYTES {
+                Err(GgufError::Malformed(format!(
+                    "header larger than {} MiB",
+                    MAX_HEADER_BYTES >> 20
+                )))
+            } else {
+                Ok(())
+            }
+        };
         let mut metadata = BTreeMap::new();
         for _ in 0..n_kv {
             let key = r.string()?;
             let ty = r.u32()?;
             let v = r.value(ty)?;
             metadata.insert(key, v);
+            budget(r.pos)?;
         }
         // The count comes from the file: cap the pre-allocation, let real entries grow it.
         let mut tensors = Vec::with_capacity((n_tensors as usize).min(4096));
@@ -245,6 +264,7 @@ impl Gguf {
                 offset,
                 size: 0,
             });
+            budget(r.pos)?;
         }
         let align = metadata
             .get("general.alignment")
@@ -477,6 +497,32 @@ mod tests {
     fn rejects_non_gguf() {
         let e = Gguf::read(Cursor::new(b"GGML0000".to_vec()), 8).unwrap_err();
         assert!(matches!(e, GgufError::BadMagic));
+    }
+
+    #[test]
+    fn rejects_absurd_counts_and_huge_headers() {
+        let mut h = b"GGUF".to_vec();
+        h.extend(3u32.to_le_bytes());
+        h.extend(0u64.to_le_bytes());
+        h.extend((MAX_KV + 1).to_le_bytes());
+        let e = Gguf::from_prefix(&h, h.len() as u64).unwrap_err();
+        assert!(matches!(e, GgufError::Malformed(_)), "{e}");
+        let mut h = b"GGUF".to_vec();
+        h.extend(3u32.to_le_bytes());
+        h.extend((MAX_TENSORS + 1).to_le_bytes());
+        h.extend(0u64.to_le_bytes());
+        assert!(matches!(
+            Gguf::from_prefix(&h, h.len() as u64),
+            Err(GgufError::Malformed(_))
+        ));
+        // Metadata past the byte budget: 5 strings of 15 MiB.
+        use write::{V, gguf};
+        let big = "x".repeat(15 << 20);
+        let keys: Vec<String> = (0..5).map(|i| format!("k{i}")).collect();
+        let kv: Vec<(&str, V<'_>)> = keys.iter().map(|k| (k.as_str(), V::Str(&big))).collect();
+        let f = gguf(&kv, &[]);
+        let e = Gguf::from_prefix(&f, f.len() as u64).unwrap_err();
+        assert!(e.to_string().contains("header larger"), "{e}");
     }
 
     #[test]

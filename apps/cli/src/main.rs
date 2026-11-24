@@ -413,7 +413,8 @@ pub fn machine(ram_gb: Option<f64>, vram_gb: Option<f64>, unified: bool) -> Mach
 }
 
 fn is_local_model(s: &str) -> bool {
-    PathBuf::from(s).exists()
+    s.to_ascii_lowercase().ends_with(".gguf")
+        || PathBuf::from(s).exists()
         || Catalog::builtin().get(s).is_some()
         || dn_models::hub::validate_repo_id(s).is_err()
 }
@@ -467,14 +468,14 @@ async fn remote_fit(a: &FitArgs, mach: &Machine) -> Result<(), String> {
     let rows: Vec<_> = models
         .iter()
         .map(|v| {
-            let est = dn_models::hub::estimate_variant(&fp, base.total_size, v);
-            (*v, dn_models::fit(&est, mach))
+            let est = dn_models::hub::estimate_variant(&fp, base, v);
+            (*v, est.fit(mach))
         })
         .collect();
     if a.json {
         let v: Vec<_> = rows
             .iter()
-            .map(|(v, r)| serde_json::json!({"variant": v.name, "quant": v.quant, "size": v.total_size, "report": r}))
+            .map(|(v, r)| serde_json::json!({"variant": v.name, "quant": v.quant, "size": v.total_size, "estimated": r.estimated, "report": r.value}))
             .collect();
         println!(
             "{}",
@@ -495,12 +496,13 @@ async fn remote_fit(a: &FitArgs, mach: &Machine) -> Result<(), String> {
     );
     for (v, r) in rows {
         println!(
-            "{:<48} {:<9} {:>9}  {:<34} {}",
+            "{:<48} {:<9} {:>9}  {:<34} {}{}",
             v.name,
             v.quant.as_deref().unwrap_or("-"),
             format!("{:.2} GB", v.total_size as f64 / 1e9),
-            status_label(r.status),
-            r.recommended.n_ctx
+            status_label(r.value.status),
+            r.value.recommended.n_ctx,
+            if r.estimated { "  (estimated)" } else { "" }
         );
     }
     Ok(())
@@ -616,6 +618,7 @@ fn license_line(l: &LicenseInfo, card: &str) -> String {
         Some(LicenseWarning::Missing) => "  ⚠ no licence in the model card".into(),
         Some(LicenseWarning::NonCommercial) => "  ⚠ non-commercial / research licence".into(),
         Some(LicenseWarning::Custom) => "  ⚠ custom licence: read the model card".into(),
+        Some(LicenseWarning::UsePolicy) => "  (acceptable-use policy applies: see the card)".into(),
     };
     format!("licence: {id}{warn}\nmodel card: {card}")
 }
