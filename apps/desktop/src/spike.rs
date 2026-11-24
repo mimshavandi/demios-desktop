@@ -145,7 +145,9 @@ pub fn autorun(app: &tauri::AppHandle) {
             let _ = w.set_size(tauri::LogicalSize::new(1100.0, 760.0));
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             let after = (w.inner_size().ok(), main.size().ok(), main.position().ok());
-            eprintln!("spike resize: before (window, main webview) {before:?}; after (window, main webview, position) {after:?}");
+            eprintln!(
+                "spike resize: before (window, main webview) {before:?}; after (window, main webview, position) {after:?}"
+            );
         }
     });
 }
