@@ -1,4 +1,4 @@
-import { ArrowUp, Copy, RotateCcw, Square } from "lucide-react";
+import { ArrowUp, Copy, Flag, RotateCcw, Square } from "lucide-react";
 import { useEffect, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import {
   messageText,
@@ -43,6 +43,8 @@ interface Props {
   /** Show the first-run AI notice (T-STORE-09). */
   aiNotice?: boolean;
   onDismissAiNotice?: () => void;
+  /** "Report this answer": opens a form in the browser with the model ref, no chat content. */
+  onReportAnswer?: (model: string | null) => void;
 }
 
 interface ToolResult {
@@ -176,6 +178,7 @@ export function ChatView(p: Props) {
                   isLast={m.id === lastId}
                   canRetry={canRegenerate(p.state)}
                   onRetry={p.onRegenerate}
+                  onReport={p.onReportAnswer}
                   live={p.state.tools[m.id] ?? []}
                   results={results}
                 />
@@ -270,6 +273,7 @@ function Message({
   isLast,
   canRetry,
   onRetry,
+  onReport,
   live,
   results,
 }: {
@@ -279,6 +283,7 @@ function Message({
   isLast: boolean;
   canRetry: boolean;
   onRetry: () => void;
+  onReport?: ((model: string | null) => void) | undefined;
   live: LiveToolCall[];
   results: Map<string, ToolResult>;
 }) {
@@ -384,6 +389,11 @@ function Message({
           {retry && m.status === "complete" && (
             <IconButton size="sm" label="Retry" onClick={onRetry}>
               <RotateCcw {...ICON} aria-hidden="true" />
+            </IconButton>
+          )}
+          {onReport !== undefined && (
+            <IconButton size="sm" label="Report this answer" onClick={() => onReport(m.model)}>
+              <Flag {...ICON} aria-hidden="true" />
             </IconButton>
           )}
           <ModelBadge info={describeModel(m.model, catalog)} />

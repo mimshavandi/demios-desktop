@@ -16,6 +16,7 @@ pub mod models;
 pub mod secrets;
 pub mod settings;
 pub mod state;
+pub mod support;
 
 use std::path::PathBuf;
 
@@ -59,6 +60,8 @@ fn navigation_guard<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(navigation_guard())
+        // Used from Rust only (`commands::report_problem`); its JS commands are not granted.
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             use tauri::Manager;
             let dir = data_dir().ok_or("no home directory to keep app data in")?;
@@ -79,6 +82,7 @@ pub fn run() {
             commands::app_info,
             commands::delete_all_local_data,
             commands::local_data_summary,
+            commands::report_problem,
             commands::list_conversations,
             commands::create_conversation,
             commands::rename_conversation,

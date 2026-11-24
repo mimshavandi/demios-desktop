@@ -232,6 +232,9 @@ export interface AppInfo {
   models_dir: string | null;
 }
 
+/** "Report a problem" (app) or "Report this answer" (a model answer). */
+export type ReportKind = "problem" | "answer";
+
 /** What "Delete all local data" removes (confirm dialog). */
 export interface LocalDataSummary {
   conversations: number;

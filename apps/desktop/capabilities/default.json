@@ -9,6 +9,7 @@
     "allow-app-info",
     "allow-delete-all-local-data",
     "allow-local-data-summary",
+    "allow-report-problem",
     "allow-list-conversations",
     "allow-create-conversation",
     "allow-rename-conversation",
