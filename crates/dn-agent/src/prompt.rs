@@ -120,6 +120,39 @@ struct Entry {
     versions: HashMap<String, Prompt>,
 }
 
+/// Resolves a version file strictly inside the manifest's directory: relative, no `..`,
+/// and (after following symlinks) still under that directory.
+fn version_file(
+    manifest: &Path,
+    dir: &Path,
+    rel: &str,
+    i: usize,
+) -> Result<std::path::PathBuf, ManifestError> {
+    let at = format!("/versions/{i}/file");
+    let outside = || {
+        ManifestError::one(
+            manifest,
+            &at,
+            format!("`{rel}` must be a relative path inside the prompt's directory"),
+        )
+    };
+    let relp = Path::new(rel);
+    if relp
+        .components()
+        .any(|c| !matches!(c, std::path::Component::Normal(_)))
+    {
+        return Err(outside());
+    }
+    let unreadable =
+        |e: std::io::Error| ManifestError::one(manifest, &at, format!("can't read `{rel}`: {e}"));
+    let base = dir.canonicalize().map_err(unreadable)?;
+    let full = base.join(relp).canonicalize().map_err(unreadable)?;
+    if !full.starts_with(&base) {
+        return Err(outside());
+    }
+    Ok(full)
+}
+
 #[derive(Default)]
 pub struct PromptRegistry {
     prompts: HashMap<String, Entry>,
@@ -152,7 +185,7 @@ impl PromptRegistry {
         let dir = file.parent().unwrap_or(Path::new("."));
         let mut versions = HashMap::new();
         for (i, v) in manifest.versions.iter().enumerate() {
-            let path = dir.join(&v.file);
+            let path = version_file(file, dir, &v.file, i)?;
             let template = std::fs::read_to_string(&path).map_err(|e| {
                 ManifestError::one(
                     file,
@@ -318,6 +351,50 @@ mod tests {
             "{}",
             errs[0]
         );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn version_files_cannot_escape_the_prompt_dir() {
+        let dir = std::env::temp_dir().join(format!("dn-agent-escape-{}", std::process::id()));
+        let p = dir.join("p");
+        std::fs::create_dir_all(&p).unwrap();
+        std::fs::write(dir.join("secret.md"), "outside").unwrap();
+        let outside = dir.join("secret.md");
+        for file in ["../secret.md", outside.to_str().unwrap(), "./v1.md"] {
+            std::fs::write(
+                p.join("manifest.yaml"),
+                format!("id: demo.escape\nactive_version: v1\nversions:\n  - {{version: v1, file: '{file}'}}\n"),
+            )
+            .unwrap();
+            let errs = PromptRegistry::load_dir(&p)
+                .err()
+                .unwrap_or_else(|| panic!("{file} accepted"));
+            assert!(
+                errs[0]
+                    .to_string()
+                    .contains("must be a relative path inside"),
+                "{file}: {}",
+                errs[0]
+            );
+        }
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&outside, p.join("link.md")).unwrap();
+            std::fs::write(
+                p.join("manifest.yaml"),
+                "id: demo.escape\nactive_version: v1\nversions:\n  - {version: v1, file: link.md}\n",
+            )
+            .unwrap();
+            let errs = PromptRegistry::load_dir(&p).err().unwrap();
+            assert!(
+                errs[0]
+                    .to_string()
+                    .contains("must be a relative path inside"),
+                "{}",
+                errs[0]
+            );
+        }
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -347,6 +347,14 @@ async fn cancel_while_waiting_for_a_tool_closes_the_turn() {
         .collect();
     assert_eq!(tool_ids, ["c1", "c2"]);
     assert_eq!(tools.calls.lock().unwrap().len(), 1, "c2 never ran");
+    // Usage of the finished model call is kept on cancel.
+    assert_eq!(
+        out.usage,
+        Usage {
+            input_tokens: 1,
+            output_tokens: 1
+        }
+    );
 }
 
 #[tokio::test]
@@ -418,4 +426,103 @@ async fn model_errors_end_the_run() {
     .await
     .unwrap_err();
     assert!(matches!(err, CoreError::ModelUnavailable { .. }));
+}
+
+#[tokio::test]
+async fn empty_and_duplicate_call_ids_are_made_unique_and_results_line_up() {
+    let model = ScriptedModel::new(vec![
+        vec![
+            call("", "search", json!({})),
+            call("", "search", json!({})),
+            done(FinishReason::ToolCalls, 1, 1),
+        ],
+        // Local models often reuse the same id every step.
+        vec![
+            call("call_0", "read", json!({"path": "/notes/groceries.md"})),
+            call("call_0", "read", json!({"path": "/nope"})),
+            done(FinishReason::ToolCalls, 1, 1),
+        ],
+        vec![text("ok"), done(FinishReason::Stop, 1, 1)],
+    ]);
+    let tools = NotesTools::default();
+    let out = run_loop(
+        &model,
+        &tools,
+        &cfg(),
+        history(),
+        &CancelToken::new(),
+        &mut |_| {},
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.stop, StopReason::Completed);
+    let executed: Vec<String> = tools
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|c| c.id.clone())
+        .collect();
+    assert_eq!(executed, ["call_0_0", "call_0_1", "call_0", "call_1_1"]);
+    // Every assistant call id has exactly one tool result with the same id, in order.
+    for (i, m) in out
+        .messages
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| !m.tool_calls.is_empty())
+    {
+        for (j, c) in m.tool_calls.iter().enumerate() {
+            assert_eq!(
+                out.messages[i + 1 + j].tool_call_id.as_deref(),
+                Some(c.id.as_str())
+            );
+        }
+    }
+    // The second read (bad path) got its own error result.
+    let last_tool = &model.requests()[2].messages;
+    assert_eq!(
+        texts(&last_tool[last_tool.len() - 1]),
+        "Error: no such file"
+    );
+}
+
+#[tokio::test]
+async fn stream_without_done_is_an_error() {
+    let model = ScriptedModel::new(vec![vec![text("Half an answ")]]);
+    let err = run_loop(
+        &model,
+        &NotesTools::default(),
+        &cfg(),
+        history(),
+        &CancelToken::new(),
+        &mut |_| {},
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(err, CoreError::ModelUnavailable { .. }), "{err:?}");
+}
+
+#[tokio::test]
+async fn length_finish_never_runs_tool_calls() {
+    let model = ScriptedModel::new(vec![vec![
+        text("Let me"),
+        call("c1", "search", json!({"q": "gro"})),
+        done(FinishReason::Length, 5, 64),
+    ]]);
+    let tools = NotesTools::default();
+    let out = run_loop(
+        &model,
+        &tools,
+        &cfg(),
+        history(),
+        &CancelToken::new(),
+        &mut |_| {},
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.stop, StopReason::Length);
+    assert!(tools.calls.lock().unwrap().is_empty());
+    assert_eq!(out.messages.len(), 1);
+    assert!(out.messages[0].tool_calls.is_empty());
+    assert_eq!(out.usage.output_tokens, 64);
 }

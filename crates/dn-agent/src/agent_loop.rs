@@ -2,12 +2,12 @@
 //! model answers without tools, the step limit is hit, or the run is cancelled.
 
 use crate::{CancelToken, ToolContext, ToolExecutor, ToolOutput};
-use dn_core::CoreError;
 use dn_core::chat::{
     ChatMessage, ChatModel, ChatRequest, ContentPart, EventStream, FinishReason, Reasoning, Role,
     StreamEvent, ToolCall, Usage,
 };
 use dn_core::model::ModelRef;
+use dn_core::{CoreError, RecoveryAction};
 
 /// Settings for one run, usually built from an `AgentManifest` + the resolved model.
 #[derive(Clone, Debug)]
@@ -88,7 +88,9 @@ pub enum StopReason {
     Completed,
     /// The model hit its output token limit.
     Length,
-    /// `max_steps` model calls were made and the model still wanted tools.
+    /// `max_steps` model calls were made and the model still wanted tools. The tools of
+    /// the last step *did* run, so history ends with tool results and no final answer:
+    /// the UI should offer "continue" (another run picks up from those results).
     StepLimit,
     Cancelled,
 }
@@ -102,7 +104,8 @@ pub struct RunOutcome {
     pub messages: Vec<ChatMessage>,
     pub stop: StopReason,
     pub steps: u32,
-    /// Sum over all model calls.
+    /// Sum over all model calls that reported usage. Kept on cancellation; a call
+    /// cancelled mid-stream reports nothing, so its tokens are not included.
     pub usage: Usage,
     /// Text of the last assistant turn.
     pub final_text: String,
@@ -122,6 +125,7 @@ pub async fn run_loop(
     let specs = tools.tools();
     // One id per run: the idempotency scope for tool calls (see `ToolContext::run_id`).
     let run_id = dn_core::Id::new();
+    let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut messages = history;
     let start = messages.len();
     let mut usage = Usage::default();
@@ -160,6 +164,7 @@ pub async fn run_loop(
         let mut text = String::new();
         let mut calls: Vec<ToolCall> = Vec::new();
         let mut finish = FinishReason::Stop;
+        let mut got_done = false;
         let mut cancelled = false;
         loop {
             let ev = tokio::select! {
@@ -183,6 +188,7 @@ pub async fn run_loop(
                     usage: u,
                 })) => {
                     finish = finish_reason;
+                    got_done = true;
                     usage.input_tokens += u.input_tokens;
                     usage.output_tokens += u.output_tokens;
                     on_event(AgentEvent::StepFinished {
@@ -206,6 +212,35 @@ pub async fn run_loop(
                 usage,
                 text,
             ));
+        }
+        if !got_done {
+            // A `ChatModel` must end every stream with `Done`; anything else is a cut-off.
+            return Err(CoreError::ModelUnavailable {
+                user_message: "The model stopped before finishing its answer.".into(),
+                developer_message: format!(
+                    "agent `{}` step {step}: stream ended without Done",
+                    cfg.agent_id
+                ),
+                recovery: vec![RecoveryAction::Retry {
+                    after_seconds: None,
+                }],
+            });
+        }
+        if finish == FinishReason::Length {
+            // Out of tokens: tool calls may be half-formed, so they never run (and are not
+            // kept, so history has no calls without results).
+            calls.clear();
+        }
+        // Model-provided ids aren't unique (local models send "" or reuse `call_0`), and
+        // tool ledgers key on (run_id, call.id): make them unique within the run. The
+        // rewritten call is the one stored, executed and answered, so results line up.
+        for (i, c) in calls.iter_mut().enumerate() {
+            if c.id.is_empty() || !seen_ids.insert(c.id.clone()) {
+                c.id = format!("call_{step}_{i}");
+                while !seen_ids.insert(c.id.clone()) {
+                    c.id.push('_');
+                }
+            }
         }
         final_text = text.clone();
         messages.push(ChatMessage {

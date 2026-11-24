@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 pub const AGENT_SCHEMA: &str = include_str!("../schemas/agent.schema.json");
 pub const SKILL_SCHEMA: &str = include_str!("../schemas/skill.schema.json");
@@ -198,7 +199,7 @@ impl ManifestError {
 fn parse<T: DeserializeOwned>(
     file: &Path,
     yaml: &str,
-    schema_src: &str,
+    validator: &jsonschema::Validator,
     extra: impl FnOnce(&T) -> Vec<Problem>,
 ) -> Result<T, ManifestError> {
     let value: Value = serde_yaml_ng::from_str(yaml).map_err(|e| {
@@ -208,8 +209,7 @@ fn parse<T: DeserializeOwned>(
             .unwrap_or_else(|| "/".into());
         ManifestError::one(file, &at, format!("invalid YAML: {e}"))
     })?;
-    let schema: Value = serde_json::from_str(schema_src).expect("bundled schema is valid JSON");
-    let problems = schema::validate(&schema::compile(&schema), &value);
+    let problems = schema::validate(validator, &value);
     if !problems.is_empty() {
         return Err(ManifestError {
             file: file.to_path_buf(),
@@ -236,87 +236,129 @@ fn problem(path: &str, message: impl Into<String>) -> Problem {
     }
 }
 
-pub fn parse_agent(file: &Path, yaml: &str) -> Result<AgentManifest, ManifestError> {
-    parse(file, yaml, AGENT_SCHEMA, |a: &AgentManifest| {
-        let mut p = Vec::new();
-        for (i, s) in a.model_slots.iter().enumerate() {
-            if a.model_slots[..i].iter().any(|o| o.slot_id == s.slot_id) {
-                p.push(problem(
-                    &format!("/model_slots/{i}/slot_id"),
-                    format!("duplicate slot `{}`", s.slot_id),
-                ));
-            }
-        }
-        if a.slot("primary").is_none() {
-            p.push(problem("/model_slots", "an agent needs a `primary` slot"));
-        }
-        p
+/// Bundled schemas, compiled once per process.
+static AGENT_VALIDATOR: OnceLock<jsonschema::Validator> = OnceLock::new();
+static SKILL_VALIDATOR: OnceLock<jsonschema::Validator> = OnceLock::new();
+static PROMPT_VALIDATOR: OnceLock<jsonschema::Validator> = OnceLock::new();
+
+fn compiled(
+    cell: &'static OnceLock<jsonschema::Validator>,
+    src: &str,
+) -> &'static jsonschema::Validator {
+    cell.get_or_init(|| {
+        schema::compile(&serde_json::from_str(src).expect("bundled schema is valid JSON"))
     })
+}
+
+pub fn parse_agent(file: &Path, yaml: &str) -> Result<AgentManifest, ManifestError> {
+    parse(
+        file,
+        yaml,
+        compiled(&AGENT_VALIDATOR, AGENT_SCHEMA),
+        |a: &AgentManifest| {
+            let mut p = Vec::new();
+            for (i, s) in a.model_slots.iter().enumerate() {
+                if a.model_slots[..i].iter().any(|o| o.slot_id == s.slot_id) {
+                    p.push(problem(
+                        &format!("/model_slots/{i}/slot_id"),
+                        format!("duplicate slot `{}`", s.slot_id),
+                    ));
+                }
+            }
+            if a.slot("primary").is_none() {
+                p.push(problem("/model_slots", "an agent needs a `primary` slot"));
+            }
+            p
+        },
+    )
 }
 
 pub fn parse_skill(file: &Path, yaml: &str) -> Result<SkillManifest, ManifestError> {
-    parse(file, yaml, SKILL_SCHEMA, |s: &SkillManifest| {
-        let mut p = Vec::new();
-        let need = |field: &str, present: bool, p: &mut Vec<Problem>| {
-            if !present {
+    parse(
+        file,
+        yaml,
+        compiled(&SKILL_VALIDATOR, SKILL_SCHEMA),
+        |s: &SkillManifest| {
+            let mut p = Vec::new();
+            let need = |field: &str, present: bool, p: &mut Vec<Problem>| {
+                if !present {
+                    p.push(problem(
+                        "/",
+                        format!("`kind: {}` needs `{field}`", kind_name(s.kind)),
+                    ));
+                }
+            };
+            match s.kind {
+                SkillKind::Prompt => need("prompt", s.prompt.is_some(), &mut p),
+                SkillKind::ToolChain => need("steps", !s.steps.is_empty(), &mut p),
+                SkillKind::Builtin => need("handler", s.handler.is_some(), &mut p),
+            }
+            for (field, present, allowed) in [
+                ("prompt", s.prompt.is_some(), SkillKind::Prompt),
+                ("steps", !s.steps.is_empty(), SkillKind::ToolChain),
+                ("handler", s.handler.is_some(), SkillKind::Builtin),
+            ] {
+                if present && s.kind != allowed {
+                    p.push(problem(
+                        &format!("/{field}"),
+                        format!("`{field}` is only used by `kind: {}`", kind_name(allowed)),
+                    ));
+                }
+            }
+            for (field, schema) in [
+                ("input_schema", Some(&s.input_schema)),
+                ("output_schema", s.output_schema.as_ref()),
+            ] {
+                if let Some(schema) = schema
+                    && let Err(e) = jsonschema::meta::validate(schema)
+                {
+                    p.push(problem(
+                        &format!("/{field}{}", e.instance_path()),
+                        format!("not a valid JSON Schema: {e}"),
+                    ));
+                }
+            }
+            if s.input_schema.get("type").and_then(Value::as_str) != Some("object") {
                 p.push(problem(
-                    "/",
-                    format!("`kind: {}` needs `{field}`", kind_name(s.kind)),
+                    "/input_schema/type",
+                    "tool input schemas must have `type: object`",
                 ));
             }
-        };
-        match s.kind {
-            SkillKind::Prompt => need("prompt", s.prompt.is_some(), &mut p),
-            SkillKind::ToolChain => need("steps", !s.steps.is_empty(), &mut p),
-            SkillKind::Builtin => need("handler", s.handler.is_some(), &mut p),
-        }
-        for (field, present, allowed) in [
-            ("prompt", s.prompt.is_some(), SkillKind::Prompt),
-            ("steps", !s.steps.is_empty(), SkillKind::ToolChain),
-            ("handler", s.handler.is_some(), SkillKind::Builtin),
-        ] {
-            if present && s.kind != allowed {
+            if s.tool_name().len() > 64 {
                 p.push(problem(
-                    &format!("/{field}"),
-                    format!("`{field}` is only used by `kind: {}`", kind_name(allowed)),
+                    "/id",
+                    "id is too long to be a tool name (max 64 characters)",
                 ));
             }
-        }
-        if s.input_schema.get("type").and_then(Value::as_str) != Some("object") {
-            p.push(problem(
-                "/input_schema/type",
-                "tool input schemas must have `type: object`",
-            ));
-        }
-        if s.tool_name().len() > 64 {
-            p.push(problem(
-                "/id",
-                "id is too long to be a tool name (max 64 characters)",
-            ));
-        }
-        p
-    })
+            p
+        },
+    )
 }
 
 pub fn parse_prompt_manifest(file: &Path, yaml: &str) -> Result<PromptManifest, ManifestError> {
-    parse(file, yaml, PROMPT_SCHEMA, |m: &PromptManifest| {
-        let mut p = Vec::new();
-        for (i, v) in m.versions.iter().enumerate() {
-            if m.versions[..i].iter().any(|o| o.version == v.version) {
+    parse(
+        file,
+        yaml,
+        compiled(&PROMPT_VALIDATOR, PROMPT_SCHEMA),
+        |m: &PromptManifest| {
+            let mut p = Vec::new();
+            for (i, v) in m.versions.iter().enumerate() {
+                if m.versions[..i].iter().any(|o| o.version == v.version) {
+                    p.push(problem(
+                        &format!("/versions/{i}/version"),
+                        format!("duplicate version `{}`", v.version),
+                    ));
+                }
+            }
+            if !m.versions.iter().any(|v| v.version == m.active_version) {
                 p.push(problem(
-                    &format!("/versions/{i}/version"),
-                    format!("duplicate version `{}`", v.version),
+                    "/active_version",
+                    format!("`{}` is not listed in `versions`", m.active_version),
                 ));
             }
-        }
-        if !m.versions.iter().any(|v| v.version == m.active_version) {
-            p.push(problem(
-                "/active_version",
-                format!("`{}` is not listed in `versions`", m.active_version),
-            ));
-        }
-        p
-    })
+            p
+        },
+    )
 }
 
 fn kind_name(k: SkillKind) -> &'static str {
@@ -355,13 +397,25 @@ pub fn load_skills_dir(dir: &Path) -> Result<Vec<SkillManifest>, Vec<ManifestErr
         }
     }
     skills.sort_by(|a, b| a.id.cmp(&b.id));
-    for w in skills.windows(2) {
-        if w[0].id == w[1].id {
-            errors.push(ManifestError::one(
+    let mut by_tool: std::collections::HashMap<String, &str> = Default::default();
+    for s in &skills {
+        match by_tool.insert(s.tool_name(), &s.id) {
+            Some(prev) if prev == s.id => errors.push(ManifestError::one(
                 dir,
                 "/id",
-                format!("duplicate skill id `{}`", w[0].id),
-            ));
+                format!("duplicate skill id `{}`", s.id),
+            )),
+            // `a.b` and `a__b` both become tool `a__b`.
+            Some(prev) => errors.push(ManifestError::one(
+                dir,
+                "/id",
+                format!(
+                    "skills `{prev}` and `{}` map to the same tool name `{}`",
+                    s.id,
+                    s.tool_name()
+                ),
+            )),
+            None => {}
         }
     }
     if errors.is_empty() {
@@ -371,19 +425,25 @@ pub fn load_skills_dir(dir: &Path) -> Result<Vec<SkillManifest>, Vec<ManifestErr
     }
 }
 
+/// Directory levels searched below the root (also bounds pathological trees).
+const MAX_DEPTH: usize = 16;
+
+/// Files named `name` under `dir`. Symlinks are never followed (no loops, no escaping
+/// the tree), and the walk stops [`MAX_DEPTH`] levels down.
 pub(crate) fn find_files(dir: &Path, name: &str) -> Vec<PathBuf> {
     let mut out = Vec::new();
-    let mut stack = vec![dir.to_path_buf()];
-    while let Some(d) = stack.pop() {
+    let mut stack = vec![(dir.to_path_buf(), 0usize)];
+    while let Some((d, depth)) = stack.pop() {
         let Ok(rd) = std::fs::read_dir(&d) else {
             continue;
         };
         for e in rd.flatten() {
-            let p = e.path();
-            if p.is_dir() {
-                stack.push(p);
-            } else if p.file_name().is_some_and(|n| n == name) {
-                out.push(p);
+            // `DirEntry::file_type` does not follow symlinks.
+            let Ok(ft) = e.file_type() else { continue };
+            if ft.is_dir() && depth < MAX_DEPTH {
+                stack.push((e.path(), depth + 1));
+            } else if ft.is_file() && e.file_name() == name {
+                out.push(e.path());
             }
         }
     }
@@ -498,6 +558,65 @@ policies:
         )
         .unwrap_err();
         assert!(e.to_string().contains("must have `type: object`"));
+    }
+
+    #[test]
+    fn skill_schemas_must_be_valid_json_schema() {
+        let e = parse_skill(
+            Path::new("s"),
+            "id: x.y\nversion: 1\ndescription: d\nrisk: read\nkind: builtin\nhandler: a.b\ninput_schema: {type: object, properties: {n: {type: integr}}}\n",
+        )
+        .unwrap_err();
+        let msg = e.to_string();
+        assert!(
+            msg.contains("/input_schema/properties/n/type")
+                && msg.contains("not a valid JSON Schema"),
+            "{msg}"
+        );
+    }
+
+    fn tmp(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("dn-agent-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn write_skill(dir: &Path, id: &str) {
+        let d = dir.join(id);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(
+            d.join("skill.yaml"),
+            format!("id: {id}\nversion: 1\ndescription: d\nrisk: read\nkind: builtin\nhandler: a.b\ninput_schema: {{type: object}}\n"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn tool_name_collisions_are_rejected() {
+        let d = tmp("collide");
+        write_skill(&d, "text.sum");
+        write_skill(&d, "text__sum");
+        let errs = load_skills_dir(&d).unwrap_err();
+        assert!(
+            errs[0]
+                .to_string()
+                .contains("map to the same tool name `text__sum`"),
+            "{}",
+            errs[0]
+        );
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_loops_are_not_followed() {
+        let d = tmp("loop");
+        write_skill(&d, "a.b");
+        std::os::unix::fs::symlink(&d, d.join("a.b").join("loop")).unwrap();
+        let skills = load_skills_dir(&d).unwrap();
+        assert_eq!(skills.len(), 1);
+        std::fs::remove_dir_all(&d).unwrap();
     }
 
     #[test]
