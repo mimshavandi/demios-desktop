@@ -1,6 +1,6 @@
 # ADR-0010: One design system — tokens + headless primitives
 
-**Status:** Proposed · **Date:** 2026-11-24 · **Deciders:** project owner
+**Status:** Accepted (D-014, 2026-11-24) · **Date:** 2026-11-24 · **Deciders:** project owner
 
 ## Context
 The app shell (W-shell) and the artifact sandbox chrome (W-artifacts) are built in parallel by different sessions. Demios had a design-system folder but hard-coded values and three overlapping UI libraries crept in. The owner asked for one standard design based on best practice before UI work starts.
