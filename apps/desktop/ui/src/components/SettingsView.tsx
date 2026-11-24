@@ -13,6 +13,7 @@ import {
 } from "../ipc/types";
 import { Badge, Button, ICON, InlineMessage, Select, Skeleton, TextField, type SelectGroup } from "./primitives";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { Licences } from "./Licences";
 import { LocalModelsCard, formatBytes } from "./LocalModels";
 import { useToast } from "./toast";
 
@@ -543,6 +544,7 @@ function GeneralPage({ api, info }: { api: Api; info: AppInfo | null }) {
             </Button>
           </div>
         </div>
+        <Licences />
       </section>
       <ConfirmDialog
         open={confirming}
