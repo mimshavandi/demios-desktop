@@ -23,6 +23,7 @@ Nothing has been released yet. This section lists what is on `main` now.
 - **Settings → General** shows where your data goes: what stays on your computer, what goes to a provider you add a key for, and what goes to Hugging Face ([#40](https://github.com/mimshavandi/demios-desktop/pull/40)).
 - **Delete all local data** removes chats, settings, tool history, downloaded models and the keys Demios saved in your keychain, after a confirmation that lists what will go ([#40](https://github.com/mimshavandi/demios-desktop/pull/40)).
 - A notice on first run, and a line under the message box, say that answers come from the AI model you chose and can be wrong. Answers are marked as AI-generated with the model that wrote them ([#39](https://github.com/mimshavandi/demios-desktop/pull/39)).
+- **Settings → General → About → Open-source licences** lists every package shipped with the app (Rust crates, npm packages and bundled C/C++ code). You can search by name or licence and read each full licence text ([#45](https://github.com/mimshavandi/demios-desktop/pull/45)).
 - **Report a problem** (Settings → General) and **Report this answer** (the flag under an answer) open a prefilled form on GitHub in your browser ([#42](https://github.com/mimshavandi/demios-desktop/pull/42)).
 
 #### `dn` command-line tool
