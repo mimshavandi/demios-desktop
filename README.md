@@ -13,7 +13,7 @@ An open-source desktop app for chatting with AI models you choose: one running o
 
 - Chat with streamed answers, with Markdown and highlighted code blocks.
 - Stop an answer mid-way (Ctrl+. or ⌘.) and retry it.
-- Keep conversations between launches; rename them, and delete with Undo.
+- Keep conversations between launches, and delete them with Undo.
 - Run models on your computer: download from a built-in catalogue of 12 open models. Each row shows whether the model fits your machine ("Won't fit" when it doesn't), its licence, and download progress. Downloads can be paused, resume after an interruption, and are checked against their SHA-256.
 - Use your own key for Anthropic, OpenAI or Google Gemini.
 - Light and dark appearance that follows your system, and keyboard shortcuts for the main actions.
