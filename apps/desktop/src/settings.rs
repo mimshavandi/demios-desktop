@@ -56,6 +56,10 @@ pub struct SlotInfo {
     pub label: &'static str,
     pub description: &'static str,
     pub capability: Capability,
+    /// Whether Settings shows the slot. A slot nothing reads yet stays valid in saved settings
+    /// but is hidden, so the screen doesn't promise work the app doesn't do.
+    #[serde(skip)]
+    pub shown: bool,
 }
 
 pub const SLOTS: &[SlotInfo] = &[
@@ -64,18 +68,23 @@ pub const SLOTS: &[SlotInfo] = &[
         label: "Chat",
         description: "Answers in conversations.",
         capability: Capability::Chat,
+        shown: true,
     },
     SlotInfo {
         slot_id: "fast",
         label: "Fast",
         description: "Titles, summaries and other quick background tasks.",
         capability: Capability::Chat,
+        // Nothing uses it yet (chat titles are the first message). Show it again when
+        // something reads `slot("fast")`.
+        shown: false,
     },
     SlotInfo {
         slot_id: "embed",
         label: "Embeddings",
         description: "Knowledge search (arrives with dn-knowledge).",
         capability: Capability::Embedding,
+        shown: true,
     },
 ];
 
@@ -156,6 +165,19 @@ mod tests {
 
     fn db() -> Connection {
         dn_store::open_in_memory(&[dn_store::MigrationSet::new("app", migrations())]).unwrap()
+    }
+
+    #[test]
+    fn a_hidden_slot_stays_valid_in_saved_settings() {
+        let c = db();
+        let mut s = Settings::default();
+        s.slots.insert("fast".into(), "local:dev-fake".into());
+        save(&c, &s).unwrap();
+        assert_eq!(
+            load(&c).unwrap().slot("fast").unwrap().to_string(),
+            "local:dev-fake"
+        );
+        assert!(!SLOTS.iter().find(|s| s.slot_id == "fast").unwrap().shown);
     }
 
     #[test]
