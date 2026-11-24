@@ -5,8 +5,7 @@ Real-app tests: WebdriverIO drives the built app through
 WebDriver (WebKitWebDriver on Linux, msedgedriver on Windows).
 
 - CI job **`e2e`** (required): `ubuntu-latest`, WebKitGTK.
-- CI job **`e2e-windows`** (`continue-on-error` until it has been green three runs in a
-  row): `windows-latest`, WebView2. Its e2e build turns on WebView2 remote debugging through
+- CI job **`e2e-windows`** (required): `windows-latest`, WebView2. Its e2e build turns on WebView2 remote debugging through
   the window config; see [Windows WebView2 session](#t-shell-06-windows-webview2-session).
   Its msedgedriver log is uploaded as the `msedgedriver-log` artifact.
 
@@ -61,8 +60,8 @@ cargo build -p demios-desktop --features dev-fake-model,custom-protocol
 ```
 (The CI step derives this from `tauri.conf.json`, so keep the two in step if you copy it.)
 
-Done-check: `e2e-windows` green three runs in a row, then drop `continue-on-error` and make
-it required.
+Done: `e2e-windows` was green three runs in a row on the fix, and no longer has
+`continue-on-error`.
 
 ## macOS: manual release checklist
 macOS has no WebDriver for WKWebView, so run this before every release, on a signed build where possible.
