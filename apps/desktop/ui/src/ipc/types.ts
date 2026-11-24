@@ -6,6 +6,7 @@
 
 import type { ApprovalPolicy } from "@dn-core/ApprovalPolicy";
 import type { Capability } from "@dn-core/Capability";
+import type { FitStatus } from "@dn-core/FitStatus";
 import type { ContentPart } from "@dn-core/ContentPart";
 import type { FinishReason } from "@dn-core/FinishReason";
 import type { Id } from "@dn-core/Id";
@@ -19,6 +20,7 @@ export type {
   ApprovalPolicy,
   Capability,
   ContentPart,
+  FitStatus,
   FinishReason,
   Id,
   RecoveryAction,
@@ -169,18 +171,50 @@ export interface ProviderInfo {
   has_key: boolean;
 }
 
-export interface LocalModelPlaceholder {
-  model_id: string;
-  label: string;
-  size: string;
-  note: string;
+/** Where a catalogue model is (design-system §4, Download row). */
+export type DownloadState =
+  | { state: "not_downloaded" }
+  | { state: "queued" }
+  | { state: "downloading"; done: number; total: number; bytes_per_sec: number }
+  | { state: "paused"; done: number; total: number }
+  | { state: "verifying"; total: number }
+  | { state: "ready" }
+  | { state: "failed"; message: string; done: number; total: number };
+
+export interface FitView {
+  status: FitStatus;
+  /** From the file size only (before download); exact after. */
+  estimated: boolean;
+  reason: string;
+  suggested_quant: string | null;
 }
+
+/** A curated catalogue model on (or for) this device. */
+export interface LocalModelRow {
+  id: string;
+  model_ref: string;
+  name: string;
+  repo: string;
+  quant: string;
+  size: number;
+  params_b: number;
+  capabilities: Capability[];
+  license: string;
+  /** Missing, non-commercial or custom licence (D-020). */
+  license_warning: boolean;
+  card_url: string;
+  notes: string;
+  state: DownloadState;
+  fit: FitView;
+}
+
+export type LocalModelEvent = { type: "changed"; row: LocalModelRow };
 
 export interface ModelCatalog {
   slots: SlotInfo[];
   models: ModelOption[];
   providers: ProviderInfo[];
-  local_models: LocalModelPlaceholder[];
+  local_models: LocalModelRow[];
   key_store: string;
   settings: Settings;
   /** The model chat uses now (chosen or picked automatically); null if none is usable. */
