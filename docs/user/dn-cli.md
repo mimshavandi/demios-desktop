@@ -31,7 +31,7 @@ Or run it without installing: `cargo run -p dn -- <command>`.
 
 ## Add-model links
 
-A `demios://models/add?…` link names a Hugging Face model, and can name one version of it. Only `dn` can open these links for now; the app can't yet. `dn models open` never downloads without your `y`, and if the link doesn't pick one version, it lists the `dn models pull` commands for each one instead.
+A `demios://models/add?…` link names a Hugging Face model, and can name one version of it. The app opens them too (see [Adding a model](models.md#links-that-add-a-model)). `dn models open` never downloads without your `y`, and if the link doesn't pick one version, it lists the `dn models pull` commands for each one instead.
 
 ## Settings chosen for you
 

@@ -16,7 +16,7 @@ An open-source desktop app for chatting with AI models you choose: one running o
 - Stop an answer mid-way (Ctrl+. or ⌘.) and retry it.
 - Keep conversations between launches, and delete them with Undo.
 - Run models on your computer: download from a built-in catalogue of 12 open models. Each row shows whether the model fits your machine ("Won't fit" when it doesn't), its licence, and download progress. Downloads can be paused, resume after an interruption, and are checked against their SHA-256.
-- Add GGUF models from Hugging Face: search, see each version's size, whether it fits and its licence before downloading, and add a Hugging Face token for gated models. GGUF models already in your Hugging Face cache are used where they are, never changed or deleted.
+- Add GGUF models from Hugging Face: search, see each version's size, whether it fits and its licence before downloading, and add a Hugging Face token for gated models. GGUF models already in your Hugging Face cache are used where they are, never changed or deleted. A `demios://models/add` link opens the same check in the app; nothing downloads until you choose to.
 - Use your own key for Anthropic, OpenAI or Google Gemini.
 - Light and dark appearance that follows your system, and keyboard shortcuts for the main actions.
 - See where your data goes in **Settings → General**, and remove everything with **Delete all local data**: chats, settings, downloaded models and the keys Demios saved, after a confirmation that lists what will go.
@@ -24,7 +24,7 @@ An open-source desktop app for chatting with AI models you choose: one running o
 - Report a problem, or a single answer, through a prefilled form on GitHub. Nothing from your chats is sent.
 - Read the licence of every package shipped with the app, searchable, in **Settings → General → About → Open-source licences**.
 - An answer from a provider that stops responding ends with an error you can retry, instead of waiting forever.
-- Add tool servers (MCP) in **Settings → Models → Tool servers**: a program on this computer, which starts only after you allow its exact command, or a remote HTTPS server, with sign-in in your browser. Tools that change something show their exact arguments and wait for you to allow or deny them.
+- Add tool servers (MCP) in **Settings → Models → Tool servers**: a program on this computer, which starts only after you allow its exact command, or a remote HTTPS server, with sign-in in your browser. Tools that change something show their exact arguments and wait for you to allow or deny them. See each server's tools and their risk, choose per tool whether it asks, and review new or changed tools before they run without asking.
 - The `dn` command-line tool: run a model, check whether it fits, browse and download models from Hugging Face, and open `demios://` add-model links.
 
 ## Coming next
@@ -33,7 +33,6 @@ Not available yet:
 
 - Artifacts on Windows. They're saved there, but can't be shown yet.
 - Connecting the app to an OpenAI-compatible server (such as Ollama). The `dn` CLI can already do this.
-- Opening `demios://` add-model links in the app. The `dn` CLI can already do this.
 - Signed installers for macOS, Windows and Linux.
 
 ## Screenshots
