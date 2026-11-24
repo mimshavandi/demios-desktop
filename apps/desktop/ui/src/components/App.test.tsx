@@ -8,6 +8,8 @@ import type {
   ModelCatalog,
   Settings,
   StoredMessage,
+  LocalModelEvent,
+  LocalModelRow,
   ToolEvent,
   UnknownOutcome,
 } from "../ipc/types";
@@ -23,6 +25,27 @@ function fakeApi() {
   const responses: [string, string][] = [];
   const resolved: [string, boolean][] = [];
   const unknowns: UnknownOutcome[] = [];
+  let localSink: ((e: LocalModelEvent) => void) | null = null;
+  const downloads: string[] = [];
+  const pauses: string[] = [];
+  const localRows: LocalModelRow[] = [
+    {
+      id: "m1",
+      model_ref: "local:m1",
+      name: "Tiny Model",
+      repo: "org/tiny",
+      quant: "Q4_K_M",
+      size: 2_000_000_000,
+      params_b: 1,
+      capabilities: ["chat"],
+      license: "cc-by-nc-4.0",
+      license_warning: true,
+      card_url: "https://huggingface.co/org/tiny",
+      notes: "",
+      state: { state: "not_downloaded" },
+      fit: { status: "caution", estimated: true, reason: "Fits, with little memory left for other apps.", suggested_quant: null },
+    },
+  ];
   const msgs = new Map<string, StoredMessage[]>();
   let settings: Settings = { slots: {}, telemetry_enabled: false };
   let n = 0;
@@ -48,7 +71,7 @@ function fakeApi() {
       { model_ref: "local:dev-fake", label: "Dev fake", source: "dev", capabilities: ["chat"], available: true, note: null },
     ],
     providers: [{ id: "openai", name: "OpenAI", has_key: false }],
-    local_models: [],
+    local_models: localRows,
     key_store: "memory",
     settings,
     chat_model: null,
@@ -98,6 +121,18 @@ function fakeApi() {
     setProviderKey: async () => catalog(),
     deleteProviderKey: async () => catalog(),
     restoreProviderKey: async () => catalog(),
+    watchLocalModels: async (onEvent) => {
+      localSink = onEvent;
+      return localRows;
+    },
+    downloadModel: async (id) => {
+      downloads.push(id);
+      return null;
+    },
+    pauseDownload: async (id) => {
+      pauses.push(id);
+      return null;
+    },
     watchTools: async (onEvent) => {
       approvalSink = onEvent;
       return { approvals: [], servers: [] };
@@ -121,6 +156,10 @@ function fakeApi() {
     responses,
     resolved,
     unknowns,
+    local: (e: LocalModelEvent) => localSink?.(e),
+    downloads,
+    pauses,
+    localRows,
   };
 }
 
@@ -403,5 +442,43 @@ describe("App", () => {
     await act(() => new Promise((r) => setTimeout(r, 550)));
     fireEvent.click(allow);
     await waitFor(() => expect(f.responses).toEqual([["r3", "approve"]]));
+  });
+
+  it("downloads a local model with progress, pause and a licence warning", async () => {
+    const f = fakeApi();
+    render(<App api={f.api} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Models" }));
+    const row = await screen.findByTestId("local-model-row");
+    expect(row.textContent).toContain("Caution (estimate)");
+    expect(row.textContent).toContain("Licence: cc-by-nc-4.0");
+    expect(screen.getByText(/Check the licence before downloading/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Download model" }));
+    await waitFor(() => expect(f.downloads).toEqual(["m1"]));
+
+    const base = f.localRows[0]!;
+    act(() =>
+      f.local({
+        type: "changed",
+        row: { ...base, state: { state: "downloading", done: 500_000_000, total: 2_000_000_000, bytes_per_sec: 10_000_000 } },
+      }),
+    );
+    const bar = await screen.findByRole("progressbar");
+    expect(bar.getAttribute("aria-valuenow")).toBe("500000000");
+    expect(screen.getByText(/500 MB of 2.0 GB · 3 min left/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+    await waitFor(() => expect(f.pauses).toEqual(["m1"]));
+
+    act(() =>
+      f.local({ type: "changed", row: { ...base, state: { state: "failed", message: "Couldn't reach Hugging Face.", done: 0, total: 2_000_000_000 } } }),
+    );
+    expect(await screen.findByText("Couldn't reach Hugging Face.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+
+    act(() => f.local({ type: "changed", row: { ...base, state: { state: "queued", resuming: true } } }));
+    expect(await screen.findByText("Checking the partial download…")).toBeTruthy();
+
+    act(() => f.local({ type: "changed", row: { ...base, state: { state: "ready" } } }));
+    expect(await screen.findByText("On this device", { selector: ".dn-badge" })).toBeTruthy();
+    expect(await screen.findByText("Tiny Model downloaded")).toBeTruthy();
   });
 });

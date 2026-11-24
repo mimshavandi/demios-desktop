@@ -188,7 +188,9 @@ impl AppState {
             executor: Arc::clone(&executor),
             manifest: agent.manifest.clone(),
         });
-        let mut state = Self::new(conn, ModelRegistry::with_builtin(), keys);
+        let mut models = ModelRegistry::with_builtin();
+        models.local = Some(crate::local::LocalModels::open());
+        let mut state = Self::new(conn, models, keys);
         state.agent = agent;
         state.tools = tools;
         state.executor = Some(Arc::clone(&executor));
