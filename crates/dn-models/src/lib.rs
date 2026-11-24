@@ -1,7 +1,7 @@
 //! `dn-models` — everything about model *files* (ADR-0003): reading GGUF metadata
 //! ([`gguf`]), deciding whether a model fits this machine ([`fit`], formula in its docs),
-//! the curated catalogue ([`catalog`]) and resumable, SHA-256-verified downloads
-//! ([`download`]).
+//! the curated catalogue ([`catalog`], tested recommendations), the Hugging Face Hub client
+//! ([`hub`], ADR-0011) and resumable, SHA-256-verified downloads ([`download`]).
 //!
 //! No llama.cpp dependency: the fit estimator works from the GGUF header alone, so it runs
 //! in CI and in the UI before a model is ever loaded.
@@ -10,6 +10,9 @@ pub mod catalog;
 pub mod download;
 pub mod fit;
 pub mod gguf;
+pub mod hub;
+#[cfg(test)]
+mod testserver;
 
 pub use catalog::{Catalog, CatalogEntry};
 pub use fit::{FitReport, Machine, MemoryKind, ModelFootprint, fit};
