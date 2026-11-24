@@ -2,6 +2,24 @@
 
 The lead session plans, writes briefs, reviews every PR against its done-check, and is the only one to mark a task `done`. Workers report to the lead, not to the owner. One worker = one session = one set of crates (no two writers on the same files).
 
+## Status (updated by the lead session)
+
+| Task(s) | Owner | PR | Status |
+|---|---|---|---|
+| T-GOV-01..06 | lead | #5, #13, #18, direct pushes | done |
+| T-CORE-01, 03 | lead | direct, #6 | done |
+| T-CORE-02, 04, 05 | W-shell | #1, #10, #17 | done |
+| T-DES-01 | lead | #3 | done (D-014) |
+| T-AGT-02 (ToolExecutor) | W-providers | #2 | done |
+| T-PRV-03 | W-providers | #4 | done |
+| T-CON-01..05 | W-tools | #7 | done (filesystem reference test run locally, `#[ignore]` in CI) |
+| T-PRV-01..02 | W-providers | #8 | review fixes pending |
+| T-AGT-01, 03 (+ loop) | W-providers | #15 | review fixes pending |
+| T-SHELL-01..03 | W-shell | #14 | review fixes pending (2 blockers) |
+| T-INF-01..06 | W-inference | – | in progress |
+| T-ART-01..05 | W-artifacts | – | in progress |
+| T-DES-02 | lead | – | after #14 |
+
 ## Wave 0 (lead session, after D-002)
 | Task | What | Doc | Done-check |
 |---|---|---|---|
