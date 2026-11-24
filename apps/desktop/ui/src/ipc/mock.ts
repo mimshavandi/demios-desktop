@@ -5,13 +5,13 @@
 import type { Api } from "./commands";
 import type {
   ApprovalDecision,
-  ApprovalEvent,
   ApprovalPrompt,
   ChatEvent,
   Conversation,
   ModelCatalog,
   Settings,
   StoredMessage,
+  ToolEvent,
   UnknownOutcome,
 } from "./types";
 
@@ -78,6 +78,7 @@ export function createMockApi(): Api {
     ],
     key_store: "session only (browser mock)",
     settings,
+    chat_model: settings.slots["chat"] ?? "local:dev-fake",
   });
 
   const stream = (cid: string, a: StoredMessage, q: string, onEvent: (e: ChatEvent) => void) => {
@@ -109,7 +110,7 @@ export function createMockApi(): Api {
     };
   };
   const stops = new Map<string, () => void>();
-  let approvalSink: ((e: ApprovalEvent) => void) | null = null;
+  let approvalSink: ((e: ToolEvent) => void) | null = null;
   const waiting = new Map<string, { prompt: ApprovalPrompt; done: (d: ApprovalDecision) => void }>();
   const unknown: UnknownOutcome[] = [];
 
@@ -215,15 +216,15 @@ export function createMockApi(): Api {
       removedKeys.add(p);
       return catalog();
     },
-    watchApprovals: async (onEvent) => {
+    watchTools: async (onEvent) => {
       approvalSink = onEvent;
-      return [...waiting.values()].map((w) => w.prompt);
+      return { approvals: [...waiting.values()].map((w) => w.prompt), servers: [] };
     },
     respondApproval: async (requestId, decision) => {
       const w = waiting.get(requestId);
       if (w === undefined) throw { code: "expired", message: "This request is no longer waiting." };
       waiting.delete(requestId);
-      approvalSink?.({ type: "resolved", request_id: requestId });
+      approvalSink?.({ type: "resolved", request_id: requestId, expired: false });
       w.done(decision);
       return null;
     },

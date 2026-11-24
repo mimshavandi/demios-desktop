@@ -106,9 +106,26 @@ export interface ApprovalPrompt {
   arguments: unknown;
 }
 
-export type ApprovalEvent =
+/** Connection state of a configured MCP server. */
+export interface McpServerStatus {
+  server_id: string;
+  name: string;
+  state: "connecting" | "connected" | "failed";
+  message: string | null;
+  tools: number;
+}
+
+/** Tool-runtime events (`watch_tools`). */
+export type ToolEvent =
   | { type: "requested"; prompt: ApprovalPrompt }
-  | { type: "resolved"; request_id: Id };
+  /** `expired`: timed out or its run ended before an answer. */
+  | { type: "resolved"; request_id: Id; expired: boolean }
+  | { type: "mcp_server"; status: McpServerStatus };
+
+export interface ToolSnapshot {
+  approvals: ApprovalPrompt[];
+  servers: McpServerStatus[];
+}
 
 export type ApprovalDecision = "approve" | "approve_for_conversation" | "deny";
 
@@ -166,6 +183,8 @@ export interface ModelCatalog {
   local_models: LocalModelPlaceholder[];
   key_store: string;
   settings: Settings;
+  /** The model chat uses now (chosen or picked automatically); null if none is usable. */
+  chat_model: string | null;
 }
 
 export interface AppInfo {

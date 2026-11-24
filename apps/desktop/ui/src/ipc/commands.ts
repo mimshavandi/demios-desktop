@@ -5,8 +5,8 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
   AppInfo,
   ApprovalDecision,
-  ApprovalEvent,
-  ApprovalPrompt,
+  ToolEvent,
+  ToolSnapshot,
   UnknownOutcome,
   ChatEvent,
   Conversation,
@@ -37,7 +37,7 @@ interface Commands {
   set_provider_key: { args: { providerId: string; apiKey: string }; ret: ModelCatalog };
   delete_provider_key: { args: { providerId: string }; ret: ModelCatalog };
   restore_provider_key: { args: { providerId: string }; ret: ModelCatalog };
-  watch_approvals: { args: { onEvent: Channel<ApprovalEvent> }; ret: ApprovalPrompt[] };
+  watch_tools: { args: { onEvent: Channel<ToolEvent> }; ret: ToolSnapshot };
   respond_approval: { args: { requestId: Id; decision: ApprovalDecision }; ret: null };
   list_unknown_outcomes: { args: { conversationId: Id | null }; ret: UnknownOutcome[] };
   resolve_unknown_outcome: { args: { key: string; happened: boolean }; ret: null };
@@ -76,8 +76,8 @@ export const api = {
     call("set_provider_key", { providerId, apiKey }),
   deleteProviderKey: (providerId: string) => call("delete_provider_key", { providerId }),
   restoreProviderKey: (providerId: string) => call("restore_provider_key", { providerId }),
-  watchApprovals: (onEvent: (ev: ApprovalEvent) => void) =>
-    call("watch_approvals", { onEvent: channel(onEvent) }),
+  watchTools: (onEvent: (ev: ToolEvent) => void) =>
+    call("watch_tools", { onEvent: channel(onEvent) }),
   respondApproval: (requestId: Id, decision: ApprovalDecision) =>
     call("respond_approval", { requestId, decision }),
   listUnknownOutcomes: (conversationId: Id | null) =>

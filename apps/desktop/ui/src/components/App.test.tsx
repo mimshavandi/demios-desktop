@@ -2,13 +2,13 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, describe, expect, it } from "vitest";
 import type { Api } from "../ipc/commands";
 import type {
-  ApprovalEvent,
   ApprovalPrompt,
   ChatEvent,
   Conversation,
   ModelCatalog,
   Settings,
   StoredMessage,
+  ToolEvent,
   UnknownOutcome,
 } from "../ipc/types";
 import { App } from "./App";
@@ -19,7 +19,7 @@ afterEach(cleanup);
 function fakeApi() {
   const convs: Conversation[] = [];
   const trash: Conversation[] = [];
-  let approvalSink: ((e: ApprovalEvent) => void) | null = null;
+  let approvalSink: ((e: ToolEvent) => void) | null = null;
   const responses: [string, string][] = [];
   const resolved: [string, boolean][] = [];
   const unknowns: UnknownOutcome[] = [];
@@ -51,6 +51,7 @@ function fakeApi() {
     local_models: [],
     key_store: "memory",
     settings,
+    chat_model: null,
   });
   const api: Api = {
     appInfo: async () => ({ version: "0.1.0", dev_fake_model: true, data_dir: "/tmp" }),
@@ -97,9 +98,9 @@ function fakeApi() {
     setProviderKey: async () => catalog(),
     deleteProviderKey: async () => catalog(),
     restoreProviderKey: async () => catalog(),
-    watchApprovals: async (onEvent) => {
+    watchTools: async (onEvent) => {
       approvalSink = onEvent;
-      return [];
+      return { approvals: [], servers: [] };
     },
     respondApproval: async (requestId, decision) => {
       responses.push([requestId, decision]);
@@ -116,7 +117,7 @@ function fakeApi() {
     api,
     emit: (ev: ChatEvent) => listener?.(ev),
     msgs,
-    approve: (e: ApprovalEvent) => approvalSink?.(e),
+    approve: (e: ToolEvent) => approvalSink?.(e),
     responses,
     resolved,
     unknowns,
@@ -239,6 +240,10 @@ describe("App", () => {
     expect(screen.getByText("Changes local data")).toBeTruthy();
     expect(screen.getByRole("button", { name: /Always allow in this chat/ })).toBeTruthy();
     expect(f.responses).toEqual([]);
+    // Keys in the first 500 ms after the card appears are ignored.
+    fireEvent.keyDown(card, { key: "Enter", metaKey: true, ctrlKey: true });
+    expect(f.responses).toEqual([]);
+    await act(() => new Promise((r) => setTimeout(r, 550)));
     // ⌘↵ / Ctrl+↵ allows once.
     fireEvent.keyDown(card, { key: "Enter", metaKey: true, ctrlKey: true });
     await waitFor(() => expect(f.responses).toEqual([["r-low_write", "approve"]]));
@@ -248,6 +253,7 @@ describe("App", () => {
     act(() => f.approve({ type: "requested", prompt: prompt("destructive") }));
     const card2 = await screen.findByTestId("approval-card");
     expect(screen.queryByRole("button", { name: /Always allow in this chat/ })).toBeNull();
+    await act(() => new Promise((r) => setTimeout(r, 550)));
     fireEvent.keyDown(card2, { key: "Escape" });
     await waitFor(() => expect(f.responses[1]).toEqual(["r-destructive", "deny"]));
   });
@@ -302,5 +308,70 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: /write_file/ }));
     expect(await screen.findByText("Wrote 1 file.")).toBeTruthy();
     expect(screen.getByText("Saved.")).toBeTruthy();
+  });
+
+  it("never approves when the user is typing in the composer as a card appears", async () => {
+    const f = fakeApi();
+    const c = await f.api.createConversation();
+    render(<App api={f.api} />);
+    const box = (await screen.findByLabelText("Message")) as HTMLTextAreaElement;
+    box.focus();
+    fireEvent.change(box, { target: { value: "next message" } });
+    act(() =>
+      f.approve({
+        type: "requested",
+        prompt: {
+          request_id: "r1",
+          scope: `conv:${c.id}`,
+          capability_id: "mcp.files.write_file",
+          title: "Write to notes/todo.md",
+          description: "",
+          risk: "low_write",
+          policy: "ask_once_per_conversation",
+          arguments: { path: "notes/todo.md" },
+        },
+      }),
+    );
+    await screen.findByTestId("approval-card");
+    expect(document.activeElement).toBe(box);
+    fireEvent.keyDown(box, { key: "Enter", metaKey: true, ctrlKey: true });
+    await act(() => new Promise((r) => setTimeout(r, 50)));
+    expect(f.responses).toEqual([]);
+    expect(screen.getByTestId("approval-card")).toBeTruthy();
+    expect(await screen.findByText("Approval needed: Write to notes/todo.md")).toBeTruthy();
+  });
+
+  it("tells the user when an approval expired and when a tool server failed", async () => {
+    const f = fakeApi();
+    const c = await f.api.createConversation();
+    render(<App api={f.api} />);
+    await screen.findByRole("button", { name: "New chat" });
+    act(() =>
+      f.approve({
+        type: "requested",
+        prompt: {
+          request_id: "r2",
+          scope: `conv:${c.id}`,
+          capability_id: "mcp.files.write_file",
+          title: "Write",
+          description: "",
+          risk: "low_write",
+          policy: "always_ask",
+          arguments: {},
+        },
+      }),
+    );
+    await screen.findByTestId("approval-card");
+    act(() => f.approve({ type: "resolved", request_id: "r2", expired: true }));
+    expect(await screen.findByText(/approval request expired/)).toBeTruthy();
+    expect(screen.queryByTestId("approval-card")).toBeNull();
+
+    act(() =>
+      f.approve({
+        type: "mcp_server",
+        status: { server_id: "fs", name: "Files", state: "failed", message: "It didn't start.", tools: 0 },
+      }),
+    );
+    expect(await screen.findByText("Files couldn't connect. It didn't start.")).toBeTruthy();
   });
 });

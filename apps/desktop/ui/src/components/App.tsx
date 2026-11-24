@@ -10,6 +10,7 @@ import {
   type ChatEvent,
   type Conversation,
   type Id,
+  type McpServerStatus,
   type ModelCatalog,
   type UnknownOutcome,
 } from "../ipc/types";
@@ -70,8 +71,12 @@ function Shell({ api }: { api: Api }) {
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const [approvals, setApprovals] = useState<ApprovalPrompt[]>([]);
   const [unknowns, setUnknowns] = useState<UnknownOutcome[]>([]);
+  const [servers, setServers] = useState<McpServerStatus[]>([]);
   const openIdRef = useRef<Id | null>(null);
+  const announceRef = useRef<((msg: string) => void) | null>(null);
+  const shownApprovals = useRef<Set<Id>>(new Set());
   openIdRef.current = chat.conversationId;
+  shownApprovals.current = new Set(approvals.map((a) => a.request_id));
 
   const devFake = info?.dev_fake_model ?? false;
   const ready = chatModelReady(catalog, devFake);
@@ -101,7 +106,9 @@ function Shell({ api }: { api: Api }) {
         return;
       }
       try {
-        setUnknowns(await api.listUnknownOutcomes(id));
+        const list = await api.listUnknownOutcomes(id);
+        setUnknowns(list);
+        if (list.length > 0) announceRef.current?.("A tool call needs checking: did it go through?");
       } catch {
         setUnknowns([]);
       }
@@ -131,23 +138,38 @@ function Shell({ api }: { api: Api }) {
     [api, refreshUnknowns],
   );
 
-  // Tool approvals arrive on their own channel; cards show in their conversation.
+  // Tool events arrive on their own channel: approval cards show in their conversation,
+  // server status shows on the Models page (failures also as a toast).
   useEffect(() => {
     let alive = true;
     void api
-      .watchApprovals((ev) => {
+      .watchTools((ev) => {
         if (!alive) return;
-        if (ev.type === "requested") setApprovals((a) => [...a.filter((x) => x.request_id !== ev.prompt.request_id), ev.prompt]);
-        else setApprovals((a) => a.filter((x) => x.request_id !== ev.request_id));
+        if (ev.type === "requested") {
+          setApprovals((a) => [...a.filter((x) => x.request_id !== ev.prompt.request_id), ev.prompt]);
+          announceRef.current?.(`Approval needed: ${ev.prompt.title}`);
+        } else if (ev.type === "resolved") {
+          if (ev.expired && shownApprovals.current.has(ev.request_id)) {
+            toast({ tone: "warning", title: "An approval request expired, so the tool didn't run" });
+          }
+          setApprovals((a) => a.filter((x) => x.request_id !== ev.request_id));
+        } else {
+          setServers((list) => [...list.filter((x) => x.server_id !== ev.status.server_id), ev.status]);
+          if (ev.status.state === "failed") {
+            toast({ tone: "error", title: `${ev.status.name} couldn't connect. ${ev.status.message ?? ""}`.trim() });
+          }
+        }
       })
-      .then((pending) => {
-        if (alive) setApprovals(pending);
+      .then((snap) => {
+        if (!alive) return;
+        setApprovals(snap.approvals);
+        setServers(snap.servers);
       })
       .catch(() => {});
     return () => {
       alive = false;
     };
-  }, [api]);
+  }, [api, toast]);
 
   useEffect(() => {
     void (async () => {
@@ -167,6 +189,13 @@ function Shell({ api }: { api: Api }) {
       }
     })();
   }, [api, open, refreshCatalog]);
+
+  const say = useCallback((msg: string) => {
+    // Clear first so the same words are announced again.
+    setAnnounce("");
+    window.setTimeout(() => setAnnounce(msg), 50);
+  }, []);
+  announceRef.current = say;
 
   const onEvent = useCallback(
     (event: ChatEvent) => {
@@ -443,6 +472,7 @@ function Shell({ api }: { api: Api }) {
             section={view.section}
             onSection={goSettings}
             onCatalog={setCatalog}
+            servers={servers}
           />
         )}
       </main>

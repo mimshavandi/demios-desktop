@@ -39,6 +39,11 @@ interface Props {
   onResolveUnknown: (key: string, happened: boolean) => Promise<void>;
 }
 
+interface ToolResult {
+  text: string;
+  isError: boolean;
+}
+
 const EXAMPLES = [
   "Explain how a hash map works, with a short Rust example",
   "Draft a polite reply declining a meeting",
@@ -78,9 +83,11 @@ export function ChatView(p: Props) {
 
   const empty = !p.loading && p.state.messages.length === 0;
   // Tool results are shown inside their call's card, not as messages.
-  const results = new Map<string, string>();
+  const results = new Map<string, ToolResult>();
   for (const m of p.state.messages) {
-    if (m.role === "tool" && m.tool_call_id !== null) results.set(m.tool_call_id, messageText(m));
+    if (m.role === "tool" && m.tool_call_id !== null) {
+      results.set(m.tool_call_id, { text: messageText(m), isError: m.status === "error" });
+    }
   }
 
   return (
@@ -233,7 +240,7 @@ function Message({
   canRetry: boolean;
   onRetry: () => void;
   live: LiveToolCall[];
-  results: Map<string, string>;
+  results: Map<string, ToolResult>;
 }) {
   const toast = useToast();
   const text = messageText(m);
@@ -244,8 +251,10 @@ function Message({
           call_id: c.id,
           name: c.name,
           arguments: c.arguments,
-          status: results.has(c.id) ? ("done" as const) : ("error" as const),
-          summary: results.get(c.id) ?? "",
+          // No stored result means the call never finished.
+          status:
+            results.get(c.id)?.isError === false ? ("done" as const) : ("error" as const),
+          summary: results.get(c.id)?.text ?? "",
         }))
       : live;
   if (m.role === "user") {

@@ -34,9 +34,17 @@ export function RiskBadge({ risk }: { risk: RiskTier }) {
   );
 }
 
+/** JSON for display, with invisible and control characters (bidi overrides, zero-width
+ * marks, C0/C1) shown as `\u{…}` escapes, so what the user reads is what the tool gets. */
+export function showArgs(value: unknown): string {
+  const text = JSON.stringify(value ?? {}, null, 2) ?? "null";
+  return text.replace(/[\p{Cc}\p{Cf}]/gu, (c) =>
+    c === "\n" ? c : `\\u{${(c.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, "0")}}`,
+  );
+}
+
 function Args({ value }: { value: unknown }) {
-  const text = JSON.stringify(value ?? {}, null, 2);
-  return <pre className="tool-args">{text}</pre>;
+  return <pre className="tool-args">{showArgs(value)}</pre>;
 }
 
 export type ToolCallStatus = "running" | "done" | "error";
@@ -108,6 +116,8 @@ export function ToolCallCard({
   );
 }
 
+export const KEY_GUARD_MS = 500;
+
 export function ApprovalCard({
   prompt,
   onDecide,
@@ -117,15 +127,24 @@ export function ApprovalCard({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [busy, setBusy] = useState<ApprovalDecision | null>(null);
+  // Keys pressed in the first moments after the card appears were meant for whatever the
+  // user was doing (e.g. ⌘↵ in the composer); they never decide.
+  const mountedAt = useRef(Date.now());
   const canRemember =
     prompt.policy === "ask_once_per_conversation" &&
     prompt.risk !== "destructive" &&
     prompt.risk !== "sensitive";
   const titleId = `approval-${prompt.request_id}`;
 
-  // The approval is the next thing to act on: take focus (design-system §7).
+  // Take focus only when the user isn't typing: never pull focus out of the composer (or
+  // any field) mid-message. The live region announces the card either way.
   useEffect(() => {
-    ref.current?.focus();
+    const active = document.activeElement;
+    const typing =
+      active instanceof HTMLTextAreaElement ||
+      active instanceof HTMLInputElement ||
+      (active instanceof HTMLElement && active.isContentEditable);
+    if (!typing) ref.current?.focus();
   }, []);
 
   const decide = async (d: ApprovalDecision) => {
@@ -139,6 +158,9 @@ export function ApprovalCard({
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    // Only keys pressed inside this card, and not in its first half second.
+    if (!(e.target instanceof Node) || !e.currentTarget.contains(e.target)) return;
+    if (Date.now() - mountedAt.current < KEY_GUARD_MS) return;
     const m = isMac ? e.metaKey : e.ctrlKey;
     if (m && e.key === "Enter") {
       e.preventDefault();
