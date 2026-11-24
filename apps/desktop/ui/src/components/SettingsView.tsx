@@ -1,17 +1,19 @@
-import { Cpu, KeyRound } from "lucide-react";
+import { Cpu, KeyRound, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Api } from "../ipc/commands";
 import {
   errorMessage,
   type AppInfo,
+  type LocalDataSummary,
   type McpServerStatus,
   type ModelCatalog,
   type ProviderInfo,
   type Settings,
   type SlotInfo,
 } from "../ipc/types";
-import { Badge, Button, ICON, InlineMessage, Select, Skeleton, Switch, TextField, type SelectGroup } from "./primitives";
-import { LocalModelsCard } from "./LocalModels";
+import { Badge, Button, ICON, InlineMessage, Select, Skeleton, TextField, type SelectGroup } from "./primitives";
+import { ConfirmDialog } from "./ConfirmDialog";
+import { LocalModelsCard, formatBytes } from "./LocalModels";
 import { useToast } from "./toast";
 
 export type SettingsSection = "models" | "general";
@@ -137,11 +139,7 @@ export function SettingsView({ api, info, section, onSection, onCatalog, servers
           />
         )}
         {load.kind === "ready" && section === "general" && (
-          <GeneralPage
-            info={info}
-            settings={load.catalog.settings}
-            onSave={(next, what) => void save(load.catalog, next, what)}
-          />
+          <GeneralPage api={api} info={info} />
         )}
         </div>
       </div>
@@ -391,7 +389,7 @@ function ProviderRow({
         placeholder={provider.has_key ? "Paste a new key to replace it" : "Paste API key"}
         value={key}
         error={error}
-        help={provider.has_key ? "Key saved" : "No key yet"}
+        help={`${provider.has_key ? "Key saved." : "No key yet."} Messages in chats that use ${provider.name} models are sent to ${provider.name} under your account with them.`}
         onChange={(e) => {
           setKey(e.target.value);
           if (error !== null) setError(null);
@@ -416,25 +414,98 @@ function ProviderRow({
   );
 }
 
-function GeneralPage({
-  info,
-  settings,
-  onSave,
-}: {
-  info: AppInfo | null;
-  settings: Settings;
-  onSave: (s: Settings, what: string) => void;
-}) {
+function GeneralPage({ api, info }: { api: Api; info: AppInfo | null }) {
+  const toast = useToast();
+  const [confirming, setConfirming] = useState(false);
+  const [summary, setSummary] = useState<LocalDataSummary | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+
+  const openConfirm = async () => {
+    setDeleteError(null);
+    setSummary(null);
+    setConfirming(true);
+    try {
+      setSummary(await api.localDataSummary());
+    } catch (e) {
+      setDeleteError(`Couldn't check what is stored. ${errorMessage(e)}`);
+    }
+  };
+
+  const deleteAll = async () => {
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await api.deleteAllLocalData();
+      setConfirming(false);
+      toast({ tone: "success", title: "All local data deleted" });
+      // Start over with an empty app (also drops anything the window kept in memory).
+      window.setTimeout(() => window.location.reload(), 600);
+    } catch (e) {
+      setDeleteError(errorMessage(e));
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const dataDir = summary?.data_dir ?? info?.data_dir ?? null;
+  const modelsDir = summary?.models_dir ?? info?.models_dir ?? null;
+
   return (
     <>
       <section className="card" aria-labelledby="privacy-h">
         <h2 id="privacy-h">Privacy</h2>
-        <Switch
-          label="Share anonymous usage statistics"
-          description="Off by default. This build collects nothing either way."
-          checked={settings.telemetry_enabled}
-          onCheckedChange={(v) => onSave({ ...settings, telemetry_enabled: v }, "Usage statistics setting")}
-        />
+        <p className="dn-help">Demios collects no usage data. There is no Demios account and no Demios server.</p>
+        <h3 id="data-flow-h" className="card-subhead">
+          Where your data goes
+        </h3>
+        <ul className="data-flow" aria-labelledby="data-flow-h">
+          <li>
+            <span className="row-title">On this computer</span>
+            <span className="dn-help">
+              Chats and settings are stored in {info?.data_dir ?? "the app data folder"}. Provider keys and sign-ins are
+              kept in your system keychain. Local models answer without sending anything off this computer.
+            </span>
+          </li>
+          <li>
+            <span className="row-title">Model providers you add a key for</span>
+            <span className="dn-help">
+              Messages in chats that use a provider's models are sent to that provider under your account with them, and
+              their terms apply.
+            </span>
+          </li>
+          <li>
+            <span className="row-title">Hugging Face</span>
+            <span className="dn-help">Downloading a model fetches it from Hugging Face. Your chats are never sent there.</span>
+          </li>
+          <li>
+            <span className="row-title">Tool servers (MCP)</span>
+            <span className="dn-help">
+              A tool server you add receives what its tools are asked to do, which can include text from your chat.
+              Read-only tools run without asking. Tools that change something ask for your approval first, unless you
+              allowed that tool for the chat.
+            </span>
+          </li>
+        </ul>
+        <div className="row">
+          <div className="row-main">
+            <span className="row-title">Delete all local data</span>
+            <span className="dn-help">
+              Chats, settings, tool history, downloaded models, and the keys and sign-ins Demios saved in your keychain.
+            </span>
+          </div>
+          <div className="row-actions">
+            <Button
+              ref={triggerRef}
+              variant="danger"
+              icon={<Trash2 {...ICON} aria-hidden="true" />}
+              onClick={() => void openConfirm()}
+            >
+              Delete all local data
+            </Button>
+          </div>
+        </div>
       </section>
       <section className="card" aria-labelledby="about-h">
         <h2 id="about-h">About</h2>
@@ -442,9 +513,47 @@ function GeneralPage({
           <div className="row-main">
             <span className="row-title">Demios Desktop {info?.version ?? ""}</span>
             <span className="dn-help">Your chats are stored in {info?.data_dir ?? "the app data folder"}</span>
+            {info?.models_dir != null && <span className="dn-help">Downloaded models are stored in {info.models_dir}</span>}
           </div>
         </div>
       </section>
+      <ConfirmDialog
+        open={confirming}
+        onOpenChange={(o) => {
+          if (!deleting) setConfirming(o);
+        }}
+        title="Delete all local data?"
+        confirmLabel="Delete all data"
+        busy={deleting}
+        ready={summary !== null}
+        error={deleteError}
+        onConfirm={() => void deleteAll()}
+        returnFocusTo={triggerRef}
+      >
+        <p>This deletes from this computer:</p>
+        <ul aria-busy={summary === null || undefined}>
+          <li>
+            The database{dataDir !== null ? ` in ${dataDir}` : ""}:{" "}
+            {summary === null
+              ? "every chat"
+              : `${summary.conversations} ${summary.conversations === 1 ? "chat" : "chats"}`}
+            {" "}(and recently deleted ones), settings and tool history
+          </li>
+          <li>
+            Downloaded models{modelsDir !== null ? ` in ${modelsDir}` : ""}
+            {summary !== null && (summary.models_bytes > 0 ? ` (${formatBytes(summary.models_bytes)})` : " (none)")}, also
+            the ones the <code>dn</code> command-line tool uses
+          </li>
+          <li>
+            Keys in your system keychain
+            {summary !== null && (summary.keychain.length > 0 ? `: ${summary.keychain.join(", ")}` : ": none saved")}
+          </li>
+          <li>App storage of this window</li>
+        </ul>
+        <p>
+          <strong>This can't be undone.</strong> Your accounts with providers are not affected.
+        </p>
+      </ConfirmDialog>
     </>
   );
 }

@@ -40,6 +40,7 @@ Every direct dependency is listed here with why and its licence (ADR-0009). Appr
 | dompurify | sanitises rendered model output | MPL-2.0 OR Apache-2.0 | T-SHELL-01 |
 | highlight.js (core + 13 languages) | code highlighting | BSD-3-Clause | T-SHELL-01 |
 | @radix-ui/react-{tooltip,switch,select,toast} | headless primitives required by the design standard (D-014, §4) | MIT | T-SHELL-01 |
+| @radix-ui/react-alert-dialog | shared confirm for irreversible actions (design-system §4 Dialog, alert variant; lead approved 2026-11-24) | MIT | T-STORE-11 |
 | lucide-react | icons, 16 px / 1.5 stroke (design standard §4) | ISC | T-SHELL-01 |
 | dev: typescript 7, vite 8, @vitejs/plugin-react, vitest, @testing-library/react, jsdom, @types/react(-dom), @types/node 22, @tauri-apps/cli ~2.11 | strict typecheck, build, unit tests, `tauri dev/build` | MIT / Apache-2.0 | T-SHELL-01 |
 

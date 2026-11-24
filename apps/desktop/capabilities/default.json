@@ -7,6 +7,8 @@
   ],
   "permissions": [
     "allow-app-info",
+    "allow-delete-all-local-data",
+    "allow-local-data-summary",
     "allow-list-conversations",
     "allow-create-conversation",
     "allow-rename-conversation",

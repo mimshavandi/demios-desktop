@@ -226,6 +226,18 @@ export interface AppInfo {
   version: string;
   dev_fake_model: boolean;
   data_dir: string | null;
+  /** Where downloaded models live (shared with the `dn` CLI). */
+  models_dir: string | null;
+}
+
+/** What "Delete all local data" removes (confirm dialog). */
+export interface LocalDataSummary {
+  conversations: number;
+  data_dir: string | null;
+  models_dir: string | null;
+  models_bytes: number;
+  /** Keychain entries in the user's words ("OpenAI key", "Hugging Face token", …). */
+  keychain: string[];
 }
 
 export interface IpcError {
