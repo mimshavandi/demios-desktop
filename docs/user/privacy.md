@@ -9,7 +9,7 @@ Demios collects no usage data. There is no Demios account and no Demios server.
 - **On this computer.** Chats and settings are stored in a database in the app's data folder. Provider keys are kept in your system keychain. Models on this device answer without sending anything off your computer.
 - **Model providers you add a key for.** Messages in chats that use a provider's model are sent to that provider under your account with them, and their terms apply.
 - **Hugging Face.** Downloading a model fetches it from Hugging Face. Your chats are never sent there.
-- **Tool servers (MCP).** A tool server receives what its tools are asked to do, which can include text from your chat. Adding tool servers isn't in the app yet; see [Tools and approvals](tools-and-approvals.md).
+- **Tool servers (MCP).** A tool server receives what its tools are asked to do, which can include text from your chat. See [Tools and approvals](tools-and-approvals.md).
 
 **Settings → General → About** shows the exact folders for your chats and for downloaded models. The confirmation for **Delete all local data** shows them too.
 
