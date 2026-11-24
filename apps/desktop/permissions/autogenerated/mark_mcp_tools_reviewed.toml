@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-mark-mcp-tools-reviewed"
+description = "Enables the mark_mcp_tools_reviewed command without any pre-configured scope."
+commands.allow = ["mark_mcp_tools_reviewed"]
+
+[[permission]]
+identifier = "deny-mark-mcp-tools-reviewed"
+description = "Denies the mark_mcp_tools_reviewed command without any pre-configured scope."
+commands.deny = ["mark_mcp_tools_reviewed"]

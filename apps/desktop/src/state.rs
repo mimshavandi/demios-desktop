@@ -127,6 +127,8 @@ pub struct McpServerStatus {
     /// User-facing reason when `failed` or `needs_auth`.
     pub message: Option<String>,
     pub tools: usize,
+    /// Tools that are new or changed since they were reviewed (they always ask meanwhile).
+    pub review: usize,
 }
 
 /// What the UI gets when it subscribes.
@@ -187,6 +189,8 @@ pub struct AppState {
     pub hub_pulls: Arc<crate::hub::HubPulls>,
     /// Asks before a local MCP server starts (native dialog in the app; tests set a fake).
     pub launch_approver: std::sync::OnceLock<Arc<dyn crate::mcp::LaunchApprover>>,
+    /// Servers whose tools are hidden from the model while they connect (T-SHELL-11).
+    pub tools_settling: Arc<crate::tool_review::Settling>,
 }
 
 /// A reserved generation slot. Dropping it without [`Reservation::into_parts`] releases
@@ -241,6 +245,7 @@ impl AppState {
             local_servers: crate::mcp::local_servers_allowed(),
             hub_pulls: Default::default(),
             launch_approver: std::sync::OnceLock::new(),
+            tools_settling: Default::default(),
         }
     }
 
@@ -290,9 +295,11 @@ impl AppState {
         }
         let keys = Keys::os_keychain();
         let agent = Agent::load(skills);
+        let settling: Arc<crate::tool_review::Settling> = Default::default();
         let tools = Arc::new(crate::agent::ManifestTools {
             executor: Arc::clone(&executor),
             manifest: agent.manifest.clone(),
+            settling: Arc::clone(&settling),
         });
         let mut models = ModelRegistry::with_builtin();
         models.local = Some(crate::local::LocalModels::open());
@@ -300,6 +307,7 @@ impl AppState {
         state.agent = agent;
         state.tools = tools;
         state.executor = Some(Arc::clone(&executor));
+        state.tools_settling = settling;
         if let Some(a) = launch_approver {
             let _ = state.launch_approver.set(a);
         }
@@ -329,6 +337,7 @@ impl AppState {
                 state: "connecting",
                 message: None,
                 tools: 0,
+                review: 0,
             });
         }
         let state = Arc::clone(self);
@@ -478,6 +487,7 @@ impl AppState {
         let before = mcp_secret_ids(&settings.mcp_servers);
         let after = mcp_secret_ids(&servers);
         settings.mcp_servers = servers;
+        crate::tool_review::forget_removed(&mut settings);
         self.save_settings(&settings)?;
         for id in before.iter().filter(|id| !after.contains(id)) {
             self.keys.store.delete(&dn_secrets::SecretId::mcp(id))?;
@@ -774,6 +784,23 @@ impl AppState {
         self.emit_approval(ToolEvent::McpServer { status });
     }
 
+    /// Updates the "to review" count of a connected server's status.
+    pub fn set_mcp_review_count(&self, server_id: &str, review: usize) {
+        let updated = {
+            let mut all = lock(&self.mcp_status);
+            match all.get_mut(server_id) {
+                Some(st) if st.review != review => {
+                    st.review = review;
+                    Some(st.clone())
+                }
+                _ => None,
+            }
+        };
+        if let Some(status) = updated {
+            self.emit_approval(ToolEvent::McpServer { status });
+        }
+    }
+
     pub fn mcp_statuses(&self) -> std::collections::BTreeMap<String, McpServerStatus> {
         lock(&self.mcp_status).clone()
     }
@@ -801,6 +828,7 @@ impl AppState {
             state,
             message,
             tools,
+            review: 0,
         };
         // Connect only what is saved now: the server may have been removed or edited while
         // this was waiting (a save's background connect, a sign-in).
@@ -844,6 +872,9 @@ impl AppState {
                 return true;
             }
         };
+        // Hidden from the model until the review policy below is applied, so a tool that
+        // changed since it was reviewed can't auto-run in between.
+        let _settling = self.tools_settling.hold(&id);
         let Some(added) = self
             .add_mcp_server_if_current(executor, client, epoch)
             .await
@@ -851,7 +882,21 @@ impl AppState {
             return false;
         };
         match added {
-            Ok(caps) => self.set_mcp_status(status("connected", None, caps.len())),
+            Ok(caps) => match self.apply_tool_policy(executor, Some(&id)) {
+                Ok(review) => self.set_mcp_status(McpServerStatus {
+                    review,
+                    ..status("connected", None, caps.len())
+                }),
+                Err(e) => {
+                    eprintln!("could not apply tool settings for `{id}`: {}", e.message);
+                    executor.remove_server(&id).await;
+                    self.set_mcp_status(status(
+                        "failed",
+                        Some("Couldn't load its tool settings. Use Reconnect to try again.".into()),
+                        0,
+                    ));
+                }
+            },
             Err(e) => {
                 let needs_auth = executor
                     .client(&id)
@@ -1340,6 +1385,7 @@ mod tests {
             state: "failed",
             message: None,
             tools: 0,
+            review: 0,
         });
 
         assert!(st.delete_all_local_data().await.is_empty());

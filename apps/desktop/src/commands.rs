@@ -255,8 +255,8 @@ pub async fn update_settings(
     mut settings: Settings,
 ) -> IpcResult<Settings> {
     blocking(&state, move |s| {
-        // No screen edits MCP servers yet; never let a settings save drop them.
-        settings.mcp_servers = s.settings()?.mcp_servers;
+        // Servers and tool choices have their own commands; a settings save keeps them.
+        settings.keep_managed(s.settings()?);
         s.save_settings(&settings)?;
         s.settings()
     })
@@ -581,6 +581,7 @@ pub async fn sign_out_mcp_server(
         state: "needs_auth",
         message: Some("Signed out. Sign in to use this server's tools.".into()),
         tools: 0,
+        review: 0,
     });
     blocking(&state, |s| s.mcp_servers_view()).await
 }
@@ -612,6 +613,7 @@ pub async fn sign_in_mcp_server(
             state,
             message,
             tools: 0,
+            review: 0,
         })
     };
     set(
@@ -684,6 +686,43 @@ pub async fn sign_in_mcp_server(
             Err(e)
         }
     }
+}
+
+// ---- each server's tools (T-SHELL-11)
+
+#[tauri::command]
+pub async fn list_mcp_tools(
+    state: AppStateRef<'_>,
+    server_id: String,
+) -> IpcResult<crate::tool_review::ServerToolsView> {
+    blocking(&state, move |s| s.mcp_tools_view(&server_id)).await
+}
+
+/// Saves the user's choice for one tool ("always ask", "off", ...) and applies it now.
+#[tauri::command]
+pub async fn set_mcp_tool_choice(
+    state: AppStateRef<'_>,
+    server_id: String,
+    tool: String,
+    choice: crate::tool_review::ToolChoice,
+) -> IpcResult<crate::tool_review::ServerToolsView> {
+    blocking(&state, move |s| {
+        s.set_mcp_tool_choice(&server_id, &tool, choice)
+    })
+    .await
+}
+
+/// Marks new or changed tools as reviewed, so they follow their usual approval again.
+#[tauri::command]
+pub async fn mark_mcp_tools_reviewed(
+    state: AppStateRef<'_>,
+    server_id: String,
+    tools: Vec<crate::tool_review::Reviewed>,
+) -> IpcResult<crate::tool_review::ServerToolsView> {
+    blocking(&state, move |s| {
+        s.mark_mcp_tools_reviewed(&server_id, &tools)
+    })
+    .await
 }
 
 // ---- add a model from Hugging Face (T-INF-10)

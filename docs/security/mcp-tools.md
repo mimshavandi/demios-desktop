@@ -60,8 +60,15 @@ results, or changes its tool list after approval ("rug pull").*
   (`Executor::recent_diagnostics`, capped): it can carry injected text and would otherwise be
   sent to a remote model provider.
 - `refresh` rebuilds a server's capabilities from scratch; overrides are keyed by capability id
-  and re-applied. **Open item:** surface a diff to the user when a refreshed tool's schema or
-  annotations change (tool-definition pinning), before it can auto-run again.
+  and re-applied. The app pins tool definitions (T-SHELL-11): a server's first connect records
+  a SHA-256 of each tool (name, title, description, schemas, annotations). On every later
+  connect a tool that is missing from that record, or whose hash differs, is shown as new or
+  changed and gets "always ask", overriding the user's choice, until the user marks that
+  version reviewed. While a server connects, its tools are hidden from the model, so a changed
+  tool can't auto-run between listing and pinning. The settings screen shows each tool's
+  description as plain text (control, bidi and zero-width characters removed), its seeded
+  tier, and a per-tool choice saved in settings. Without `tools/list_changed` support in
+  dn-tools, a change made while the server stays connected is caught at the next connect.
 - Stdio servers run as the user with the user's permissions; dn-tools does not sandbox them.
   The child starts with a **cleared environment** plus an allow-list (`PATH`, `HOME`, `USER`,
   `LOGNAME`, `LANG`, `LC_*`, `TMPDIR`; on Windows `SystemRoot`, `windir`, `APPDATA`,

@@ -41,6 +41,20 @@ Each tool is put in a risk group from what its server says about it. A remote se
 | Can delete or overwrite | Can destroy data | Yes, every time |
 | Sensitive | Touches sensitive data | Yes, every time |
 
+## See and change each tool
+
+Select **Tools** on a server's row to list its tools. Each shows:
+
+- its name and the description the server gives it. Descriptions are shown as plain text, exactly as the model reads them; a server can use them to slip instructions to the model, so read them.
+- **Server says:** the risk group from the server's own description of the tool.
+- **Now:** whether it runs without asking, asks once per chat, asks every time, or is off.
+
+Under **When a model uses it**, choose **Ask every time**, **Ask once per chat**, **Run without asking** or **Off**, or **Follow its risk tier** to go back to the default. Your choice is kept and applied every time the server connects.
+
+### New or changed tools
+
+Demios remembers each server's tools as they were when it first connected. If a server later adds a tool, or changes one's description, inputs or risk hints, the tool is marked **New** or **Changed**, the row shows how many tools are **to review**, and those tools ask before every use, whatever your choice. Read what changed, then select **Mark reviewed** (or **Mark all reviewed**).
+
 ## The approval card
 
 When a tool needs your OK, a card appears in the chat. It shows what the tool will do, its risk badge, and the exact arguments it will receive. Then choose:
