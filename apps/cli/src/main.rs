@@ -710,12 +710,26 @@ async fn hub_pull(
     Ok(())
 }
 
+fn fit_label(f: Option<&dn_models::hub::Estimated<dn_models::FitReport>>) -> String {
+    match f {
+        None => "fit unknown".into(),
+        Some(e) => format!(
+            "{}{}",
+            status_label(e.value.status),
+            if e.estimated { ", estimated" } else { "" }
+        ),
+    }
+}
+
 async fn open_link(link: &str, dir: Option<PathBuf>) -> Result<(), String> {
     use dn_models::link::{AddModelLink, PlanWarning};
     use std::io::{BufRead, IsTerminal};
     let l = AddModelLink::parse(link).map_err(|e| e.to_string())?;
     let hub = hub_client().await?;
-    let plan = l.resolve(&hub).await.map_err(|e| e.to_string())?;
+    let plan = l
+        .resolve(&hub, &machine(None, None, false))
+        .await
+        .map_err(|e| e.to_string())?;
     println!("{} @ {}", plan.info.id, plan.info.sha);
     println!("{}", license_line(&plan.info.license, &plan.info.card_url));
     for w in &plan.warnings {
@@ -724,22 +738,23 @@ async fn open_link(link: &str, dir: Option<PathBuf>) -> Result<(), String> {
                 println!("⚠ gated: needs your Hugging Face token and accepted terms")
             }
             PlanWarning::Unverifiable => println!("⚠ no sha256 on the Hub: cannot be downloaded"),
+            PlanWarning::FitUnknown => println!("⚠ couldn't read the GGUF header: no fit status"),
             PlanWarning::License(_) => {}
         }
     }
     let Some(v) = plan.selected_variant() else {
         println!("\nthe link doesn't pick one variant; choose with:");
-        for v in plan
-            .variants
-            .iter()
-            .filter(|v| v.kind == VariantKind::Model)
-        {
+        for (v, fit) in plan.variants.iter().zip(&plan.fits) {
+            if v.kind != VariantKind::Model {
+                continue;
+            }
             println!(
-                "  dn models pull {} --variant {} --revision {}   ({:.2} GB)",
+                "  dn models pull {} --variant {} --revision {}   ({:.2} GB, {})",
                 plan.info.id,
                 v.name,
                 plan.info.sha,
-                v.total_size as f64 / 1e9
+                v.total_size as f64 / 1e9,
+                fit_label(fit.as_ref())
             );
         }
         return Ok(());
@@ -750,6 +765,7 @@ async fn open_link(link: &str, dir: Option<PathBuf>) -> Result<(), String> {
         v.total_size as f64 / 1e9,
         v.files.len()
     );
+    println!("fit on this machine: {}", fit_label(plan.selected_fit()));
     if plan.warnings.contains(&PlanWarning::Unverifiable) {
         return Err("refusing: a file has no sha256".into());
     }
