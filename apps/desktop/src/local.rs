@@ -18,6 +18,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 
+/// The catalogue id in `local:<id>`, if `model` is a local model.
+pub fn catalogue_id(model: &ModelRef) -> Option<&str> {
+    match model {
+        ModelRef::Local { model_id } => Some(model_id.as_str()),
+        _ => None,
+    }
+}
+
 /// Where a catalogue model is (design-system §4, Download row).
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
@@ -129,6 +137,15 @@ impl<B: InferenceBackend> Resident<B> {
     pub fn new(model: LoadedModel<B>) -> Self {
         Self { model: Some(model) }
     }
+
+    /// Unloads now and waits for it (used when nothing else holds the model).
+    pub async fn unload_now(mut self) {
+        if let Some(m) = self.model.take()
+            && let Err(e) = m.unload().await
+        {
+            eprintln!("could not unload a local model: {e}");
+        }
+    }
 }
 
 impl<B: InferenceBackend> ChatModel for Resident<B> {
@@ -152,7 +169,7 @@ impl<B: InferenceBackend> Drop for Resident<B> {
     }
 }
 
-pub struct LocalModels {
+pub struct LocalModels<B: InferenceBackend = LlamaCppBackend> {
     dir: PathBuf,
     catalog: Catalog,
     machine: Machine,
@@ -165,9 +182,9 @@ pub struct LocalModels {
     next_generation: AtomicU64,
     fetch: FetchFn,
     sink: Mutex<Option<Sink>>,
-    backend: Arc<LlamaCppBackend>,
+    backend: Arc<B>,
     /// The one local model the app holds (others may live on briefly in running replies).
-    loaded: tokio::sync::Mutex<Option<(String, Arc<Resident<LlamaCppBackend>>)>>,
+    loaded: tokio::sync::Mutex<Option<(String, Arc<Resident<B>>)>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -271,22 +288,13 @@ impl LocalModels {
     }
 
     pub fn with_fetch(dir: PathBuf, catalog: Catalog, machine: Machine, fetch: FetchFn) -> Self {
-        let lm = Self {
+        Self::with_parts(
             dir,
             catalog,
             machine,
-            state: Mutex::new(HashMap::new()),
-            fits: Mutex::new(HashMap::new()),
-            tasks: Mutex::new(HashMap::new()),
-            model_locks: Mutex::new(HashMap::new()),
-            next_generation: AtomicU64::new(1),
             fetch,
-            sink: Mutex::new(None),
-            backend: Arc::new(LlamaCppBackend::new()),
-            loaded: tokio::sync::Mutex::new(None),
-        };
-        lm.scan();
-        lm
+            Arc::new(LlamaCppBackend::new()),
+        )
     }
 
     /// The app's instance: built-in catalogue, shared models dir, this machine. Exact fits
@@ -299,6 +307,33 @@ impl LocalModels {
         ));
         let bg = Arc::clone(&lm);
         tauri::async_runtime::spawn_blocking(move || bg.refresh_exact_fits());
+        lm
+    }
+}
+
+impl<B: InferenceBackend> LocalModels<B> {
+    pub fn with_parts(
+        dir: PathBuf,
+        catalog: Catalog,
+        machine: Machine,
+        fetch: FetchFn,
+        backend: Arc<B>,
+    ) -> Self {
+        let lm = Self {
+            dir,
+            catalog,
+            machine,
+            state: Mutex::new(HashMap::new()),
+            fits: Mutex::new(HashMap::new()),
+            tasks: Mutex::new(HashMap::new()),
+            model_locks: Mutex::new(HashMap::new()),
+            next_generation: AtomicU64::new(1),
+            fetch,
+            sink: Mutex::new(None),
+            backend,
+            loaded: tokio::sync::Mutex::new(None),
+        };
+        lm.scan();
         lm
     }
 
@@ -458,8 +493,28 @@ impl LocalModels {
     /// Updates the row only while `generation` is still the model's running download, so a
     /// paused run's late progress never overwrites "Paused".
     fn set_if_current(&self, id: &str, generation: u64, s: DownloadState) {
-        if self.is_current(id, generation) {
-            self.set(id, s);
+        // Check and write under the tasks lock, so a pause can't slip in between.
+        {
+            let tasks = lock(&self.tasks);
+            if !tasks.get(id).is_some_and(|t| t.generation == generation) {
+                return;
+            }
+            lock(&self.state).insert(id.to_string(), s);
+        }
+        if let Some(e) = self.catalog.get(id) {
+            self.emit(e);
+        }
+    }
+
+    /// Ends `generation`'s registration if it is still the current run; returns whether it
+    /// was. Atomic, so a finishing old run can never remove a newer run's task.
+    fn finish_run(&self, id: &str, generation: u64) -> bool {
+        let mut tasks = lock(&self.tasks);
+        if tasks.get(id).is_some_and(|t| t.generation == generation) {
+            tasks.remove(id);
+            true
+        } else {
+            false
         }
     }
 
@@ -496,7 +551,9 @@ impl LocalModels {
                 return;
             }
             let result = this.run_download(&e, generation).await;
-            let current = this.is_current(&e.id, generation);
+            // Decided right here, with no await in between (an aborted run can still get
+            // this far if the abort lands after its last await).
+            let current = this.finish_run(&e.id, generation);
             match result {
                 Ok(_) => {
                     // A finished file is finished even if a pause raced it.
@@ -507,14 +564,10 @@ impl LocalModels {
                     if let Ok(Some(view)) = exact {
                         lock(&this.fits).insert(e.id.clone(), view);
                     }
-                    if current {
-                        lock(&this.tasks).remove(&e.id);
-                    }
                     this.set(&e.id, DownloadState::Ready);
                 }
                 Err(err) if current => {
                     eprintln!("download of `{}` failed: {err}", e.id);
-                    lock(&this.tasks).remove(&e.id);
                     this.set(
                         &e.id,
                         DownloadState::Failed {
@@ -646,9 +699,15 @@ impl LocalModels {
             let m: Arc<dyn ChatModel> = m.clone();
             return Ok(m);
         }
-        // Let go of the previous model first: if no reply holds it, it unloads now, before
-        // the new weights are read.
-        *loaded = None;
+        // Let go of the previous model first. If no reply holds it, unload it and wait, so
+        // its weights are freed before the new ones are read; otherwise it unloads when the
+        // last reply using it ends (Resident's Drop).
+        if let Some((_, old)) = loaded.take() {
+            match Arc::try_unwrap(old) {
+                Ok(idle) => idle.unload_now().await,
+                Err(in_use) => drop(in_use),
+            }
+        }
         let m = LoadedModel::load(
             Arc::clone(&self.backend),
             &ModelSpec::gguf(self.path(e)),
@@ -667,14 +726,6 @@ impl LocalModels {
         *loaded = Some((id.to_string(), Arc::clone(&m)));
         let m: Arc<dyn ChatModel> = m;
         Ok(m)
-    }
-
-    /// `local:<id>` for a catalogue id, if it is one.
-    pub fn catalogue_id(model: &ModelRef) -> Option<&str> {
-        match model {
-            ModelRef::Local { model_id } => Some(model_id.as_str()),
-            _ => None,
-        }
     }
 }
 
@@ -890,42 +941,30 @@ mod tests {
         );
     }
 
-    /// A scripted network: emits progress in steps and holds a "file lock" while running,
-    /// like dn_models::download (a second concurrent fetch gets Busy).
-    struct Net {
-        locked: AtomicBool,
-        busy_seen: AtomicBool,
-        step_ms: u64,
-        steps: u64,
-    }
+    // Deterministic interleavings: each test fails if its fix is removed.
 
-    struct LockGuard(Arc<Net>);
-    impl Drop for LockGuard {
-        fn drop(&mut self) {
-            self.0.locked.store(false, Ordering::SeqCst);
-        }
-    }
+    type Behaviour = Arc<
+        dyn Fn(
+                u64,
+                CatalogEntry,
+                PathBuf,
+                ProgressFn,
+            ) -> std::pin::Pin<
+                Box<dyn std::future::Future<Output = Result<PathBuf, DownloadError>> + Send>,
+            > + Send
+            + Sync,
+    >;
 
-    fn scripted(net: Arc<Net>) -> FetchFn {
-        Arc::new(move |e, dir, mut progress| {
-            let net = Arc::clone(&net);
-            Box::pin(async move {
-                if net.locked.swap(true, Ordering::SeqCst) {
-                    net.busy_seen.store(true, Ordering::SeqCst);
-                    return Err(DownloadError::Busy(dir.join(&e.file)));
-                }
-                let _guard = LockGuard(Arc::clone(&net));
-                for i in 1..=net.steps {
-                    tokio::time::sleep(std::time::Duration::from_millis(net.step_ms)).await;
-                    progress(e.size * i / (net.steps + 1), e.size);
-                }
-                progress(e.size, e.size);
-                Ok(dir.join(&e.file))
-            })
+    /// A fetch whose n-th call (1-based) behaves as `behaviour` says.
+    fn scripted(behaviour: Behaviour) -> FetchFn {
+        let calls = Arc::new(AtomicU64::new(0));
+        Arc::new(move |e, dir, progress| {
+            let n = calls.fetch_add(1, Ordering::SeqCst) + 1;
+            behaviour(n, e, dir, progress)
         })
     }
 
-    fn racing(net: &Arc<Net>) -> (Dir, Arc<LocalModels>) {
+    fn racing(fetch: FetchFn) -> (Dir, Arc<LocalModels>) {
         let dir = Dir(std::env::temp_dir().join(format!("dn-local-race-{}", dn_core::Id::new())));
         std::fs::create_dir_all(&dir.0).unwrap();
         let catalog = Catalog {
@@ -936,7 +975,7 @@ mod tests {
             dir.0.clone(),
             catalog,
             Machine::cpu_only(16 << 30),
-            scripted(Arc::clone(net)),
+            fetch,
         ));
         (dir, lm)
     }
@@ -945,24 +984,38 @@ mod tests {
         lm.rows()[0].state.clone()
     }
 
+    async fn until(mut f: impl FnMut() -> bool) {
+        for _ in 0..200 {
+            if f() {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        panic!("condition not reached");
+    }
+
+    /// Fails without the generation check in `set_if_current`.
     #[tokio::test(flavor = "multi_thread")]
-    async fn late_progress_never_overwrites_paused() {
-        let net = Arc::new(Net {
-            locked: AtomicBool::new(false),
-            busy_seen: AtomicBool::new(false),
-            step_ms: 40,
-            steps: 50,
-        });
-        let (_d, lm) = racing(&net);
+    async fn progress_delivered_after_pause_never_overwrites_paused() {
+        let release = Arc::new(tokio::sync::Notify::new());
+        let r = Arc::clone(&release);
+        let (_d, lm) = racing(scripted(Arc::new(move |_, e, _, mut progress| {
+            let r = Arc::clone(&r);
+            Box::pin(async move {
+                // The callback outlives the (aborted) transfer and fires only after the pause.
+                tokio::spawn(async move {
+                    r.notified().await;
+                    progress(e.size / 2, e.size);
+                });
+                std::future::pending().await
+            })
+        })));
         lm.download("m").unwrap();
-        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-        assert!(
-            matches!(state_of(&lm), DownloadState::Downloading { .. }),
-            "{:?}",
-            state_of(&lm)
-        );
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
         lm.pause("m");
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        assert!(matches!(state_of(&lm), DownloadState::Paused { .. }));
+        release.notify_one();
+        tokio::time::sleep(std::time::Duration::from_millis(60)).await;
         assert!(
             matches!(state_of(&lm), DownloadState::Paused { .. }),
             "{:?}",
@@ -970,55 +1023,168 @@ mod tests {
         );
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn resume_right_after_pause_waits_instead_of_reporting_busy() {
-        let net = Arc::new(Net {
-            locked: AtomicBool::new(false),
-            busy_seen: AtomicBool::new(false),
-            step_ms: 10,
-            steps: 20,
-        });
-        let (_d, lm) = racing(&net);
-        lm.download("m").unwrap();
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        lm.pause("m");
-        lm.download("m").unwrap(); // immediately
-        for _ in 0..100 {
-            if state_of(&lm) == DownloadState::Ready {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    /// File lock like dn_models::download's; dropping it takes a while (as releasing a real
+    /// lock and closing a file can), so a resume that doesn't wait sees it still held.
+    struct SlowLock(Arc<AtomicBool>);
+    impl Drop for SlowLock {
+        fn drop(&mut self) {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            self.0.store(false, Ordering::SeqCst);
         }
-        assert_eq!(state_of(&lm), DownloadState::Ready);
-        assert!(
-            !net.busy_seen.load(Ordering::SeqCst),
-            "the resumed run waited for the paused one"
-        );
-        assert!(
-            lock(&lm.tasks).is_empty(),
-            "the finished run removed only its own task"
-        );
     }
 
+    /// Fails without the per-model lock wait.
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_paused_run_finishing_late_does_not_remove_the_new_run() {
-        let net = Arc::new(Net {
-            locked: AtomicBool::new(false),
-            busy_seen: AtomicBool::new(false),
-            step_ms: 15,
-            steps: 10,
-        });
-        let (_d, lm) = racing(&net);
+    async fn a_resume_right_after_pause_waits_for_the_file_lock() {
+        let held = Arc::new(AtomicBool::new(false));
+        let busy = Arc::new(AtomicBool::new(false));
+        let (h, b) = (Arc::clone(&held), Arc::clone(&busy));
+        let (_d, lm) = racing(scripted(Arc::new(move |n, e, dir, mut progress| {
+            let (held, busy) = (Arc::clone(&h), Arc::clone(&b));
+            Box::pin(async move {
+                if held.swap(true, Ordering::SeqCst) {
+                    busy.store(true, Ordering::SeqCst);
+                    return Err(DownloadError::Busy(dir.join(&e.file)));
+                }
+                let _lock = SlowLock(held);
+                if n == 1 {
+                    std::future::pending::<()>().await;
+                }
+                progress(e.size, e.size);
+                Ok(dir.join(&e.file))
+            })
+        })));
         lm.download("m").unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(30)).await;
         lm.pause("m");
         lm.download("m").unwrap();
-        let second = lock(&lm.tasks).get("m").map(|t| t.generation);
-        assert!(second.is_some());
-        tokio::time::sleep(std::time::Duration::from_millis(40)).await;
-        // The new run is still registered (or already done) — never removed by the old one.
-        let now = lock(&lm.tasks).get("m").map(|t| t.generation);
-        assert!(now.is_none() || now == second);
+        until(|| {
+            state_of(&lm) == DownloadState::Ready
+                || matches!(state_of(&lm), DownloadState::Failed { .. })
+        })
+        .await;
+        assert!(
+            !busy.load(Ordering::SeqCst),
+            "resume hit the old run's file lock"
+        );
+        assert_eq!(state_of(&lm), DownloadState::Ready);
+    }
+
+    /// Fails without the generation check when a finishing run removes its task.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_paused_run_that_finishes_late_leaves_the_new_run_registered() {
+        let at_end = Arc::new(AtomicBool::new(false));
+        let gate = Arc::new(std::sync::Barrier::new(2));
+        let (a, g) = (Arc::clone(&at_end), Arc::clone(&gate));
+        let (_d, lm) = racing(scripted(Arc::new(move |n, e, dir, _progress| {
+            let (at_end, gate) = (Arc::clone(&a), Arc::clone(&g));
+            Box::pin(async move {
+                if n == 1 {
+                    // Finish synchronously (no await), so an abort can't stop it.
+                    at_end.store(true, Ordering::SeqCst);
+                    gate.wait();
+                    return Ok(dir.join(&e.file));
+                }
+                std::future::pending().await
+            })
+        })));
+        lm.download("m").unwrap();
+        until(|| at_end.load(Ordering::SeqCst)).await;
+        lm.pause("m");
+        lm.download("m").unwrap();
+        let second = lock(&lm.tasks)
+            .get("m")
+            .map(|t| t.generation)
+            .expect("new run");
+        let g = Arc::clone(&gate);
+        tokio::task::spawn_blocking(move || g.wait()).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert_eq!(
+            lock(&lm.tasks).get("m").map(|t| t.generation),
+            Some(second),
+            "the old run removed the new run's task"
+        );
+        lm.pause("m");
+    }
+
+    /// Records what the backend did, in order.
+    #[derive(Default)]
+    struct Recorder(Mutex<Vec<String>>);
+
+    impl InferenceBackend for Recorder {
+        fn name(&self) -> &'static str {
+            "recorder"
+        }
+        fn capabilities(&self) -> BackendCaps {
+            BackendCaps::default()
+        }
+        async fn load(
+            &self,
+            spec: &ModelSpec,
+            _: &LoadOptions,
+        ) -> dn_inference::Result<ModelHandle> {
+            let mut v = lock(&self.0);
+            v.push(format!("load {}", spec.model_id));
+            Ok(ModelHandle::new(v.len() as u64, spec.model_id.clone()))
+        }
+        async fn chat(
+            &self,
+            h: &ModelHandle,
+            _: dn_core::chat::ChatRequest,
+        ) -> dn_inference::Result<TokenStream> {
+            Err(dn_inference::InferenceError::UnknownHandle(h.id()))
+        }
+        async fn embed(
+            &self,
+            _: &ModelHandle,
+            _: &[String],
+        ) -> dn_inference::Result<Vec<Vec<f32>>> {
+            Ok(vec![])
+        }
+        async fn unload(&self, h: ModelHandle) -> dn_inference::Result<()> {
+            lock(&self.0).push(format!("unload {}", h.model_id));
+            Ok(())
+        }
+    }
+
+    fn two_ready_models() -> (Dir, Arc<Recorder>, LocalModels<Recorder>) {
+        let dir = Dir(std::env::temp_dir().join(format!("dn-local-switch-{}", dn_core::Id::new())));
+        std::fs::create_dir_all(&dir.0).unwrap();
+        for id in ["a", "b"] {
+            std::fs::write(dir.0.join(format!("{id}.gguf")), b"12345").unwrap();
+            std::fs::write(dir.0.join(format!("{id}.gguf.sha256")), "aa").unwrap();
+        }
+        let rec = Arc::new(Recorder::default());
+        let lm = LocalModels::with_parts(
+            dir.0.clone(),
+            Catalog {
+                version: 1,
+                models: vec![entry("a", 5, "aa"), entry("b", 5, "aa")],
+            },
+            Machine::cpu_only(16 << 30),
+            pull_fetch(),
+            Arc::clone(&rec),
+        );
+        (dir, rec, lm)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn switching_from_an_idle_model_unloads_it_before_loading_the_next() {
+        let (_d, rec, lm) = two_ready_models();
+        drop(lm.chat_model("a").await.unwrap());
+        drop(lm.chat_model("b").await.unwrap());
+        assert_eq!(*lock(&rec.0), ["load a", "unload a", "load b"]);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn switching_during_a_reply_unloads_the_old_model_when_the_reply_ends() {
+        let (_d, rec, lm) = two_ready_models();
+        let in_reply = lm.chat_model("a").await.unwrap();
+        drop(lm.chat_model("b").await.unwrap());
+        assert_eq!(*lock(&rec.0), ["load a", "load b"], "a is still answering");
+        drop(in_reply);
+        settle().await;
+        assert_eq!(*lock(&rec.0), ["load a", "load b", "unload a"]);
     }
 
     #[test]

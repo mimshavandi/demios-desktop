@@ -100,15 +100,41 @@ fn title_from(text: &str) -> String {
 /// later download or key never silently changes which model answers.
 fn model_for_turn(state: &AppState) -> IpcResult<(ModelRef, Arc<dyn ChatModel>)> {
     let mut settings = state.settings()?;
-    let model = state
+    let chosen = settings.slot("chat");
+    let model = match state
         .agent
-        .resolve_model(&settings, &state.models, &state.keys)?;
-    if settings.slot("chat").is_none() {
+        .resolve_model(&settings, &state.models, &state.keys)
+    {
+        Ok(m) => m,
+        // The resolver only knows "disabled"; say why when it's a local model too big here.
+        Err(e) => return Err(chosen.and_then(|m| wont_fit_error(state, &m)).unwrap_or(e)),
+    };
+    let backend = state.models.get(&model, &state.keys).map_err(model_error)?;
+    // Save an automatic pick only once it actually loaded.
+    if chosen.is_none() {
         settings.slots.insert("chat".into(), model.to_string());
         state.save_settings(&settings)?;
     }
-    let backend = state.models.get(&model, &state.keys).map_err(model_error)?;
     Ok((model, backend))
+}
+
+fn wont_fit_error(state: &AppState, model: &ModelRef) -> Option<IpcError> {
+    let local = state.models.local.as_ref()?;
+    let id = crate::local::catalogue_id(model)?;
+    if !(local.is_ready(id) && local.wont_fit(id)) {
+        return None;
+    }
+    Some(IpcError {
+        code: "model_unavailable",
+        message: format!(
+            "{} won't fit on this computer. Choose a smaller model in Settings → Models.",
+            local.name(id).unwrap_or(id)
+        ),
+        recovery: vec![RecoveryAction::ChooseModelForSlot {
+            agent_id: crate::agent::AGENT_ID.into(),
+            slot_id: "primary".into(),
+        }],
+    })
 }
 
 /// Sends `text` as a new user message and streams the reply. Blocking (SQLite): call it
@@ -1007,6 +1033,105 @@ mod tests {
             Some("local:dev-fake"),
             "the first automatic pick became the saved choice"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_chosen_model_that_wont_fit_says_so() {
+        let dir = std::env::temp_dir().join(format!("dn-chat-fit-{}", Id::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("huge.gguf"), b"12345").unwrap();
+        std::fs::write(dir.join("huge.gguf.sha256"), "aa").unwrap();
+        let catalog = dn_models::Catalog {
+            version: 1,
+            models: vec![dn_models::CatalogEntry {
+                id: "huge".into(),
+                name: "Huge Model".into(),
+                repo: "o/r".into(),
+                revision: "x".into(),
+                file: "huge.gguf".into(),
+                size: 5,
+                sha256: "aa".into(),
+                quant: "Q4_K_M".into(),
+                params_b: 999.0,
+                capabilities: vec![dn_core::model::Capability::Chat],
+                license: "mit".into(),
+                notes: String::new(),
+            }],
+        };
+        // 1 MiB of RAM: the 999B model can't fit.
+        let local = crate::local::LocalModels::new(
+            dir.clone(),
+            catalog,
+            dn_models::Machine::cpu_only(1 << 20),
+        );
+        assert!(local.wont_fit("huge"));
+        let mut s = AppState::in_memory().unwrap();
+        s.models.local = Some(Arc::new(local));
+        let st = Arc::new(s);
+        let mut settings = crate::settings::Settings::default();
+        settings.slots.insert("chat".into(), "local:huge".into());
+        st.save_settings(&settings).unwrap();
+        let conv = st.create_conversation().unwrap();
+        let (_e, s1) = sink();
+        let err = send(&st, conv.id, "hi".into(), s1).unwrap_err();
+        assert!(
+            err.message.contains("won't fit on this computer"),
+            "{}",
+            err.message
+        );
+        assert_eq!(count(&st, conv.id), 0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_automatic_pick_that_fails_to_load_is_not_saved() {
+        // The only ready source is a downloaded local model whose file isn't a valid GGUF,
+        // so the resolver picks it automatically and llama.cpp then fails to load it.
+        let dir = std::env::temp_dir().join(format!("dn-chat-badload-{}", Id::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("tiny.gguf"), b"12345").unwrap();
+        std::fs::write(dir.join("tiny.gguf.sha256"), "aa").unwrap();
+        let catalog = dn_models::Catalog {
+            version: 1,
+            models: vec![dn_models::CatalogEntry {
+                id: "tiny".into(),
+                name: "Tiny".into(),
+                repo: "o/r".into(),
+                revision: "x".into(),
+                file: "tiny.gguf".into(),
+                size: 5,
+                sha256: "aa".into(),
+                quant: "Q4_K_M".into(),
+                params_b: 0.1,
+                capabilities: vec![dn_core::model::Capability::Chat],
+                license: "mit".into(),
+                notes: String::new(),
+            }],
+        };
+        let local = crate::local::LocalModels::new(
+            dir.clone(),
+            catalog,
+            dn_models::Machine::cpu_only(16 << 30),
+        );
+        assert!(local.is_ready("tiny") && !local.wont_fit("tiny"));
+        let mut s = AppState::in_memory().unwrap();
+        s.models.local = Some(Arc::new(local));
+        let st = Arc::new(s);
+        let conv = st.create_conversation().unwrap();
+        let (_e, s1) = sink();
+        // As in the app: chat turns run on a blocking thread (loading uses block_on).
+        let st2 = Arc::clone(&st);
+        let conv_id = conv.id;
+        let err = tokio::task::spawn_blocking(move || send(&st2, conv_id, "hi".into(), s1))
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(err.code, "model_unavailable", "{}", err.message);
+        assert!(
+            st.settings().unwrap().slot("chat").is_none(),
+            "a failed load isn't saved as the choice"
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
