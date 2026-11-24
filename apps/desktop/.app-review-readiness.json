@@ -18,7 +18,7 @@
     "screenshots_match_build": "Existing screenshots in apps/desktop/docs/screenshots are dev captures with the fake model. Recapture from the release build (audit S-24).",
     "account_deletion_device_test": "No accounts. Local data deletion is tracked separately (audit S-27).",
     "privacy_labels_match_runtime": "Declaration drafted in docs/store/readiness-audit.md (no data collected by the developer). Still to do: verify against the release build's network traffic, including the update check once it exists.",
-    "iap_reachable_by_reviewer": "Free app with no in-app purchases (D-018)."
+    "iap_reachable_by_reviewer": "Free app with no in-app purchases."
   },
   "targets": ["macos-direct", "microsoft-store-msix", "windows-direct", "flathub"],
   "desktop_checks": {
