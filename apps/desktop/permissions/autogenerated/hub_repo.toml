@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-hub-repo"
+description = "Enables the hub_repo command without any pre-configured scope."
+commands.allow = ["hub_repo"]
+
+[[permission]]
+identifier = "deny-hub-repo"
+description = "Denies the hub_repo command without any pre-configured scope."
+commands.deny = ["hub_repo"]

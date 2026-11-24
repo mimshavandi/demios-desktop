@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-hub-pull-status"
+description = "Enables the hub_pull_status command without any pre-configured scope."
+commands.allow = ["hub_pull_status"]
+
+[[permission]]
+identifier = "deny-hub-pull-status"
+description = "Denies the hub_pull_status command without any pre-configured scope."
+commands.deny = ["hub_pull_status"]

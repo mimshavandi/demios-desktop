@@ -4,14 +4,15 @@
 // model card are shown before download, with a warning for missing / non-commercial /
 // custom licences (any licence is allowed).
 
-import { Copy, Cpu, Download, Pause, Play, RotateCcw, TriangleAlert } from "lucide-react";
+import { Copy, Cpu, Download, Pause, Play, Plus, RotateCcw, TriangleAlert } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Api } from "../ipc/commands";
 import { errorMessage, type FitStatus, type LocalModelRow } from "../ipc/types";
 import { Badge, Button, ICON, IconButton, InlineMessage } from "./primitives";
 import { useToast } from "./toast";
+import { AddFromHub } from "./AddFromHub";
 
-const SMALL = { size: 12, strokeWidth: 1.5 } as const;
+export const SMALL = { size: 12, strokeWidth: 1.5 } as const;
 
 export function formatBytes(b: number): string {
   if (b >= 1e9) return `${(b / 1e9).toFixed(1)} GB`;
@@ -28,7 +29,7 @@ export function formatEta(remaining: number, bytesPerSec: number): string | null
   return `${Math.floor(m / 60)} h ${m % 60} min left`;
 }
 
-const FIT: Record<FitStatus, { label: string; tone: "success" | "warning" | "danger" }> = {
+export const FIT: Record<FitStatus, { label: string; tone: "success" | "warning" | "danger" }> = {
   ready: { label: "Ready", tone: "success" },
   caution: { label: "Caution", tone: "warning" },
   memory_pressure: { label: "Memory pressure", tone: "warning" },
@@ -46,6 +47,8 @@ export function LocalModelsCard({
   onReady: () => void;
 }) {
   const [rows, setRows] = useState<LocalModelRow[]>(initial);
+  const [adding, setAdding] = useState(false);
+  const addRef = useRef<HTMLButtonElement>(null);
   const [announce, setAnnounce] = useState("");
   // Rows updated by events before the snapshot arrived: the snapshot must not undo them.
   const fresh = useRef<Set<string>>(new Set());
@@ -56,8 +59,14 @@ export function LocalModelsCard({
     void api
       .watchLocalModels((ev) => {
         if (!alive) return;
+        if (ev.type === "removed") {
+          setRows((list) => list.filter((r) => r.id !== ev.id));
+          prev.current.delete(ev.id);
+          return;
+        }
         fresh.current.add(ev.row.id);
-        setRows((list) => list.map((r) => (r.id === ev.row.id ? ev.row : r)));
+        // Upsert: Hub downloads and cache models arrive as new rows.
+        setRows((list) => (list.some((r) => r.id === ev.row.id) ? list.map((r) => (r.id === ev.row.id ? ev.row : r)) : [...list, ev.row]));
         const was = prev.current.get(ev.row.id);
         prev.current.set(ev.row.id, ev.row.state.state);
         if (ev.row.state.state === "ready" && was !== "ready") {
@@ -82,11 +91,27 @@ export function LocalModelsCard({
 
   return (
     <section className="card" aria-labelledby="local-h">
-      <h2 id="local-h">On this device</h2>
+      <div className="card-head">
+        <h2 id="local-h">On this device</h2>
+        {!adding && (
+          <Button ref={addRef} size="sm" icon={<Plus {...ICON} aria-hidden="true" />} onClick={() => setAdding(true)}>
+            Add from Hugging Face
+          </Button>
+        )}
+      </div>
       <p className="dn-help">
         Runs on this computer; nothing leaves it. Downloads resume if interrupted and are checked
         against their published checksum.
       </p>
+      {adding && (
+        <AddFromHub
+          api={api}
+          onClose={() => {
+            setAdding(false);
+            requestAnimationFrame(() => addRef.current?.focus());
+          }}
+        />
+      )}
       {rows.length === 0 && <p className="dn-help">No models in the catalogue.</p>}
       {rows.map((r) => (
         <LocalModelRowView key={r.id} api={api} row={r} />
@@ -141,6 +166,17 @@ function LocalModelRowView({ api, row }: { api: Api; row: LocalModelRow }) {
         <span className="row-title" id={nameId}>
           {row.name} <span className="dn-help">{row.quant} · {formatBytes(row.size)}</span>
         </span>
+        {row.origin !== "catalog" && (
+          <span className="dn-help local-origin">
+            {row.origin === "hub" ? "From Hugging Face" : "From your Hugging Face cache, used where it is"}
+            {row.location !== null ? (
+              <>
+                {" · "}
+                <code>{row.location}</code>
+              </>
+            ) : null}
+          </span>
+        )}
         <span className="local-meta">
           <Badge
             tone={fit.tone}
