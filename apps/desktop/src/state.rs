@@ -15,6 +15,35 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
+/// Key-store id of the Hugging Face token (`dn_models::hub::hf_token_secret()`).
+pub const HF_TOKEN_PROVIDER_ID: &str = "huggingface";
+
+/// Keychain ids (dn-tools secret ids) an MCP server config refers to: secret env vars and
+/// headers, and the OAuth token set.
+pub fn mcp_secret_ids(servers: &[dn_tools::McpServerConfig]) -> Vec<String> {
+    use dn_tools::{McpTransport, ValueRef};
+    let mut out = Vec::new();
+    for s in servers {
+        let refs: Vec<&ValueRef> = match &s.transport {
+            McpTransport::Stdio { env, .. } => env.values().collect(),
+            McpTransport::StreamableHttp { headers, oauth, .. } => {
+                if let Some(o) = oauth {
+                    out.push(o.credential_secret_id.clone());
+                }
+                headers.values().collect()
+            }
+        };
+        for r in refs {
+            if let ValueRef::Secret { secret_id } = r {
+                out.push(secret_id.clone());
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
 /// Every migration set the app composes into its database. Add a crate's
 /// `migrations()` here when the app starts using that crate's tables.
 pub fn migration_sets() -> Vec<MigrationSet> {
@@ -169,13 +198,19 @@ impl AppState {
         if n > 0 {
             eprintln!("marked {n} interrupted answer(s) as cancelled");
         }
-        store::purge_deleted(&conn, dn_store::now_ms())?;
+        let purged = store::purge_deleted(&conn, dn_store::now_ms())?;
 
         let ledger = dn_store::open_connection(path)?;
         match dn_tools::ledger::mark_interrupted(&ledger) {
             Ok(0) => {}
             Ok(n) => eprintln!("{n} tool call(s) were interrupted; their outcome is unknown"),
             Err(e) => eprintln!("could not check the tool ledger: {e}"),
+        }
+        // A purged chat keeps no tool history either (unknown writes stay until resolved).
+        for id in &purged {
+            if let Err(e) = dn_tools::ledger::delete_scope(&ledger, &format!("conv:{id}")) {
+                eprintln!("could not clear the tool ledger of a deleted chat: {e}");
+            }
         }
         let (gate, approvals) = dn_tools::ApprovalGate::new(16);
         let executor = Arc::new(dn_tools::Executor::new(
@@ -341,6 +376,108 @@ impl AppState {
             }
             None => false,
         }
+    }
+
+    /// Cancels every running reply.
+    pub fn stop_all(&self) {
+        for (_, r) in lock(&self.running).drain() {
+            r.cancel.cancel();
+        }
+    }
+
+    /// What "Delete all local data" would remove from the keychain, in the user's words
+    /// (provider names, "Hugging Face token", tool-server secrets). Blocking.
+    pub fn keychain_entries(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        for p in crate::models::PROVIDERS {
+            if self.keys.has(p.id).unwrap_or(false) {
+                out.push(format!("{} key", p.name));
+            }
+        }
+        if self.keys.has(HF_TOKEN_PROVIDER_ID).unwrap_or(false) {
+            out.push("Hugging Face token".into());
+        }
+        let servers = self.settings().map(|s| s.mcp_servers).unwrap_or_default();
+        let mcp = mcp_secret_ids(&servers)
+            .into_iter()
+            .filter(|id| {
+                self.keys
+                    .store
+                    .get(&dn_secrets::SecretId::mcp(id))
+                    .is_ok_and(|v| v.is_some())
+            })
+            .count();
+        match mcp {
+            0 => {}
+            1 => out.push("1 tool-server secret or sign-in".into()),
+            n => out.push(format!("{n} tool-server secrets or sign-ins")),
+        }
+        out
+    }
+
+    /// "Delete all local data" for everything this state owns: chats, tombstones,
+    /// settings, the tool ledger, approval grants, and keychain entries (provider keys, the
+    /// Hugging Face token, MCP secrets and sign-ins). Blocking. Keeps going after a failure
+    /// and returns the parts it could not delete, in the user's words.
+    pub fn wipe_local_data(&self) -> Vec<&'static str> {
+        let mut failed = Vec::new();
+        let mcp_servers = self.settings().map(|s| s.mcp_servers).unwrap_or_default();
+
+        // Keychain.
+        let mut keys_ok = true;
+        let mut provider_ids: Vec<&str> = crate::models::PROVIDERS.iter().map(|p| p.id).collect();
+        provider_ids.push(HF_TOKEN_PROVIDER_ID);
+        for id in provider_ids {
+            if let Err(e) = self.keys.delete(id) {
+                eprintln!("could not delete the `{id}` key: {e}");
+                keys_ok = false;
+            }
+            self.models.invalidate(id);
+        }
+        for id in mcp_secret_ids(&mcp_servers) {
+            if let Err(e) = self.keys.store.delete(&dn_secrets::SecretId::mcp(&id)) {
+                eprintln!("could not delete MCP secret `{id}`: {e}");
+                keys_ok = false;
+            }
+        }
+        lock(&self.removed_keys).clear();
+        if !keys_ok {
+            failed.push("keys in the system keychain");
+        }
+
+        // Database.
+        let conversations = self
+            .db()
+            .ok()
+            .and_then(|db| store::list_conversations(&db).ok())
+            .unwrap_or_default();
+        if let Some(exec) = &self.executor {
+            for c in &conversations {
+                exec.gate().clear_conversation(&format!("conv:{}", c.id));
+            }
+            if let Err(e) = exec.forget_all() {
+                eprintln!("could not clear the tool ledger: {e}");
+                failed.push("tool history");
+            }
+        }
+        match self.db() {
+            Ok(db) => {
+                let r = store::delete_all(&db)
+                    .and_then(|()| settings::delete_all(&db))
+                    // Rewrite the file so deleted rows don't linger in free pages or the WAL.
+                    .and_then(|()| {
+                        db.execute_batch("VACUUM; PRAGMA wal_checkpoint(TRUNCATE);")?;
+                        Ok(())
+                    });
+                if let Err(e) = r {
+                    eprintln!("could not clear the database: {e}");
+                    failed.push("chats and settings");
+                }
+            }
+            Err(_) => failed.push("chats and settings"),
+        }
+        lock(&self.live).clear();
+        failed
     }
 
     pub fn is_generating(&self, conversation_id: Id) -> bool {
@@ -724,5 +861,148 @@ mod tests {
             );
         });
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn open_purges_deleted_chats_and_their_finished_tool_calls() {
+        let dir = std::env::temp_dir().join(format!("dn-app-purge-{}", Id::new()));
+        let path = dir.join("db.sqlite3");
+        let (gone, kept) = {
+            let c = dn_store::open(&path, &migration_sets()).unwrap();
+            let gone = store::create_conversation(&c, "private title").unwrap();
+            let kept = store::create_conversation(&c, "kept").unwrap();
+            store::delete_conversation(&c, gone.id).unwrap();
+            let l = dn_store::open_connection(&path).unwrap();
+            let args = serde_json::json!({});
+            for (key, conv) in [("done", gone.id), ("unk", gone.id), ("live", kept.id)] {
+                dn_tools::ledger::claim(&l, key, "cap", &format!("conv:{conv}"), &args).unwrap();
+            }
+            dn_tools::ledger::succeed(&l, "done", &serde_json::json!("ok")).unwrap();
+            dn_tools::ledger::mark_unknown(&l, "unk", "cancelled").unwrap();
+            dn_tools::ledger::succeed(&l, "live", &serde_json::json!("ok")).unwrap();
+            (gone, kept)
+        };
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let st = AppState::open(&path, None).unwrap();
+            let exec = st.executor.as_ref().unwrap();
+            assert!(exec.ledger_entry("done").unwrap().is_none());
+            assert!(exec.ledger_entry("live").unwrap().is_some());
+            // The unknown write waits for the user, then goes once resolved.
+            assert!(exec.ledger_entry("unk").unwrap().is_some());
+            {
+                let db = st.db().unwrap();
+                assert!(store::is_purged(&db, &gone.id.to_string()).unwrap());
+                assert!(store::get_conversation(&db, kept.id).is_ok());
+                let titles: i64 = db
+                    .query_row(
+                        "SELECT COUNT(*) FROM store_conversations WHERE title = 'private title'",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(titles, 0);
+            }
+        });
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn wipe_local_data_clears_chats_settings_ledger_and_keys() {
+        let conn = dn_store::open_in_memory(&migration_sets()).unwrap();
+        let keys = Keys::memory();
+        let mut st = AppState::new(conn, ModelRegistry::default(), keys.clone());
+        let ledger = dn_store::open_in_memory(&migration_sets()).unwrap();
+        let (gate, _approvals) = dn_tools::ApprovalGate::new(1);
+        let exec = Arc::new(dn_tools::Executor::new(
+            Arc::new(gate),
+            Arc::new(Mutex::new(ledger)),
+        ));
+        st.executor = Some(Arc::clone(&exec));
+
+        let c = st.create_conversation().unwrap();
+        let mut settings = st.settings().unwrap();
+        settings
+            .slots
+            .insert("chat".into(), "byok:openai:gpt-5".into());
+        settings.mcp_servers = vec![
+            serde_json::from_value(serde_json::json!({
+                "id": "gh",
+                "transport": {
+                    "type": "streamable_http",
+                    "url": "https://example.test/mcp",
+                    "headers": {},
+                    "oauth": { "credential_secret_id": "mcp.gh.oauth" }
+                }
+            }))
+            .unwrap(),
+        ];
+        st.save_settings(&settings).unwrap();
+        keys.set("openai", &Secret::new("test-key")).unwrap();
+        keys.set(HF_TOKEN_PROVIDER_ID, &Secret::new("test-hf"))
+            .unwrap();
+        keys.store
+            .set(
+                &dn_secrets::SecretId::mcp("mcp.gh.oauth"),
+                &Secret::new("{}"),
+            )
+            .unwrap();
+
+        assert_eq!(
+            st.keychain_entries(),
+            [
+                "OpenAI key",
+                "Hugging Face token",
+                "1 tool-server secret or sign-in"
+            ]
+        );
+        assert!(st.wipe_local_data().is_empty());
+        assert!(st.keychain_entries().is_empty());
+        assert!(
+            store::list_conversations(&st.db().unwrap())
+                .unwrap()
+                .is_empty()
+        );
+        assert!(store::get_conversation(&st.db().unwrap(), c.id).is_err());
+        assert_eq!(st.settings().unwrap(), Settings::default());
+        assert!(!keys.has("openai").unwrap());
+        assert!(!keys.has(HF_TOKEN_PROVIDER_ID).unwrap());
+        assert!(
+            keys.store
+                .get(&dn_secrets::SecretId::mcp("mcp.gh.oauth"))
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn mcp_secret_ids_cover_env_headers_and_oauth() {
+        let servers: Vec<dn_tools::McpServerConfig> = serde_json::from_value(serde_json::json!([
+            {
+                "id": "a",
+                "transport": {
+                    "type": "stdio",
+                    "command": "x",
+                    "env": {
+                        "API_TOKEN": { "kind": "secret", "secret_id": "mcp.a.token" },
+                        "LOG": { "kind": "plain", "value": "debug" }
+                    }
+                }
+            },
+            {
+                "id": "b",
+                "transport": {
+                    "type": "streamable_http",
+                    "url": "https://example.test/mcp",
+                    "headers": { "Authorization": { "kind": "secret", "secret_id": "mcp.b.auth" } },
+                    "oauth": { "credential_secret_id": "mcp.b.oauth" }
+                }
+            }
+        ]))
+        .unwrap();
+        assert_eq!(
+            mcp_secret_ids(&servers),
+            ["mcp.a.token", "mcp.b.auth", "mcp.b.oauth"]
+        );
     }
 }

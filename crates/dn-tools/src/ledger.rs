@@ -346,6 +346,32 @@ pub fn list_for_conversation(
         .collect()
 }
 
+/// Deletes the finished (`succeeded` / `failed`) rows of `scope` (the `conversation_id`
+/// column, e.g. `conv:<id>`), for when that conversation is purged (T-STORE-11). `running`
+/// and `unknown` rows stay: an unknown write must be resolved by the user first, then
+/// [`delete_finished`] removes it. Returns how many rows were deleted.
+pub fn delete_scope(conn: &Connection, scope: &str) -> Result<usize, LedgerError> {
+    Ok(conn.execute(
+        "DELETE FROM tool_ledger_runs
+         WHERE conversation_id = ?1 AND status IN ('succeeded', 'failed')",
+        params![scope],
+    )?)
+}
+
+/// Deletes one row if it is finished (`succeeded` / `failed`). Returns whether it did.
+pub fn delete_finished(conn: &Connection, key: &str) -> Result<bool, LedgerError> {
+    Ok(conn.execute(
+        "DELETE FROM tool_ledger_runs
+         WHERE idempotency_key = ?1 AND status IN ('succeeded', 'failed')",
+        params![key],
+    )? > 0)
+}
+
+/// Deletes every row ("Delete all local data"). Callers stop tool runs first.
+pub fn delete_all(conn: &Connection) -> Result<usize, LedgerError> {
+    Ok(conn.execute("DELETE FROM tool_ledger_runs", [])?)
+}
+
 #[cfg(test)]
 pub(crate) fn test_db() -> Connection {
     let conn = Connection::open_in_memory().unwrap();
@@ -428,5 +454,32 @@ mod tests {
             }
         );
         assert!(resolve(&db, "k", &Resolution::DidNotHappen).is_err());
+    }
+
+    #[test]
+    fn delete_scope_keeps_unknown_until_resolved() {
+        let db = test_db();
+        let a = json!({});
+        claim(&db, "done", "cap", "conv:1", &a).unwrap();
+        succeed(&db, "done", &json!("ok")).unwrap();
+        claim(&db, "bad", "cap", "conv:1", &a).unwrap();
+        fail(&db, "bad", "boom").unwrap();
+        claim(&db, "unk", "cap", "conv:1", &a).unwrap();
+        mark_unknown(&db, "unk", "cancelled").unwrap();
+        claim(&db, "other", "cap", "conv:2", &a).unwrap();
+        succeed(&db, "other", &json!("ok")).unwrap();
+
+        assert_eq!(delete_scope(&db, "conv:1").unwrap(), 2);
+        assert!(get(&db, "done").unwrap().is_none());
+        assert!(get(&db, "bad").unwrap().is_none());
+        assert!(get(&db, "other").unwrap().is_some());
+        assert!(!delete_finished(&db, "unk").unwrap(), "unknown rows stay");
+
+        resolve(&db, "unk", &Resolution::DidNotHappen).unwrap();
+        assert!(delete_finished(&db, "unk").unwrap());
+        assert!(get(&db, "unk").unwrap().is_none());
+
+        assert_eq!(delete_all(&db).unwrap(), 1);
+        assert!(get(&db, "other").unwrap().is_none());
     }
 }

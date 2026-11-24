@@ -191,6 +191,21 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|p| p.into_inner())
 }
 
+/// Total size of the files under `dir` (symlinks are not followed). Missing → 0.
+fn dir_size(dir: &Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .map(|e| match e.file_type() {
+            Ok(t) if t.is_dir() => dir_size(&e.path()),
+            Ok(t) if t.is_file() => e.metadata().map(|m| m.len()).unwrap_or(0),
+            _ => 0,
+        })
+        .sum()
+}
+
 fn suffixed(path: &Path, suffix: &str) -> PathBuf {
     let mut p = path.as_os_str().to_owned();
     p.push(suffix);
@@ -654,6 +669,44 @@ impl<B: InferenceBackend> LocalModels<B> {
         for id in ids {
             self.pause(&id);
         }
+    }
+
+    /// The models folder (shown in Settings › About).
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
+    /// Bytes under the models folder (downloads, partial files, Hub downloads). Blocking.
+    pub fn disk_usage(&self) -> u64 {
+        dir_size(&self.dir)
+    }
+
+    /// "Delete all local data": stops every download (waiting until each has let go of its
+    /// files), lets go of the loaded model, deletes the models folder and resets every row
+    /// to "not downloaded". A reply still streaming keeps its model until it ends; the
+    /// caller cancels replies first.
+    pub async fn delete_all(&self) -> std::io::Result<()> {
+        self.pause_all();
+        let locks: Vec<_> = lock(&self.model_locks).values().cloned().collect();
+        for l in locks {
+            drop(l.lock().await);
+        }
+        if let Some((_, m)) = self.loaded.lock().await.take() {
+            match Arc::try_unwrap(m) {
+                Ok(idle) => idle.unload_now().await,
+                Err(in_use) => drop(in_use),
+            }
+        }
+        match std::fs::remove_dir_all(&self.dir) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
+        self.scan();
+        for e in &self.catalog.models {
+            self.emit(e);
+        }
+        Ok(())
     }
 
     /// The `ChatModel` for `local:<id>`: loads the file on first use. Switching models drops
@@ -1174,6 +1227,26 @@ mod tests {
         drop(lm.chat_model("a").await.unwrap());
         drop(lm.chat_model("b").await.unwrap());
         assert_eq!(*lock(&rec.0), ["load a", "unload a", "load b"]);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn delete_all_unloads_and_removes_the_models_folder() {
+        let (d, rec, lm) = two_ready_models();
+        std::fs::create_dir_all(d.0.join("hf")).unwrap();
+        std::fs::write(d.0.join("hf").join("x.gguf"), b"123").unwrap();
+        assert_eq!(lm.disk_usage(), 5 + 2 + 5 + 2 + 3);
+        drop(lm.chat_model("a").await.unwrap());
+        lm.delete_all().await.unwrap();
+        assert_eq!(lm.disk_usage(), 0);
+        assert_eq!(*lock(&rec.0), ["load a", "unload a"]);
+        assert!(!d.0.exists());
+        assert!(
+            lm.rows()
+                .iter()
+                .all(|r| r.state == DownloadState::NotDownloaded)
+        );
+        // Deleting again (nothing there) is fine.
+        lm.delete_all().await.unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]

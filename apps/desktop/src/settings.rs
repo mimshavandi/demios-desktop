@@ -1,5 +1,6 @@
 //! App settings (T-SHELL-02), stored as JSON values in the app's own `app_settings`
-//! table. Telemetry is off by default and nothing in the app sends any yet.
+//! table. The app collects no usage data; `telemetry_enabled` is kept only so older saved
+//! settings still load (T-STORE-11 removed the switch).
 
 use dn_core::model::{Capability, ModelRef};
 use dn_store::{Connection, Result, StoreError, now_ms};
@@ -51,7 +52,8 @@ pub const SLOTS: &[SlotInfo] = &[
 pub struct Settings {
     /// slot id → `ModelRef` string. Missing = not configured (never a silent fallback).
     pub slots: BTreeMap<String, String>,
-    /// Off by default. No telemetry is collected in this build either way.
+    /// Unused: no telemetry exists, and the switch was removed (T-STORE-11). Kept so older
+    /// saved settings round-trip.
     pub telemetry_enabled: bool,
     /// MCP servers the tool runtime connects to at startup (secret *ids* only).
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -103,6 +105,12 @@ pub fn save(conn: &Connection, s: &Settings) -> Result<()> {
          ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
         params![KEY, serde_json::to_string(s)?, now_ms()],
     )?;
+    Ok(())
+}
+
+/// Deletes the saved settings ("Delete all local data").
+pub fn delete_all(conn: &Connection) -> Result<()> {
+    conn.execute("DELETE FROM app_settings", [])?;
     Ok(())
 }
 

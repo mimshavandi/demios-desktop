@@ -77,7 +77,18 @@ function fakeApi() {
     chat_model: null,
   });
   const api: Api = {
-    appInfo: async () => ({ version: "0.1.0", dev_fake_model: true, data_dir: "/tmp" }),
+    appInfo: async () => ({ version: "0.1.0", dev_fake_model: true, data_dir: "/tmp", models_dir: "/tmp/models" }),
+    localDataSummary: async () => ({
+      conversations: convs.length,
+      data_dir: "/tmp",
+      models_dir: "/tmp/models",
+      models_bytes: 4_200_000_000,
+      keychain: ["OpenAI key"],
+    }),
+    deleteAllLocalData: async () => {
+      convs.length = 0;
+      return null;
+    },
     listConversations: async () => [...convs],
     createConversation: async () => {
       const c = { id: id(), title: "New chat", model: null, created_at: n, updated_at: n };
@@ -237,21 +248,68 @@ describe("App", () => {
     expect(screen.getByLabelText("Chat")).toBeTruthy();
     const key = screen.getByLabelText("OpenAI") as HTMLInputElement;
     expect(key.type).toBe("password");
+    expect(screen.getByText(/Messages in chats that use OpenAI models are sent to OpenAI/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Save key" }));
     expect(await screen.findByText("Paste the key first.")).toBeTruthy();
     expect(key.getAttribute("aria-invalid")).toBe("true");
 
     fireEvent.click(screen.getByRole("tab", { name: "General" }));
     expect(screen.getByRole("tabpanel").getAttribute("aria-labelledby")).toBe("tab-general");
-    const telemetry = await screen.findByRole("switch", { name: "Share anonymous usage statistics" });
-    expect(telemetry.getAttribute("aria-checked")).toBe("false");
-    fireEvent.click(telemetry);
-    expect(await screen.findByText("Usage statistics setting saved")).toBeTruthy();
+    // No inert telemetry switch; a plain statement instead (T-STORE-11).
+    expect(await screen.findByText(/Demios collects no usage data/)).toBeTruthy();
+    expect(screen.queryByRole("switch")).toBeNull();
+    expect(screen.getByText("Where your data goes")).toBeTruthy();
+    expect(screen.getByText("Downloaded models are stored in /tmp/models")).toBeTruthy();
+  });
+
+  it("deletes all local data only after a confirm, and cancel changes nothing", async () => {
+    const { api } = fakeApi();
+    let calls = 0;
+    let fail = true;
+    api.deleteAllLocalData = async () => {
+      calls++;
+      if (fail) throw { code: "partial", message: "Some data could not be deleted: keys in the system keychain. Try again." };
+      return null;
+    };
+    render(<App api={api} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Models" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "General" }));
+    const trigger = await screen.findByRole("button", { name: "Delete all local data" });
+
+    fireEvent.click(trigger);
+    const dialog = await screen.findByRole("alertdialog", { name: "Delete all local data?" });
+    expect(dialog.textContent).toContain("can't be undone");
+    await waitFor(() => expect(dialog.textContent).toContain("4.2 GB"));
+    expect(dialog.textContent).toContain("/tmp/models");
+    expect(dialog.textContent).toContain("OpenAI key");
+    // Focus starts on Cancel; the red button is armed only after a short guard.
+    expect(document.activeElement?.textContent).toBe("Cancel");
+    const confirm = screen.getByRole("button", { name: "Delete all data" }) as HTMLButtonElement;
+    expect(confirm.disabled).toBe(true);
+    fireEvent.click(confirm);
+    expect(calls).toBe(0);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(calls).toBe(0);
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+
+    fireEvent.click(trigger);
+    const armed = (await screen.findByRole("button", { name: "Delete all data" })) as HTMLButtonElement;
+    await waitFor(() => expect(armed.disabled).toBe(false), { timeout: 1500 });
+    fireEvent.click(armed);
+    // A partial failure stays in the dialog and says what is left.
+    expect(await screen.findByText(/keys in the system keychain/)).toBeTruthy();
+    expect(screen.getByRole("alertdialog")).toBeTruthy();
+
+    fail = false;
+    fireEvent.click(screen.getByRole("button", { name: "Delete all data" }));
+    expect(await screen.findByText("All local data deleted")).toBeTruthy();
+    expect(calls).toBe(2);
   });
 
   it("asks to connect a model when none is available", async () => {
     const { api } = fakeApi();
-    api.appInfo = async () => ({ version: "0.1.0", dev_fake_model: false, data_dir: null });
+    api.appInfo = async () => ({ version: "0.1.0", dev_fake_model: false, data_dir: null, models_dir: null });
     render(<App api={api} />);
     expect(await screen.findByText(/No model connected/)).toBeTruthy();
     expect((screen.getByLabelText("Message") as HTMLTextAreaElement).disabled).toBe(true);

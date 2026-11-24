@@ -735,6 +735,28 @@ impl Executor {
         Ok(self.with_ledger(key, |c| ledger::resolve(c, key, resolution))?)
     }
 
+    /// Drops the finished ledger rows of a purged conversation; unknown ones stay until
+    /// resolved (T-STORE-11).
+    pub fn forget_conversation(&self, conversation_id: &str) -> Result<usize, CoreError> {
+        let scope = format!("conv:{conversation_id}");
+        Ok(self.with_ledger("ledger", |c| ledger::delete_scope(c, &scope))?)
+    }
+
+    /// The ledger row for `key`, if any.
+    pub fn ledger_entry(&self, key: &str) -> Result<Option<ledger::LedgerEntry>, CoreError> {
+        Ok(self.with_ledger(key, |c| ledger::get(c, key))?)
+    }
+
+    /// Deletes one finished ledger row (after resolving a call whose conversation is gone).
+    pub fn forget_call(&self, key: &str) -> Result<bool, CoreError> {
+        Ok(self.with_ledger(key, |c| ledger::delete_finished(c, key))?)
+    }
+
+    /// Deletes the whole ledger ("Delete all local data").
+    pub fn forget_all(&self) -> Result<usize, CoreError> {
+        Ok(self.with_ledger("ledger", ledger::delete_all)?)
+    }
+
     /// Writes waiting for the user to resolve.
     pub fn unknown_outcomes(&self) -> Result<Vec<ledger::LedgerEntry>, CoreError> {
         Ok(self.with_ledger("ledger", ledger::list_unknown)?)
