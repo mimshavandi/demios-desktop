@@ -483,14 +483,9 @@ pub async fn watch_local_models(
     state: AppStateRef<'_>,
     on_event: Channel<crate::local::LocalModelEvent>,
 ) -> IpcResult<Vec<crate::local::LocalModelRow>> {
-    let lm = local(&state)?;
-    let rows = lm.watch(Arc::new(move |ev| {
+    Ok(local(&state)?.watch_and_refresh(Arc::new(move |ev| {
         let _ = on_event.send(ev);
-    }));
-    // Settings › Models opened: pick up Hub downloads made by the CLI and changes in the
-    // Hugging Face cache; rows that changed arrive as events.
-    tauri::async_runtime::spawn_blocking(move || lm.refresh_externals());
-    Ok(rows)
+    })))
 }
 
 /// Starts or resumes a catalogue download (resumable, SHA-256 verified).

@@ -492,8 +492,13 @@ mod tests {
         while !holding.load(Ordering::SeqCst) {
             tokio::task::yield_now().await;
         }
-        // A second start while it runs is refused.
-        assert_eq!(pulls.run("k", async {}).await, Err(RunEnd::Busy));
+        // A second start while it runs is refused (a timeout, so a missing busy check fails
+        // instead of waiting on the file lock forever).
+        let busy =
+            tokio::time::timeout(std::time::Duration::from_secs(2), pulls.run("k", async {}))
+                .await
+                .expect("a second start must be refused at once, not wait");
+        assert_eq!(busy, Err(RunEnd::Busy));
 
         // Pause, then resume at once: the new run starts only after the old one let go.
         assert!(pulls.cancel("k"));
@@ -554,5 +559,40 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.message.contains("too long"));
+    }
+
+    #[tokio::test]
+    async fn a_pull_needs_the_pinned_commit_not_a_branch_name() {
+        // An endpoint that would fail if contacted: the check comes first.
+        let hub = || {
+            HubClient::new(HubConfig {
+                endpoint: Some("http://127.0.0.1:9".into()),
+                ..Default::default()
+            })
+            .unwrap()
+        };
+        let dir = std::env::temp_dir().join(format!("dn-hub-sha-{}", dn_core::Id::new()));
+        let local = Arc::new(LocalModels::new(
+            dir,
+            dn_models::Catalog {
+                version: 1,
+                models: vec![],
+            },
+            dn_models::Machine::cpu_only(1 << 30),
+        ));
+        for bad in ["main", "", "abc", &"g".repeat(40), &"a".repeat(41)] {
+            let err = pull(
+                hub(),
+                Arc::clone(&local),
+                Arc::new(HubPulls::default()),
+                "org/Tiny-GGUF".into(),
+                bad.to_string(),
+                "Tiny-Q4_K_M".into(),
+                |_| {},
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code, "invalid_input", "{bad:?}");
+        }
     }
 }

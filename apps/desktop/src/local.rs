@@ -723,6 +723,15 @@ impl<B: InferenceBackend> LocalModels<B> {
         self.find(id).map(|e| e.name)
     }
 
+    /// Settings › Models opened: subscribe, then re-read Hub downloads (e.g. made by the CLI)
+    /// and the Hugging Face cache in the background; changed rows arrive as events.
+    pub fn watch_and_refresh(self: &Arc<Self>, sink: Sink) -> Vec<LocalModelRow> {
+        let rows = self.watch(sink);
+        let me = Arc::clone(self);
+        tauri::async_runtime::spawn_blocking(move || me.refresh_externals());
+        rows
+    }
+
     pub fn watch(&self, sink: Sink) -> Vec<LocalModelRow> {
         *lock(&self.sink) = Some(sink);
         self.rows()
@@ -1866,6 +1875,63 @@ mod tests {
                 "hfcache/org/Tiny-GGUF/Tiny-Q8_0"
             ],
             "the Hub copy wins; the cache adds only what's new"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn opening_settings_picks_up_models_the_cli_downloaded() {
+        let (d, _rec, lm) = two_ready_models();
+        let lm = Arc::new(lm);
+        // Downloaded by the CLI while the app ran: not listed yet.
+        fake_hub_download(&d.0, "org/Tiny-GGUF", "Tiny-Q4_K_M.gguf", b"1234567");
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let e2 = Arc::clone(&events);
+        let rows = lm.watch_and_refresh(Arc::new(move |ev| lock(&e2).push(ev)));
+        assert!(rows.iter().all(|r| r.origin == ModelOrigin::Catalog));
+        let deadline = Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let seen = lock(&events).iter().any(|e| {
+                matches!(e, LocalModelEvent::Changed { row } if row.id == "hf/org/Tiny-GGUF/Tiny-Q4_K_M")
+            });
+            if seen {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the refresh never reported the new model"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    }
+
+    #[test]
+    fn a_hub_model_that_fails_to_load_is_re_read_and_dropped_when_gone() {
+        let dir = Dir(std::env::temp_dir().join(format!("dn-local-gone-{}", dn_core::Id::new())));
+        std::fs::create_dir_all(&dir.0).unwrap();
+        let path = fake_hub_download(&dir.0, "org/Tiny-GGUF", "Tiny-Q4_K_M.gguf", b"not a gguf");
+        let lm = LocalModels::new(
+            dir.0.clone(),
+            Catalog {
+                version: 1,
+                models: vec![],
+            },
+            Machine::cpu_only(16 << 30),
+        );
+        lm.refresh_externals();
+        let id = "hf/org/Tiny-GGUF/Tiny-Q4_K_M";
+        assert!(lm.is_external(id));
+        // The file goes away behind the app's back (deleted with the CLI, a cleaner…).
+        std::fs::remove_file(&path).unwrap();
+        let mut reg = crate::models::ModelRegistry::default();
+        reg.local = Some(Arc::new(lm));
+        let keys = crate::secrets::Keys::memory();
+        assert!(
+            reg.get(&format!("local:{id}").parse().unwrap(), &keys)
+                .is_err()
+        );
+        assert!(
+            !reg.local.as_ref().unwrap().is_external(id),
+            "re-read after the failed load: the missing model is gone from the list"
         );
     }
 }
