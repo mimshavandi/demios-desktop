@@ -375,7 +375,7 @@ mod tests {
         );
         // The keychain store validates before touching the OS.
         assert!(matches!(
-            KeyringStore::new("io.demios.desktop.test").set(&id, &over),
+            KeyringStore::new("io.demios.app.test").set(&id, &over),
             Err(SecretError::TooLarge { .. })
         ));
     }
@@ -397,7 +397,7 @@ mod tests {
             eprintln!("skipped: a session bus is available");
             return;
         }
-        let r = KeyringStore::new("io.demios.desktop.test").get(&SecretId::provider("openai"));
+        let r = KeyringStore::new("io.demios.app.test").get(&SecretId::provider("openai"));
         assert!(matches!(r, Err(SecretError::Unavailable(_))), "{r:?}");
     }
 
@@ -423,6 +423,6 @@ mod tests {
     #[test]
     #[ignore = "uses the real OS keychain"]
     fn keyring_store_roundtrip() {
-        roundtrip(&KeyringStore::new("io.demios.desktop.test"));
+        roundtrip(&KeyringStore::new("io.demios.app.test"));
     }
 }

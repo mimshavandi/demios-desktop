@@ -24,6 +24,8 @@ Each decision: ID, question, options, recommendation, status, decided-by/date. S
 | D-019 | Register Demios as a Hugging Face "local app" (public upstream PR) | later · now · no | No | decided |
 | D-020 | Which model licences users may download in-app | any with licence shown · allow-list only · extra confirm for unclear | Any; licence and card link shown before download, warning when missing or non-commercial | decided |
 | D-021 | ModelScope as a second source | later · now | Later (HF_ENDPOINT mirrors cover most cases) | decided |
+| D-022 | App id (bundle identifier, data folder, keychain service) | io.demios.Demios · io.demios.app · keep io.demios.desktop | `io.demios.app` (Flathub rejects ids ending in `.desktop`); changed before any release, so no migration | decided |
+| D-023 | MCP servers in the Flathub build | HTTP + bundled servers only · allow host commands via flatpak-spawn --host | HTTP and bundled servers only; local stdio servers only in macOS / Windows / .deb builds | decided |
 | D-015 | How to test the real desktop app | tauri-driver + WebdriverIO e2e in CI on Linux + Windows · Playwright over WebView2 (Windows only) · manual / computer-use on macOS | tauri-driver + WebdriverIO `e2e` job (Linux, Windows); macOS by a documented manual release checklist | decided |
 
 ## Decided
@@ -40,3 +42,5 @@ Each decision: ID, question, options, recommendation, status, decided-by/date. S
 **2026-11-24 — owner decided D-016, D-017, D-018** (answers to the lead's question); T-STORE work started with worker W-store.
 
 **2026-11-24 — owner decided D-019 (no), D-020 (any licence, shown), D-021 (later)**; ADR-0011 accepted.
+
+**2026-11-24 — owner decided D-022 (`io.demios.app`) and D-023 (Flathub: HTTP + bundled MCP only)**, and chose to start the no-account store fixes plus a privacy-policy draft for owner approval.
