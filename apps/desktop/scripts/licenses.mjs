@@ -143,6 +143,25 @@ export function missingRequired(data, required = REQUIRED) {
   return required.filter((n) => !data.packages.some((p) => p.name === n));
 }
 
+/**
+ * npm packages to leave out because they don't ship: `npm_exclude` in licenses-extra.json,
+ * each with a reason (e.g. replaced by a stub at build time). Fails on an entry without one.
+ */
+export function excludeNpm(list, exclude) {
+  for (const e of exclude) {
+    if (typeof e.name !== "string" || typeof e.reason !== "string" || e.reason.trim() === "") {
+      throw new Error(`licenses-extra.json npm_exclude entries need a name and a reason: ${JSON.stringify(e)}`);
+    }
+  }
+  const names = new Set(exclude.map((e) => e.name));
+  return list.filter((p) => !names.has(p.name));
+}
+
+/** Per-package licence exceptions for npm (`npm_exceptions`), like deny.toml's crate ones. */
+export function npmExceptions(entries) {
+  return new Map(entries.map((e) => [e.name, new Set(e.accepted)]));
+}
+
 /** One entry per name@version (several npm roots can share packages). */
 export function dedupe(list) {
   const seen = new Map();
@@ -151,7 +170,7 @@ export function dedupe(list) {
 }
 
 /** Combines and validates; texts are stored once and referenced by index. */
-export function build({ rust, npm, extra, accepted }) {
+export function build({ rust, npm, extra, accepted, npmExceptions = new Map() }) {
   const problems = [];
   const texts = [];
   const index = new Map();
@@ -176,7 +195,7 @@ export function build({ rust, npm, extra, accepted }) {
   };
   const forCrate = (name) => new Set([...accepted.all, ...(accepted.perCrate.get(name) ?? [])]);
   add("rust", rust, (l, p) => satisfied(l, forCrate(p.name)));
-  add("npm", npm, (l) => satisfied(l, accepted.all));
+  add("npm", npm, (l, p) => satisfied(l, new Set([...accepted.all, ...(npmExceptions.get(p.name) ?? [])])));
   add("bundled", extra, (l) => satisfied(l, new Set([...accepted.all, ...EXTRA_ACCEPTED])));
   packages.sort((a, b) => a.name.localeCompare(b.name) || a.version.localeCompare(b.version));
   return { problems, data: { packages, texts } };
@@ -202,10 +221,17 @@ function main() {
   }));
   // Each npm root whose code ships: the UI, plus any listed in licenses-extra.json (e.g. the
   // artifact sandbox once it has its own package.json). Missing roots are skipped.
-  const extraRoots = JSON.parse(readFileSync(join(appDir, "licenses-extra.json"), "utf8")).npm_roots ?? [];
+  const extraConfig = JSON.parse(readFileSync(join(appDir, "licenses-extra.json"), "utf8"));
+  const extraRoots = extraConfig.npm_roots ?? [];
   const npm = [appDir, ...extraRoots.map((r) => join(appDir, r)).filter((r) => existsSync(join(r, "package.json")))]
     .flatMap((r) => npmLicences(r));
-  const { problems, data } = build({ rust: rustLicences(), npm: dedupe(npm), extra, accepted: acceptedIds() });
+  const { problems, data } = build({
+    rust: rustLicences(),
+    npm: excludeNpm(dedupe(npm), extraConfig.npm_exclude ?? []),
+    extra,
+    accepted: acceptedIds(),
+    npmExceptions: npmExceptions(extraConfig.npm_exceptions ?? []),
+  });
   for (const n of missingRequired(data)) problems.push(`${n} is missing from the list`);
   if (problems.length > 0) {
     console.error(`Licence check failed:\n  ${problems.join("\n  ")}`);

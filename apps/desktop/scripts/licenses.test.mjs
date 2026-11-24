@@ -1,7 +1,7 @@
 // npm run test:scripts (T-STORE-07): the licence checks that gate CI.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { acceptedIds, build, dedupe, listRequired, missingRequired, satisfied } from "./licenses.mjs";
+import { acceptedIds, build, dedupe, excludeNpm, listRequired, missingRequired, npmExceptions, satisfied } from "./licenses.mjs";
 import { npmLs } from "./npm-licenses.mjs";
 
 const accepted = new Set(["MIT", "Apache-2.0", "ISC", "Apache-2.0 WITH LLVM-exception"]);
@@ -81,4 +81,22 @@ test("npm ls: a non-zero exit with JSON output is used, without JSON it fails", 
 test("packages shared by several npm roots are listed once", () => {
   const p = { name: "a", version: "1", licence: "MIT", texts: ["t"] };
   assert.equal(dedupe([p, { ...p }, { ...p, version: "2" }]).length, 2);
+});
+
+test("excluded npm packages (not shipped) need a reason and are left out", () => {
+  const list = [{ name: "elkjs", version: "1", licence: "EPL-2.0 OR GPL-3.0", texts: ["t"] }, { name: "a", version: "1", licence: "MIT", texts: ["t"] }];
+  assert.deepEqual(excludeNpm(list, [{ name: "elkjs", reason: "stubbed at build time" }]).map((p) => p.name), ["a"]);
+  assert.throws(() => excludeNpm(list, [{ name: "elkjs" }]), /need a name and a reason/);
+});
+
+test("npm exceptions apply to the named package only", () => {
+  const exc = npmExceptions([{ name: "robust-predicates", accepted: ["Unlicense"] }]);
+  const { problems } = build({
+    rust: [],
+    npm: [pkg("robust-predicates", "Unlicense"), pkg("other", "Unlicense")],
+    extra: [],
+    accepted: ok,
+    npmExceptions: exc,
+  });
+  assert.deepEqual(problems, ['npm other 1.0.0: licence "Unlicense" is not accepted']);
 });
