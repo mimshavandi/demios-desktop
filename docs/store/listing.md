@@ -38,10 +38,11 @@ These wait until they ship in the build being listed:
 
 | Field | Value | Who decides |
 |---|---|---|
-| `copyright` | Copyright © 2026 The Demios Desktop contributors. Licensed under the Apache License 2.0. | Set (Apache-2.0 line; change the holder if the owner prefers a name) |
+| `copyright` | Copyright © 2026 DigiNote Inc. Licensed under the Apache License 2.0. | Set (owner) |
 | `category` | Productivity | Set |
 | `homepage` | https://github.com/mimshavandi/demios-desktop | Placeholder until the owner supplies a product URL |
-| `publisher` | *not set*. Tauri falls back to the identifier's second part (`demios`). | **Owner** (must match the Partner Center publisher for MSIX) |
+| `publisher` | DigiNote Inc. | Set (owner). Must match the Partner Center publisher for MSIX |
+| Support contact | mahdi@demios.io | Set (owner). Listing field only; not in `tauri.conf.json` |
 
 ## Still to do (T-STORE-12)
 
