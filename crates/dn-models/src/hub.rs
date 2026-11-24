@@ -255,8 +255,8 @@ pub enum LicenseWarning {
     NonCommercial,
     /// `other` or a model-specific licence: read the card.
     Custom,
-    /// Commercial use allowed under an acceptable-use policy (Llama, Gemma): allowed per
-    /// like any licence, but worth a note next to it.
+    /// Commercial use allowed under an acceptable-use policy (Llama, Gemma): allowed like
+    /// any licence, but worth a note next to it.
     UsePolicy,
 }
 
