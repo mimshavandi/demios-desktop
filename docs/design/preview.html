@@ -1,0 +1,386 @@
+<title>Demios Desktop Design</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: a live mock of the three-pane app on top, then foundations and component states below. Tokens mirror ui/design-tokens/tokens.json. */
+:root {
+  --dn-color-bg:#FAFAFB; --dn-color-surface:#FFFFFF; --dn-color-surface-sunken:#F3F3F6; --dn-color-surface-raised:#FFFFFF;
+  --dn-color-sidebar:#F3F3F6; --dn-color-border:#E3E3E9; --dn-color-border-strong:#C9C9D3;
+  --dn-color-text:#16161D; --dn-color-text-muted:#4B4B58; --dn-color-text-subtle:#6A6A78; --dn-color-text-on-accent:#FFFFFF;
+  --dn-color-accent:#5658DD; --dn-color-accent-hover:#4840D0; --dn-color-accent-soft:#ECEDFC; --dn-color-accent-text:#4436BF;
+  --dn-color-local:#0E7A5C; --dn-color-local-soft:#E3F8F1;
+  --dn-color-danger:#C42B2B; --dn-color-danger-soft:#FDECEC; --dn-color-warning:#975A00; --dn-color-warning-soft:#FDF3E1;
+  --dn-color-success:#177040; --dn-color-success-soft:#E6F5EC; --dn-color-focus:#5658DD; --dn-color-code-bg:#F3F3F6;
+  --dn-shadow-1:0 1px 2px rgba(22,22,29,.06); --dn-shadow-2:0 4px 12px rgba(22,22,29,.08); --dn-shadow-3:0 16px 40px rgba(22,22,29,.16);
+  --dn-font-sans:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI Variable Text","Segoe UI",system-ui,Ubuntu,"Noto Sans",sans-serif;
+  --dn-font-mono:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Menlo,Consolas,monospace;
+  --dn-radius-sm:4px; --dn-radius-md:6px; --dn-radius-lg:10px; --dn-radius-xl:14px; --dn-radius-full:999px;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --dn-color-bg:#111115; --dn-color-surface:#18181D; --dn-color-surface-sunken:#0D0D10; --dn-color-surface-raised:#212128;
+  --dn-color-sidebar:#141418; --dn-color-border:#2B2B34; --dn-color-border-strong:#3D3D48;
+  --dn-color-text:#EDEDF2; --dn-color-text-muted:#B6B6C2; --dn-color-text-subtle:#8E8E9C;
+  --dn-color-accent:#5E61E6; --dn-color-accent-hover:#4D50D4; --dn-color-accent-soft:#25264A; --dn-color-accent-text:#A1AAEF;
+  --dn-color-local:#4DEABE; --dn-color-local-soft:#10322A;
+  --dn-color-danger:#F47A7A; --dn-color-danger-soft:#3A1C1F; --dn-color-warning:#F2B84B; --dn-color-warning-soft:#36290F;
+  --dn-color-success:#5BD68D; --dn-color-success-soft:#14301F; --dn-color-focus:#A1AAEF; --dn-color-code-bg:#0D0D10;
+  --dn-shadow-1:0 1px 2px rgba(0,0,0,.4); --dn-shadow-2:0 4px 12px rgba(0,0,0,.45); --dn-shadow-3:0 16px 40px rgba(0,0,0,.6);
+  color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --dn-color-bg:#111115; --dn-color-surface:#18181D; --dn-color-surface-sunken:#0D0D10; --dn-color-surface-raised:#212128;
+  --dn-color-sidebar:#141418; --dn-color-border:#2B2B34; --dn-color-border-strong:#3D3D48;
+  --dn-color-text:#EDEDF2; --dn-color-text-muted:#B6B6C2; --dn-color-text-subtle:#8E8E9C;
+  --dn-color-accent:#5E61E6; --dn-color-accent-hover:#4D50D4; --dn-color-accent-soft:#25264A; --dn-color-accent-text:#A1AAEF;
+  --dn-color-local:#4DEABE; --dn-color-local-soft:#10322A;
+  --dn-color-danger:#F47A7A; --dn-color-danger-soft:#3A1C1F; --dn-color-warning:#F2B84B; --dn-color-warning-soft:#36290F;
+  --dn-color-success:#5BD68D; --dn-color-success-soft:#14301F; --dn-color-focus:#A1AAEF; --dn-color-code-bg:#0D0D10;
+  --dn-shadow-1:0 1px 2px rgba(0,0,0,.4); --dn-shadow-2:0 4px 12px rgba(0,0,0,.45); --dn-shadow-3:0 16px 40px rgba(0,0,0,.6);
+  color-scheme: dark; }
+
+* { box-sizing: border-box; }
+body { background: var(--dn-color-bg); color: var(--dn-color-text); font-family: var(--dn-font-sans); font-size: 14px; line-height: 20px; -webkit-font-smoothing: antialiased; }
+.page { max-width: 1240px; margin: 0 auto; padding-block: 32px 64px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; gap: 48px; }
+h1 { font-size: 24px; line-height: 32px; font-weight: 600; margin: 0; text-wrap: balance; }
+h2 { font-size: 17px; line-height: 24px; font-weight: 600; margin: 0; }
+h3 { font-size: 14px; line-height: 20px; font-weight: 600; margin: 0; }
+p { margin: 0; }
+.muted { color: var(--dn-color-text-muted); }
+.subtle { color: var(--dn-color-text-subtle); font-size: 13px; line-height: 18px; }
+.intro { display: grid; gap: 8px; max-width: 68ch; }
+section { display: grid; gap: 16px; min-width: 0; }
+code, .mono { font-family: var(--dn-font-mono); font-size: 12.5px; }
+:focus-visible { outline: 2px solid var(--dn-color-focus); outline-offset: 2px; border-radius: var(--dn-radius-sm); }
+button { font: inherit; }
+
+/* ---- app mock ---- */
+.app { border: 1px solid var(--dn-color-border); border-radius: var(--dn-radius-xl); overflow: hidden; background: var(--dn-color-surface); box-shadow: var(--dn-shadow-3); display: grid; grid-template-rows: 40px 1fr; min-height: 600px; }
+.titlebar { display: flex; align-items: center; gap: 12px; padding: 0 14px; border-bottom: 1px solid var(--dn-color-border); background: var(--dn-color-sidebar); }
+.lights { display: flex; gap: 8px; } .lights i { width: 12px; height: 12px; border-radius: 50%; background: var(--dn-color-border-strong); display: block; }
+.titlebar .t { flex: 1; text-align: center; font-weight: 500; color: var(--dn-color-text-muted); font-size: 13px; }
+.panes { display: grid; grid-template-columns: 240px minmax(0, 1fr) minmax(0, 1fr); min-height: 0; }
+.sidebar { background: var(--dn-color-sidebar); border-right: 1px solid var(--dn-color-border); padding: 12px 8px; display: flex; flex-direction: column; gap: 4px; }
+.nav { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: var(--dn-radius-md); color: var(--dn-color-text-muted); }
+.nav.sel { background: var(--dn-color-surface); color: var(--dn-color-text); box-shadow: var(--dn-shadow-1); }
+.nav kbd { margin-left: auto; font-size: 11px; color: var(--dn-color-text-subtle); font-family: var(--dn-font-sans); }
+.group { font-size: 12px; color: var(--dn-color-text-subtle); padding: 12px 8px 4px; font-weight: 500; }
+.sidebar .spacer { flex: 1; }
+svg.i { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+.chat { display: grid; grid-template-rows: 1fr auto; min-width: 0; border-right: 1px solid var(--dn-color-border); }
+.msgs { padding: 24px 28px; display: flex; flex-direction: column; gap: 20px; overflow: hidden; }
+.user { align-self: flex-end; background: var(--dn-color-surface-sunken); padding: 10px 14px; border-radius: var(--dn-radius-lg); max-width: 80%; font-size: 15px; line-height: 24px; }
+.asst { font-size: 15px; line-height: 24px; display: grid; gap: 10px; }
+.meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.badge { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; line-height: 16px; padding: 2px 8px; border-radius: var(--dn-radius-full); border: 1px solid var(--dn-color-border); color: var(--dn-color-text-muted); background: var(--dn-color-surface); white-space: nowrap; }
+.badge.local { background: var(--dn-color-local-soft); color: var(--dn-color-local); border-color: transparent; }
+.badge.accent { background: var(--dn-color-accent-soft); color: var(--dn-color-accent-text); border-color: transparent; }
+.badge.warning { background: var(--dn-color-warning-soft); color: var(--dn-color-warning); border-color: transparent; }
+.badge.danger { background: var(--dn-color-danger-soft); color: var(--dn-color-danger); border-color: transparent; }
+.badge.success { background: var(--dn-color-success-soft); color: var(--dn-color-success); border-color: transparent; }
+.badge svg.i { width: 12px; height: 12px; }
+.thinking { font-size: 13px; color: var(--dn-color-text-subtle); display: flex; gap: 6px; align-items: center; }
+.card { border: 1px solid var(--dn-color-border); border-radius: var(--dn-radius-lg); background: var(--dn-color-surface); padding: 12px 14px; display: grid; gap: 8px; font-size: 14px; line-height: 20px; }
+.card .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.card .row .grow { flex: 1; min-width: 0; }
+.art { display: flex; gap: 12px; align-items: center; }
+.art .ico { width: 36px; height: 36px; border-radius: var(--dn-radius-md); background: var(--dn-color-accent-soft); color: var(--dn-color-accent-text); display: grid; place-items: center; }
+.approval { border-color: var(--dn-color-warning); }
+.diff { font-family: var(--dn-font-mono); font-size: 12.5px; line-height: 18px; background: var(--dn-color-code-bg); border-radius: var(--dn-radius-md); padding: 8px 10px; overflow-x: auto; white-space: pre; }
+.diff .add { color: var(--dn-color-success); }
+.btns { display: flex; gap: 8px; flex-wrap: wrap; }
+.btn { height: 32px; padding: 0 12px; border-radius: var(--dn-radius-md); border: 1px solid var(--dn-color-border-strong); background: var(--dn-color-surface); color: var(--dn-color-text); font-weight: 500; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; transition: background 120ms cubic-bezier(.2,0,0,1); }
+.btn:hover { background: var(--dn-color-surface-sunken); }
+.btn.primary { background: var(--dn-color-accent); border-color: var(--dn-color-accent); color: var(--dn-color-text-on-accent); }
+.btn.primary:hover { background: var(--dn-color-accent-hover); }
+.btn.ghost { border-color: transparent; background: transparent; color: var(--dn-color-text-muted); }
+.btn.ghost:hover { background: var(--dn-color-surface-sunken); color: var(--dn-color-text); }
+.btn.danger { background: var(--dn-color-danger); border-color: var(--dn-color-danger); color: var(--dn-color-text-on-accent); }
+.btn.sm { height: 28px; padding: 0 10px; font-size: 13px; }
+.btn[disabled] { opacity: .5; cursor: not-allowed; }
+.btn kbd { font-family: var(--dn-font-sans); font-size: 11px; opacity: .8; }
+.composer { margin: 0 20px 20px; border: 1px solid var(--dn-color-border-strong); border-radius: var(--dn-radius-xl); background: var(--dn-color-surface); padding: 10px 10px 10px 14px; display: grid; gap: 8px; box-shadow: var(--dn-shadow-1); }
+.composer .ph { color: var(--dn-color-text-subtle); font-size: 15px; line-height: 24px; }
+.composer .bar { display: flex; gap: 8px; align-items: center; }
+.composer .bar .grow { flex: 1; }
+.send { width: 32px; height: 32px; border-radius: var(--dn-radius-md); background: var(--dn-color-accent); color: var(--dn-color-text-on-accent); display: grid; place-items: center; border: 0; }
+
+.artpane { display: grid; grid-template-rows: auto auto 1fr; min-width: 0; background: var(--dn-color-bg); }
+.arthead { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--dn-color-border); background: var(--dn-color-surface); }
+.arthead .grow { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tabs { display: flex; gap: 2px; padding: 8px 14px 0; border-bottom: 1px solid var(--dn-color-border); background: var(--dn-color-surface); }
+.tab { padding: 6px 10px 8px; color: var(--dn-color-text-muted); border-bottom: 2px solid transparent; font-weight: 500; }
+.tab.sel { color: var(--dn-color-text); border-color: var(--dn-color-accent); }
+.render { margin: 16px; border-radius: var(--dn-radius-lg); border: 1px solid var(--dn-color-border); background: var(--dn-color-surface); display: grid; place-items: center; padding: 24px; }
+.timer { text-align: center; display: grid; gap: 12px; }
+.timer .big { font-size: 56px; line-height: 1; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -1px; }
+.ring { width: 180px; height: 180px; margin: 0 auto; }
+
+/* ---- foundations ---- */
+.swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+.sw { border: 1px solid var(--dn-color-border); border-radius: var(--dn-radius-lg); overflow: hidden; background: var(--dn-color-surface); }
+.sw .chip { height: 48px; }
+.sw .lbl { padding: 8px 10px; display: grid; gap: 2px; }
+.sw .lbl b { font-weight: 500; font-size: 13px; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+.panel { border: 1px solid var(--dn-color-border); border-radius: var(--dn-radius-lg); background: var(--dn-color-surface); padding: 16px; display: grid; gap: 12px; min-width: 0; }
+.scale { display: grid; gap: 6px; }
+.scale div { display: flex; align-items: baseline; gap: 12px; }
+.scale span.k { width: 64px; flex: none; color: var(--dn-color-text-subtle); font-size: 12px; font-family: var(--dn-font-mono); }
+.spaces { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
+.spaces div { display: grid; gap: 4px; justify-items: center; font-size: 11px; color: var(--dn-color-text-subtle); }
+.spaces i { display: block; background: var(--dn-color-accent-soft); border: 1px solid var(--dn-color-accent); border-radius: 2px; }
+.states { display: grid; gap: 10px; }
+.stateRow { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.stateRow > span.k { width: 72px; flex: none; color: var(--dn-color-text-subtle); font-size: 12px; }
+.field { display: grid; gap: 4px; max-width: 320px; }
+.field label { font-weight: 500; font-size: 13px; }
+.input { height: 32px; border: 1px solid var(--dn-color-border-strong); border-radius: var(--dn-radius-md); padding: 0 10px; background: var(--dn-color-surface); color: var(--dn-color-text); display: flex; align-items: center; }
+.input.invalid { border-color: var(--dn-color-danger); }
+.err { color: var(--dn-color-danger); font-size: 13px; line-height: 18px; display: flex; gap: 4px; align-items: center; }
+.inline { border-radius: var(--dn-radius-md); padding: 10px 12px; display: flex; gap: 8px; align-items: flex-start; font-size: 13px; line-height: 18px; }
+.inline.warning { background: var(--dn-color-warning-soft); color: var(--dn-color-text); }
+.inline.warning svg { color: var(--dn-color-warning); }
+.inline.error { background: var(--dn-color-danger-soft); }
+.inline.error svg { color: var(--dn-color-danger); }
+.skel { height: 12px; border-radius: var(--dn-radius-sm); background: var(--dn-color-surface-sunken); }
+.empty { text-align: center; display: grid; gap: 8px; justify-items: center; padding: 20px; }
+.empty .ico { width: 40px; height: 40px; border-radius: 50%; background: var(--dn-color-surface-sunken); display: grid; place-items: center; color: var(--dn-color-text-subtle); }
+.modelrow { display: flex; gap: 10px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--dn-color-border); flex-wrap: wrap; }
+.modelrow:last-child { border-bottom: 0; }
+.modelrow .grow { flex: 1; min-width: 160px; display: grid; gap: 2px; }
+.progress { height: 6px; border-radius: var(--dn-radius-full); background: var(--dn-color-surface-sunken); overflow: hidden; width: 140px; }
+.progress i { display: block; height: 100%; width: 62%; background: var(--dn-color-accent); }
+.toast { display: flex; gap: 10px; align-items: center; padding: 10px 12px; border-radius: var(--dn-radius-lg); background: var(--dn-color-surface-raised); border: 1px solid var(--dn-color-border); box-shadow: var(--dn-shadow-2); max-width: 380px; }
+.toast .grow { flex: 1; }
+.themebar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.themebar .btn[aria-pressed="true"] { background: var(--dn-color-accent-soft); color: var(--dn-color-accent-text); border-color: transparent; }
+
+@media (max-width: 1100px) { .panes { grid-template-columns: 200px minmax(0,1fr); } .artpane { display: none; } }
+@media (max-width: 700px) { .panes { grid-template-columns: minmax(0,1fr); } .sidebar { display: none; } .app { min-height: 0; } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol>
+  <symbol id="folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+  <symbol id="msg" viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></symbol>
+  <symbol id="cpu" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></symbol>
+  <symbol id="gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></symbol>
+  <symbol id="lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></symbol>
+  <symbol id="code" viewBox="0 0 24 24"><path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/></symbol>
+  <symbol id="tool" viewBox="0 0 24 24"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.6 2.6-2.4-.6-.6-2.4z"/></symbol>
+  <symbol id="check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="alert" viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></symbol>
+  <symbol id="up" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></symbol>
+  <symbol id="clip" viewBox="0 0 24 24"><path d="m21 11-8.5 8.5a5 5 0 0 1-7-7L14 4a3.5 3.5 0 0 1 5 5l-8.5 8.5a2 2 0 0 1-3-3L15 7"/></symbol>
+  <symbol id="copy" viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></symbol>
+  <symbol id="down" viewBox="0 0 24 24"><path d="M12 5v14M5 12l7 7 7-7"/></symbol>
+  <symbol id="chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+  <symbol id="x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+</svg>
+
+<div class="page">
+  <header class="intro">
+    <p class="subtle">demios-desktop · design standard · T-DES-01 · proposed</p>
+    <h1>Quiet chrome, visible privacy</h1>
+    <p class="muted">Neutral surfaces so the conversation and the artifact carry the page. Indigo marks the main action and the current selection. Mint means the model is running on this device. Red, amber and green only ever mean status.</p>
+    <div class="themebar" role="group" aria-label="Preview theme">
+      <span class="subtle">Preview in</span>
+      <button class="btn sm" type="button" id="th-system" data-t="" aria-pressed="true">System</button>
+      <button class="btn sm" type="button" id="th-light" data-t="light" aria-pressed="false">Light</button>
+      <button class="btn sm" type="button" id="th-dark" data-t="dark" aria-pressed="false">Dark</button>
+    </div>
+  </header>
+
+  <section aria-labelledby="s-app">
+    <h2 id="s-app">The app</h2>
+    <div class="app" role="img" aria-label="Mock of the desktop app: sidebar, chat with an approval card, and an artifact pane showing a pomodoro timer">
+      <div class="titlebar">
+        <div class="lights"><i></i><i></i><i></i></div>
+        <div class="t">Pomodoro timer</div>
+        <span class="badge local"><svg class="i"><use href="#lock"/></svg>On this device · Qwen3 8B</span>
+      </div>
+      <div class="panes">
+        <nav class="sidebar">
+          <div class="nav"><svg class="i"><use href="#plus"/></svg>New chat<kbd>⌘N</kbd></div>
+          <div class="nav"><svg class="i"><use href="#search"/></svg>Search<kbd>⌘K</kbd></div>
+          <div class="nav"><svg class="i"><use href="#folder"/></svg>Projects</div>
+          <div class="group">Today</div>
+          <div class="nav sel"><svg class="i"><use href="#msg"/></svg>Pomodoro timer</div>
+          <div class="nav"><svg class="i"><use href="#msg"/></svg>Quarterly notes summary</div>
+          <div class="group">Last week</div>
+          <div class="nav"><svg class="i"><use href="#msg"/></svg>Trip budget</div>
+          <div class="nav"><svg class="i"><use href="#msg"/></svg>Rust lifetimes question</div>
+          <div class="spacer"></div>
+          <div class="nav"><svg class="i"><use href="#cpu"/></svg>Models</div>
+          <div class="nav"><svg class="i"><use href="#gear"/></svg>Settings<kbd>⌘,</kbd></div>
+        </nav>
+
+        <div class="chat">
+          <div class="msgs">
+            <div class="user">Make me a pomodoro timer, 25 minutes, with a ring that empties.</div>
+            <div class="asst">
+              <div class="thinking"><svg class="i"><use href="#chev"/></svg>Thought for 4 s</div>
+              <p>Here's a timer with a ring that drains as time runs out. Start, pause and reset are on the keyboard too.</p>
+              <div class="card art">
+                <div class="ico"><svg class="i"><use href="#code"/></svg></div>
+                <div class="grow"><b>Pomodoro timer</b><div class="subtle">HTML · v2</div></div>
+                <button class="btn sm" type="button">Open</button>
+              </div>
+              <div class="card approval" aria-label="Approval request">
+                <div class="row">
+                  <svg class="i" style="color:var(--dn-color-warning)"><use href="#tool"/></svg>
+                  <b class="grow">Save to <code>~/Documents/timer.html</code></b>
+                  <span class="badge warning">Writes a file</span>
+                </div>
+                <div class="subtle">filesystem · write_file</div>
+                <div class="diff"><span class="add">+ &lt;!doctype html&gt;</span>
+<span class="add">+ &lt;title&gt;Pomodoro timer&lt;/title&gt; …</span></div>
+                <div class="btns">
+                  <button class="btn primary sm" type="button">Allow once <kbd>⌘↵</kbd></button>
+                  <button class="btn sm" type="button">Always allow in this chat</button>
+                  <button class="btn ghost sm" type="button">Deny</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="composer">
+            <div class="ph">Reply…</div>
+            <div class="bar">
+              <button class="btn ghost sm" type="button" aria-label="Attach file"><svg class="i"><use href="#clip"/></svg></button>
+              <span class="badge local"><svg class="i"><use href="#lock"/></svg>Qwen3 8B</span>
+              <span class="grow"></span>
+              <button class="send" type="button" aria-label="Send"><svg class="i"><use href="#up"/></svg></button>
+            </div>
+          </div>
+        </div>
+
+        <aside class="artpane" aria-label="Artifact">
+          <div class="arthead">
+            <span class="grow">Pomodoro timer</span>
+            <button class="btn sm" type="button">v2 <svg class="i"><use href="#chev"/></svg></button>
+            <button class="btn ghost sm" type="button" aria-label="Copy"><svg class="i"><use href="#copy"/></svg></button>
+            <button class="btn ghost sm" type="button" aria-label="Download"><svg class="i"><use href="#down"/></svg></button>
+            <button class="btn ghost sm" type="button" aria-label="Close"><svg class="i"><use href="#x"/></svg></button>
+          </div>
+          <div class="tabs" role="tablist"><span class="tab sel" role="tab" aria-selected="true">Preview</span><span class="tab" role="tab" aria-selected="false">Code</span></div>
+          <div class="render">
+            <div class="timer">
+              <svg class="ring" viewBox="0 0 100 100" aria-hidden="true">
+                <circle cx="50" cy="50" r="44" fill="none" stroke="var(--dn-color-surface-sunken)" stroke-width="7"/>
+                <circle cx="50" cy="50" r="44" fill="none" stroke="var(--dn-color-accent)" stroke-width="7" stroke-linecap="round" stroke-dasharray="276.5" stroke-dashoffset="85" transform="rotate(-90 50 50)"/>
+              </svg>
+              <div class="big">17:12</div>
+              <div class="btns" style="justify-content:center"><button class="btn primary sm" type="button">Pause</button><button class="btn sm" type="button">Reset</button></div>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </div>
+    <p class="subtle">Rendered in the sandbox, the artifact is the model's own HTML. The app's tokens style only the chrome around it.</p>
+  </section>
+
+  <section aria-labelledby="s-color">
+    <h2 id="s-color">Colour roles</h2>
+    <div class="swatches" id="swatches"></div>
+    <p class="subtle">50 text/background pairs are checked by <code>ui/design-tokens/scripts/build.mjs</code> in both themes: body text at least 7:1, everything else at least 4.5:1, focus ring at least 3:1.</p>
+  </section>
+
+  <section aria-labelledby="s-type">
+    <h2 id="s-type">Type, space and shape</h2>
+    <div class="grid2">
+      <div class="panel scale">
+        <h3>System fonts, one scale</h3>
+        <div><span class="k">2xl 24</span><span style="font-size:24px;line-height:32px;font-weight:600">Settings</span></div>
+        <div><span class="k">xl 20</span><span style="font-size:20px;line-height:28px;font-weight:600">Models on this device</span></div>
+        <div><span class="k">lg 17</span><span style="font-size:17px;line-height:24px;font-weight:600">Connected servers</span></div>
+        <div><span class="k">md 15</span><span style="font-size:15px;line-height:24px">Messages read at 15/24 for comfort.</span></div>
+        <div><span class="k">base 14</span><span>Interface text, labels and buttons.</span></div>
+        <div><span class="k">sm 13</span><span style="font-size:13px">Help text and metadata</span></div>
+        <div><span class="k">mono</span><span class="mono">dn run --model qwen3-8b-q4_k_m.gguf</span></div>
+      </div>
+      <div class="panel">
+        <h3>4 px spacing grid</h3>
+        <div class="spaces">
+          <div><i style="width:4px;height:4px"></i>1</div><div><i style="width:8px;height:8px"></i>2</div><div><i style="width:12px;height:12px"></i>3</div><div><i style="width:16px;height:16px"></i>4</div><div><i style="width:24px;height:24px"></i>6</div><div><i style="width:32px;height:32px"></i>8</div><div><i style="width:48px;height:48px"></i>12</div><div><i style="width:64px;height:64px"></i>16</div>
+        </div>
+        <h3>Radius by role</h3>
+        <div class="btns">
+          <span class="badge">full · pills</span>
+          <button class="btn sm" type="button">md 6 · controls</button>
+          <span class="card" style="padding:6px 10px">lg 10 · cards</span>
+          <span class="card" style="padding:6px 10px;border-radius:var(--dn-radius-xl)">xl 14 · dialogs</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-comp">
+    <h2 id="s-comp">Components and their states</h2>
+    <div class="grid2">
+      <div class="panel states">
+        <h3>Buttons</h3>
+        <div class="stateRow"><span class="k">Variants</span><button class="btn primary" type="button">Download model</button><button class="btn" type="button">Add key</button><button class="btn ghost" type="button">Cancel</button><button class="btn danger" type="button">Delete model</button></div>
+        <div class="stateRow"><span class="k">Loading</span><button class="btn primary" type="button" aria-busy="true">Downloading…</button></div>
+        <div class="stateRow"><span class="k">Disabled</span><button class="btn" type="button" disabled>Not available offline</button></div>
+        <p class="subtle">Verb + noun labels. One primary per view. Submit buttons are never disabled to signal errors; the form explains what's missing.</p>
+      </div>
+      <div class="panel states">
+        <h3>Fields</h3>
+        <div class="field"><label for="k1">Anthropic API key</label><div class="input" id="k1">sk-ant-••••••••••••</div><span class="subtle">Stored in your system keychain</span></div>
+        <div class="field"><label for="k2">Server URL</label><div class="input invalid" id="k2">localhost:11434</div><span class="err"><svg class="i" style="width:14px;height:14px"><use href="#alert"/></svg>Add http:// or https:// to the start</span></div>
+      </div>
+      <div class="panel">
+        <h3>Models: fit and download states</h3>
+        <div>
+          <div class="modelrow"><div class="grow"><b>Qwen3 8B · Q4_K_M</b><span class="subtle">4.7 GB · 38 tokens/s on this Mac</span></div><span class="badge success"><svg class="i"><use href="#check"/></svg>Ready</span></div>
+          <div class="modelrow"><div class="grow"><b>Qwen3 30B-A3B · Q4_K_M</b><span class="subtle">17.3 GB · experts offloaded to RAM</span></div><span class="badge warning"><svg class="i"><use href="#alert"/></svg>Caution</span></div>
+          <div class="modelrow"><div class="grow"><b>Llama 3.3 70B · Q4_K_M</b><span class="subtle">Needs 42 GB, this Mac has 16 GB</span></div><span class="badge danger">Won't fit</span></div>
+          <div class="modelrow"><div class="grow"><b>Gemma 3 12B · Q4_K_M</b><span class="subtle">4.4 of 7.1 GB · 3 min left</span></div><div class="progress" role="progressbar" aria-valuenow="62" aria-valuemin="0" aria-valuemax="100" aria-label="Download progress"><i></i></div><button class="btn ghost sm" type="button">Pause</button></div>
+        </div>
+      </div>
+      <div class="panel states">
+        <h3>Feedback</h3>
+        <div class="inline warning"><svg class="i"><use href="#alert"/></svg><div><b>No model connected.</b> Download one to run on this device, or add a key for a provider.</div></div>
+        <div class="inline error"><svg class="i"><use href="#alert"/></svg><div><b>Couldn't reach Anthropic.</b> Check your connection, then retry. Your message is kept.</div></div>
+        <div class="toast" role="status"><svg class="i" style="color:var(--dn-color-success)"><use href="#check"/></svg><span class="grow">Chat deleted</span><button class="btn ghost sm" type="button">Undo</button></div>
+        <div style="display:grid;gap:8px" aria-label="Loading chats"><div class="skel" style="width:70%"></div><div class="skel" style="width:55%"></div><div class="skel" style="width:62%"></div></div>
+        <div class="empty"><div class="ico"><svg class="i"><use href="#tool"/></svg></div><b>No tool servers yet</b><span class="subtle">Connect an MCP server to let the model read files, search or act for you.</span><button class="btn primary sm" type="button">Add server</button></div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+(function () {
+  var roles = [
+    ["bg","Page"],["surface","Panels, messages"],["sidebar","Sidebar, title bar"],["surface-sunken","Your messages, code"],
+    ["border","Dividers"],["text","Body text"],["text-muted","Secondary text"],["text-subtle","Metadata"],
+    ["accent","Primary action, selection"],["accent-soft","Selected background"],["local","On this device"],
+    ["danger","Errors, destructive"],["warning","Risk, caution"],["success","Done, ready"]
+  ];
+  var host = document.getElementById("swatches");
+  var cs = getComputedStyle(document.documentElement);
+  function draw() {
+    host.innerHTML = "";
+    roles.forEach(function (r) {
+      var el = document.createElement("div");
+      el.className = "sw";
+      var v = cs.getPropertyValue("--dn-color-" + r[0]).trim();
+      el.innerHTML = '<div class="chip" style="background:var(--dn-color-' + r[0] + ')"></div><div class="lbl"><b>' + r[0] + '</b><span class="subtle">' + r[1] + ' · <span class="mono">' + v + '</span></span></div>';
+      host.appendChild(el);
+    });
+  }
+  draw();
+  var btns = Array.prototype.slice.call(document.querySelectorAll(".themebar .btn"));
+  btns.forEach(function (b) {
+    b.addEventListener("click", function () {
+      var t = b.getAttribute("data-t");
+      if (t) document.documentElement.setAttribute("data-theme", t); else document.documentElement.removeAttribute("data-theme");
+      btns.forEach(function (x) { x.setAttribute("aria-pressed", String(x === b)); });
+      cs = getComputedStyle(document.documentElement); draw();
+    });
+  });
+  if (window.matchMedia) { var mq = window.matchMedia("(prefers-color-scheme: dark)"); if (mq.addEventListener) mq.addEventListener("change", function () { cs = getComputedStyle(document.documentElement); draw(); }); }
+})();
+</script>
