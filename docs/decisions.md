@@ -17,6 +17,7 @@ Each decision: ID, question, options, recommendation, status, decided-by/date. S
 | D-011 | MVP platform order | macOS first, Win/Linux compile-only · all three at MVP | **macOS first** (Demios Edge users, Metal) with Win/Linux CI builds | decided |
 | D-012 | Core dependency set | Approve: tauri 2, tokio, serde/serde_yaml, llama-cpp-2, rmcp, rusqlite or sqlx, keyring, reqwest, axum (team) · review one by one | Approve the set; anything else asks the lead first | decided |
 | D-013 | Codebase-conversion tooling | craft-anything · TrustGraph · direct Claude Code sessions per module | **Direct sessions against written contracts**; don't use craft-anything or TrustGraph for the port (R-01) | decided |
+| D-014 | Visual direction of the design standard (ADR-0010) | Quiet neutral chrome + Demios indigo accent + mint for on-device, system fonts · other direction | As proposed in `docs/design/design-system.md`; preview shared for review | open |
 
 ## Decided
 

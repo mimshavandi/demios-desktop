@@ -13,3 +13,4 @@ Format: Context → Decision → Options (table) → Trade-offs → Consequences
 | [0007](0007-local-storage-and-secrets.md) | Local storage, knowledge index and secrets | Proposed | – |
 | [0008](0008-team-server-and-sync.md) | Team server and sync | Proposed | D-009 |
 | [0009](0009-security-baseline.md) | Security and supply-chain baseline | Proposed | – |
+| [0010](0010-design-system.md) | One design system: tokens + headless primitives | Proposed | – |
