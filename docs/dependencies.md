@@ -9,5 +9,6 @@ Every direct dependency is listed here with why and its licence (ADR-0009). Appr
 | uuid (v7) | dn-core | time-ordered, sync-safe ids | MIT/Apache-2.0 | T-CORE-01 |
 | futures-core | dn-core | `Stream` trait for `ChatModel::chat` | MIT/Apache-2.0 | T-CORE-01 |
 | tokio | dn-agent | async runtime; `sync` for cancellation (D-012) | MIT | T-AGT-02 |
+| serde_yaml_ng 0.10 | dn-agent | YAML manifests (`agent.yaml`, `skill.yaml`, prompt `manifest.yaml`). Maintained fork of the archived `serde_yaml` (D-012: "serde_yaml or a maintained successor") | MIT | T-AGT-01 |
 
 Approved for wave 1 (D-012), add a row when first used: tauri 2, tokio, serde_yaml (or a maintained successor), llama-cpp-2, rmcp, rusqlite (chosen over sqlx: sync, SQLCipher + sqlite-vec support), keyring, reqwest, axum (team server).

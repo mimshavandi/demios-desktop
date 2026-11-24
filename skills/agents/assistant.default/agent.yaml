@@ -1,0 +1,20 @@
+id: assistant.default
+version: 1
+description: General-purpose assistant with notes access and artifacts.
+prompt: assistant.default.system
+model_slots:
+  - slot_id: primary
+    capability: chat
+  - slot_id: fast
+    capability: chat
+    user_configurable: true
+skills: [text.summarize, notes.find_and_read, clock.now]
+tools:
+  - "mcp.filesystem.*"
+  - artifact.create
+  - artifact.update
+  - artifact.rewrite
+policies:
+  max_steps: 8
+  reasoning: auto
+  caller: chat.reply

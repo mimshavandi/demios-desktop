@@ -1,0 +1,23 @@
+id: notes.find_and_read
+version: 1
+description: >-
+  Find a note by name in the user's notes folder and return its contents. Use when the
+  user refers to one of their notes by title.
+kind: tool_chain
+risk: read
+input_schema:
+  type: object
+  additionalProperties: false
+  required: [query]
+  properties:
+    query:
+      type: string
+      description: Words from the note's file name.
+steps:
+  - tool: mcp.filesystem.search_files
+    arguments:
+      path: "~/Notes"
+      pattern: "*{input.query}*"
+  - tool: mcp.filesystem.read_text_file
+    arguments:
+      path: "{steps.0.output}"
