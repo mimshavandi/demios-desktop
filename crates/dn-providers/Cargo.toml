@@ -8,7 +8,7 @@ rust-version.workspace = true
 
 [dependencies]
 dn-core.workspace = true
-dn-secrets = { path = "../dn-secrets", version = "0.1.0" }
+dn-secrets.workspace = true
 futures-core.workspace = true
 reqwest.workspace = true
 serde.workspace = true
