@@ -9,7 +9,7 @@ Every direct dependency is listed here with why and its licence (ADR-0009). Appr
 | uuid (v7) | dn-core | time-ordered, sync-safe ids | MIT/Apache-2.0 | T-CORE-01 |
 | futures-core | dn-core | `Stream` trait for `ChatModel::chat` | MIT/Apache-2.0 | T-CORE-01 |
 | keyring 3 | dn-secrets | OS keychain for BYOK keys and MCP tokens (D-012, ADR-0007). Features `apple-native`, `windows-native`, `async-secret-service` + `tokio` + `crypto-rust`, so there are no C deps (libdbus/openssl) | MIT/Apache-2.0 | T-PRV-03 |
-| tokio | dn-agent, dn-secrets, dn-providers | async runtime; `sync` for streams/cancellation, `rt` for `AsyncSecrets::spawn_blocking` (D-012) | MIT | T-AGT-02 |
+| tokio | dn-agent, dn-secrets, dn-providers | async runtime; `sync` for streams/cancellation, `rt` for `AsyncSecrets::spawn_blocking`; dn-providers also `time` for SSE first-byte/idle timeouts (T-PRV-04); approved wave-1 dependency | MIT | T-AGT-02 |
 | reqwest 0.13 | dn-providers | HTTPS client for BYOK providers (D-012). `rustls` (aws-lc-rs, platform verifier) + `http2` + `charset`; no OpenSSL. SSE parsing is hand-rolled (`dn_providers::sse`) | MIT/Apache-2.0 | T-PRV-01 |
 | zeroize 1 | dn-secrets | wipe `Secret` buffers on drop (`Zeroizing<String>`); already a transitive dep of keyring | MIT/Apache-2.0 | T-PRV-03 |
 | ts-rs 12 (optional, `ts` feature; `serde-compat`, no default features) | dn-core | TypeScript bindings for the UI in `crates/dn-core/bindings/`; not in the default build | MIT | T-CORE-04 |

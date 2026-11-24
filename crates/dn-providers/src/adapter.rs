@@ -54,6 +54,101 @@ pub struct ProviderConfig {
     /// Thinking budget for providers that take one (Anthropic, Gemini).
     pub thinking_budget_tokens: u32,
     pub connect_timeout: Duration,
+    /// A streaming answer that sends nothing for this long after its first byte ends with
+    /// a retryable `ModelUnavailable` (default 60 s).
+    pub idle_timeout: Duration,
+    /// Longer allowance before the first byte of the body: reasoning models and local
+    /// servers loading a model can be silent for minutes (default 300 s).
+    pub first_byte_timeout: Duration,
+    /// Which local server an `OpenAiCompatible` endpoint is, for its thinking switch.
+    /// `Unknown` (default) sends nothing server-specific. See [`detect_server_family`].
+    pub server_family: ServerFamily,
+}
+
+/// The server behind an OpenAI-compatible endpoint. Only matters for switching thinking on
+/// or off, which each family spells differently.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ServerFamily {
+    /// llama.cpp `llama-server`: `chat_template_kwargs.enable_thinking`.
+    LlamaCpp,
+    /// vLLM (and SGLang-style servers): `chat_template_kwargs.enable_thinking`.
+    Vllm,
+    /// Ollama: top-level `think`.
+    Ollama,
+    /// LM Studio: no request-level switch; nothing extra is sent.
+    LmStudio,
+    #[default]
+    Unknown,
+}
+
+impl ServerFamily {
+    /// From the `owned_by` field of `GET /v1/models` entries.
+    pub fn from_owned_by(owned_by: &str) -> Self {
+        match owned_by.to_ascii_lowercase().as_str() {
+            "llamacpp" | "llama.cpp" | "llama-server" => Self::LlamaCpp,
+            "vllm" => Self::Vllm,
+            "organization_owner" => Self::LmStudio,
+            "library" | "ollama" => Self::Ollama,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+/// Best-effort guess of an OpenAI-compatible server's family: `GET {base}/models` and its
+/// `owned_by`, else Ollama's native `GET /api/version`. Any failure is `Unknown`. Bounded to
+/// 3 s in total so loading a model is never held up; other provider kinds return `Unknown`
+/// without a request.
+pub async fn detect_server_family(cfg: &ProviderConfig) -> ServerFamily {
+    if cfg.kind != ProviderKind::OpenAiCompatible {
+        return ServerFamily::Unknown;
+    }
+    tokio::time::timeout(Duration::from_secs(3), probe_family(cfg))
+        .await
+        .unwrap_or(ServerFamily::Unknown)
+}
+
+async fn probe_family(cfg: &ProviderConfig) -> ServerFamily {
+    let Ok(base) = cfg.base_url() else {
+        return ServerFamily::Unknown;
+    };
+    let Ok(client) = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(2))
+        .timeout(Duration::from_secs(3))
+        .build()
+    else {
+        return ServerFamily::Unknown;
+    };
+    let get = |url: String| {
+        let mut rb = client.get(url);
+        if let Some(k) = &cfg.api_key {
+            rb = rb.bearer_auth(k.expose());
+        }
+        rb
+    };
+    if let Ok(r) = get(format!("{base}/models")).send().await
+        && r.status().is_success()
+        && let Ok(b) = r.bytes().await
+        && let Ok(v) = serde_json::from_slice::<serde_json::Value>(&b)
+        && let Some(owner) = v["data"]
+            .as_array()
+            .and_then(|a| a.iter().find_map(|m| m["owned_by"].as_str()))
+    {
+        let f = ServerFamily::from_owned_by(owner);
+        if f != ServerFamily::Unknown {
+            return f;
+        }
+    }
+    let root = base.strip_suffix("/v1").unwrap_or(&base);
+    if let Ok(r) = get(format!("{root}/api/version")).send().await
+        && r.status().is_success()
+        && let Ok(b) = r.bytes().await
+        && let Ok(v) = serde_json::from_slice::<serde_json::Value>(&b)
+        && v["version"].is_string()
+    {
+        return ServerFamily::Ollama;
+    }
+    ServerFamily::Unknown
 }
 
 impl ProviderConfig {
@@ -66,7 +161,22 @@ impl ProviderConfig {
             reasoning: ReasoningPolicy::default(),
             thinking_budget_tokens: 2048,
             connect_timeout: Duration::from_secs(15),
+            idle_timeout: Duration::from_secs(60),
+            first_byte_timeout: Duration::from_secs(300),
+            server_family: ServerFamily::Unknown,
         }
+    }
+
+    /// Stream timeouts: before the first body byte, and between bytes after that.
+    pub fn with_stream_timeouts(mut self, first_byte: Duration, idle: Duration) -> Self {
+        self.first_byte_timeout = first_byte;
+        self.idle_timeout = idle;
+        self
+    }
+
+    pub fn with_server_family(mut self, family: ServerFamily) -> Self {
+        self.server_family = family;
+        self
     }
 
     pub fn with_base_url(mut self, url: impl Into<String>) -> Self {
