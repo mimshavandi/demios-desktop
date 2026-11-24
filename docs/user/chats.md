@@ -6,7 +6,7 @@ Type in the message box at the bottom and press **Enter**. For a new line, press
 
 The answer appears as the model writes it. Answers can contain formatting, lists, tables and code blocks with highlighted code.
 
-Every answer shows which model wrote it, and is marked as AI-generated. The line under the message box is a reminder: answers come from the AI model you chose and can be wrong, so check important facts.
+The name of the model that wrote an answer appears under it once it's finished, and screen readers announce each answer as "AI answer". The line under the message box is a reminder: answers come from the AI model you chose and can be wrong, so check important facts.
 
 ## Stop, retry and copy
 

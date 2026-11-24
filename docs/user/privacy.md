@@ -2,7 +2,7 @@
 
 Demios collects no usage data. There is no Demios account and no Demios server.
 
-**Settings → General → Privacy** shows the same information as this page, with the folders on your computer.
+**Settings → General → Privacy** shows the same information as this page, with the folder your chats are stored in.
 
 ## Where your data goes
 
@@ -11,7 +11,7 @@ Demios collects no usage data. There is no Demios account and no Demios server.
 - **Hugging Face.** Downloading a model fetches it from Hugging Face. Your chats are never sent there.
 - **Tool servers (MCP).** A tool server receives what its tools are asked to do, which can include text from your chat. Adding tool servers isn't in the app yet; see [Tools and approvals](tools-and-approvals.md).
 
-**Settings → General → About** shows the exact folders for your chats and for downloaded models.
+**Settings → General → About** shows the exact folders for your chats and for downloaded models. The confirmation for **Delete all local data** shows them too.
 
 ## Delete one chat
 

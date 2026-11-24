@@ -6,7 +6,7 @@ No model is ready yet. Select **Connect a model** and add one: download a model 
 
 ## A model shows "Won't fit" or "Memory pressure"
 
-Your computer probably doesn't have enough memory for that model. Choose a smaller one from the list; those near the top of the catalogue are the smallest. Closing other apps can help a model marked **Caution** or **Memory pressure**.
+Your computer probably doesn't have enough memory for that model. Choose one marked **Ready** instead. Closing other apps can help a model marked **Caution** or **Memory pressure**.
 
 ## A download failed or stopped
 

@@ -13,7 +13,7 @@ The **On this device** card lists 12 open models in a built-in catalogue, from s
 
 Each row shows:
 
-- The model's name, quantisation and download size.
+- The model's name, its size and quality version (quantisation, such as Q4_K_M) and its download size.
 - **Whether it fits this computer's memory:**
   - **Ready**: it fits.
   - **Caution** or **Memory pressure**: it may run slowly, or slow down other apps.
