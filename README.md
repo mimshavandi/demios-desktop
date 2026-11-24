@@ -17,7 +17,12 @@ An open-source desktop app for chatting with AI models you choose: one running o
 - Run models on your computer: download from a built-in catalogue of 12 open models. Each row shows whether the model fits your machine ("Won't fit" when it doesn't), its licence, and download progress. Downloads can be paused, resume after an interruption, and are checked against their SHA-256.
 - Use your own key for Anthropic, OpenAI or Google Gemini.
 - Light and dark appearance that follows your system, and keyboard shortcuts for the main actions.
-- The `dn` command-line tool: run a model, check whether it fits, and browse and download models from Hugging Face.
+- See where your data goes in **Settings → General**, and remove everything with **Delete all local data**: chats, settings, downloaded models and the keys Demios saved, after a confirmation that lists what will go.
+- A notice on first run, and a line under the message box, say that answers come from the model you chose and can be wrong.
+- Report a problem, or a single answer, through a prefilled form on GitHub. Nothing from your chats is sent.
+- Read the licence of every package shipped with the app, searchable, in **Settings → General → About → Open-source licences**.
+- An answer from a provider that stops responding ends with an error you can retry, instead of waiting forever.
+- The `dn` command-line tool: run a model, check whether it fits, browse and download models from Hugging Face, and open `demios://` add-model links.
 
 ## Coming next
 
@@ -26,6 +31,7 @@ Not available yet:
 - Artifacts: documents, code and small apps the model makes, opened in a side pane. The pane is there but stays empty for now.
 - A screen to add MCP tool servers. The tool runtime and its approval cards exist, but servers can't be added from the app yet.
 - Connecting the app to an OpenAI-compatible server (such as Ollama). The `dn` CLI can already do this.
+- Adding models from Hugging Face in the app, and opening `demios://` add-model links in it. The `dn` CLI can already do both.
 - Signed installers for macOS, Windows and Linux.
 
 ## Screenshots
@@ -64,10 +70,12 @@ To try the app without touching your normal data, use a throwaway data folder: `
 
 ## Getting started
 
-Open **Settings → Models** and pick one of these:
+The [user guide](docs/user/README.md) covers everything below in more detail.
 
-- **On this device:** choose a model from the catalogue and select **Download model**. Check the fit status first: it tells you whether the model fits this computer's memory. When the download finishes, choose the model for the Chat slot.
-- **Your own key:** add an Anthropic, OpenAI or Google Gemini API key. The key goes into your system keychain; macOS asks for keychain access the first time.
+Open **Settings → Models** (select **Models** at the bottom of the sidebar) and pick one of these:
+
+- **On this device:** choose a model from the catalogue and select **Download model**. Check the fit status first: it tells you whether the model fits this computer's memory. When the download finishes, the app picks a ready model for chat unless you choose one for the Chat slot.
+- **Your own key:** add an Anthropic, OpenAI or Google Gemini API key. The key goes into your system keychain; macOS may ask you to allow keychain access.
 
 ### The `dn` command-line tool
 
@@ -82,15 +90,15 @@ dn run -m qwen3-4b-q4_k_m "Explain DNS briefly"  # chat from the terminal
 dn run --endpoint http://localhost:11434/v1 -m llama3.2 "Hi"   # an OpenAI-compatible server
 ```
 
-Models downloaded with `dn` show up in the app too. Run `dn --help` for every option.
+Catalogue models downloaded with `dn` show up in the app too; models downloaded from Hugging Face with `dn` don't yet. See [the dn guide](docs/user/dn-cli.md), or run `dn --help` for every option.
 
 ## Privacy and safety
 
-When you chat with a model on this device, nothing leaves your computer. When you use a provider key, your messages in that chat go to that provider under your own account with them. Browsing and downloading models contacts Hugging Face. Tools that change something ask first: the call shows its exact arguments and waits for you to allow or deny it. Tools a server marks as read-only run without asking. More detail: [MCP tools and approvals](docs/security/mcp-tools.md) and the [store readiness audit](docs/store/readiness-audit.md) (data-collection section).
+When you chat with a model on this device, nothing leaves your computer. When you use a provider key, your messages in that chat go to that provider under your own account with them. Browsing and downloading models contacts Hugging Face. Once tool servers can be added, tools that change something ask first: the call shows its exact arguments and waits for you to allow or deny it. Tools a server marks as read-only run without asking. More detail: [MCP tools and approvals](docs/security/mcp-tools.md) and the [store readiness audit](docs/store/readiness-audit.md) (data-collection section).
 
 ## Project status
 
-Early and pre-release (version 0.1.0). Expect rough edges and changes between versions. CI builds and tests it on macOS, Linux and Windows; the end-to-end app tests run on Linux.
+Early and pre-release (version 0.1.0). Expect rough edges and changes between versions. What changed is in the [changelog](CHANGELOG.md). CI builds and tests it on macOS, Linux and Windows; the end-to-end app tests run on Linux.
 
 ## Contributing
 

@@ -15,6 +15,10 @@ import type {
   LocalModelRow,
   ToolEvent,
   UnknownOutcome,
+  McpServerStatus,
+  McpServerView,
+  McpServersView,
+  McpValueInput,
 } from "./types";
 
 const REPLY = (q: string, turn: number) =>
@@ -85,6 +89,52 @@ export function createMockApi(): Api {
       fit: fit("memory_blocked", "Won't fit in this computer's memory."),
     },
   ];
+  // MCP servers (T-SHELL-08): one local server that works, one remote one that needs sign-in.
+  let mcpServers: McpServerView[] = [
+    {
+      id: "files",
+      name: "Project files",
+      status: null,
+      transport: {
+        type: "stdio",
+        command: "/usr/local/bin/mcp-server-files",
+        args: ["--root", "~/projects"],
+        env: [{ name: "LOG_LEVEL", secret: false, value: "info", stored: false }],
+      },
+    },
+    {
+      id: "tracker",
+      name: "Issue tracker",
+      status: null,
+      transport: {
+        type: "streamable_http",
+        url: "https://mcp.tracker.example/mcp",
+        headers: [{ name: "X-Workspace-Token", secret: true, value: null, stored: true }],
+        oauth: { scopes: ["read"], client_id: null, signed_in: false },
+      },
+    },
+  ];
+  const mcpStatus = new Map<string, McpServerStatus>([
+    ["files", { server_id: "files", name: "Project files", state: "connected", message: null, tools: 4 }],
+    ["tracker", { server_id: "tracker", name: "Issue tracker", state: "needs_auth", message: "Sign in to use this server's tools.", tools: 0 }],
+  ]);
+  const mcpView = (): McpServersView => ({
+    servers: mcpServers.map((s) => ({ ...s, status: mcpStatus.get(s.id) ?? null })),
+    local_servers_allowed: true,
+  });
+  const mcpStored = (t: McpServerView["transport"], name: string) =>
+    (t.type === "stdio" ? t.env : t.headers).some((v) => v.name === name && v.stored);
+  const mcpSet = (s: McpServerView, state: McpServerStatus["state"]) => {
+    const status: McpServerStatus = {
+      server_id: s.id,
+      name: s.name,
+      state,
+      message: state === "needs_auth" ? "Sign in to use this server's tools." : state === "signing_in" ? "Finish signing in in your browser." : null,
+      tools: state === "connected" ? 3 : 0,
+    };
+    mcpStatus.set(s.id, status);
+    approvalSink?.({ type: "mcp_server", status });
+  };
   const timersDl = new Map<string, number>();
   const emitRow = (r: LocalModelRow) => localSink?.({ type: "changed", row: { ...r } });
   const deleted = new Set<string>();
@@ -112,7 +162,6 @@ export function createMockApi(): Api {
   const catalog = (): ModelCatalog => ({
     slots: [
       { slot_id: "chat", label: "Chat", description: "Answers in conversations.", capability: "chat" },
-      { slot_id: "fast", label: "Fast", description: "Titles, summaries and other quick background tasks.", capability: "chat" },
       { slot_id: "embed", label: "Embeddings", description: "Knowledge search (arrives with dn-knowledge).", capability: "embedding" },
     ],
     models: [
@@ -302,7 +351,68 @@ export function createMockApi(): Api {
     },
     watchTools: async (onEvent) => {
       approvalSink = onEvent;
-      return { approvals: [...waiting.values()].map((w) => w.prompt), servers: [] };
+      return { approvals: [...waiting.values()].map((w) => w.prompt), servers: [...mcpStatus.values()] };
+    },
+    listMcpServers: async () => mcpView(),
+    saveMcpServer: async (input, editing) => {
+      if (editing === null && mcpServers.some((s) => s.id === input.id)) {
+        throw { code: "invalid_input", message: `A server with the id ${input.id} already exists. Choose another id.` };
+      }
+      const vals = (v: McpValueInput[], prev: McpServerView["transport"] | undefined) =>
+        v.map((x) => ({
+          name: x.name,
+          secret: x.secret,
+          value: x.secret ? null : (x.value ?? ""),
+          stored: x.secret && (x.value !== null || (prev !== undefined && mcpStored(prev, x.name))),
+        }));
+      const prev = mcpServers.find((s) => s.id === input.id)?.transport;
+      const server: McpServerView = {
+        id: input.id,
+        name: input.name ?? input.id,
+        status: null,
+        transport:
+          input.transport.type === "stdio"
+            ? { type: "stdio", command: input.transport.command, args: input.transport.args, env: vals(input.transport.env, prev) }
+            : {
+                type: "streamable_http",
+                url: input.transport.url,
+                headers: vals(input.transport.headers, prev),
+                oauth: input.transport.oauth
+                  ? { scopes: input.transport.scopes, client_id: input.transport.client_id, signed_in: false }
+                  : null,
+              },
+      };
+      mcpServers = [...mcpServers.filter((s) => s.id !== input.id), server];
+      mcpSet(server, server.transport.type === "streamable_http" && server.transport.oauth !== null ? "needs_auth" : "connected");
+      return mcpView();
+    },
+    removeMcpServer: async (id) => {
+      mcpServers = mcpServers.filter((s) => s.id !== id);
+      mcpStatus.delete(id);
+      approvalSink?.({ type: "mcp_server_removed", server_id: id });
+      return mcpView();
+    },
+    reconnectMcpServer: async (id) => {
+      const s = mcpServers.find((x) => x.id === id);
+      if (s) mcpSet(s, "connected");
+      return null;
+    },
+    signInMcpServer: async (id) => {
+      const s = mcpServers.find((x) => x.id === id);
+      if (s?.transport.type !== "streamable_http" || s.transport.oauth === null) return null;
+      mcpSet(s, "signing_in");
+      await new Promise((r) => setTimeout(r, 1200));
+      s.transport.oauth.signed_in = true;
+      mcpSet(s, "connected");
+      return null;
+    },
+    signOutMcpServer: async (id) => {
+      const s = mcpServers.find((x) => x.id === id);
+      if (s?.transport.type === "streamable_http" && s.transport.oauth !== null) {
+        s.transport.oauth.signed_in = false;
+        mcpSet(s, "needs_auth");
+      }
+      return mcpView();
     },
     respondApproval: async (requestId, decision) => {
       const w = waiting.get(requestId);

@@ -23,6 +23,14 @@ pub fn migrations() -> &'static [&'static str] {
         id         TEXT    PRIMARY KEY NOT NULL,
         created_at INTEGER NOT NULL
     );",
+        // T-SHELL-08: local MCP servers the user allowed to start, per exact command line
+        // (program, arguments and env var names). A change asks again.
+        "CREATE TABLE app_mcp_launch_approvals (
+        server_id    TEXT    NOT NULL,
+        command_line TEXT    NOT NULL,
+        created_at   INTEGER NOT NULL,
+        PRIMARY KEY (server_id, command_line)
+    );",
     ]
 }
 
@@ -44,6 +52,34 @@ pub fn known_mcp_secret_ids(conn: &Connection) -> Result<Vec<String>> {
     Ok(ids)
 }
 
+pub fn record_mcp_launch(conn: &Connection, server_id: &str, command_line: &str) -> Result<()> {
+    conn.execute(
+        "INSERT OR IGNORE INTO app_mcp_launch_approvals (server_id, command_line, created_at)
+         VALUES (?1, ?2, ?3)",
+        params![server_id, command_line, now_ms()],
+    )?;
+    Ok(())
+}
+
+pub fn mcp_launch_approved(conn: &Connection, server_id: &str, command_line: &str) -> Result<bool> {
+    Ok(conn
+        .query_row(
+            "SELECT 1 FROM app_mcp_launch_approvals WHERE server_id = ?1 AND command_line = ?2",
+            params![server_id, command_line],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
+}
+
+pub fn forget_mcp_launches(conn: &Connection, server_id: &str) -> Result<()> {
+    conn.execute(
+        "DELETE FROM app_mcp_launch_approvals WHERE server_id = ?1",
+        [server_id],
+    )?;
+    Ok(())
+}
+
 pub fn forget_mcp_secret_id(conn: &Connection, id: &str) -> Result<()> {
     conn.execute("DELETE FROM app_mcp_secret_ids WHERE id = ?1", [id])?;
     Ok(())
@@ -56,6 +92,10 @@ pub struct SlotInfo {
     pub label: &'static str,
     pub description: &'static str,
     pub capability: Capability,
+    /// Whether Settings shows the slot. A slot nothing reads yet stays valid in saved settings
+    /// but is hidden, so the screen doesn't promise work the app doesn't do.
+    #[serde(skip)]
+    pub shown: bool,
 }
 
 pub const SLOTS: &[SlotInfo] = &[
@@ -64,18 +104,23 @@ pub const SLOTS: &[SlotInfo] = &[
         label: "Chat",
         description: "Answers in conversations.",
         capability: Capability::Chat,
+        shown: true,
     },
     SlotInfo {
         slot_id: "fast",
         label: "Fast",
         description: "Titles, summaries and other quick background tasks.",
         capability: Capability::Chat,
+        // Nothing uses it yet (chat titles are the first message). Show it again when
+        // something reads `slot("fast")`.
+        shown: false,
     },
     SlotInfo {
         slot_id: "embed",
         label: "Embeddings",
         description: "Knowledge search (arrives with dn-knowledge).",
         capability: Capability::Embedding,
+        shown: true,
     },
 ];
 
@@ -147,6 +192,7 @@ pub fn save(conn: &Connection, s: &Settings) -> Result<()> {
 pub fn delete_all(conn: &Connection) -> Result<()> {
     conn.execute("DELETE FROM app_settings", [])?;
     conn.execute("DELETE FROM app_mcp_secret_ids", [])?;
+    conn.execute("DELETE FROM app_mcp_launch_approvals", [])?;
     Ok(())
 }
 
@@ -156,6 +202,19 @@ mod tests {
 
     fn db() -> Connection {
         dn_store::open_in_memory(&[dn_store::MigrationSet::new("app", migrations())]).unwrap()
+    }
+
+    #[test]
+    fn a_hidden_slot_stays_valid_in_saved_settings() {
+        let c = db();
+        let mut s = Settings::default();
+        s.slots.insert("fast".into(), "local:dev-fake".into());
+        save(&c, &s).unwrap();
+        assert_eq!(
+            load(&c).unwrap().slot("fast").unwrap().to_string(),
+            "local:dev-fake"
+        );
+        assert!(!SLOTS.iter().find(|s| s.slot_id == "fast").unwrap().shown);
     }
 
     #[test]

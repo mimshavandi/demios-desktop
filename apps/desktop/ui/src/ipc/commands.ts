@@ -19,6 +19,8 @@ import type {
   TurnStarted,
   LocalDataSummary,
   ReportKind,
+  McpServerInput,
+  McpServersView,
 } from "./types";
 
 interface Commands {
@@ -26,6 +28,12 @@ interface Commands {
   delete_all_local_data: { args: Record<string, never>; ret: null };
   local_data_summary: { args: Record<string, never>; ret: LocalDataSummary };
   report_problem: { args: { kind: ReportKind; messageId: Id | null }; ret: null };
+  list_mcp_servers: { args: Record<string, never>; ret: McpServersView };
+  save_mcp_server: { args: { input: McpServerInput; editing: string | null }; ret: McpServersView };
+  remove_mcp_server: { args: { serverId: string }; ret: McpServersView };
+  reconnect_mcp_server: { args: { serverId: string }; ret: null };
+  sign_in_mcp_server: { args: { serverId: string }; ret: null };
+  sign_out_mcp_server: { args: { serverId: string }; ret: McpServersView };
   list_conversations: { args: Record<string, never>; ret: Conversation[] };
   create_conversation: { args: Record<string, never>; ret: Conversation };
   rename_conversation: { args: { conversationId: Id; title: string }; ret: null };
@@ -70,6 +78,16 @@ export const api = {
   /** Deletes chats, settings, tool history, models, keychain entries and window storage. */
   deleteAllLocalData: () => call("delete_all_local_data", {}),
   localDataSummary: () => call("local_data_summary", {}),
+  listMcpServers: () => call("list_mcp_servers", {}),
+  /** Adds (`editing: null`) or updates a server, then connects it. */
+  saveMcpServer: (input: McpServerInput, editing: string | null) => call("save_mcp_server", { input, editing }),
+  /** Deletes the server with its secrets and sign-in. Can't be undone. */
+  removeMcpServer: (serverId: string) => call("remove_mcp_server", { serverId }),
+  reconnectMcpServer: (serverId: string) => call("reconnect_mcp_server", { serverId }),
+  /** Opens the server's sign-in page in the browser and waits (up to 5 minutes). */
+  signInMcpServer: (serverId: string) => call("sign_in_mcp_server", { serverId }),
+  /** Deletes the server's stored sign-in tokens. */
+  signOutMcpServer: (serverId: string) => call("sign_out_mcp_server", { serverId }),
   /**
    * Opens the prefilled issue form in the browser. For an answer, pass its message id: the
    * backend reads the model from the database. No chat content is sent.
