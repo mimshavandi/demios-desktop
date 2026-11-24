@@ -86,7 +86,7 @@ Models downloaded with `dn` show up in the app too. Run `dn --help` for every op
 
 ## Privacy and safety
 
-When you chat with a model on this device, nothing leaves your computer. When you use a provider key, your messages in that chat go to that provider under your own account with them. Browsing and downloading models contacts Hugging Face. Tools never run without your approval: each tool call shows its exact arguments and waits for you to allow or deny it. More detail: [MCP tools and approvals](docs/security/mcp-tools.md) and the [store readiness audit](docs/store/readiness-audit.md) (data-collection section).
+When you chat with a model on this device, nothing leaves your computer. When you use a provider key, your messages in that chat go to that provider under your own account with them. Browsing and downloading models contacts Hugging Face. Tools that change something ask first: the call shows its exact arguments and waits for you to allow or deny it. Tools a server marks as read-only run without asking. More detail: [MCP tools and approvals](docs/security/mcp-tools.md) and the [store readiness audit](docs/store/readiness-audit.md) (data-collection section).
 
 ## Project status
 
