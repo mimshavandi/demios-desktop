@@ -33,7 +33,7 @@ Models are stored in a folder shared with the `dn` command-line tool. **Settings
 
 ## Add a model from Hugging Face
 
-Beyond the catalogue, you can add any GGUF model from Hugging Face that runs on this computer. In the **On this device** card, select **Add from Hugging Face**.
+Beyond the catalogue, you can add GGUF models from Hugging Face that run on this computer. A model needs a published checksum to be downloaded, and some need your Hugging Face token (see below). In the **On this device** card, select **Add from Hugging Face**.
 
 1. **Search.** Type a name, such as "qwen 1.5b instruct", and select **Search**. Sort by most downloaded, most liked, trending or recently updated, and select **Show more** for more results. Searching contacts Hugging Face; your chats are never sent there.
 2. **Pick a model.** While the app reads the model's files, it says "Checking model…". Nothing is downloaded yet. Then you see:
