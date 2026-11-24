@@ -121,8 +121,15 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 25
     continue-on-error: true
+    # T-SHELL-06: try the ways msedgedriver can find WebView2's DevTools endpoint side by
+    # side; the winner stays and the matrix goes once the job is green.
+    strategy:
+      fail-fast: false
+      matrix:
+        devtools: [port, udd, port+udd]
     env:
       TAURI_DRIVER_VERSION: 2.0.6
+      DEMIOS_E2E_WIN_DEVTOOLS: ${{ matrix.devtools }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -180,11 +187,24 @@ jobs:
       - name: e2e
         working-directory: apps/desktop/e2e
         run: npm test
+      - name: Where did DevToolsActivePort land?
+        if: always()
+        shell: pwsh
+        run: |
+          foreach ($root in @("$env:LOCALAPPDATA\io.demios.app", "$env:LOCALAPPDATA\io.demios.desktop", $env:TEMP)) {
+            if (Test-Path $root) {
+              Get-ChildItem -Path $root -Recurse -Filter DevToolsActivePort -ErrorAction SilentlyContinue |
+                ForEach-Object { Write-Host "$($_.FullName): $((Get-Content $_.FullName) -join ' | ')" }
+            }
+          }
+          if (Test-Path "$env:LOCALAPPDATA\io.demios.app\EBWebView") {
+            Get-ChildItem "$env:LOCALAPPDATA\io.demios.app\EBWebView" | Select-Object -First 20 | ForEach-Object { Write-Host $_.Name }
+          }
       - name: Upload msedgedriver log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: msedgedriver-log
+          name: msedgedriver-log-${{ strategy.job-index }}
           path: ${{ env.MSEDGEDRIVER_LOG }}
           if-no-files-found: warn
   # Open-source licences screen (T-STORE-07): every shipped Rust crate, npm package and
