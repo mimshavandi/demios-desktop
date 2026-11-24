@@ -19,6 +19,8 @@ futures-core = "0.3"
 tokio = { version = "1", default-features = false }
 # Maintained fork of the archived serde_yaml (D-012 allows "serde_yaml or a maintained successor").
 serde_yaml_ng = "0.10"
+# No remote/file $ref resolution: schemas are bundled.
+jsonschema = { version = "0.63", default-features = false }
 dn-core = { path = "crates/dn-core", version = "0.1.0" }
 rusqlite = { version = "0.43", features = ["bundled"] }
 dn-store = { path = "crates/dn-store", version = "0.1.0" }

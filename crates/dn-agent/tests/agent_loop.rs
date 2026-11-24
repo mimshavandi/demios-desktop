@@ -89,6 +89,7 @@ fn done(f: FinishReason, i: u32, o: u32) -> StreamEvent {
 #[derive(Default)]
 struct NotesTools {
     calls: Mutex<Vec<ToolCall>>,
+    run_ids: Mutex<Vec<dn_core::Id>>,
     /// Block `read` until cancelled (simulates waiting for approval).
     block_read: bool,
 }
@@ -112,6 +113,7 @@ impl ToolExecutor for NotesTools {
     ) -> BoxFuture<'a, Result<ToolOutput, CoreError>> {
         Box::pin(async move {
             self.calls.lock().unwrap().push(call.clone());
+            self.run_ids.lock().unwrap().push(ctx.run_id);
             match call.name.as_str() {
                 "search" => Ok(ToolOutput::text("/notes/groceries.md")),
                 "read" if self.block_read => {
@@ -203,6 +205,8 @@ async fn runs_a_two_step_tool_chain() {
         .map(|c| c.name.clone())
         .collect();
     assert_eq!(ran, ["search", "read"]);
+    // Every call in the run shares one run_id (the idempotency scope).
+    assert_eq!(*tools.run_ids.lock().unwrap(), [out.run_id, out.run_id]);
 
     // Each model call saw the previous tool result.
     let reqs = model.requests();

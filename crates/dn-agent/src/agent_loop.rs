@@ -95,6 +95,8 @@ pub enum StopReason {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct RunOutcome {
+    /// The `ToolContext::run_id` every tool call of this run received.
+    pub run_id: dn_core::Id,
     /// Messages produced by this run (assistant turns and tool results), to append to
     /// the conversation. Always consistent: every tool call has its result.
     pub messages: Vec<ChatMessage>,
@@ -118,11 +120,14 @@ pub async fn run_loop(
     on_event: &mut (dyn FnMut(AgentEvent) + Send),
 ) -> Result<RunOutcome, CoreError> {
     let specs = tools.tools();
+    // One id per run: the idempotency scope for tool calls (see `ToolContext::run_id`).
+    let run_id = dn_core::Id::new();
     let mut messages = history;
     let start = messages.len();
     let mut usage = Usage::default();
     let mut final_text = String::new();
     let outcome = |messages: Vec<ChatMessage>, stop, steps, usage, final_text| RunOutcome {
+        run_id,
         messages: messages[start..].to_vec(),
         stop,
         steps,
@@ -225,6 +230,7 @@ pub async fn run_loop(
             agent_id: cfg.agent_id.clone(),
             caller: cfg.caller.clone(),
             conversation_id: cfg.conversation_id,
+            run_id,
             step,
             cancel: cancel.clone(),
         };

@@ -209,7 +209,7 @@ fn parse<T: DeserializeOwned>(
         ManifestError::one(file, &at, format!("invalid YAML: {e}"))
     })?;
     let schema: Value = serde_json::from_str(schema_src).expect("bundled schema is valid JSON");
-    let problems = schema::validate(&schema, &value);
+    let problems = schema::validate(&schema::compile(&schema), &value);
     if !problems.is_empty() {
         return Err(ManifestError {
             file: file.to_path_buf(),
@@ -453,9 +453,14 @@ policies:
             msg.contains("/model_slots/1/default_model: `qwen3` is not a model ref"),
             "{msg}"
         );
-        assert!(msg.contains("/policies/max_steps: must be ≥ 1"), "{msg}");
         assert!(
-            msg.contains("/policies/colour: unknown field `colour`"),
+            msg.contains("/policies/max_steps: 0 is less than the minimum of 1"),
+            "{msg}"
+        );
+        assert!(
+            msg.contains(
+                "/policies: Additional properties are not allowed ('colour' was unexpected)"
+            ),
             "{msg}"
         );
     }
