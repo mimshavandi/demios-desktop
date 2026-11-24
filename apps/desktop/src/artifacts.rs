@@ -168,6 +168,14 @@ fn store_error(e: ArtifactError) -> IpcError {
             eprintln!("artifact store error: {e}");
             IpcError::new("storage", "Could not read or write local data.")
         }
+        // The store's own text is written for the model; the user gets plain words.
+        ArtifactError::TooMany { what, max } => IpcError::invalid(if what == "artifacts" {
+            format!("This chat already has {max} artifacts, the most it can hold.")
+        } else {
+            format!(
+                "This artifact already has {max} versions, the most it can have, so this version can't be restored. Ask for a new artifact instead."
+            )
+        }),
         other => IpcError::invalid(other.to_string()),
     }
 }
@@ -568,6 +576,16 @@ mod tests {
             assert!(net.contains("https:"), "{net}");
             assert!(!net.contains("http:"), "plain http stays blocked: {net}");
         }
+    }
+
+    #[test]
+    fn limit_errors_are_worded_for_people() {
+        let e = store_error(ArtifactError::TooMany {
+            what: "versions of one artifact",
+            max: 200,
+        });
+        assert!(e.message.contains("can't be restored"), "{}", e.message);
+        assert!(!e.message.contains("artifact_"), "{}", e.message);
     }
 
     #[test]

@@ -23,6 +23,11 @@ import type {
   ReportKind,
   McpServerInput,
   McpServersView,
+  HubPullEvent,
+  HubRepoView,
+  HubSearchPage,
+  HubSort,
+  HubPullProgress,
 } from "./types";
 
 interface Commands {
@@ -36,6 +41,14 @@ interface Commands {
   reconnect_mcp_server: { args: { serverId: string }; ret: null };
   sign_in_mcp_server: { args: { serverId: string }; ret: null };
   sign_out_mcp_server: { args: { serverId: string }; ret: McpServersView };
+  hub_search: { args: { text: string; sort: HubSort; cursor: string | null }; ret: HubSearchPage };
+  hub_repo: { args: { repo: string }; ret: HubRepoView };
+  hub_pull: { args: { repo: string; sha: string; variant: string; onEvent: Channel<HubPullEvent> }; ret: string };
+  hub_cancel: { args: { repo: string; sha: string; variant: string }; ret: boolean };
+  hub_pull_status: { args: { repo: string; sha: string; variants: string[] }; ret: Record<string, HubPullProgress> };
+  hf_token_status: { args: Record<string, never>; ret: boolean };
+  set_hf_token: { args: { token: string }; ret: boolean };
+  delete_hf_token: { args: Record<string, never>; ret: boolean };
   list_conversations: { args: Record<string, never>; ret: Conversation[] };
   create_conversation: { args: Record<string, never>; ret: Conversation };
   rename_conversation: { args: { conversationId: Id; title: string }; ret: null };
@@ -96,6 +109,18 @@ export const api = {
   signInMcpServer: (serverId: string) => call("sign_in_mcp_server", { serverId }),
   /** Deletes the server's stored sign-in tokens. */
   signOutMcpServer: (serverId: string) => call("sign_out_mcp_server", { serverId }),
+  hubSearch: (text: string, sort: HubSort, cursor: string | null = null) => call("hub_search", { text, sort, cursor }),
+  hubRepo: (repo: string) => call("hub_repo", { repo }),
+  /** Downloads one quantisation (verified, resumable); resolves to its model ref. */
+  hubPull: (repo: string, sha: string, variant: string, onEvent: (ev: HubPullEvent) => void) =>
+    call("hub_pull", { repo, sha, variant, onEvent: channel(onEvent) }),
+  /** Pauses a running download; downloading again resumes it. */
+  hubCancel: (repo: string, sha: string, variant: string) => call("hub_cancel", { repo, sha, variant }),
+  /** Progress of running downloads of these variants (for a screen that came back). */
+  hubPullStatus: (repo: string, sha: string, variants: string[]) => call("hub_pull_status", { repo, sha, variants }),
+  hfTokenStatus: () => call("hf_token_status", {}),
+  setHfToken: (token: string) => call("set_hf_token", { token }),
+  deleteHfToken: () => call("delete_hf_token", {}),
   /**
    * Opens the prefilled issue form in the browser. For an answer, pass its message id: the
    * backend reads the model from the database. No chat content is sent.

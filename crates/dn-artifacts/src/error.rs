@@ -38,8 +38,8 @@ pub enum ArtifactError {
     },
 
     #[error(
-        "this chat already has the maximum of {max} {what}; reuse an existing artifact \
-         (artifact_rewrite) instead of creating more"
+        "the limit of {max} {what} is reached, so this change was not saved; change an existing \
+         artifact instead of creating more, or start a new chat"
     )]
     TooMany { what: &'static str, max: usize },
 

@@ -67,9 +67,33 @@ pub struct FitView {
     pub suggested_quant: Option<String>,
 }
 
+/// Where a local model comes from (T-INF-10).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelOrigin {
+    /// The built-in catalogue (downloadable from Settings).
+    Catalog,
+    /// Downloaded from Hugging Face by Demios or the `dn` CLI (`models_dir/hf/…`, verified).
+    Hub,
+    /// Found in the user's own Hugging Face cache; used in place, never changed.
+    HfCache,
+}
+
+/// A model outside the catalogue: a Hub download or a Hugging Face cache file.
+#[derive(Clone, Debug)]
+pub struct External {
+    pub entry: CatalogEntry,
+    pub path: PathBuf,
+    pub origin: ModelOrigin,
+    pub card_url: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct LocalModelRow {
     pub id: String,
+    pub origin: ModelOrigin,
+    /// Hub and cache models: where the file is.
+    pub location: Option<String>,
     pub model_ref: String,
     pub name: String,
     pub repo: String,
@@ -89,7 +113,13 @@ pub struct LocalModelRow {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum LocalModelEvent {
-    Changed { row: LocalModelRow },
+    Changed {
+        row: Box<LocalModelRow>,
+    },
+    /// An external model went away (deleted, cache cleaned).
+    Removed {
+        id: String,
+    },
 }
 
 type Sink = Arc<dyn Fn(LocalModelEvent) + Send + Sync>;
@@ -188,6 +218,10 @@ pub struct LocalModels<B: InferenceBackend = LlamaCppBackend> {
     owns_dir: bool,
     /// The one local model the app holds (others may live on briefly in running replies).
     loaded: tokio::sync::Mutex<Option<(String, Arc<Resident<B>>)>>,
+    /// Hub downloads and Hugging Face cache models (see [`Self::refresh_externals`]).
+    externals: Mutex<Vec<External>>,
+    /// The user's Hugging Face cache, read for models to reuse; `None` = don't look (tests).
+    hf_cache: Option<PathBuf>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -213,6 +247,103 @@ fn suffixed(path: &Path, suffix: &str) -> PathBuf {
     let mut p = path.as_os_str().to_owned();
     p.push(suffix);
     PathBuf::from(p)
+}
+
+/// Hub downloads in `models_dir/hf/` (verified; Demios's or the `dn` CLI's), as externals.
+/// Id: `hf/<owner>/<name>/<file stem>`.
+pub fn hub_downloads(models_dir: &Path) -> Vec<External> {
+    dn_models::cache::list_downloaded(models_dir)
+        .into_iter()
+        .filter_map(|d| {
+            let stem = d.path.file_stem()?.to_string_lossy().into_owned();
+            if stem.to_ascii_lowercase().contains("mmproj") {
+                return None; // vision projectors load next to a model, not as one
+            }
+            let m = &d.manifest;
+            let size = m.files.iter().map(|f| f.size).sum();
+            Some(External {
+                entry: external_entry(
+                    format!("hf/{}/{}", m.repo, split_stem(&stem)),
+                    &m.repo,
+                    &m.revision,
+                    size,
+                    m.license.id.clone().unwrap_or_default(),
+                    "Downloaded from Hugging Face.",
+                ),
+                path: d.path,
+                origin: ModelOrigin::Hub,
+                card_url: m.card_url.clone(),
+            })
+        })
+        .collect()
+}
+
+/// GGUF models in the user's Hugging Face cache, used in place (read-only).
+/// Id: `hfcache/<owner>/<name>/<variant>`.
+pub fn cache_models(found: &[dn_models::cache::CachedModel]) -> Vec<External> {
+    found
+        .iter()
+        .filter(|c| c.variant.kind == dn_models::hub::VariantKind::Model)
+        .map(|c| External {
+            entry: external_entry(
+                format!("hfcache/{}/{}", c.repo, c.variant.name),
+                &c.repo,
+                &c.revision,
+                c.variant.total_size,
+                String::new(),
+                "From your Hugging Face cache. Demios uses the file where it is and never changes it.",
+            ),
+            path: c.path.clone(),
+            origin: ModelOrigin::HfCache,
+            card_url: format!("https://huggingface.co/{}", c.repo),
+        })
+        .collect()
+}
+
+/// What makes two listings the same model file: repo and file name (case-insensitive).
+fn dedupe_key(x: &External) -> (String, String) {
+    let file = x
+        .path
+        .file_name()
+        .map(|f| f.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    (x.entry.repo.to_ascii_lowercase(), file)
+}
+
+/// `name-00001-of-00003` → `name`.
+fn split_stem(stem: &str) -> &str {
+    match stem.rsplit_once("-of-") {
+        Some((head, tail)) if tail.len() == 5 && tail.chars().all(|c| c.is_ascii_digit()) => {
+            head.rsplit_once('-').map_or(stem, |(h, _)| h)
+        }
+        _ => stem,
+    }
+}
+
+fn external_entry(
+    id: String,
+    repo: &str,
+    revision: &str,
+    size: u64,
+    license: String,
+    notes: &str,
+) -> CatalogEntry {
+    let name = repo.rsplit('/').next().unwrap_or(repo).to_string();
+    let variant = id.rsplit('/').next().unwrap_or("").to_string();
+    CatalogEntry {
+        quant: dn_models::hub::quant_label(&variant).unwrap_or_default(),
+        id,
+        name,
+        repo: repo.to_string(),
+        revision: revision.to_string(),
+        file: variant,
+        size,
+        sha256: String::new(),
+        params_b: 0.0,
+        capabilities: vec![Capability::Chat],
+        license,
+        notes: notes.to_string(),
+    }
 }
 
 /// Licence ids we warn about (any licence is allowed): unknown, non-commercial, or a custom "other" licence.
@@ -324,9 +455,13 @@ impl LocalModels {
             dn_models::detect_machine(),
         );
         lm.owns_dir = std::env::var_os("DN_MODELS_DIR").is_none();
+        lm.hf_cache = dn_models::cache::hf_cache_dir();
         let lm = Arc::new(lm);
         let bg = Arc::clone(&lm);
-        tauri::async_runtime::spawn_blocking(move || bg.refresh_exact_fits());
+        tauri::async_runtime::spawn_blocking(move || {
+            bg.refresh_exact_fits();
+            bg.refresh_externals();
+        });
         lm
     }
 }
@@ -353,13 +488,108 @@ impl<B: InferenceBackend> LocalModels<B> {
             backend,
             owns_dir: false,
             loaded: tokio::sync::Mutex::new(None),
+            externals: Mutex::new(Vec::new()),
+            hf_cache: None,
         };
         lm.scan();
         lm
     }
 
     fn path(&self, e: &CatalogEntry) -> PathBuf {
-        self.dir.join(&e.file)
+        match lock(&self.externals).iter().find(|x| x.entry.id == e.id) {
+            Some(x) => x.path.clone(),
+            None => self.dir.join(&e.file),
+        }
+    }
+
+    /// A Hub download or Hugging Face cache model (not the catalogue).
+    pub fn is_external(&self, id: &str) -> bool {
+        lock(&self.externals).iter().any(|x| x.entry.id == id)
+    }
+
+    fn external(&self, id: &str) -> Option<External> {
+        lock(&self.externals)
+            .iter()
+            .find(|x| x.entry.id == id)
+            .cloned()
+    }
+
+    /// A catalogue entry or an external model.
+    pub fn find(&self, id: &str) -> Option<CatalogEntry> {
+        self.catalog
+            .get(id)
+            .cloned()
+            .or_else(|| self.external(id).map(|x| x.entry))
+    }
+
+    /// Replaces the external models (Hub downloads, cache files): each is ready, with an
+    /// exact fit from its GGUF header when it can be read. Blocking (header reads).
+    pub fn set_externals(&self, list: Vec<External>) {
+        let new_ids: std::collections::HashSet<String> =
+            list.iter().map(|x| x.entry.id.clone()).collect();
+        let gone: Vec<String> = lock(&self.externals)
+            .iter()
+            .map(|x| x.entry.id.clone())
+            .filter(|id| !new_ids.contains(id))
+            .collect();
+        for id in &gone {
+            lock(&self.state).remove(id);
+            lock(&self.fits).remove(id);
+        }
+        for x in &list {
+            lock(&self.state).insert(x.entry.id.clone(), DownloadState::Ready);
+            let fit = Gguf::open(&x.path)
+                .ok()
+                .map(|g| {
+                    fit_view(
+                        &dn_models::fit(&ModelFootprint::from_gguf(&g), &self.machine),
+                        false,
+                    )
+                })
+                .unwrap_or_else(|| self.estimated_fit(&x.entry));
+            lock(&self.fits).insert(x.entry.id.clone(), fit);
+        }
+        *lock(&self.externals) = list;
+        let rows = self.rows();
+        let sink = lock(&self.sink).clone();
+        if let Some(sink) = sink {
+            // Only models that went away are removed, and before the updates, so a row that
+            // is still there is never dropped.
+            for id in gone {
+                sink(LocalModelEvent::Removed { id });
+            }
+            for row in rows
+                .into_iter()
+                .filter(|r| r.origin != ModelOrigin::Catalog)
+            {
+                sink(LocalModelEvent::Changed { row: Box::new(row) });
+            }
+        }
+    }
+
+    /// Re-reads Hub downloads in the models folder (verified, from Demios or the `dn` CLI)
+    /// and GGUF models in the Hugging Face cache. A file that's already listed (same repo and
+    /// file name) is listed once: a downloaded catalogue model first, then Hub downloads,
+    /// then the cache. Blocking.
+    pub fn refresh_externals(&self) {
+        let cached = self
+            .hf_cache
+            .as_deref()
+            .map(dn_models::cache::discover)
+            .unwrap_or_default();
+        let mut seen: std::collections::HashSet<(String, String)> = self
+            .catalog
+            .models
+            .iter()
+            .filter(|e| self.is_ready(&e.id))
+            .map(|e| (e.repo.to_ascii_lowercase(), e.file.to_ascii_lowercase()))
+            .collect();
+        let list = hub_downloads(&self.dir)
+            .into_iter()
+            .chain(cache_models(&cached))
+            .filter(|x| seen.insert(dedupe_key(x)))
+            .collect();
+        self.set_externals(list);
     }
 
     fn partial_len(&self, e: &CatalogEntry) -> u64 {
@@ -427,6 +657,7 @@ impl<B: InferenceBackend> LocalModels<B> {
     }
 
     fn row(&self, e: &CatalogEntry) -> LocalModelRow {
+        let ext = self.external(&e.id);
         let state = lock(&self.state)
             .get(&e.id)
             .cloned()
@@ -437,6 +668,8 @@ impl<B: InferenceBackend> LocalModels<B> {
             .unwrap_or_else(|| self.estimated_fit(e));
         LocalModelRow {
             id: e.id.clone(),
+            origin: ext.as_ref().map_or(ModelOrigin::Catalog, |x| x.origin),
+            location: ext.as_ref().map(|x| x.path.display().to_string()),
             model_ref: format!("local:{}", e.id),
             name: e.name.clone(),
             repo: e.repo.clone(),
@@ -446,7 +679,10 @@ impl<B: InferenceBackend> LocalModels<B> {
             capabilities: e.capabilities.clone(),
             license: e.license.clone(),
             license_warning: license_needs_warning(&e.license),
-            card_url: format!("https://huggingface.co/{}", e.repo),
+            card_url: ext
+                .as_ref()
+                .map(|x| x.card_url.clone())
+                .unwrap_or_else(|| format!("https://huggingface.co/{}", e.repo)),
             notes: e.notes.clone(),
             state,
             fit,
@@ -454,7 +690,7 @@ impl<B: InferenceBackend> LocalModels<B> {
     }
 
     pub fn rows(&self) -> Vec<LocalModelRow> {
-        self.catalog.models.iter().map(|e| self.row(e)).collect()
+        self.entries().iter().map(|e| self.row(e)).collect()
     }
 
     pub fn is_ready(&self, id: &str) -> bool {
@@ -469,10 +705,9 @@ impl<B: InferenceBackend> LocalModels<B> {
     }
 
     /// Downloaded models, for the resolver and the slot pickers.
-    pub fn ready(&self) -> Vec<&CatalogEntry> {
-        self.catalog
-            .models
-            .iter()
+    pub fn ready(&self) -> Vec<CatalogEntry> {
+        self.entries()
+            .into_iter()
             .filter(|e| self.is_ready(&e.id))
             .collect()
     }
@@ -482,12 +717,15 @@ impl<B: InferenceBackend> LocalModels<B> {
         self.backend.capabilities().tool_calls
     }
 
-    pub fn entries(&self) -> &[CatalogEntry] {
-        &self.catalog.models
+    /// The catalogue followed by the external models.
+    pub fn entries(&self) -> Vec<CatalogEntry> {
+        let mut v = self.catalog.models.clone();
+        v.extend(lock(&self.externals).iter().map(|x| x.entry.clone()));
+        v
     }
 
-    pub fn name(&self, id: &str) -> Option<&str> {
-        self.catalog.get(id).map(|e| e.name.as_str())
+    pub fn name(&self, id: &str) -> Option<String> {
+        self.find(id).map(|e| e.name)
     }
 
     pub fn watch(&self, sink: Sink) -> Vec<LocalModelRow> {
@@ -499,7 +737,7 @@ impl<B: InferenceBackend> LocalModels<B> {
         let row = self.row(e);
         let sink = lock(&self.sink).clone();
         if let Some(sink) = sink {
-            sink(LocalModelEvent::Changed { row });
+            sink(LocalModelEvent::Changed { row: Box::new(row) });
         }
     }
 
@@ -687,6 +925,16 @@ impl<B: InferenceBackend> LocalModels<B> {
         &self.dir
     }
 
+    /// This computer, for fit checks.
+    pub fn machine(&self) -> &Machine {
+        &self.machine
+    }
+
+    /// Fit in the screen's terms.
+    pub fn fit_view_for(&self, report: &FitReport, estimated: bool) -> FitView {
+        fit_view(report, estimated)
+    }
+
     /// Marks `dir` as the app's own folder (removed whole by [`Self::delete_all`]).
     pub fn set_owns_dir(&mut self, owns: bool) {
         self.owns_dir = owns;
@@ -759,6 +1007,8 @@ impl<B: InferenceBackend> LocalModels<B> {
             }
         }
         self.scan();
+        // Hub downloads went with the folder; cache models (not ours) stay listed.
+        self.refresh_externals();
         for e in &self.catalog.models {
             self.emit(e);
         }
@@ -768,14 +1018,11 @@ impl<B: InferenceBackend> LocalModels<B> {
     /// The `ChatModel` for `local:<id>`: loads the file on first use. Switching models drops
     /// the app's reference to the previous one; it is unloaded as soon as no reply uses it.
     pub async fn chat_model(&self, id: &str) -> Result<Arc<dyn ChatModel>, CoreError> {
-        let e = self
-            .catalog
-            .get(id)
-            .ok_or_else(|| CoreError::ModelUnavailable {
-                user_message: format!("`local:{id}` isn't a model this app knows."),
-                developer_message: format!("unknown catalogue id {id}"),
-                recovery: vec![],
-            })?;
+        let e = self.find(id).ok_or_else(|| CoreError::ModelUnavailable {
+            user_message: format!("`local:{id}` isn't a model this app knows."),
+            developer_message: format!("unknown catalogue id {id}"),
+            recovery: vec![],
+        })?;
         if !self.is_ready(id) {
             return Err(CoreError::ModelUnavailable {
                 user_message: format!(
@@ -819,7 +1066,7 @@ impl<B: InferenceBackend> LocalModels<B> {
         }
         let m = LoadedModel::load(
             Arc::clone(&self.backend),
-            &ModelSpec::gguf(self.path(e)),
+            &ModelSpec::gguf(self.path(&e)),
             &LoadOptions::default(),
         )
         .await
@@ -1396,5 +1643,234 @@ mod tests {
         assert!(download_error_message(&DownloadError::Status(403)).contains("licence"));
         let full = std::io::Error::new(std::io::ErrorKind::StorageFull, "full");
         assert!(download_error_message(&DownloadError::Io(full)).contains("disk filled up"));
+    }
+
+    // ---- Hub downloads and Hugging Face cache models (T-INF-10)
+
+    /// Writes a verified Hub download the way `HubClient::pull` leaves it.
+    fn fake_hub_download(dir: &Path, repo: &str, file: &str, bytes: &[u8]) -> PathBuf {
+        let sha = "ab".repeat(32);
+        let path = dn_models::hub::HubClient::local_path(dir, repo, file).unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, bytes).unwrap();
+        std::fs::write(suffixed(&path, ".sha256"), &sha).unwrap();
+        let manifest = dn_models::hub::SourceManifest {
+            source: "huggingface".into(),
+            endpoint: "https://huggingface.co".into(),
+            repo: repo.into(),
+            revision: "c".repeat(40),
+            files: vec![dn_models::hub::RepoFile {
+                path: file.into(),
+                size: bytes.len() as u64,
+                sha256: Some(sha),
+            }],
+            license: dn_models::hub::LicenseInfo::classify(Some("apache-2.0"), None, None),
+            card_url: format!("https://huggingface.co/{repo}"),
+            downloaded_at: 0,
+        };
+        std::fs::write(
+            dn_models::hub::SourceManifest::path_for(&path),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        path
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn hub_downloads_from_the_app_or_cli_are_listed_and_loadable() {
+        let (d, rec, mut lm) = two_ready_models();
+        lm.set_owns_dir(true);
+        let path = fake_hub_download(&d.0, "org/Tiny-GGUF", "Tiny-Q4_K_M.gguf", b"1234567");
+        // An unverified file (no marker) next to it is ignored.
+        let bad = dn_models::hub::HubClient::local_path(&d.0, "org/Tiny-GGUF", "Bad.gguf").unwrap();
+        std::fs::write(&bad, b"x").unwrap();
+
+        lm.refresh_externals();
+        let row = lm
+            .rows()
+            .into_iter()
+            .find(|r| r.origin == ModelOrigin::Hub)
+            .expect("listed");
+        assert_eq!(row.id, "hf/org/Tiny-GGUF/Tiny-Q4_K_M");
+        assert_eq!(row.model_ref, "local:hf/org/Tiny-GGUF/Tiny-Q4_K_M");
+        assert_eq!(row.state, DownloadState::Ready);
+        assert_eq!(row.quant, "Q4_K_M");
+        assert_eq!(row.license, "apache-2.0");
+        assert_eq!(
+            row.location.as_deref(),
+            Some(path.display().to_string().as_str())
+        );
+        assert_eq!(
+            lm.rows()
+                .iter()
+                .filter(|r| r.origin == ModelOrigin::Hub)
+                .count(),
+            1
+        );
+        assert!(
+            lm.ready().iter().any(|e| e.id == row.id),
+            "offered in the pickers"
+        );
+
+        drop(lm.chat_model(&row.id).await.unwrap());
+        assert!(lock(&rec.0).iter().any(|l| l.starts_with("load ")));
+
+        // "Delete all local data" removes the download and its row.
+        lm.delete_all().await.unwrap();
+        assert!(lm.rows().iter().all(|r| r.origin != ModelOrigin::Hub));
+        assert!(lm.chat_model(&row.id).await.is_err());
+    }
+
+    #[test]
+    fn cache_models_are_used_in_place_and_projectors_skipped() {
+        let v = |name: &str, kind| dn_models::hub::GgufVariant {
+            name: name.into(),
+            quant: dn_models::hub::quant_label(name),
+            kind,
+            files: vec![],
+            total_size: 42,
+        };
+        let found = vec![
+            dn_models::cache::CachedModel {
+                repo: "org/M".into(),
+                revision: "d".repeat(40),
+                refs: vec!["main".into()],
+                variant: v("M-Q8_0", dn_models::hub::VariantKind::Model),
+                path: PathBuf::from("/cache/models--org--M/snapshots/x/M-Q8_0.gguf"),
+            },
+            dn_models::cache::CachedModel {
+                repo: "org/M".into(),
+                revision: "d".repeat(40),
+                refs: vec![],
+                variant: v("mmproj-M", dn_models::hub::VariantKind::Projector),
+                path: PathBuf::from("/cache/x/mmproj.gguf"),
+            },
+        ];
+        let ext = cache_models(&found);
+        assert_eq!(ext.len(), 1);
+        assert_eq!(ext[0].entry.id, "hfcache/org/M/M-Q8_0");
+        assert_eq!(ext[0].origin, ModelOrigin::HfCache);
+        assert_eq!(ext[0].entry.quant, "Q8_0");
+        assert!(ext[0].entry.notes.contains("never changes it"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn delete_all_never_touches_the_hugging_face_cache() {
+        let (d, _rec, mut lm) = two_ready_models();
+        lm.set_owns_dir(true);
+        let cache = Dir(std::env::temp_dir().join(format!("dn-hfcache-{}", dn_core::Id::new())));
+        let file = cache.0.join("M-Q8_0.gguf");
+        std::fs::create_dir_all(&cache.0).unwrap();
+        std::fs::write(&file, b"weights").unwrap();
+        lm.set_externals(cache_models(&[dn_models::cache::CachedModel {
+            repo: "org/M".into(),
+            revision: "d".repeat(40),
+            refs: vec![],
+            variant: dn_models::hub::GgufVariant {
+                name: "M-Q8_0".into(),
+                quant: Some("Q8_0".into()),
+                kind: dn_models::hub::VariantKind::Model,
+                files: vec![],
+                total_size: 7,
+            },
+            path: file.clone(),
+        }]));
+        assert!(lm.is_ready("hfcache/org/M/M-Q8_0"));
+        lm.delete_all().await.unwrap();
+        assert!(!d.0.exists());
+        assert!(file.exists(), "the user's cache is never changed");
+    }
+
+    /// Collects local-model events.
+    fn recording(lm: &LocalModels<Recorder>) -> Arc<Mutex<Vec<LocalModelEvent>>> {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let e2 = Arc::clone(&events);
+        lm.watch(Arc::new(move |ev| lock(&e2).push(ev)));
+        events
+    }
+
+    #[test]
+    fn refreshing_twice_keeps_every_row_and_removes_only_what_went() {
+        let (d, _rec, lm) = two_ready_models();
+        let a = fake_hub_download(&d.0, "org/Tiny-GGUF", "Tiny-Q4_K_M.gguf", b"1234567");
+        fake_hub_download(&d.0, "org/Tiny-GGUF", "Tiny-Q8_0.gguf", b"12345678");
+        let events = recording(&lm);
+        lm.refresh_externals();
+        lm.refresh_externals();
+        let removed = |evs: &[LocalModelEvent]| -> Vec<String> {
+            evs.iter()
+                .filter_map(|e| match e {
+                    LocalModelEvent::Removed { id } => Some(id.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert!(removed(&lock(&events)).is_empty(), "nothing went away");
+        assert_eq!(
+            lm.rows()
+                .iter()
+                .filter(|r| r.origin == ModelOrigin::Hub)
+                .count(),
+            2
+        );
+
+        // One file goes: only it is removed, before the updates of the others.
+        std::fs::remove_file(&a).unwrap();
+        lock(&events).clear();
+        lm.refresh_externals();
+        let evs = lock(&events);
+        assert_eq!(removed(&evs), ["hf/org/Tiny-GGUF/Tiny-Q4_K_M"]);
+        assert!(
+            matches!(evs[0], LocalModelEvent::Removed { .. }),
+            "removals come first"
+        );
+        assert!(evs.iter().any(|e| matches!(e, LocalModelEvent::Changed { row } if row.id == "hf/org/Tiny-GGUF/Tiny-Q8_0")));
+    }
+
+    #[test]
+    fn a_file_listed_by_the_catalogue_isnt_listed_again_as_a_hub_download() {
+        let (d, _rec, lm) = two_ready_models();
+        // The catalogue's "a" is org/repo a.gguf and ready; the same file as a Hub download.
+        fake_hub_download(&d.0, "org/repo", "a.gguf", b"12345");
+        lm.refresh_externals();
+        assert!(lm.rows().iter().all(|r| r.origin == ModelOrigin::Catalog));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_hub_download_and_the_same_file_in_the_cache_are_listed_once() {
+        let (d, _rec, mut lm) = two_ready_models();
+        fake_hub_download(&d.0, "org/Tiny-GGUF", "Tiny-Q4_K_M.gguf", b"1234567");
+        // The same repo and file in a Hugging Face cache layout (snapshot links into blobs),
+        // plus another file only the cache has.
+        let cache =
+            Dir(std::env::temp_dir().join(format!("dn-hfcache-dedupe-{}", dn_core::Id::new())));
+        let repo = cache.0.join("models--org--Tiny-GGUF");
+        let snap = repo.join("snapshots").join("e".repeat(40));
+        std::fs::create_dir_all(repo.join("blobs")).unwrap();
+        std::fs::create_dir_all(&snap).unwrap();
+        for (file, blob) in [
+            ("Tiny-Q4_K_M.gguf", "1".repeat(64)),
+            ("Tiny-Q8_0.gguf", "2".repeat(64)),
+        ] {
+            std::fs::write(repo.join("blobs").join(&blob), b"weights").unwrap();
+            std::os::unix::fs::symlink(repo.join("blobs").join(&blob), snap.join(file)).unwrap();
+        }
+        lm.hf_cache = Some(cache.0.clone());
+        lm.refresh_externals();
+        let ids: Vec<String> = lm
+            .rows()
+            .into_iter()
+            .filter(|r| r.origin != ModelOrigin::Catalog)
+            .map(|r| r.id)
+            .collect();
+        assert_eq!(
+            ids,
+            [
+                "hf/org/Tiny-GGUF/Tiny-Q4_K_M",
+                "hfcache/org/Tiny-GGUF/Tiny-Q8_0"
+            ],
+            "the Hub copy wins; the cache adds only what's new"
+        );
     }
 }

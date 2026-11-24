@@ -99,7 +99,13 @@ impl ModelRegistry {
         if let (Some(local), ModelRef::Local { model_id }) = (&self.local, model) {
             // Called on a blocking thread (chat turns run in spawn_blocking): loading the
             // weights can take seconds.
-            return tauri::async_runtime::block_on(local.chat_model(model_id));
+            let r = tauri::async_runtime::block_on(local.chat_model(model_id));
+            // A Hub or cache file that fails to load may have changed or gone on disk: re-scan
+            // so the list shows what is there now.
+            if r.is_err() && local.is_external(model_id) {
+                local.refresh_externals();
+            }
+            return r;
         }
         let ModelRef::Byok { provider_id, .. } = model else {
             return Err(unavailable(

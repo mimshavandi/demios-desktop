@@ -184,6 +184,8 @@ pub struct AppState {
     mcp_epoch: AtomicU64,
     /// Whether this build may start local (stdio) MCP servers (not in Flatpak).
     pub local_servers: bool,
+    /// Running Hugging Face downloads (add-model screen).
+    pub hub_pulls: Arc<crate::hub::HubPulls>,
     /// Asks before a local MCP server starts (native dialog in the app; tests set a fake).
     pub launch_approver: std::sync::OnceLock<Arc<dyn crate::mcp::LaunchApprover>>,
 }
@@ -238,6 +240,7 @@ impl AppState {
             next_token: AtomicU64::new(1),
             mcp_epoch: AtomicU64::new(0),
             local_servers: crate::mcp::local_servers_allowed(),
+            hub_pulls: Default::default(),
             launch_approver: std::sync::OnceLock::new(),
         }
     }

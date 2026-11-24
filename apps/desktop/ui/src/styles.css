@@ -445,6 +445,28 @@ pre.code .code-copy { position: absolute; top: var(--dn-space-1); right: var(--d
 .data-flow { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--dn-space-3); }
 .data-flow li { display: grid; gap: calc(var(--dn-space-1) / 2); }
 
+/* ---------- add a model from Hugging Face (T-INF-10) ---------- */
+.hub { display: grid; gap: var(--dn-space-3); padding: var(--dn-space-3) 0; border-top: 1px solid var(--dn-color-border); justify-items: stretch; }
+.hub > .dn-btn-ghost { justify-self: start; }
+.hub-head { display: flex; align-items: center; justify-content: space-between; }
+.hub-head h3:focus, .hub-repo-name:focus { outline: none; }
+.hub-repo-name { overflow-wrap: anywhere; }
+.hub-search { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--dn-space-2) var(--dn-space-3); align-items: end; }
+.hub-search > .dn-field:first-child { grid-column: 1 / -1; }
+.hub-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--dn-color-border); border-radius: var(--dn-radius-md); max-height: 360px; overflow: auto; }
+.hub-list li + li { border-top: 1px solid var(--dn-color-border); }
+.hub-item { display: grid; gap: calc(var(--dn-space-1) / 2); width: 100%; padding: var(--dn-space-2) var(--dn-space-3); background: transparent; border: 0; color: var(--dn-color-text); text-align: left; cursor: pointer; font: inherit; }
+.hub-item:hover { background: var(--dn-color-surface-sunken); }
+.hub-item:focus-visible { outline: 2px solid var(--dn-color-focus); outline-offset: -2px; }
+.hub-name { font-weight: var(--dn-weight-medium); overflow-wrap: anywhere; }
+.hub-meta { font-size: var(--dn-text-sm); color: var(--dn-color-text-subtle); }
+.hub-variants { list-style: none; margin: 0; padding: 0; display: grid; }
+.hub-variant { display: flex; justify-content: space-between; gap: var(--dn-space-3); padding: var(--dn-space-3) 0; border-top: 1px solid var(--dn-color-border); }
+.hub-variant:first-child { border-top: 0; }
+.hub-token { display: grid; gap: var(--dn-space-2); }
+.local-origin code { overflow-wrap: anywhere; }
+@media (max-width: 500px) { .hub-search { grid-template-columns: 1fr; } }
+
 /* ---------- MCP tool servers (T-SHELL-08) ---------- */
 .card-head { display: flex; align-items: center; justify-content: space-between; gap: var(--dn-space-3); }
 .mcp-where { font-family: var(--dn-font-mono); font-size: var(--dn-text-xs); overflow-wrap: anywhere; }

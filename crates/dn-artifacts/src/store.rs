@@ -1167,7 +1167,10 @@ pub(crate) mod tests {
             ),
             "{err}"
         );
-        assert!(err.to_string().contains("artifact_rewrite"));
+        assert!(
+            !err.to_string().contains("artifact_"),
+            "no tool names: {err}"
+        );
         // Another conversation is unaffected; one artifact's versions are capped too.
         let other = Id::new();
         let id = create(&store, other, "v1");
