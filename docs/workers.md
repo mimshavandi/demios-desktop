@@ -13,11 +13,15 @@ The lead session plans, writes briefs, reviews every PR against its done-check, 
 | T-AGT-02 (ToolExecutor) | W-providers | #2 | done |
 | T-PRV-03 | W-providers | #4 | done |
 | T-CON-01..05 | W-tools | #7 | done (filesystem reference test run locally, `#[ignore]` in CI) |
-| T-PRV-01..02 | W-providers | #8 | review fixes pending |
-| T-AGT-01, 03 (+ loop) | W-providers | #15 | review fixes pending |
-| T-SHELL-01..03 | W-shell | #14 | review fixes pending (2 blockers) |
-| T-INF-01..06 | W-inference | – | in progress |
-| T-ART-01..05 | W-artifacts | – | in progress |
+| T-PRV-01..02 | W-providers | #8 | done |
+| T-AGT-01, 03 (+ loop) | W-providers | #15 | done |
+| T-SHELL-01..03 | W-shell | #14 | done (real-window check replaced by T-SHELL-05 e2e, D-015) |
+| T-INF-01..06 | W-inference | #12 | review fixes pending |
+| T-ART-01..05 | W-artifacts | #11, #16 | review fixes pending |
+| T-ART-06 (sandbox in the app + in-app escape suite) | W-artifacts | – | after #16 |
+| T-SHELL-04 (wire real backends + approval cards) | W-shell | – | in progress |
+| T-SHELL-05 (real-app e2e, Linux + Windows) | W-shell | – | in progress |
+| T-INF-07 (fit estimator drives `dn run` defaults) | W-inference | – | follow-up |
 | T-DES-02 | lead | – | after #14 |
 
 ## Wave 0 (lead session, after D-002)
