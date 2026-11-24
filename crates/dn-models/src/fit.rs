@@ -486,7 +486,9 @@ pub fn fit(model: &ModelFootprint, machine: &Machine) -> FitReport {
             })
             .and_then(|alt| alt.quant);
         if let Some(q) = &suggested_quant {
-            notes.push(format!("A {q} build of this model would run comfortably."));
+            notes.push(format!(
+                "Re-quantised to {q}, this model would run comfortably."
+            ));
         } else if rec.status == FitStatus::MemoryBlocked {
             notes.push(
                 "Too large for this machine at any common quant; pick a smaller model.".into(),

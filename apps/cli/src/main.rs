@@ -392,12 +392,18 @@ fn fit_cmd(a: FitArgs) -> Result<(), String> {
             .unwrap_or_else(|| "all".into()),
         r.placement.moe_cpu_layers
     );
+    let split = r.placement.moe_cpu_layers > 0 || r.placement.gpu_layers.is_some();
     println!(
-        "memory    weights {} + kv {} + overhead {} = {} of {} budget ({:.0}%)",
+        "memory    weights {} + kv {} + overhead {} = {}; {}budget {} ({:.0}% used)",
         gib(r.weight_bytes),
         gib(r.kv_bytes),
         gib(r.overhead_bytes),
         gib(r.need_bytes),
+        if split {
+            "split across GPU + RAM; GPU "
+        } else {
+            ""
+        },
         gib(r.budget_bytes),
         r.ratio * 100.0
     );
