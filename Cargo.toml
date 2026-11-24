@@ -17,7 +17,7 @@ uuid = { version = "1", features = ["v7", "serde"] }
 futures-core = "0.3"
 tauri = { version = "2", features = [] }
 tauri-build = { version = "2", features = [] }
-tokio = { version = "1", features = ["sync", "macros", "time", "rt"] }
+tokio = { version = "1", default-features = false }
 rusqlite = { version = "0.43", features = ["bundled"] }
 ts-rs = { version = "12", default-features = false, features = ["serde-compat", "no-serde-warnings"] }
 dn-core = { path = "crates/dn-core", version = "0.1.0" }
