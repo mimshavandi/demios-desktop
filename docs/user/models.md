@@ -43,6 +43,12 @@ Beyond the catalogue, you can add GGUF models from Hugging Face that run on this
 
 Select **Done** to go back to the list. Models you add this way show "From Hugging Face" on their row.
 
+### Links that add a model
+
+A web page or a message can contain a `demios://models/add` link that points at a model on Hugging Face. Opening it brings Demios to the front on **Settings → Models → On this device**, with a note that a link asked to add this model. You see the same details as above: the licence, the model card and whether each version fits. The version the link chose is listed first and marked **Chosen by the link**.
+
+Nothing downloads until you select **Download**. Select **Not now** to close it. While one link's model is open, other links are ignored.
+
 ### Models that need access
 
 Some models are gated: you have to accept their terms first. For those, the app asks for a Hugging Face token:
