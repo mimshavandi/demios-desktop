@@ -90,7 +90,7 @@ describe("spike: artifact child webview (#75)", () => {
       osScreenshot("spike-zorder");
       fs.mkdirSync(shots, { recursive: true });
       await browser.saveScreenshot(path.join(shots, `spike-main-webview-${process.platform}.png`));
-      console.log("child stages:", JSON.stringify(last?.stages ?? last));
+      console.log("child stages:", JSON.stringify(last?.stages ?? last), "child:", JSON.stringify(last?.child ?? null));
     }
     const r = JSON.parse(last.report);
     console.log("child webview report:", JSON.stringify(r, null, 2));

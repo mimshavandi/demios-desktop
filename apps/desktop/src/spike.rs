@@ -143,8 +143,27 @@ pub async fn spike_open_child(app: tauri::AppHandle) -> Result<(), String> {
     let url: tauri::Url = format!("{}/spike/", origin())
         .parse()
         .map_err(|e| format!("{e}"))?;
-    let builder =
-        tauri::webview::WebviewBuilder::new(CHILD_LABEL, tauri::WebviewUrl::CustomProtocol(url));
+    #[allow(unused_mut)]
+    let mut builder =
+        tauri::webview::WebviewBuilder::new(CHILD_LABEL, tauri::WebviewUrl::CustomProtocol(url))
+            .on_page_load(|_wv, payload| {
+                let s = format!("page-load {:?} {}", payload.event(), payload.url());
+                eprintln!("spike: {s}");
+                STAGES.lock().unwrap_or_else(|p| p.into_inner()).push(s);
+            });
+    // WebView2: webviews that share a data directory must use the same browser arguments, or
+    // the later one fails to start. Use the main window's (from the merged config).
+    #[cfg(windows)]
+    if let Some(args) = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|w| w.label == "main")
+        .and_then(|w| w.additional_browser_args.clone())
+    {
+        builder = builder.additional_browser_args(&args);
+    }
     window
         .add_child(
             builder,
@@ -152,13 +171,26 @@ pub async fn spike_open_child(app: tauri::AppHandle) -> Result<(), String> {
             tauri::LogicalSize::new(380.0, 260.0),
         )
         .map_err(|e| e.to_string())?;
+    STAGES
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .push("add_child ok".into());
     Ok(())
 }
 
 /// What the child's probes found (JSON, once it has reported) and the stages it reached.
 #[tauri::command]
-pub async fn spike_child_report() -> serde_json::Value {
+pub async fn spike_child_report(app: tauri::AppHandle) -> serde_json::Value {
+    use tauri::Manager;
+    let child = app.get_webview(CHILD_LABEL).map(|w| {
+        serde_json::json!({
+            "url": w.url().map(|u| u.to_string()).map_err(|e| e.to_string()),
+            "position": w.position().map(|p| format!("{p:?}")).map_err(|e| e.to_string()),
+            "size": w.size().map(|s| format!("{s:?}")).map_err(|e| e.to_string()),
+        })
+    });
     serde_json::json!({
+        "child": child,
         "report": REPORT.lock().unwrap_or_else(|p| p.into_inner()).clone(),
         "stages": STAGES.lock().unwrap_or_else(|p| p.into_inner()).clone(),
     })
