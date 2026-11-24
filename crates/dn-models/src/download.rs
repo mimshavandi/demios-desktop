@@ -158,6 +158,13 @@ async fn hash_file(path: &Path, h: &mut Sha256) -> std::io::Result<u64> {
     }
 }
 
+/// Blocking [`is_verified`], for directory scans.
+pub fn is_verified_blocking(path: &Path, size: u64, sha256: &str) -> bool {
+    std::fs::metadata(path).is_ok_and(|m| m.len() == size)
+        && std::fs::read_to_string(marker(path))
+            .is_ok_and(|m| m.trim().eq_ignore_ascii_case(sha256))
+}
+
 /// True if `path` exists with the expected size and a matching verified marker.
 pub async fn is_verified(path: &Path, size: u64, sha256: &str) -> bool {
     let Ok(meta) = tokio::fs::metadata(path).await else {
