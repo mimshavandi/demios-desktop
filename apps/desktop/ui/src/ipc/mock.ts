@@ -162,7 +162,6 @@ export function createMockApi(): Api {
   const catalog = (): ModelCatalog => ({
     slots: [
       { slot_id: "chat", label: "Chat", description: "Answers in conversations.", capability: "chat" },
-      { slot_id: "fast", label: "Fast", description: "Titles, summaries and other quick background tasks.", capability: "chat" },
       { slot_id: "embed", label: "Embeddings", description: "Knowledge search (arrives with dn-knowledge).", capability: "embedding" },
     ],
     models: [
