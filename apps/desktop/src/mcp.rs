@@ -162,14 +162,16 @@ fn values(
     Ok(out)
 }
 
-/// What starting a local server will run, as the confirmation shows it. Env var values are
-/// left out (they can be secrets); their names are part of what's approved.
+/// What starting a local server will run, as the confirmation shows it. Plain env values are
+/// shown and approved (`NODE_OPTIONS`, `LD_PRELOAD`… change what runs); secret values are
+/// never shown, only their names.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct LaunchRequest {
     pub server_name: String,
     pub command: String,
     pub args: Vec<String>,
-    pub env_names: Vec<String>,
+    /// Name and plain value; `None` for a secret.
+    pub env: Vec<(String, Option<String>)>,
 }
 
 impl LaunchRequest {
@@ -181,18 +183,29 @@ impl LaunchRequest {
                 server_name: cfg.display_name.clone().unwrap_or_else(|| cfg.id.clone()),
                 command: command.clone(),
                 args: args.clone(),
-                env_names: env.keys().cloned().collect(),
+                env: env
+                    .iter()
+                    .map(|(k, v)| {
+                        let plain = match v {
+                            ValueRef::Plain { value } => Some(value.clone()),
+                            ValueRef::Secret { .. } => None,
+                        };
+                        (k.clone(), plain)
+                    })
+                    .collect(),
             }),
             McpTransport::StreamableHttp { .. } => None,
         }
     }
 
-    /// What an approval is remembered for: the exact program, arguments and env var names.
+    /// What an approval is remembered for: the exact program, arguments, env var names and
+    /// plain env values (a secret's value isn't part of it; its name is).
     pub fn command_line(&self) -> String {
-        serde_json::to_string(&(&self.command, &self.args, &self.env_names)).unwrap_or_default()
+        serde_json::to_string(&(&self.command, &self.args, &self.env)).unwrap_or_default()
     }
 
-    /// The native dialog's text: every argument on its own line, quoted, so nothing hides.
+    /// The native dialog's text: every argument and plain env value on its own line, quoted,
+    /// so nothing hides. Secret values are never shown.
     pub fn dialog_text(&self) -> String {
         let mut t = format!(
             "Demios is about to start this program for the tool server \"{}\":\n\n{:?}",
@@ -201,11 +214,14 @@ impl LaunchRequest {
         for a in &self.args {
             t.push_str(&format!("\n    {a:?}"));
         }
-        if !self.env_names.is_empty() {
-            t.push_str(&format!(
-                "\n\nEnvironment variables: {}",
-                self.env_names.join(", ")
-            ));
+        if !self.env.is_empty() {
+            t.push_str("\n\nEnvironment variables:");
+            for (name, value) in &self.env {
+                match value {
+                    Some(v) => t.push_str(&format!("\n    {name}={v:?}")),
+                    None => t.push_str(&format!("\n    {name} (secret, not shown)")),
+                }
+            }
         }
         t.push_str(
             "\n\nIt runs with your permissions and can read and change your files. Allow it only if you trust it. You'll be asked again if the command changes.",
@@ -237,7 +253,11 @@ pub fn valid_value_name(name: &str, header: bool) -> bool {
 /// secrets and the sign-in must not follow it.
 pub fn destination(cfg: &McpServerConfig) -> String {
     match &cfg.transport {
-        McpTransport::Stdio { command, .. } => format!("stdio:{command}"),
+        // The arguments are part of what runs (`npx pkg-a` vs `npx pkg-b`).
+        McpTransport::Stdio { command, args, .. } => format!(
+            "stdio:{}",
+            serde_json::to_string(&(command, args)).unwrap_or_default()
+        ),
         McpTransport::StreamableHttp { url, .. } => format!("http:{}", url.trim()),
     }
 }
@@ -500,6 +520,15 @@ impl AppState {
             self.clear_mcp_grants(&cfg.id);
         }
         Ok(cfg)
+    }
+
+    /// After a sign-in finished: keeps the new token only if the server is still saved as it
+    /// was when sign-in started; otherwise deletes the token and returns false. Blocking.
+    pub fn keep_sign_in_for(&self, started_for: &McpServerConfig) -> IpcResult<bool> {
+        match self.mcp_server(&started_for.id) {
+            Ok(now) if &now == started_for => Ok(true),
+            _ => self.forget_mcp_sign_in(&started_for.id).map(|()| false),
+        }
     }
 
     /// Deletes the stored OAuth token of a server id (whether or not it uses sign-in now).
@@ -1090,6 +1119,29 @@ mod tests {
             .await;
         assert_eq!(asked(), 2, "a changed argument asks again");
 
+        // A plain env value is part of what runs (NODE_OPTIONS, LD_PRELOAD…): asks again.
+        let mut with_env = local("files", &["--root", "/"]);
+        if let McpTransport::Stdio { env, .. } = &mut with_env.transport {
+            env.insert(
+                "NODE_OPTIONS".into(),
+                ValueRef::plain("--require /tmp/x.js"),
+            );
+        }
+        st.set_mcp_servers(vec![with_env.clone()]).unwrap();
+        st.connect_mcp_server(&exec, with_env.clone(), epoch).await;
+        assert_eq!(asked(), 3, "a changed plain env value asks again");
+        if let McpTransport::Stdio { env, .. } = &mut with_env.transport {
+            env.insert(
+                "NODE_OPTIONS".into(),
+                ValueRef::plain("--require /tmp/y.js"),
+            );
+        }
+        st.set_mcp_servers(vec![with_env.clone()]).unwrap();
+        st.connect_mcp_server(&exec, with_env.clone(), epoch).await;
+        assert_eq!(asked(), 4);
+        st.set_mcp_servers(vec![local("files", &["--root", "/"])])
+            .unwrap();
+
         // Removing the server forgets its approvals.
         st.remove_mcp_server_config("files").unwrap();
         assert!(
@@ -1108,10 +1160,14 @@ mod tests {
     async fn no_local_server_starts_where_programs_cant_run_or_without_an_approver() {
         let (st, exec, _keys, _rx) = app_with_exec();
         st.set_mcp_servers(vec![local("files", &[])]).unwrap();
-        // No approver installed: refused, not started.
+        // No approver installed: refused, not started. (Starting would register a client
+        // even for a program that fails to run, so this fails if the check is skipped.)
         st.connect_mcp_server(&exec, local("files", &[]), st.mcp_epoch_now())
             .await;
-        assert_eq!(state_of(&st, "files").unwrap().state, "failed");
+        let s = state_of(&st, "files").unwrap();
+        assert_eq!(s.state, "failed");
+        assert!(s.message.unwrap().contains("didn't allow"));
+        assert!(exec.client("files").is_none(), "never started");
 
         let mut flat = AppState::new(
             dn_store::open_in_memory(&crate::state::migration_sets()).unwrap(),
@@ -1154,21 +1210,105 @@ mod tests {
     }
 
     #[test]
-    fn the_launch_dialog_shows_every_argument_and_no_env_values() {
+    fn the_launch_dialog_shows_every_argument_and_plain_env_values_but_no_secrets() {
         let mut cfg = local("files", &["--root", "/tmp; rm -rf ~", ""]);
         if let McpTransport::Stdio { env, .. } = &mut cfg.transport {
             env.insert(
                 "API_TOKEN".into(),
                 ValueRef::secret("mcp.files.env.API_TOKEN"),
             );
-            env.insert("LOG".into(), ValueRef::plain("hidden-plain-value"));
+            env.insert("LOG".into(), ValueRef::plain("shown-plain-value"));
         }
         let r = LaunchRequest::of(&cfg).unwrap();
         let t = r.dialog_text();
         assert!(t.contains("\"/nonexistent/demios-test-mcp\""));
         assert!(t.contains("\"/tmp; rm -rf ~\""), "{t}");
         assert!(t.contains("\"\""), "an empty argument is visible");
-        assert!(t.contains("API_TOKEN, LOG"));
-        assert!(!t.contains("hidden-plain-value"));
+        assert!(t.contains("API_TOKEN (secret, not shown)"), "{t}");
+        assert!(t.contains("LOG=\"shown-plain-value\""), "{t}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn delete_all_local_data_forgets_launch_approvals() {
+        let (st, exec, _keys, _rx) = app_with_exec();
+        let approver = Arc::new(FakeApprover {
+            allow: true,
+            asked: Default::default(),
+        });
+        let _ = st.launch_approver.set(approver.clone());
+        let cfg = local("files", &["a"]);
+        st.set_mcp_servers(vec![cfg.clone()]).unwrap();
+        st.connect_mcp_server(&exec, cfg.clone(), st.mcp_epoch_now())
+            .await;
+        let line = LaunchRequest::of(&cfg).unwrap().command_line();
+        assert!(crate::settings::mcp_launch_approved(&st.db().unwrap(), "files", &line).unwrap());
+        assert!(st.delete_all_local_data().await.is_empty());
+        assert!(!crate::settings::mcp_launch_approved(&st.db().unwrap(), "files", &line).unwrap());
+    }
+
+    #[test]
+    fn a_sign_in_for_a_changed_or_removed_server_is_thrown_away() {
+        let (st, keys) = app();
+        st.save_mcp_server(&http("work", vec![], true), None)
+            .unwrap();
+        let started_for = st.mcp_server("work").unwrap();
+        let store = st.mcp_secret_store();
+
+        // Unchanged: kept.
+        store.set("mcp.work.oauth", "{}").unwrap();
+        assert!(st.keep_sign_in_for(&started_for).unwrap());
+        assert!(has(&keys, "mcp.work.oauth"));
+
+        // Edited while the browser was open: discarded.
+        let moved = ServerInput {
+            id: "work".into(),
+            name: Some("Work".into()),
+            transport: TransportInput::StreamableHttp {
+                url: "https://elsewhere.example/mcp".into(),
+                headers: vec![],
+                oauth: true,
+                scopes: vec![],
+                client_id: None,
+            },
+        };
+        st.save_mcp_server(&moved, Some("work")).unwrap();
+        store.set("mcp.work.oauth", "{}").unwrap(); // the token the browser just delivered
+        assert!(!st.keep_sign_in_for(&started_for).unwrap());
+        assert!(!has(&keys, "mcp.work.oauth"));
+
+        // Removed meanwhile: discarded too.
+        let now = st.mcp_server("work").unwrap();
+        st.remove_mcp_server_config("work").unwrap();
+        store.set("mcp.work.oauth", "{}").unwrap();
+        assert!(!st.keep_sign_in_for(&now).unwrap());
+        assert!(!has(&keys, "mcp.work.oauth"));
+    }
+
+    #[test]
+    fn new_arguments_count_as_a_new_destination_for_saved_secrets() {
+        let (st, keys) = app();
+        let input = |args: Vec<String>, value: Option<&str>| ServerInput {
+            id: "pkg".into(),
+            name: None,
+            transport: TransportInput::Stdio {
+                command: "npx".into(),
+                args,
+                env: vec![secret("API_TOKEN", value)],
+            },
+        };
+        st.save_mcp_server(&input(vec!["pkg-a".into()], Some("t0k")), None)
+            .unwrap();
+        let err = st
+            .save_mcp_server(&input(vec!["pkg-b".into()], None), Some("pkg"))
+            .unwrap_err();
+        assert!(
+            err.message.contains("Type API_TOKEN again"),
+            "{}",
+            err.message
+        );
+        // Same arguments: the saved secret is kept.
+        st.save_mcp_server(&input(vec!["pkg-a".into()], None), Some("pkg"))
+            .unwrap();
+        assert!(has(&keys, "mcp.pkg.env.API_TOKEN"));
     }
 }

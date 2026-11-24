@@ -378,10 +378,17 @@ function ServerForm({
   const snapshot = JSON.stringify([kind, name, id, command, args, env, url, headers, oauth, scopes, clientId]);
   if (initial.current === null) initial.current = snapshot;
   const dirty = snapshot !== initial.current;
-  // Saved secrets aren't reused for a new address or program: they must be typed again.
+  // Saved secrets aren't reused for a new address or program (including new arguments:
+  // `npx pkg-a` vs `npx pkg-b`): they must be typed again.
+  const argList = args
+    .split("\n")
+    .map((a) => a.trim())
+    .filter((a) => a !== "");
   const moved =
     t !== undefined &&
-    (t.type === "stdio" ? command.trim() !== t.command : url.trim() !== t.url);
+    (t.type === "stdio"
+      ? command.trim() !== t.command || JSON.stringify(argList) !== JSON.stringify(t.args)
+      : url.trim() !== t.url);
 
   useEffect(() => {
     headingRef.current?.focus();
@@ -414,10 +421,7 @@ function ServerForm({
           ? {
               type: "stdio",
               command: command.trim(),
-              args: args
-                .split("\n")
-                .map((a) => a.trim())
-                .filter((a) => a !== ""),
+              args: argList,
               env: values(env),
             }
           : {

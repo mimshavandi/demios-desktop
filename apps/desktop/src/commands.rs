@@ -651,15 +651,9 @@ pub async fn sign_in_mcp_server(
         })?;
         // The token is for the server as it was when sign-in started. If it was removed or
         // changed meanwhile, throw the token away instead of connecting.
-        let id = cfg.id.clone();
         let expected = cfg.clone();
         let st2 = Arc::clone(&st);
-        let still_same = tauri::async_runtime::spawn_blocking(move || {
-            match st2.mcp_server(&id) {
-                Ok(now) if now == expected => Ok(true),
-                _ => st2.forget_mcp_sign_in(&id).map(|()| false),
-            }
-        })
+        let still_same = tauri::async_runtime::spawn_blocking(move || st2.keep_sign_in_for(&expected))
         .await
         .map_err(|_| IpcError::new("internal", "Something went wrong. Try again."))??;
         if !still_same {

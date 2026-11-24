@@ -195,6 +195,22 @@ describe("McpServersCard", () => {
     expect(await screen.findByRole("button", { name: "Edit Issue tracker" })).toBeTruthy();
   });
 
+  it("new arguments for a local server ask for its secrets again", async () => {
+    const local: McpServersView["servers"][number] = {
+      id: "pkg",
+      name: "Package",
+      status: null,
+      transport: { type: "stdio", command: "npx", args: ["pkg-a"], env: [{ name: "API_TOKEN", secret: true, value: null, stored: true }] },
+    };
+    const { api } = fake({ servers: [local], local_servers_allowed: true });
+    ui(api);
+    fireEvent.click(await screen.findByRole("button", { name: "Edit Package" }));
+    const secret = screen.getByLabelText("Secret value") as HTMLInputElement;
+    expect(secret.placeholder).toBe("Saved");
+    fireEvent.change(screen.getByLabelText("Arguments"), { target: { value: "pkg-b" } });
+    expect(secret.placeholder).toBe("Type it again");
+  });
+
   it("the remove confirm lists the chat approvals that go too", async () => {
     const { api } = fake({ servers: [tracker], local_servers_allowed: true });
     ui(api);
