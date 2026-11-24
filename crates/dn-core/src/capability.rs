@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 /// Side-effect risk of a capability. Ordered from least to most dangerous.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum RiskTier {
     Read,
@@ -26,6 +27,7 @@ impl RiskTier {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum ApprovalPolicy {
     AlwaysAsk,
@@ -34,6 +36,7 @@ pub enum ApprovalPolicy {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CapabilitySource {
     Builtin,
@@ -42,13 +45,16 @@ pub enum CapabilitySource {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct CapabilitySpec {
     /// Dotted, globally unique, e.g. `mcp.filesystem.write_file`.
     pub id: String,
     pub source: CapabilitySource,
     pub description: String,
+    #[cfg_attr(feature = "ts", ts(type = "unknown"))]
     pub input_schema: serde_json::Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(type = "unknown"))]
     pub output_schema: Option<serde_json::Value>,
     pub risk: RiskTier,
     /// Input field whose value makes a write idempotent (enables safe retry/replay).
@@ -64,6 +70,7 @@ impl CapabilitySpec {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum Preflight {
     Ready,

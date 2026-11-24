@@ -88,6 +88,7 @@ impl<'de> Deserialize<'de> for ModelRef {
 
 /// What a model can be used for. Superset of Demios `ModelCapability`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum Capability {
     Chat,
@@ -100,10 +101,12 @@ pub enum Capability {
 
 /// A named model slot an agent declares (e.g. `primary`, `fast`, `embed`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ModelSlot {
     pub slot_id: String,
     pub capability: Capability,
     #[serde(default)]
+    #[cfg_attr(feature = "ts", ts(type = "string | null"))]
     pub default_model: Option<ModelRef>,
     #[serde(default = "yes")]
     pub user_configurable: bool,
@@ -115,6 +118,7 @@ fn yes() -> bool {
 
 /// Readiness of a model source (Demios `ReadinessStatus`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum Readiness {
     Ready,
@@ -125,6 +129,7 @@ pub enum Readiness {
 
 /// Whether a model fits this machine (ported from Demios Edge `ModelFootprintEstimator`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum FitStatus {
     Ready,
