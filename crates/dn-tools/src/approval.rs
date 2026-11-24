@@ -134,6 +134,13 @@ impl ApprovalGate {
         }
     }
 
+    /// Forget every "allow for this chat" grant ("Delete all local data").
+    pub fn clear_all(&self) {
+        if let Ok(mut g) = self.grants.lock() {
+            g.clear();
+        }
+    }
+
     /// Ask if the policy requires it and wait for the answer.
     pub async fn check(&self, prompt: ApprovalPrompt) -> GateOutcome {
         if self.is_satisfied(&prompt.scope, &prompt.capability_id, prompt.policy) {

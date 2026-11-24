@@ -15,6 +15,33 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
+/// dn-tools' secret store over the keychain that also records each id it writes in
+/// `app_mcp_secret_ids` (T-STORE-11), so a later "Delete all local data" can find it.
+struct TrackedMcpSecrets {
+    inner: dn_tools::DnSecrets,
+    state: std::sync::Weak<AppState>,
+}
+
+impl dn_tools::SecretStore for TrackedMcpSecrets {
+    fn get(&self, id: &str) -> Result<Option<String>, dn_tools::secrets::SecretError> {
+        self.inner.get(id)
+    }
+    fn set(&self, id: &str, value: &str) -> Result<(), dn_tools::secrets::SecretError> {
+        // Record first: an id we fail to record could outlive a wipe.
+        if let Some(st) = self.state.upgrade() {
+            let db = st
+                .db()
+                .map_err(|e| dn_tools::secrets::SecretError(e.message))?;
+            settings::record_mcp_secret_id(&db, id)
+                .map_err(|e| dn_tools::secrets::SecretError(e.to_string()))?;
+        }
+        self.inner.set(id, value)
+    }
+    fn delete(&self, id: &str) -> Result<(), dn_tools::secrets::SecretError> {
+        self.inner.delete(id)
+    }
+}
+
 /// Key-store id of the Hugging Face token (`dn_models::hub::hf_token_secret()`).
 pub const HF_TOKEN_PROVIDER_ID: &str = "huggingface";
 
@@ -132,6 +159,9 @@ pub struct AppState {
     live: Mutex<HashMap<Id, Live>>,
     removed_keys: Mutex<HashMap<String, RemovedKey>>,
     next_token: AtomicU64,
+    /// Bumped by "Delete all local data": a background MCP connect started before it must
+    /// not add its server afterwards.
+    mcp_epoch: AtomicU64,
 }
 
 /// A reserved generation slot. Dropping it without [`Reservation::into_parts`] releases
@@ -182,6 +212,7 @@ impl AppState {
             live: Mutex::new(HashMap::new()),
             removed_keys: Mutex::new(HashMap::new()),
             next_token: AtomicU64::new(1),
+            mcp_epoch: AtomicU64::new(0),
         }
     }
 
@@ -198,7 +229,9 @@ impl AppState {
         if n > 0 {
             eprintln!("marked {n} interrupted answer(s) as cancelled");
         }
-        let purged = store::purge_deleted(&conn, dn_store::now_ms())?;
+        store::purge_deleted(&conn, dn_store::now_ms())?;
+        // Every purged chat, including ones purged by older builds that kept ledger rows.
+        let tombstones = store::list_tombstones(&conn)?;
 
         let ledger = dn_store::open_connection(path)?;
         match dn_tools::ledger::mark_interrupted(&ledger) {
@@ -206,17 +239,17 @@ impl AppState {
             Ok(n) => eprintln!("{n} tool call(s) were interrupted; their outcome is unknown"),
             Err(e) => eprintln!("could not check the tool ledger: {e}"),
         }
-        // A purged chat keeps no tool history either (unknown writes stay until resolved).
-        for id in &purged {
-            if let Err(e) = dn_tools::ledger::delete_scope(&ledger, &format!("conv:{id}")) {
-                eprintln!("could not clear the tool ledger of a deleted chat: {e}");
-            }
-        }
         let (gate, approvals) = dn_tools::ApprovalGate::new(16);
         let executor = Arc::new(dn_tools::Executor::new(
             Arc::new(gate),
             Arc::new(Mutex::new(ledger)),
         ));
+        // A purged chat keeps no tool history either (unknown writes stay until resolved).
+        for (id, _) in &tombstones {
+            if let Err(e) = executor.forget_conversation(&id.to_string()) {
+                eprintln!("could not clear the tool ledger of a deleted chat: {e}");
+            }
+        }
         let keys = Keys::os_keychain();
         let agent = Agent::load(skills);
         let tools = Arc::new(crate::agent::ManifestTools {
@@ -247,8 +280,8 @@ impl AppState {
         if servers.is_empty() {
             return;
         }
-        let secrets: Arc<dyn dn_tools::SecretStore> =
-            Arc::new(dn_tools::DnSecrets(Arc::clone(&self.keys.store)));
+        let secrets = self.mcp_secret_store();
+        let epoch = self.mcp_epoch.load(Ordering::SeqCst);
         for cfg in &servers {
             self.set_mcp_status(McpServerStatus {
                 server_id: cfg.id.clone(),
@@ -286,7 +319,15 @@ impl AppState {
                         continue;
                     }
                 };
-                match executor.add_server(client).await {
+                if state.mcp_epoch.load(Ordering::SeqCst) != epoch {
+                    return; // "Delete all local data" ran meanwhile.
+                }
+                let added = executor.add_server(client).await;
+                if state.mcp_epoch.load(Ordering::SeqCst) != epoch {
+                    executor.remove_server(&id).await;
+                    return;
+                }
+                match added {
                     Ok(caps) => state.set_mcp_status(status("connected", None, caps.len())),
                     Err(e) => {
                         eprintln!("MCP server `{id}` could not be added: {e}");
@@ -378,11 +419,82 @@ impl AppState {
         }
     }
 
-    /// Cancels every running reply.
-    pub fn stop_all(&self) {
-        for (_, r) in lock(&self.running).drain() {
+    /// Cancels every running reply and waits (up to `timeout`) until each has ended and
+    /// released its slot, so nothing writes after a wipe. Returns whether all ended.
+    pub async fn stop_all_and_wait(&self, timeout: Duration) -> bool {
+        for r in lock(&self.running).values() {
             r.cancel.cancel();
         }
+        let deadline = Instant::now() + timeout;
+        loop {
+            if lock(&self.running).is_empty() {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                lock(&self.running).clear();
+                return false;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    /// The secret store MCP servers use: the keychain, recording every id written so
+    /// "Delete all local data" finds it later.
+    pub fn mcp_secret_store(self: &Arc<Self>) -> Arc<dyn dn_tools::SecretStore> {
+        Arc::new(TrackedMcpSecrets {
+            inner: dn_tools::DnSecrets(Arc::clone(&self.keys.store)),
+            state: Arc::downgrade(self),
+        })
+    }
+
+    /// Saves a new MCP server list and deletes the keychain secrets no remaining server
+    /// refers to (a removed server's tokens and sign-ins). Blocking.
+    pub fn set_mcp_servers(&self, servers: Vec<dn_tools::McpServerConfig>) -> IpcResult<()> {
+        let mut settings = self.settings()?;
+        let before = mcp_secret_ids(&settings.mcp_servers);
+        let after = mcp_secret_ids(&servers);
+        settings.mcp_servers = servers;
+        self.save_settings(&settings)?;
+        for id in before.iter().filter(|id| !after.contains(id)) {
+            self.keys.store.delete(&dn_secrets::SecretId::mcp(id))?;
+            settings::forget_mcp_secret_id(&*self.db()?, id)?;
+        }
+        Ok(())
+    }
+
+    /// "Delete all local data", in order: stop replies (and wait for them), remove and
+    /// stop every MCP server (so none can write a refreshed token back), delete the models,
+    /// then the database and keychain entries ([`Self::wipe_local_data`]). Keeps going after
+    /// a failure and returns the parts it could not delete, in the user's words.
+    pub async fn delete_all_local_data(self: &Arc<Self>) -> Vec<&'static str> {
+        let mut failed = Vec::new();
+        if !self.stop_all_and_wait(Duration::from_secs(5)).await {
+            eprintln!("some replies did not stop in time; deleting anyway");
+        }
+        self.mcp_epoch.fetch_add(1, Ordering::SeqCst);
+        if let Some(exec) = &self.executor {
+            let stuck = exec.remove_all_servers(Duration::from_secs(2)).await;
+            if stuck > 0 {
+                eprintln!("{stuck} tool server(s) did not stop in time");
+            }
+            exec.gate().clear_all();
+        }
+        lock(&self.mcp_status).clear();
+        if let Some(local) = self.models.local.clone()
+            && let Err(e) = local.delete_all().await
+        {
+            eprintln!("could not delete the models folder: {e}");
+            failed.push("downloaded models");
+        }
+        let st = Arc::clone(self);
+        match tokio::task::spawn_blocking(move || st.wipe_local_data()).await {
+            Ok(more) => failed.extend(more),
+            Err(e) => {
+                eprintln!("wipe task failed: {e}");
+                failed.push("chats, settings and keys");
+            }
+        }
+        failed
     }
 
     /// What "Delete all local data" would remove from the keychain, in the user's words
@@ -398,7 +510,15 @@ impl AppState {
             out.push("Hugging Face token".into());
         }
         let servers = self.settings().map(|s| s.mcp_servers).unwrap_or_default();
-        let mcp = mcp_secret_ids(&servers)
+        let mut ids = mcp_secret_ids(&servers);
+        if let Ok(db) = self.db()
+            && let Ok(known) = settings::known_mcp_secret_ids(&db)
+        {
+            ids.extend(known);
+        }
+        ids.sort();
+        ids.dedup();
+        let mcp = ids
             .into_iter()
             .filter(|id| {
                 self.keys
@@ -421,7 +541,29 @@ impl AppState {
     /// and returns the parts it could not delete, in the user's words.
     pub fn wipe_local_data(&self) -> Vec<&'static str> {
         let mut failed = Vec::new();
-        let mcp_servers = self.settings().map(|s| s.mcp_servers).unwrap_or_default();
+        // MCP secrets: those the saved servers name, plus every id ever written (servers
+        // removed earlier). If settings can't be read, report it: their secrets may remain.
+        let mut mcp_ids = match self.settings() {
+            Ok(s) => mcp_secret_ids(&s.mcp_servers),
+            Err(e) => {
+                eprintln!("could not read settings: {}", e.message);
+                failed.push("tool-server sign-ins (settings unreadable)");
+                Vec::new()
+            }
+        };
+        match self
+            .db()
+            .map_err(|e| e.message)
+            .and_then(|db| settings::known_mcp_secret_ids(&db).map_err(|e| e.to_string()))
+        {
+            Ok(ids) => mcp_ids.extend(ids),
+            Err(e) => {
+                eprintln!("could not read the MCP secret list: {e}");
+                failed.push("tool-server sign-ins (list unreadable)");
+            }
+        }
+        mcp_ids.sort();
+        mcp_ids.dedup();
 
         // Keychain.
         let mut keys_ok = true;
@@ -434,7 +576,7 @@ impl AppState {
             }
             self.models.invalidate(id);
         }
-        for id in mcp_secret_ids(&mcp_servers) {
+        for id in mcp_ids {
             if let Err(e) = self.keys.store.delete(&dn_secrets::SecretId::mcp(&id)) {
                 eprintln!("could not delete MCP secret `{id}`: {e}");
                 keys_ok = false;
@@ -446,15 +588,8 @@ impl AppState {
         }
 
         // Database.
-        let conversations = self
-            .db()
-            .ok()
-            .and_then(|db| store::list_conversations(&db).ok())
-            .unwrap_or_default();
         if let Some(exec) = &self.executor {
-            for c in &conversations {
-                exec.gate().clear_conversation(&format!("conv:{}", c.id));
-            }
+            exec.gate().clear_all();
             if let Err(e) = exec.forget_all() {
                 eprintln!("could not clear the tool ledger: {e}");
                 failed.push("tool history");
@@ -462,16 +597,17 @@ impl AppState {
         }
         match self.db() {
             Ok(db) => {
-                let r = store::delete_all(&db)
-                    .and_then(|()| settings::delete_all(&db))
-                    // Rewrite the file so deleted rows don't linger in free pages or the WAL.
-                    .and_then(|()| {
-                        db.execute_batch("VACUUM; PRAGMA wal_checkpoint(TRUNCATE);")?;
-                        Ok(())
-                    });
+                let r = store::delete_all(&db).and_then(|()| settings::delete_all(&db));
                 if let Err(e) = r {
                     eprintln!("could not clear the database: {e}");
                     failed.push("chats and settings");
+                } else if let Err(e) =
+                    // Rewrite the file so deleted rows don't linger in free pages or the WAL.
+                    db.execute_batch("VACUUM; PRAGMA wal_checkpoint(TRUNCATE);")
+                {
+                    // The rows are gone (secure_delete zeroed them); only compaction failed.
+                    eprintln!("could not compact the database: {e}");
+                    failed.push("compacting the database file");
                 }
             }
             Err(_) => failed.push("chats and settings"),
@@ -880,6 +1016,15 @@ mod tests {
             dn_tools::ledger::succeed(&l, "done", &serde_json::json!("ok")).unwrap();
             dn_tools::ledger::mark_unknown(&l, "unk", "cancelled").unwrap();
             dn_tools::ledger::succeed(&l, "live", &serde_json::json!("ok")).unwrap();
+            // Purged by an older build: tombstone present, ledger rows left behind.
+            let old = Id::new();
+            c.execute(
+                "INSERT INTO store_tombstones (id, deleted_at) VALUES (?1, 1)",
+                [old.to_string()],
+            )
+            .unwrap();
+            dn_tools::ledger::claim(&l, "old", "cap", &format!("conv:{old}"), &args).unwrap();
+            dn_tools::ledger::succeed(&l, "old", &serde_json::json!("ok")).unwrap();
             (gone, kept)
         };
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -887,6 +1032,10 @@ mod tests {
             let st = AppState::open(&path, None).unwrap();
             let exec = st.executor.as_ref().unwrap();
             assert!(exec.ledger_entry("done").unwrap().is_none());
+            assert!(
+                exec.ledger_entry("old").unwrap().is_none(),
+                "older purge cleaned up"
+            );
             assert!(exec.ledger_entry("live").unwrap().is_some());
             // The unknown write waits for the user, then goes once resolved.
             assert!(exec.ledger_entry("unk").unwrap().is_some());
@@ -1003,6 +1152,124 @@ mod tests {
         assert_eq!(
             mcp_secret_ids(&servers),
             ["mcp.a.token", "mcp.b.auth", "mcp.b.oauth"]
+        );
+    }
+
+    fn state_with_executor() -> (Arc<AppState>, Arc<dn_tools::Executor>, Keys) {
+        let conn = dn_store::open_in_memory(&migration_sets()).unwrap();
+        let keys = Keys::memory();
+        let mut st = AppState::new(conn, ModelRegistry::default(), keys.clone());
+        let ledger = dn_store::open_in_memory(&migration_sets()).unwrap();
+        let (gate, _approvals) = dn_tools::ApprovalGate::new(1);
+        let exec = Arc::new(dn_tools::Executor::new(
+            Arc::new(gate),
+            Arc::new(Mutex::new(ledger)),
+        ));
+        st.executor = Some(Arc::clone(&exec));
+        (Arc::new(st), exec, keys)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn delete_all_removes_mcp_servers_before_wiping_keys() {
+        let (st, exec, _keys) = state_with_executor();
+        // Unreachable server: add_server fails to connect but registers the client.
+        let cfg = dn_tools::McpServerConfig::http("gh", "http://127.0.0.1:9/mcp");
+        let client = dn_tools::McpClient::new(cfg, st.mcp_secret_store()).unwrap();
+        let _ = exec.add_server(client).await;
+        assert!(exec.client("gh").is_some());
+        st.set_mcp_status(McpServerStatus {
+            server_id: "gh".into(),
+            name: "gh".into(),
+            state: "failed",
+            message: None,
+            tools: 0,
+        });
+
+        assert!(st.delete_all_local_data().await.is_empty());
+        assert!(exec.client("gh").is_none(), "server removed and stopped");
+        assert!(lock(&st.mcp_status).is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn delete_all_waits_for_running_replies() {
+        let (st, _exec, _keys) = state_with_executor();
+        let c = st.create_conversation().unwrap();
+        let r = st.reserve(c.id).unwrap();
+        let (token, cancel) = r.into_parts();
+        let ended = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (st2, ended2) = (Arc::clone(&st), Arc::clone(&ended));
+        tokio::spawn(async move {
+            // A reply that takes a moment to notice the cancel and store its text.
+            while !cancel.is_cancelled() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            ended2.store(true, Ordering::SeqCst);
+            st2.release(c.id, token);
+        });
+        assert!(st.delete_all_local_data().await.is_empty());
+        assert!(
+            ended.load(Ordering::SeqCst),
+            "wiped only after the reply ended"
+        );
+    }
+
+    #[test]
+    fn removed_and_orphaned_mcp_secrets_are_deleted() {
+        let (st, _exec, keys) = state_with_executor();
+        let store = st.mcp_secret_store();
+        let server = |id: &str| -> dn_tools::McpServerConfig {
+            serde_json::from_value(serde_json::json!({
+                "id": id,
+                "transport": {
+                    "type": "streamable_http",
+                    "url": "https://example.test/mcp",
+                    "oauth": { "credential_secret_id": format!("mcp.{id}.oauth") }
+                }
+            }))
+            .unwrap()
+        };
+        st.set_mcp_servers(vec![server("a"), server("b")]).unwrap();
+        // dn-tools writes sign-ins through the tracked store.
+        store.set("mcp.a.oauth", "{}").unwrap();
+        store.set("mcp.b.oauth", "{}").unwrap();
+        // An id no saved server names any more (e.g. from an older build's server list).
+        store.set("mcp.old.token", "x").unwrap();
+        let has = |id: &str| {
+            keys.store
+                .get(&dn_secrets::SecretId::mcp(id))
+                .unwrap()
+                .is_some()
+        };
+
+        // Removing server b deletes its sign-in only.
+        st.set_mcp_servers(vec![server("a")]).unwrap();
+        assert!(has("mcp.a.oauth"));
+        assert!(!has("mcp.b.oauth"));
+
+        assert_eq!(st.keychain_entries(), ["2 tool-server secrets or sign-ins"]);
+        assert!(st.wipe_local_data().is_empty());
+        assert!(!has("mcp.a.oauth"));
+        assert!(
+            !has("mcp.old.token"),
+            "orphaned secret found via the registry"
+        );
+    }
+
+    #[test]
+    fn an_unreadable_settings_row_is_reported() {
+        let (st, _exec, _keys) = state_with_executor();
+        st.db()
+            .unwrap()
+            .execute(
+                "INSERT INTO app_settings (key, value, updated_at) VALUES ('settings', 'not json', 0)",
+                [],
+            )
+            .unwrap();
+        let failed = st.wipe_local_data();
+        assert!(
+            failed.iter().any(|f| f.contains("settings unreadable")),
+            "{failed:?}"
         );
     }
 }

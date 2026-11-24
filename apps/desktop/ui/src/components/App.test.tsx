@@ -255,6 +255,7 @@ describe("App", () => {
 
     fireEvent.click(screen.getByRole("tab", { name: "General" }));
     expect(screen.getByRole("tabpanel").getAttribute("aria-labelledby")).toBe("tab-general");
+    expect(screen.getByText(/Read-only tools run without asking/)).toBeTruthy();
     // No inert telemetry switch; a plain statement instead (T-STORE-11).
     expect(await screen.findByText(/Demios collects no usage data/)).toBeTruthy();
     expect(screen.queryByRole("switch")).toBeNull();
@@ -293,6 +294,13 @@ describe("App", () => {
     expect(calls).toBe(0);
     await waitFor(() => expect(document.activeElement).toBe(trigger));
 
+    // Esc closes it too, and deletes nothing.
+    fireEvent.click(trigger);
+    const again = await screen.findByRole("alertdialog");
+    fireEvent.keyDown(again, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(calls).toBe(0);
+
     fireEvent.click(trigger);
     const armed = (await screen.findByRole("button", { name: "Delete all data" })) as HTMLButtonElement;
     await waitFor(() => expect(armed.disabled).toBe(false), { timeout: 1500 });
@@ -305,6 +313,26 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "Delete all data" }));
     expect(await screen.findByText("All local data deleted")).toBeTruthy();
     expect(calls).toBe(2);
+  });
+
+  it("keeps the delete button disabled until it knows what will be deleted", async () => {
+    const { api } = fakeApi();
+    let finish: (() => void) | null = null;
+    const summary = api.localDataSummary;
+    api.localDataSummary = () =>
+      new Promise((resolve) => {
+        finish = () => void summary().then(resolve);
+      });
+    render(<App api={api} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Models" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "General" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Delete all local data" }));
+    const confirm = (await screen.findByRole("button", { name: "Delete all data" })) as HTMLButtonElement;
+    // Well past the 500 ms guard, still disabled: the list isn't known yet.
+    await new Promise((r) => setTimeout(r, 700));
+    expect(confirm.disabled).toBe(true);
+    act(() => finish?.());
+    await waitFor(() => expect(confirm.disabled).toBe(false));
   });
 
   it("asks to connect a model when none is available", async () => {
