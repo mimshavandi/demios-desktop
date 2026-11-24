@@ -20,7 +20,7 @@ npm --prefix apps/desktop ci && npm --prefix apps/desktop run build
 cargo build -p demios-desktop --features dev-fake-model,custom-protocol
 cd apps/desktop/e2e && npm ci && npm test        # Linux headless: xvfb-run -a npm test
 ```
-- Linux needs `webkit2gtk-driver`.
+- Linux needs `webkitgtk-webdriver` (Ubuntu 24.04+; `webkit2gtk-driver` on older releases).
 - Windows needs an msedgedriver whose major version matches the installed WebView2 runtime; set `MSEDGEDRIVER=<path>`.
 
 ## macOS: manual release checklist
