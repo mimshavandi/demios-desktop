@@ -57,6 +57,43 @@ pub async fn app_info(state: AppStateRef<'_>) -> IpcResult<AppInfo> {
     })
 }
 
+/// Opens the "Report a problem" / "Report this answer" form in the system browser
+/// (T-STORE-14). The URL is fixed in [`crate::support`]. For an answer the webview passes the
+/// message id and the model ref is read from the database, so the webview can't choose what
+/// goes into the URL.
+#[tauri::command]
+pub async fn report_problem(
+    app: tauri::AppHandle,
+    state: AppStateRef<'_>,
+    kind: crate::support::ReportKind,
+    message_id: Option<Id>,
+) -> IpcResult<()> {
+    use tauri_plugin_opener::OpenerExt;
+    let model = match (kind, message_id) {
+        (crate::support::ReportKind::Answer, Some(id)) => {
+            blocking(&state, move |s| {
+                let m = store::get_message(&*s.db()?, id)?;
+                Ok(crate::support::answer_model(&m))
+            })
+            .await?
+        }
+        _ => None,
+    };
+    let url = crate::support::report_url(
+        kind,
+        env!("CARGO_PKG_VERSION"),
+        &crate::support::os_label(),
+        model.as_ref(),
+    );
+    app.opener().open_url(url, None::<&str>).map_err(|e| {
+        eprintln!("could not open the browser: {e}");
+        IpcError::new(
+            "unavailable",
+            "Couldn't open your browser. Report at github.com/mimshavandi/demios-desktop/issues.",
+        )
+    })
+}
+
 /// What "Delete all local data" removes, for the confirm dialog.
 #[derive(Debug, Serialize)]
 pub struct LocalDataSummary {

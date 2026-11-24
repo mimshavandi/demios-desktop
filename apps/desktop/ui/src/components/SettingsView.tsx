@@ -1,4 +1,4 @@
-import { Cpu, KeyRound, Trash2 } from "lucide-react";
+import { Cpu, ExternalLink, KeyRound, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Api } from "../ipc/commands";
 import {
@@ -433,6 +433,15 @@ function GeneralPage({ api, info }: { api: Api; info: AppInfo | null }) {
     }
   };
 
+  const reportProblem = async () => {
+    try {
+      await api.reportProblem("problem");
+      toast({ tone: "info", title: "Opened the report form in your browser" });
+    } catch (e) {
+      toast({ tone: "error", title: errorMessage(e) });
+    }
+  };
+
   const deleteAll = async () => {
     setDeleting(true);
     setDeleteError(null);
@@ -518,6 +527,20 @@ function GeneralPage({ api, info }: { api: Api; info: AppInfo | null }) {
             </span>
             <span className="dn-help">Your chats are stored in {info?.data_dir ?? "the app data folder"}</span>
             {info?.models_dir != null && <span className="dn-help">Downloaded models are stored in {info.models_dir}</span>}
+          </div>
+        </div>
+        <div className="row">
+          <div className="row-main">
+            <span className="row-title">Report a problem</span>
+            <span className="dn-help">
+              Opens a form on GitHub in your browser, with the app version and your operating system filled in. Nothing
+              from your chats is sent. To report an answer, use the flag under it.
+            </span>
+          </div>
+          <div className="row-actions">
+            <Button icon={<ExternalLink {...ICON} aria-hidden="true" />} onClick={() => void reportProblem()}>
+              Report a problem
+            </Button>
           </div>
         </div>
       </section>
