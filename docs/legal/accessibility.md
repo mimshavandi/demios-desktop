@@ -1,0 +1,52 @@
+# Demios Desktop accessibility statement
+
+> **Draft: not yet approved by the owner. The contact link needs to be filled in.** Task T-STORE-13 (store readiness audit, finding S-26).
+
+Last reviewed: `<date>` · App version: `<version>`
+
+## Our goal
+
+We want Demios Desktop to be usable by everyone, including people who use a keyboard only, screen readers, magnification or high-contrast settings. Our target is **WCAG 2.2 level AA**, applied to a desktop app (see EN 301 549, chapter 11). The app **does not claim full conformance yet**. This page says what we check today and what we know is missing.
+
+## What we do today
+
+**Design rules** (`docs/design/design-system.md` §7):
+
+- Every control has an accessible name, role and state.
+- A streaming answer is announced once, politely, when it is finished, not word by word. The app uses a hidden `aria-live="polite"` status region for this.
+- Focus moves on purpose: a new chat puts focus in the message box, closing a dialog returns focus to the button that opened it, and resolving an approval moves focus to the next one.
+- The interface language is declared (`lang="en"`).
+- Keyboard shortcuts (on Windows and Linux, use `Ctrl` instead of `⌘`):
+
+  | Shortcut | Action |
+  |---|---|
+  | `⌘N` | New chat |
+  | `⌘K` | Search / command palette |
+  | `⌘\` | Show or hide the sidebar |
+  | `⌘,` | Settings |
+  | `⌘.` | Stop the answer being written |
+  | `⌘⇧C` | Copy the last answer |
+
+  *(verify that every shortcut is wired in the current build)*
+
+**Automated checks:**
+
+- An end-to-end test runs the real app on Linux, in CI. It sends a message with the keyboard (`Enter`), stops the answer with `⌘.`/`Ctrl+.`, and runs **axe-core** on the screen. The test fails on any serious or critical axe finding. *(This job is on branch `t/T-SHELL-05-e2e` and is not merged into `main` yet: verify before publishing.)*
+- UI unit tests find controls by their accessible role and name (for example, a `switch` by its label). This catches missing labels.
+
+**Before each release:** we walk through the main flow (start a chat, send, stop, approve a tool call, change settings) using only the keyboard.
+
+## Known gaps
+
+- **Windows:** the end-to-end and axe checks do not run on Windows yet, because the WebView2 driver session fails in CI. The job exists but does not block a release.
+- **macOS:** WKWebView has no WebDriver, so all macOS checks are manual, from a release checklist.
+- **Screen readers:** no full pass has been done yet with VoiceOver (macOS), NVDA or Narrator (Windows), or Orca (Linux). Until one has, we will not tick any store's "accessible" box.
+- **Generated content:** answers and artifacts (pages, apps and diagrams the model writes) are written by the AI model you choose. We cannot guarantee that they are accessible: an artifact may lack alt text, headings, labels or enough contrast. You can ask the model to fix this.
+- **Links in answers** cannot be opened yet.
+- **Not yet checked:** high-contrast and forced-colours modes, zoom to 200%, and reduced motion *(verify)*.
+
+## Report a problem
+
+If something in the app is hard or impossible to use, please tell us: `<accessibility contact link or email>`. Tell us your operating system, any assistive technology you use, and what you were trying to do. We aim to reply within `<n>` working days.
+
+> Owner: the EU Accessibility Act probably does not cover a general AI chat app, and a microenterprise exemption may apply *(verify)*. This statement is voluntary and is not a legal declaration of conformity.
