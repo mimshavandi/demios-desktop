@@ -31,4 +31,4 @@ pub use config::{McpServerConfig, McpTransport, OAuthSettings, ValueRef};
 pub use executor::{CallContext, Executor, RetryPolicy, ToolOutcome};
 pub use ledger::migrations;
 pub use oauth::{LoopbackRedirect, OAuthManager, PendingAuthorization};
-pub use secrets::{MemorySecretStore, SecretStore};
+pub use secrets::{DnSecrets, MemorySecretStore, SecretStore};
