@@ -1,0 +1,11 @@
+/* Demo host page, styled with ui/design-tokens (ADR-0010). */
+#app { display: grid; grid-template-columns: minmax(260px, 340px) minmax(0, 1fr); gap: var(--dn-space-6); padding: var(--dn-space-6); max-width: 1400px; margin: 0 auto; }
+@media (max-width: 1023px) { #app { grid-template-columns: minmax(0, 1fr); padding: var(--dn-space-4); } }
+h1 { font-size: var(--dn-text-xl); line-height: var(--dn-leading-xl); font-weight: var(--dn-weight-semibold); margin: 0 0 var(--dn-space-1); }
+h2.log-title { font-size: var(--dn-text-sm); line-height: var(--dn-leading-sm); color: var(--dn-color-text-muted); font-weight: var(--dn-weight-medium); margin: var(--dn-space-5) 0 var(--dn-space-2); }
+.hint { color: var(--dn-color-text-muted); margin: 0 0 var(--dn-space-3); font-size: var(--dn-text-sm); }
+.ops { display: flex; flex-wrap: wrap; gap: var(--dn-space-2); margin-bottom: var(--dn-space-3); }
+.ops button { font: inherit; font-size: var(--dn-text-sm); min-height: var(--dn-hit-target); padding: 0 var(--dn-space-3); border-radius: var(--dn-radius-md); border: 1px solid var(--dn-color-border-strong); background: var(--dn-color-surface); color: var(--dn-color-text); cursor: pointer; }
+.ops button:hover { background: var(--dn-color-surface-sunken); }
+#log { font-family: var(--dn-font-mono); font-size: var(--dn-text-xs); line-height: var(--dn-leading-xs); padding-left: var(--dn-space-5); color: var(--dn-color-text-muted); overflow-wrap: anywhere; }
+#panel { min-width: 0; }
