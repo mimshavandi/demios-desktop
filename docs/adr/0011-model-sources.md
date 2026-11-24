@@ -1,6 +1,6 @@
 # ADR-0011: Model sources — Hugging Face Hub first, no in-house registry
 
-**Status:** Proposed · **Date:** 2026-11-24 · **Deciders:** project owner (D-019, D-020, D-021) · **Extends:** [ADR-0003](0003-inference-layer.md)
+**Status:** Accepted (D-019..D-021, 2026-11-24) · **Date:** 2026-11-24 · **Deciders:** project owner (D-019, D-020, D-021) · **Extends:** [ADR-0003](0003-inference-layer.md)
 
 ## Context
 The owner wants open models to come from free public hubs so Demios never runs its own model registry. Demios Edge served a tier-filtered catalogue from its own backend (`GET /models`, SAS/HF download URLs). PR #12 already downloads GGUF files from Hugging Face through a compiled-in, commit-pinned `catalog.json` of 12 models, with resumable SHA-256-verified downloads and a fit estimator.
@@ -11,11 +11,11 @@ The owner wants open models to come from free public hubs so Demios never runs i
    - Verify every file against the SHA-256 from the Hub's LFS metadata (`lfs.oid`); refuse files without it.
    - Run `dn fit` on each candidate quant (from GGUF header bytes via an HTTP range read where possible) and show Ready / Caution / Memory pressure / Won't fit before download.
    - Support split GGUFs (`-00001-of-0000N`), gated repos (user's own HF token stored in `dn-secrets`, never logged), and an `HF_ENDPOINT` setting for mirrors.
-   - Show the repo's licence (card metadata) and a link to the model card **before** download; record source repo, revision, file and licence in the local model manifest.
+   - Show the repo's licence (card metadata) and a link to the model card **before** download; any licence is allowed, with a clear warning when it is missing or non-commercial (D-020); record source repo, revision, file and licence in the local model manifest.
    - Reuse models already on disk: read the standard Hugging Face cache (`HF_HUB_CACHE` / `~/.cache/huggingface/hub`) read-only and list matching GGUFs; never delete files we didn't download.
 2. **The curated catalogue stays** as a small file in the repo: tested recommendations (model + quant + revision + sha256 + licence + min RAM), not a registry service. Updating it is a normal PR.
-3. **Deep links.** Register a `demios://` URL scheme (`demios://models/add?repo=…&file=…&revision=…`) that opens the add-model flow with a confirmation screen (never downloads without the user's click). Optionally register Demios as a Hugging Face "local app" so model pages show "Use this model → Demios" (an upstream PR to `huggingface.js` `local-apps`) — owner decision D-019.
-4. **Other sources, without importing their stores:** Ollama, LM Studio, vLLM, FreeToken and similar keep working through the OpenAI-compatible remote backend (ADR-0003). ModelScope as an optional mirror/source for users in China — owner decision D-021.
+3. **Deep links.** Register a `demios://` URL scheme (`demios://models/add?repo=…&file=…&revision=…`) that opens the add-model flow with a confirmation screen (never downloads without the user's click). Registering Demios as a Hugging Face "local app" (upstream `huggingface.js` PR) is **not** done (D-019 = no); the scheme is for our own links (website, docs, shared recommendations).
+4. **Other sources, without importing their stores:** Ollama, LM Studio, vLLM, FreeToken and similar keep working through the OpenAI-compatible remote backend (ADR-0003). ModelScope is deferred (D-021 = later); `HF_ENDPOINT` mirror support covers most regions now.
 5. **No telemetry and no Demios server** in any of these flows: requests go from the user's machine to the hub directly.
 
 ## Options considered
@@ -33,4 +33,4 @@ The owner wants open models to come from free public hubs so Demios never runs i
 - Revisit: other formats (MLX, safetensors) when a backend supports them.
 
 ## Action items
-T-INF-08 Hub client (search, tree, revision resolve, LFS sha256, split files, gated + token, HF_ENDPOINT) · T-INF-09 remote fit preview from GGUF header range reads · T-INF-10 add-model UI (search, quant picker with fit status, licence before download) in the shell · T-INF-11 HF cache discovery (read-only) · T-INF-12 `demios://` deep link + confirmation screen · T-INF-13 HF local-app upstream PR (only if D-019 = yes) · T-INF-14 ModelScope source (only if D-021 = yes).
+T-INF-08 Hub client (search, tree, revision resolve, LFS sha256, split files, gated + token, HF_ENDPOINT) · T-INF-09 remote fit preview from GGUF header range reads · T-INF-10 add-model UI (search, quant picker with fit status, licence before download) in the shell · T-INF-11 HF cache discovery (read-only) · T-INF-12 `demios://` deep link + confirmation screen. Not scheduled: HF local-app registration (D-019 = no), ModelScope (D-021 = later).
