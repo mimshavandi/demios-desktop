@@ -31,6 +31,34 @@ When the download finishes, the app checks the file against its published checks
 
 Models are stored in a folder shared with the `dn` command-line tool. **Settings → General → About** shows where.
 
+## Add a model from Hugging Face
+
+Beyond the catalogue, you can add any GGUF model from Hugging Face that runs on this computer. In the **On this device** card, select **Add from Hugging Face**.
+
+1. **Search.** Type a name, such as "qwen 1.5b instruct", and select **Search**. Sort by most downloaded, most liked, trending or recently updated, and select **Show more** for more results. Searching contacts Hugging Face; your chats are never sent there.
+2. **Pick a model.** While the app reads the model's files, it says "Checking model…". Nothing is downloaded yet. Then you see:
+   - **Its licence and model card.** A note tells you when the licence is missing, doesn't allow commercial use, is the model's own, or comes with an acceptable-use policy. Read it on the model card before downloading.
+   - **Its versions**, each a different size and quality (quantisation), with whether it fits this computer's memory. "(estimate)" means the fit was worked out from another version of the same model. "Fit unknown" means its details couldn't be read.
+3. **Download.** Select **Download** next to a version. You see the progress and can **Pause** and **Resume**, or **Retry** if it failed. The file is checked against the checksum Hugging Face publishes. A version without a published checksum can't be downloaded. When it's done, the version shows **Downloaded** and the model can answer.
+
+Select **Done** to go back to the list. Models you add this way show "From Hugging Face" on their row.
+
+### Models that need access
+
+Some models are gated: you have to accept their terms first. For those, the app asks for a Hugging Face token:
+
+1. Accept the model's terms on its model card.
+2. Create a token with read access in your Hugging Face account settings.
+3. Paste it into **Hugging Face token** and select **Save token**.
+
+The token is kept in your system keychain and is sent only to Hugging Face. Select **Remove token** to delete it.
+
+### Models already on your computer
+
+If you've used Hugging Face tools before, the app also lists GGUF models it finds in your Hugging Face cache. Their row says "From your Hugging Face cache, used where it is". The app uses the file in place and never changes or deletes it, not even with **Delete all local data**.
+
+Models you downloaded from Hugging Face with the `dn` command-line tool show up here too.
+
 ## Your own key
 
 Under **Provider keys** there's a field for each provider: Anthropic, OpenAI and Google Gemini.
