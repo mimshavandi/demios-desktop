@@ -7,7 +7,12 @@
 //!    call uses that SHA, so a download is reproducible), gating, licence + card link.
 //! 3. [`HubClient::files`] → [`RepoFile`]s at that commit; [`gguf_variants`] groups them into
 //!    one [`GgufVariant`] per quantisation (split GGUFs `-00001-of-0000N` become one variant).
-//! 4. [`HubClient::pull`] downloads a variant (resumable, every part checked against its LFS
+//! 4. Before download, [`HubClient::footprint`] reads only the GGUF header(s) of a variant
+//!    with HTTP range requests (a few MB, growing until the header parses) and returns the
+//!    [`ModelFootprint`] for [`crate::fit`]. To rate every quant of a repo, read one header and
+//!    scale it to the other variants' file sizes with [`estimate_variant`] (an
+//!    [`Estimated`] value, so the "estimated" label can't get lost).
+//! 5. [`HubClient::pull`] downloads a variant (resumable, every part checked against its LFS
 //!    sha256; a file without one is refused) and writes a [`SourceManifest`] next to it.
 //!
 //! Configuration: `HF_ENDPOINT` selects a mirror ([`HubConfig::from_env`]). Gated repos use
@@ -23,6 +28,8 @@
 //! Every call is async and cancels when its future is dropped.
 
 use crate::download::{self, DownloadError, Expected};
+use crate::fit::ModelFootprint;
+use crate::gguf::Gguf;
 use dn_core::{CoreError, RecoveryAction};
 use dn_secrets::{AsyncSecrets, Secret, SecretId};
 use serde::{Deserialize, Serialize};
@@ -69,6 +76,12 @@ pub enum HubError {
     /// The Hub has no LFS sha256 for this file, so it can't be verified: refused.
     #[error("{0} has no LFS sha256 on the Hub; refusing to download an unverifiable file")]
     NoChecksum(String),
+    /// The file isn't a GGUF the reader understands (or its header is absurdly large).
+    #[error("GGUF header: {0}")]
+    Gguf(String),
+    /// The server ignored a `Range` request for a non-zero offset.
+    #[error("server does not support range requests")]
+    RangeUnsupported,
     #[error("endpoint `{0}` must be https (or loopback)")]
     InsecureEndpoint(String),
     #[error(transparent)]
@@ -750,6 +763,117 @@ impl HubClient {
         Ok(v)
     }
 
+    /// Bytes `[start, end)` of a repo file, via `Range`. A `200` answer is accepted only for
+    /// `start == 0` and is cut at `end` (the rest of the body is never read).
+    async fn fetch_range(&self, url: &str, start: u64, end: u64) -> Result<Vec<u8>> {
+        if end <= start {
+            return Ok(vec![]);
+        }
+        let u = reqwest::Url::parse(url).map_err(|e| HubError::Parse(e.to_string()))?;
+        let mut rb = self
+            .http
+            .get(u.clone())
+            .header(reqwest::header::RANGE, format!("bytes={start}-{}", end - 1));
+        if let Some(t) = self.token.as_ref().filter(|_| self.same_origin(&u)) {
+            rb = rb.bearer_auth(t.expose());
+        }
+        let mut resp = rb
+            .send()
+            .await
+            .map_err(|e| HubError::Http(e.without_url().to_string()))?;
+        match resp.status().as_u16() {
+            206 => {
+                let got = resp
+                    .headers()
+                    .get(reqwest::header::CONTENT_RANGE)
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.strip_prefix("bytes "))
+                    .and_then(|v| v.split('-').next())
+                    .and_then(|v| v.trim().parse::<u64>().ok());
+                if got != Some(start) {
+                    return Err(HubError::RangeUnsupported);
+                }
+            }
+            200 if start == 0 => {}
+            200 => return Err(HubError::RangeUnsupported),
+            401 if self.token.is_some() => return Err(HubError::Unauthorized),
+            401 | 403 => {
+                return Err(HubError::Gated {
+                    repo: String::new(),
+                    has_token: self.token.is_some(),
+                });
+            }
+            404 => return Err(HubError::NotFound(u.path().into())),
+            429 => return Err(HubError::RateLimited { retry_after: None }),
+            s => {
+                return Err(HubError::Status {
+                    status: s,
+                    body: String::new(),
+                });
+            }
+        }
+        let want = (end - start) as usize;
+        let mut out = Vec::with_capacity(want.min(16 << 20));
+        while out.len() < want {
+            match resp
+                .chunk()
+                .await
+                .map_err(|e| HubError::Http(e.without_url().to_string()))?
+            {
+                Some(c) => out.extend_from_slice(&c[..c.len().min(want - out.len())]),
+                None => break,
+            }
+        }
+        Ok(out)
+    }
+
+    /// Parse the GGUF header of one repo file from its first bytes only: starts with 1 MiB and
+    /// fetches the next, doubling chunk until the header parses (at most
+    /// [`crate::gguf::MAX_HEADER_BYTES`], 64 MiB).
+    pub async fn gguf_header(&self, repo: &str, sha: &str, file: &RepoFile) -> Result<Gguf> {
+        const FIRST: u64 = 1 << 20;
+        const MAX: u64 = crate::gguf::MAX_HEADER_BYTES;
+        let url = self.file_url(repo, sha, &file.path)?;
+        let limit = file.size.min(MAX);
+        let mut buf = self.fetch_range(&url, 0, FIRST.min(limit)).await?;
+        loop {
+            match Gguf::from_prefix(&buf, file.size) {
+                Ok(g) => return Ok(g),
+                Err(e) if e.is_truncated() && (buf.len() as u64) < limit => {
+                    let start = buf.len() as u64;
+                    let end = (start * 2).min(limit);
+                    let more = self.fetch_range(&url, start, end).await?;
+                    if more.is_empty() {
+                        return Err(HubError::Gguf("file ended inside the header".into()));
+                    }
+                    buf.extend_from_slice(&more);
+                }
+                Err(e) if e.is_truncated() => {
+                    return Err(HubError::Gguf(format!(
+                        "header larger than {} MiB",
+                        limit >> 20
+                    )));
+                }
+                Err(e) => return Err(HubError::Gguf(e.to_string())),
+            }
+        }
+    }
+
+    /// Memory footprint of a variant from its header(s) alone, for [`crate::fit`] before
+    /// download. Split variants read every part's header (tensors are spread over parts).
+    pub async fn footprint(
+        &self,
+        info: &RepoInfo,
+        variant: &GgufVariant,
+    ) -> Result<ModelFootprint> {
+        let mut parts = Vec::with_capacity(variant.files.len());
+        for f in &variant.files {
+            parts.push(self.gguf_header(&info.id, &info.sha, f).await?);
+        }
+        let g = Gguf::merge_split(parts).ok_or_else(|| HubError::Gguf("empty variant".into()))?;
+        Ok(ModelFootprint::from_gguf(&g))
+    }
+
     /// `{endpoint}/{repo}/resolve/{sha}/{path}`.
     pub fn file_url(&self, repo: &str, sha: &str, path: &str) -> Result<String> {
         validate_repo_id(repo)?;
@@ -934,6 +1058,51 @@ fn next_link(resp: &reqwest::Response) -> Option<String> {
                     .to_string()
             })
     })
+}
+
+/// A value that may be an estimate. The flag travels with the value so a UI can't show an
+/// estimated fit as if it had been read from that file.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Estimated<T> {
+    pub value: T,
+    /// `true`: derived from another variant's header; `false`: read from this variant.
+    pub estimated: bool,
+}
+
+impl Estimated<ModelFootprint> {
+    /// [`crate::fit`] on the footprint, keeping the flag.
+    pub fn fit(&self, machine: &crate::fit::Machine) -> Estimated<crate::fit::FitReport> {
+        Estimated {
+            value: crate::fit::fit(&self.value, machine),
+            estimated: self.estimated,
+        }
+    }
+}
+
+/// Footprint of `other` from `base_fp`, the footprint read from `base`'s header (same repo,
+/// same model, another quant): architecture and KV shape are shared, and weights scale with
+/// file size. `estimated` is false only for `base` itself.
+pub fn estimate_variant(
+    base_fp: &ModelFootprint,
+    base: &GgufVariant,
+    other: &GgufVariant,
+) -> Estimated<ModelFootprint> {
+    if other == base {
+        return Estimated {
+            value: base_fp.clone(),
+            estimated: false,
+        };
+    }
+    let r = other.total_size as f64 / base.total_size.max(1) as f64;
+    Estimated {
+        value: ModelFootprint {
+            weight_bytes: (base_fp.weight_bytes as f64 * r) as u64,
+            expert_bytes: (base_fp.expert_bytes as f64 * r) as u64,
+            quant: other.quant.clone().or_else(|| base_fp.quant.clone()),
+            ..base_fp.clone()
+        },
+        estimated: true,
+    }
 }
 
 /// Group a repo's files into GGUF variants (one per quantisation; split parts together).
@@ -1485,6 +1654,176 @@ mod tests {
                 .any(|r| r.contains("/resolve/") && r.contains("bearer hf_tok"))
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn fake_gguf(vocab: usize, tensors: &[(&str, &[u64], u32, u64)]) -> Vec<u8> {
+        use crate::gguf::write::{V, gguf};
+        let toks: Vec<String> = (0..vocab).map(|i| format!("tok{i}")).collect();
+        let toks: Vec<&str> = toks.iter().map(String::as_str).collect();
+        gguf(
+            &[
+                ("general.architecture", V::Str("llama")),
+                ("llama.block_count", V::U32(2)),
+                ("llama.embedding_length", V::U32(64)),
+                ("llama.attention.head_count", V::U32(4)),
+                ("llama.context_length", V::U32(4096)),
+                ("tokenizer.ggml.tokens", V::StrArr(&toks)),
+            ],
+            tensors,
+        )
+    }
+
+    #[tokio::test]
+    async fn footprint_from_range_reads_only() {
+        // ~2.6 MB header (forces a second range read), 8 MB of tensor data never fetched.
+        let file = fake_gguf(
+            200_000,
+            &[
+                ("blk.0.attn_q.weight", &[64, 64], 8, 4 << 20),
+                ("blk.1.attn_q.weight", &[64, 64], 8, 4 << 20),
+            ],
+        );
+        let full = ModelFootprint::from_gguf(&Gguf::from_prefix(&file, file.len() as u64).unwrap());
+        let mut routes = HashMap::new();
+        routes.insert(
+            format!("/o/n/resolve/{SHA}/m.gguf"),
+            Reply::bytes(file.clone()).with_ranges(),
+        );
+        let s = serve(routes).await;
+        let c = client(&s.url, None);
+        let info = RepoInfo {
+            id: "o/n".into(),
+            sha: SHA.into(),
+            gated: false,
+            private: false,
+            license: LicenseInfo::classify(Some("mit"), None, None),
+            card_url: String::new(),
+            tags: vec![],
+        };
+        let v = GgufVariant {
+            name: "m".into(),
+            quant: None,
+            kind: VariantKind::Model,
+            files: vec![f("m.gguf", file.len() as u64, None)],
+            total_size: file.len() as u64,
+        };
+        let fp = c.footprint(&info, &v).await.unwrap();
+        assert_eq!(fp, full);
+        assert_eq!(fp.weight_bytes, 8 << 20);
+        assert_eq!(fp.n_vocab, 200_000);
+        let reqs = s.requests.lock().unwrap();
+        assert!(reqs.len() >= 2, "header spans more than the first MiB");
+        assert!(reqs.iter().all(|r| r.contains("range: bytes=")));
+    }
+
+    #[tokio::test]
+    async fn split_footprint_sums_parts() {
+        let p1 = fake_gguf(10, &[("blk.0.attn_q.weight", &[64, 64], 8, 1000)]);
+        let p2 = {
+            use crate::gguf::write::{V, gguf};
+            gguf(
+                &[("split.no", V::U32(1))],
+                &[("blk.1.attn_q.weight", &[64, 64], 8, 3000)],
+            )
+        };
+        let mut routes = HashMap::new();
+        routes.insert(
+            format!("/o/n/resolve/{SHA}/m-00001-of-00002.gguf"),
+            Reply::bytes(p1.clone()).with_ranges(),
+        );
+        routes.insert(
+            format!("/o/n/resolve/{SHA}/m-00002-of-00002.gguf"),
+            Reply::bytes(p2.clone()).with_ranges(),
+        );
+        let s = serve(routes).await;
+        let files = vec![
+            f("m-00001-of-00002.gguf", p1.len() as u64, None),
+            f("m-00002-of-00002.gguf", p2.len() as u64, None),
+        ];
+        let v = gguf_variants(&files).remove(0);
+        let info = RepoInfo {
+            id: "o/n".into(),
+            sha: SHA.into(),
+            gated: false,
+            private: false,
+            license: LicenseInfo::classify(Some("mit"), None, None),
+            card_url: String::new(),
+            tags: vec![],
+        };
+        let fp = client(&s.url, None).footprint(&info, &v).await.unwrap();
+        // Both parts' tensors count (sizes include each part's alignment padding).
+        assert!(
+            (4000..4100).contains(&fp.weight_bytes),
+            "{}",
+            fp.weight_bytes
+        );
+        assert_eq!(fp.n_layer, 2);
+    }
+
+    #[test]
+    fn estimate_scales_weights_by_file_size() {
+        let base = ModelFootprint {
+            weight_bytes: 4_000,
+            expert_bytes: 2_000,
+            n_params: 8,
+            n_layer: 2,
+            n_ctx_train: 4096,
+            n_vocab: 10,
+            n_embd: 64,
+            kv_elems_per_token: 128,
+            swa_kv_elems_per_token: 0,
+            sliding_window: 0,
+            quant: Some("Q4_K_M".into()),
+        };
+        let other = GgufVariant {
+            name: "m-Q8_0".into(),
+            quant: Some("Q8_0".into()),
+            kind: VariantKind::Model,
+            files: vec![],
+            total_size: 8_200,
+        };
+        let base_v = GgufVariant {
+            name: "m-Q4_K_M".into(),
+            quant: Some("Q4_K_M".into()),
+            kind: VariantKind::Model,
+            files: vec![],
+            total_size: 4_100,
+        };
+        let e = estimate_variant(&base, &base_v, &other);
+        assert!(e.estimated);
+        let e = e.value;
+        assert_eq!((e.weight_bytes, e.expert_bytes), (8_000, 4_000));
+        assert_eq!(e.quant.as_deref(), Some("Q8_0"));
+        assert_eq!(e.kv_elems_per_token, 128);
+        // The variant whose header was read is exact.
+        let own = estimate_variant(&base, &base_v, &base_v);
+        assert!(!own.estimated);
+        assert_eq!(own.value, base);
+    }
+
+    #[tokio::test]
+    async fn non_gguf_and_ignored_range_rejected() {
+        let mut routes = HashMap::new();
+        routes.insert(
+            format!("/o/n/resolve/{SHA}/bad.gguf"),
+            Reply::bytes(b"NOTAGGUF".repeat(10)).with_ranges(),
+        );
+        // No range support and a header longer than the first read.
+        routes.insert(
+            format!("/o/n/resolve/{SHA}/big.gguf"),
+            Reply::bytes(fake_gguf(200_000, &[])),
+        );
+        let s = serve(routes).await;
+        let c = client(&s.url, None);
+        assert!(matches!(
+            c.gguf_header("o/n", SHA, &f("bad.gguf", 80, None)).await,
+            Err(HubError::Gguf(_))
+        ));
+        let big = fake_gguf(200_000, &[]).len() as u64;
+        assert!(matches!(
+            c.gguf_header("o/n", SHA, &f("big.gguf", big, None)).await,
+            Err(HubError::RangeUnsupported)
+        ));
     }
 
     #[tokio::test]
