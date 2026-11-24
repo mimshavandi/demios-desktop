@@ -78,7 +78,7 @@ pub struct LocalModelRow {
     pub params_b: f64,
     pub capabilities: Vec<Capability>,
     pub license: String,
-    /// Missing, non-commercial or custom ("other") licence: the UI warns (D-020).
+    /// Missing, non-commercial or custom ("other") licence: the UI warns.
     pub license_warning: bool,
     pub card_url: String,
     pub notes: String,
@@ -197,7 +197,7 @@ fn suffixed(path: &Path, suffix: &str) -> PathBuf {
     PathBuf::from(p)
 }
 
-/// Licence ids we warn about (D-020): unknown, non-commercial, or a custom "other" licence.
+/// Licence ids we warn about (any licence is allowed): unknown, non-commercial, or a custom "other" licence.
 pub fn license_needs_warning(license: &str) -> bool {
     let l = license.trim().to_ascii_lowercase();
     l.is_empty()

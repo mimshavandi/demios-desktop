@@ -244,7 +244,7 @@ pub struct SearchPage {
     pub next: Option<String>,
 }
 
-/// Why a licence deserves a second look before download (D-020: any licence is allowed).
+/// Why a licence deserves a second look before download (any licence is allowed).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LicenseWarning {
@@ -255,7 +255,7 @@ pub enum LicenseWarning {
     /// `other` or a model-specific licence: read the card.
     Custom,
     /// Commercial use allowed under an acceptable-use policy (Llama, Gemma): allowed per
-    /// D-020, but worth a note next to the licence.
+    /// our licence rule, but worth a note next to the licence.
     UsePolicy,
 }
 

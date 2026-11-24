@@ -21,7 +21,7 @@ tauri-build = { version = "2", features = [] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2", "charset"] }
 zeroize = "1"
 tokio = { version = "1", default-features = false }
-# Maintained fork of the archived serde_yaml (D-012 allows "serde_yaml or a maintained successor").
+# Maintained fork of the archived serde_yaml (the approved dependency set allows "serde_yaml or a maintained successor").
 serde_yaml_ng = "0.10"
 # No remote/file $ref resolution: schemas are bundled.
 jsonschema = { version = "0.63", default-features = false }

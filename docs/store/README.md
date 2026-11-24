@@ -1,6 +1,6 @@
 # Store readiness
 
-What it takes to ship Demios Desktop to its distribution targets (D-016 … D-018): macOS direct download (Developer ID + notarization), Microsoft Store (MSIX), signed direct Windows download as a fallback, and Flathub. The Mac App Store is out of scope for now. No developer accounts or certificates exist yet (D-017), so nothing here signs or submits anything, and no secrets, certificates or account ids go in the repo.
+What it takes to ship Demios Desktop to its distribution targets: macOS direct download (Developer ID + notarization), Microsoft Store (MSIX), signed direct Windows download as a fallback, and Flathub. The Mac App Store is out of scope for now. No developer accounts or certificates exist yet, so nothing here signs or submits anything, and no secrets, certificates or account ids go in the repo.
 
 | File | What it is |
 |---|---|
