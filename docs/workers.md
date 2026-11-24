@@ -9,6 +9,12 @@ The lead session plans, writes briefs, reviews every PR against its done-check, 
 | T-GOV-02 | Workspace skeleton, CI (fmt, clippy, test, deny, audit, gitleaks) on 3 OSes, licence files, CONTRIBUTING, docs moved in | ADR-0001, ADR-0009 | CI green on an empty-crate PR; a PR containing a fake key is blocked by gitleaks |
 | T-CORE-01 | `dn-core` shared types (ids, model refs, slots, ChatRequest/TokenStream, Artifact, Capability, errors) | ADR-0003/4/5/6 | `cargo test -p dn-core`; types exported to TS |
 
+## Design (lead session)
+| Task | What | Doc | Done-check |
+|---|---|---|---|
+| T-DES-01 | Design tokens package + written design standard | ADR-0010, docs/design/design-system.md | `node ui/design-tokens/scripts/build.mjs --check` passes in CI (all contrast pairs, both themes); owner approves D-014 |
+| T-DES-02 | stylelint ban on raw values + behaves audit in CI | ADR-0010 §8 | a PR with a raw hex colour in `apps/desktop/ui` fails CI |
+
 ## Wave 1 — Product 1 MVP (parallel after wave 0)
 | Worker | Tasks | Crates/dirs | Done-check (summary) |
 |---|---|---|---|

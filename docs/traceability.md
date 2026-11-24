@@ -12,7 +12,7 @@ Every piece of work in demios-next can be traced from a decision to a task to a 
 | `R-##` | Research note | [research/](research/) | `R-01` external tools |
 | `W-<name>` | Worker session | [workers.md](workers.md) | `W-inference` |
 
-Areas for task IDs: `GOV` (repo, licence, CI), `CORE` (shared Rust core), `INF` (inference), `SHELL` (desktop UI), `ART` (artifacts), `AGT` (agent runtime / skills), `CON` (connectors / MCP), `TWIN` (executive assistant), `TEAM` (team server), `PRV` (BYOK providers), `KNO` (knowledge index), `PORT` (porting from Demios).
+Areas for task IDs: `GOV` (repo, licence, CI), `CORE` (shared Rust core), `INF` (inference), `SHELL` (desktop UI), `ART` (artifacts), `AGT` (agent runtime / skills), `CON` (connectors / MCP), `TWIN` (executive assistant), `TEAM` (team server), `PRV` (BYOK providers), `KNO` (knowledge index), `DES` (design system), `PORT` (porting from Demios).
 
 ## Every task has four fields
 
