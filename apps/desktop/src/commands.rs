@@ -10,9 +10,10 @@ use crate::error::{IpcError, IpcResult};
 use crate::models::{self, ModelCatalog};
 use crate::secrets::Secret;
 use crate::settings::Settings;
-use crate::state::AppState;
+use crate::state::{AppState, ToolEvent, ToolSnapshot};
 use dn_core::Id;
 use dn_store::chat::{self as store, Conversation, StoredMessage};
+use dn_tools::ApprovalDecision;
 use serde::Serialize;
 use std::sync::Arc;
 use tauri::State;
@@ -83,6 +84,11 @@ pub async fn rename_conversation(
 #[tauri::command]
 pub async fn delete_conversation(state: AppStateRef<'_>, conversation_id: Id) -> IpcResult<()> {
     chat::stop(&state, conversation_id);
+    // "Always allow in this chat" grants end with the chat.
+    if let Some(exec) = &state.executor {
+        exec.gate()
+            .clear_conversation(&format!("conv:{conversation_id}"));
+    }
     blocking(&state, move |s| {
         Ok(store::delete_conversation(&*s.db()?, conversation_id)?)
     })
@@ -147,8 +153,13 @@ pub async fn get_settings(state: AppStateRef<'_>) -> IpcResult<Settings> {
 }
 
 #[tauri::command]
-pub async fn update_settings(state: AppStateRef<'_>, settings: Settings) -> IpcResult<Settings> {
+pub async fn update_settings(
+    state: AppStateRef<'_>,
+    mut settings: Settings,
+) -> IpcResult<Settings> {
     blocking(&state, move |s| {
+        // No screen edits MCP servers yet; never let a settings save drop them.
+        settings.mcp_servers = s.settings()?.mcp_servers;
         s.save_settings(&settings)?;
         s.settings()
     })
@@ -157,7 +168,13 @@ pub async fn update_settings(state: AppStateRef<'_>, settings: Settings) -> IpcR
 
 fn catalog(s: &AppState) -> IpcResult<ModelCatalog> {
     let settings = s.settings()?;
-    Ok(models::catalog(&s.models, &s.keys, &settings))
+    let mut c = models::catalog(&s.models, &s.keys, &settings);
+    c.chat_model = s
+        .agent
+        .resolve_model(&settings, &s.models, &s.keys)
+        .ok()
+        .map(|m| m.to_string());
+    Ok(c)
 }
 
 #[tauri::command]
@@ -186,6 +203,7 @@ pub async fn set_provider_key(
     }
     blocking(&state, move |s| {
         s.keys.set(&provider_id, &Secret::new(key))?;
+        s.models.invalidate(&provider_id);
         catalog(s)
     })
     .await
@@ -202,6 +220,7 @@ pub async fn delete_provider_key(
     blocking(&state, move |s| {
         let secret = s.keys.get(&provider_id)?;
         s.keys.delete(&provider_id)?;
+        s.models.invalidate(&provider_id);
         // A slot pointing at this provider would now fail; clear it rather than fall back.
         let mut settings = s.settings()?;
         let prefix = format!("byok:{provider_id}:");
@@ -235,12 +254,100 @@ pub async fn restore_provider_key(
             )
         })?;
         s.keys.set(&provider_id, &secret)?;
+        s.models.invalidate(&provider_id);
         let mut settings = s.settings()?;
         for (slot, model) in slots {
             settings.slots.entry(slot).or_insert(model);
         }
         s.save_settings(&settings)?;
         catalog(s)
+    })
+    .await
+}
+
+// ---- tool approvals and outcome-unknown resolution (T-SHELL-04)
+
+/// Subscribes the UI to approval requests and MCP server status; returns the current ones.
+#[tauri::command]
+pub async fn watch_tools(
+    state: AppStateRef<'_>,
+    on_event: Channel<ToolEvent>,
+) -> IpcResult<ToolSnapshot> {
+    Ok(state.watch_tools(Arc::new(move |ev| {
+        let _ = on_event.send(ev);
+    })))
+}
+
+#[tauri::command]
+pub async fn respond_approval(
+    state: AppStateRef<'_>,
+    request_id: Id,
+    decision: ApprovalDecision,
+) -> IpcResult<()> {
+    state.respond_approval(request_id, decision)
+}
+
+/// A tool write whose result is not known (crash or stop mid-call).
+#[derive(Debug, Serialize)]
+pub struct UnknownOutcome {
+    pub key: String,
+    pub capability_id: String,
+    pub arguments: serde_json::Value,
+    pub error: Option<String>,
+    pub updated_at_ms: i64,
+}
+
+#[tauri::command]
+pub async fn list_unknown_outcomes(
+    state: AppStateRef<'_>,
+    conversation_id: Option<Id>,
+) -> IpcResult<Vec<UnknownOutcome>> {
+    blocking(&state, move |s| {
+        let Some(exec) = &s.executor else {
+            return Ok(vec![]);
+        };
+        let want = conversation_id.map(|c| c.to_string());
+        Ok(exec
+            .unknown_outcomes()
+            .map_err(crate::agent::model_error)?
+            .into_iter()
+            .filter(|e| want.as_ref().is_none_or(|w| &e.conversation_id == w))
+            .map(|e| UnknownOutcome {
+                key: e.idempotency_key,
+                capability_id: e.capability_id,
+                arguments: e.arguments,
+                error: e.error,
+                updated_at_ms: e.updated_at_ms,
+            })
+            .collect())
+    })
+    .await
+}
+
+/// The user's answer to "did this go through?".
+#[tauri::command]
+pub async fn resolve_unknown_outcome(
+    state: AppStateRef<'_>,
+    key: String,
+    happened: bool,
+) -> IpcResult<()> {
+    blocking(&state, move |s| {
+        let exec = s
+            .executor
+            .as_ref()
+            .ok_or_else(|| IpcError::new("unavailable", "Tools are not available."))?;
+        let resolution = if happened {
+            dn_tools::ledger::Resolution::Happened {
+                // Replays of this call return this instead of running it again.
+                output: serde_json::json!({
+                    "content": [{ "type": "text", "text": "The user confirmed this already happened." }]
+                }),
+            }
+        } else {
+            dn_tools::ledger::Resolution::DidNotHappen
+        };
+        exec.resolve_unknown(&key, &resolution)
+            .map_err(crate::agent::model_error)
     })
     .await
 }

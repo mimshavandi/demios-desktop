@@ -4,6 +4,7 @@ import type { Api } from "../ipc/commands";
 import {
   errorMessage,
   type AppInfo,
+  type McpServerStatus,
   type ModelCatalog,
   type ProviderInfo,
   type Settings,
@@ -21,11 +22,13 @@ interface Props {
   onSection: (s: SettingsSection) => void;
   /** Keeps the shell's copy of the catalog (model badge, composer state) current. */
   onCatalog: (c: ModelCatalog) => void;
+  /** MCP tool servers and their connection state. */
+  servers: McpServerStatus[];
 }
 
 type Load = { kind: "loading" } | { kind: "error"; message: string } | { kind: "ready"; catalog: ModelCatalog };
 
-export function SettingsView({ api, info, section, onSection, onCatalog }: Props) {
+export function SettingsView({ api, info, section, onSection, onCatalog, servers }: Props) {
   const toast = useToast();
   const [load, setLoad] = useState<Load>({ kind: "loading" });
   const headingRef = useRef<HTMLHeadingElement>(null);
@@ -126,6 +129,7 @@ export function SettingsView({ api, info, section, onSection, onCatalog }: Props
           <ModelsPage
             api={api}
             info={info}
+            servers={servers}
             catalog={load.catalog}
             onCatalog={set}
             onSave={(next, what) => void save(load.catalog, next, what)}
@@ -147,12 +151,14 @@ export function SettingsView({ api, info, section, onSection, onCatalog }: Props
 function ModelsPage({
   api,
   info,
+  servers,
   catalog,
   onCatalog,
   onSave,
 }: {
   api: Api;
   info: AppInfo | null;
+  servers: McpServerStatus[];
   catalog: ModelCatalog;
   onCatalog: (c: ModelCatalog) => void;
   onSave: (s: Settings, what: string) => void;
@@ -211,6 +217,31 @@ function ModelsPage({
         ))}
       </section>
 
+      {servers.length > 0 && (
+        <section className="card" aria-labelledby="servers-h">
+          <h2 id="servers-h">Tool servers</h2>
+          {[...servers]
+            .sort((a, b) => a.name.localeCompare(b.name))
+            .map((s) => (
+              <div className="row" key={s.server_id} data-testid="mcp-server-row">
+                <div className="row-main">
+                  <span className="row-title">{s.name}</span>
+                  <span className="dn-help">
+                    {s.state === "connected"
+                      ? `${s.tools} ${s.tools === 1 ? "tool" : "tools"}`
+                      : s.state === "connecting"
+                        ? "Connecting…"
+                        : (s.message ?? "Couldn't connect.")}
+                  </span>
+                </div>
+                <Badge tone={s.state === "connected" ? "success" : s.state === "failed" ? "danger" : "neutral"}>
+                  {s.state === "connected" ? "Connected" : s.state === "failed" ? "Failed" : "Connecting"}
+                </Badge>
+              </div>
+            ))}
+        </section>
+      )}
+
       <section className="card" aria-labelledby="keys-h">
         <h2 id="keys-h">Provider keys</h2>
         <p className="dn-help">
@@ -257,7 +288,14 @@ function SlotRow({
     })),
   ];
   const id = `slot-${slot.slot_id}`;
-  const fallback = slot.slot_id === "chat" && devFake ? "Not set (uses the dev fake model)" : "Not set";
+  const auto = slot.slot_id === "chat" ? catalog.chat_model : null;
+  const autoLabel = auto === null ? null : (catalog.models.find((m) => m.model_ref === auto)?.label ?? auto);
+  const fallback =
+    autoLabel !== null && current === ""
+      ? `Not set (uses ${autoLabel} automatically)`
+      : slot.slot_id === "chat" && devFake
+        ? "Not set (uses the dev fake model)"
+        : "Not set";
   return (
     <div className="row">
       <div className="row-main">

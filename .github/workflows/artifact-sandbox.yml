@@ -1,0 +1,37 @@
+name: artifact-sandbox
+on:
+  pull_request:
+    paths: ["ui/artifact-sandbox/**", "crates/dn-artifacts/tests/vectors/**", ".github/workflows/artifact-sandbox.yml"]
+  push:
+    branches: [main]
+    paths: ["ui/artifact-sandbox/**", "crates/dn-artifacts/tests/vectors/**"]
+permissions:
+  contents: read
+jobs:
+  ui:
+    strategy:
+      fail-fast: false
+      matrix:
+        # Pinned: Playwright 1.57 doesn't support ubuntu-latest (26.04).
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: ui/artifact-sandbox
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/artifact-sandbox/package-lock.json
+      - run: npm ci
+      - run: npm audit --omit=dev --audit-level=high
+      - run: npx playwright install --with-deps chromium webkit
+      - run: npm run typecheck
+      - run: npm test
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-${{ matrix.os }}
+          path: ui/artifact-sandbox/test-results

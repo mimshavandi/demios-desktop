@@ -5,10 +5,14 @@ import {
   errorMessage,
   messageText,
   type AppInfo,
+  type ApprovalDecision,
+  type ApprovalPrompt,
   type ChatEvent,
   type Conversation,
   type Id,
+  type McpServerStatus,
   type ModelCatalog,
+  type UnknownOutcome,
 } from "../ipc/types";
 import { chatModel, chatModelReady, describeModel } from "../models";
 import { isMac, mod } from "../platform";
@@ -16,7 +20,7 @@ import { chatReducer, initialChat } from "../state/chat";
 import { ArtifactPane } from "./ArtifactPane";
 import { ChatView } from "./ChatView";
 import { ModelBadge } from "./ModelBadge";
-import { Badge, ICON, IconButton, TooltipProvider } from "./primitives";
+import { Badge, Button, ICON, IconButton, InlineMessage, TooltipProvider } from "./primitives";
 import { SettingsView, type SettingsSection } from "./SettingsView";
 import { Sidebar, type ListState } from "./Sidebar";
 import { ToastProvider, useToast } from "./toast";
@@ -65,6 +69,14 @@ function Shell({ api }: { api: Api }) {
   const [sidebarOpen, setSidebarOpen] = useState(() => readPref("dn.sidebar", true));
   const [artifactsOpen, setArtifactsOpen] = useState(() => readPref("dn.artifacts", true));
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const [approvals, setApprovals] = useState<ApprovalPrompt[]>([]);
+  const [unknowns, setUnknowns] = useState<UnknownOutcome[]>([]);
+  const [servers, setServers] = useState<McpServerStatus[]>([]);
+  const openIdRef = useRef<Id | null>(null);
+  const announceRef = useRef<((msg: string) => void) | null>(null);
+  const shownApprovals = useRef<Set<Id>>(new Set());
+  openIdRef.current = chat.conversationId;
+  shownApprovals.current = new Set(approvals.map((a) => a.request_id));
 
   const devFake = info?.dev_fake_model ?? false;
   const ready = chatModelReady(catalog, devFake);
@@ -87,10 +99,28 @@ function Shell({ api }: { api: Api }) {
     }
   }, [api]);
 
+  const refreshUnknowns = useCallback(
+    async (id: Id | null) => {
+      if (id === null) {
+        setUnknowns([]);
+        return;
+      }
+      try {
+        const list = await api.listUnknownOutcomes(id);
+        setUnknowns(list);
+        if (list.length > 0) announceRef.current?.("A tool call needs checking: did it go through?");
+      } catch {
+        setUnknowns([]);
+      }
+    },
+    [api],
+  );
+
   const open = useCallback(
     async (id: Id | null) => {
       setView({ kind: "chat" });
       setError(null);
+      void refreshUnknowns(id);
       if (id === null) {
         dispatch({ kind: "open", conversationId: null, messages: [] });
       } else {
@@ -105,8 +135,41 @@ function Shell({ api }: { api: Api }) {
       }
       composerRef.current?.focus();
     },
-    [api],
+    [api, refreshUnknowns],
   );
+
+  // Tool events arrive on their own channel: approval cards show in their conversation,
+  // server status shows on the Models page (failures also as a toast).
+  useEffect(() => {
+    let alive = true;
+    void api
+      .watchTools((ev) => {
+        if (!alive) return;
+        if (ev.type === "requested") {
+          setApprovals((a) => [...a.filter((x) => x.request_id !== ev.prompt.request_id), ev.prompt]);
+          announceRef.current?.(`Approval needed: ${ev.prompt.title}`);
+        } else if (ev.type === "resolved") {
+          if (ev.expired && shownApprovals.current.has(ev.request_id)) {
+            toast({ tone: "warning", title: "An approval request expired, so the tool didn't run" });
+          }
+          setApprovals((a) => a.filter((x) => x.request_id !== ev.request_id));
+        } else {
+          setServers((list) => [...list.filter((x) => x.server_id !== ev.status.server_id), ev.status]);
+          if (ev.status.state === "failed") {
+            toast({ tone: "error", title: `${ev.status.name} couldn't connect. ${ev.status.message ?? ""}`.trim() });
+          }
+        }
+      })
+      .then((snap) => {
+        if (!alive) return;
+        setApprovals(snap.approvals);
+        setServers(snap.servers);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [api, toast]);
 
   useEffect(() => {
     void (async () => {
@@ -127,6 +190,13 @@ function Shell({ api }: { api: Api }) {
     })();
   }, [api, open, refreshCatalog]);
 
+  const say = useCallback((msg: string) => {
+    // Clear first so the same words are announced again.
+    setAnnounce("");
+    window.setTimeout(() => setAnnounce(msg), 50);
+  }, []);
+  announceRef.current = say;
+
   const onEvent = useCallback(
     (event: ChatEvent) => {
       dispatch({ kind: "event", event });
@@ -141,9 +211,47 @@ function Shell({ api }: { api: Api }) {
         setAnnounce("");
         window.setTimeout(() => setAnnounce(msg), 50);
         void refreshConversations();
+        // The run's tool calls and results are stored now; show them as saved.
+        const id = openIdRef.current;
+        if (id !== null) {
+          void api
+            .listMessages(id)
+            .then((messages) => {
+              if (openIdRef.current === id && messages.some((m) => m.id === event.message_id)) {
+                dispatch({ kind: "open", conversationId: id, messages });
+              }
+            })
+            .catch(() => {});
+          void refreshUnknowns(id);
+        }
       }
     },
-    [refreshConversations],
+    [api, refreshConversations, refreshUnknowns],
+  );
+
+  const decide = useCallback(
+    async (requestId: Id, d: ApprovalDecision) => {
+      try {
+        await api.respondApproval(requestId, d);
+      } catch (e) {
+        toast({ tone: "error", title: errorMessage(e) });
+      }
+      setApprovals((a) => a.filter((x) => x.request_id !== requestId));
+    },
+    [api, toast],
+  );
+
+  const resolveUnknown = useCallback(
+    async (key: string, happened: boolean) => {
+      try {
+        await api.resolveUnknownOutcome(key, happened);
+        toast({ tone: "success", title: happened ? "Marked as done" : "Marked as not done; it can run again" });
+      } catch (e) {
+        toast({ tone: "error", title: errorMessage(e) });
+      }
+      void refreshUnknowns(openIdRef.current);
+    },
+    [api, refreshUnknowns, toast],
   );
 
   const newChat = useCallback(() => {
@@ -277,6 +385,9 @@ function Shell({ api }: { api: Api }) {
   }, [copyLastAnswer, newChat, stop, toggleSidebar]);
 
   const goSettings = (section: SettingsSection) => setView({ kind: "settings", section });
+  const otherApprovals = approvals.filter(
+    (a) => a.scope.startsWith("conv:") && (view.kind !== "chat" || a.scope !== `conv:${chat.conversationId ?? ""}`),
+  );
   const model = chatModel(catalog, devFake);
   const title =
     view.kind === "settings" ? "Settings" : (activeConversation?.title ?? "New chat");
@@ -322,6 +433,20 @@ function Shell({ api }: { api: Api }) {
         />
       )}
       <main className="main">
+        {otherApprovals.length > 0 && (
+          <div className="approval-elsewhere" role="status">
+            <InlineMessage
+              tone="warning"
+              action={
+                <Button size="sm" onClick={() => void open(otherApprovals[0]?.scope.slice(5) ?? null)}>
+                  Open chat
+                </Button>
+              }
+            >
+              Another chat is waiting for your approval.
+            </InlineMessage>
+          </div>
+        )}
         {view.kind === "chat" ? (
           <ChatView
             state={chat}
@@ -336,6 +461,10 @@ function Shell({ api }: { api: Api }) {
             onStop={() => void stop()}
             onRegenerate={() => void regenerate()}
             onConnect={() => goSettings("models")}
+            approvals={approvals.filter((a) => a.scope === `conv:${chat.conversationId ?? ""}`)}
+            onDecide={decide}
+            unknowns={unknowns}
+            onResolveUnknown={resolveUnknown}
           />
         ) : (
           <SettingsView
@@ -344,6 +473,7 @@ function Shell({ api }: { api: Api }) {
             section={view.section}
             onSection={goSettings}
             onCatalog={setCatalog}
+            servers={servers}
           />
         )}
       </main>

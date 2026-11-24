@@ -15,7 +15,7 @@ Every direct dependency is listed here with why and its licence (ADR-0009). Appr
 | ts-rs 12 (optional, `ts` feature; `serde-compat`, no default features) | dn-core | TypeScript bindings for the UI in `crates/dn-core/bindings/`; not in the default build | MIT | T-CORE-04 |
 | serde_yaml_ng 0.10 | dn-agent | YAML manifests (`agent.yaml`, `skill.yaml`, prompt `manifest.yaml`). Maintained fork of the archived `serde_yaml` (D-012: "serde_yaml or a maintained successor") | MIT | T-AGT-01 |
 | jsonschema 0.63 (`default-features = false`) | dn-agent | validate manifests against bundled Draft 2020-12 schemas; no remote/file `$ref` resolution (approved by lead) | MIT | T-AGT-01 |
-| rusqlite 0.43 (`bundled`) | dn-store, dn-tools | SQLite store and migration runner (ADR-0007); bundled SQLite so all three OSes build the same. dn-tools: side-effect ledger (`tool_ledger_*`) | MIT (SQLite: public domain) | T-CORE-02 |
+| rusqlite 0.43 (`bundled`) | dn-store, dn-tools, dn-artifacts | SQLite store and migration runner (ADR-0007); bundled SQLite so all three OSes build the same. dn-tools: side-effect ledger (`tool_ledger_*`). dn-artifacts: artifact store (`artifact_*`, ADR-0004) | MIT (SQLite: public domain) | T-CORE-02 |
 | rmcp 3.11 (client, transport-async-rw, streamable-http-client-reqwest, auth) | dn-tools | MCP client over stdio + Streamable HTTP; OAuth (PKCE, discovery, DCR) via its `auth` feature (pulls `oauth2`, `url`). Dev: `server`, `transport-io`, `transport-streamable-http-server` for test servers | Apache-2.0 | T-CON-01 |
 | tokio | dn-tools | async runtime, child processes, timeouts, approval channels | MIT | T-CON-01 |
 | reqwest 0.13 (rustls) | dn-tools | HTTP client handed to rmcp (no redirects for MCP traffic) | MIT/Apache-2.0 | T-CON-01 |
@@ -47,3 +47,19 @@ Every direct dependency is listed here with why and its licence (ADR-0009). Appr
 | msedgedriver (CI tool, Windows; runner's copy or Microsoft's download matching WebView2) | native WebDriver for WebView2 | Microsoft | T-SHELL-05 |
 
 Approved for wave 1 (D-012), add a row when first used: tauri 2, tokio, serde_yaml (or a maintained successor), llama-cpp-2, rmcp, rusqlite (chosen over sqlx: sync, SQLCipher + sqlite-vec support), keyring, reqwest, axum (team server).
+
+## npm (`ui/artifact-sandbox`)
+
+Exact versions pinned in `package.json` and `package-lock.json`. Runtime libraries are bundled into the app (no CDN at runtime, ADR-0004); a licence scan of everything bundled is in the T-ART-02 PR.
+
+| Package | Kind | Why | Licence | Added in |
+|---|---|---|---|---|
+| react, react-dom 19.3.1 | bundled | runtime for React artifacts (T-ART-04) | MIT | T-ART-04 |
+| sucrase 3.35.1 | bundled | in-frame JSX/TS transpiler for React artifacts; chosen over esbuild-wasm (pure JS, no wasm CSP, small) | MIT | T-ART-04 |
+| marked 18.3.0 | bundled | Markdown artifacts | MIT | T-ART-02 |
+| mermaid 12.3.0 | bundled, lazy chunk (≈3.7 MB) | Mermaid artifacts. **Heavy**: loaded only when a diagram is shown. Its optional `elkjs` dependency (EPL-2.0 OR GPL-3.0) is stubbed out of the bundle; other transitive deps are MIT/ISC/BSD-3-Clause/Apache-2.0, plus dompurify (MPL-2.0 OR Apache-2.0, used under Apache-2.0) and robust-predicates (Unlicense) | MIT | T-ART-02 |
+| esbuild 0.28.2 | dev | bundles runtimes and the host library | MIT | T-ART-02 |
+| typescript 5.9.3 | dev | strict type-check | Apache-2.0 | T-ART-02 |
+| @playwright/test 1.57.0 | dev | UI flow and sandbox escape tests in Chromium + WebKit | Apache-2.0 | T-ART-05 |
+| @types/node, @types/react, @types/react-dom | dev | types | MIT | T-ART-02 |
+

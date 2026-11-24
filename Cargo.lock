@@ -930,9 +930,12 @@ dependencies = [
 name = "demios-desktop"
 version = "0.1.0"
 dependencies = [
+ "dn-agent",
  "dn-core",
+ "dn-providers",
  "dn-secrets",
  "dn-store",
+ "dn-tools",
  "futures-core",
  "rusqlite",
  "serde",
@@ -1083,6 +1086,15 @@ dependencies = [
 [[package]]
 name = "dn-artifacts"
 version = "0.1.0"
+dependencies = [
+ "dn-core",
+ "dn-store",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "uuid",
+]
 
 [[package]]
 name = "dn-core"

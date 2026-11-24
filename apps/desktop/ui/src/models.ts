@@ -22,8 +22,10 @@ export function describeModel(ref: string | null, catalog: ModelCatalog | null):
   return { local: false, text: `${a} · ${rest.join(":")}` };
 }
 
-/** The model chat will use: the chat slot, else the dev fake when this build has it. */
+/** The model chat will use: what the backend resolved, else the chat slot, else the dev
+ * fake when this build has it. */
 export function chatModel(catalog: ModelCatalog | null, devFake: boolean): string | null {
+  if (catalog !== null && catalog.chat_model !== null) return catalog.chat_model;
   const chosen = catalog?.settings.slots["chat"];
   if (chosen !== undefined && chosen !== "") return chosen;
   return devFake ? "local:dev-fake" : null;
@@ -31,6 +33,7 @@ export function chatModel(catalog: ModelCatalog | null, devFake: boolean): strin
 
 /** Whether a message can be sent right now (composer "Connect a model" state otherwise). */
 export function chatModelReady(catalog: ModelCatalog | null, devFake: boolean): boolean {
+  if (catalog !== null && catalog.chat_model !== null) return true;
   const ref = chatModel(catalog, devFake);
   if (ref === null) return false;
   if (ref === "local:dev-fake") return devFake;

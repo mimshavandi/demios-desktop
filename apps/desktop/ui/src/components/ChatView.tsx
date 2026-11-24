@@ -1,12 +1,20 @@
 import { ArrowUp, Copy, RotateCcw, Square } from "lucide-react";
 import { useEffect, useRef, useState, type KeyboardEvent, type RefObject } from "react";
-import { messageText, type ModelCatalog, type StoredMessage } from "../ipc/types";
+import {
+  messageText,
+  type ApprovalDecision,
+  type ApprovalPrompt,
+  type ModelCatalog,
+  type StoredMessage,
+  type UnknownOutcome,
+} from "../ipc/types";
 import { describeModel } from "../models";
 import { mod } from "../platform";
-import { canRegenerate, type ChatState } from "../state/chat";
+import { canRegenerate, type ChatState, type LiveToolCall } from "../state/chat";
 import { Markdown } from "./Markdown";
 import { ModelBadge } from "./ModelBadge";
 import { Button, ICON, IconButton, InlineMessage, Skeleton } from "./primitives";
+import { ApprovalCard, ToolCallCard, UnknownOutcomeCard } from "./ToolCards";
 import { useToast } from "./toast";
 
 interface Props {
@@ -25,6 +33,17 @@ interface Props {
   onStop: () => void;
   onRegenerate: () => void;
   onConnect: () => void;
+  /** Approval requests of this conversation (shown inline, never auto-allowed). */
+  approvals: ApprovalPrompt[];
+  onDecide: (requestId: string, d: ApprovalDecision) => Promise<void>;
+  /** Tool writes of this conversation whose outcome is unknown. */
+  unknowns: UnknownOutcome[];
+  onResolveUnknown: (key: string, happened: boolean) => Promise<void>;
+}
+
+interface ToolResult {
+  text: string;
+  isError: boolean;
 }
 
 const EXAMPLES = [
@@ -65,6 +84,13 @@ export function ChatView(p: Props) {
   };
 
   const empty = !p.loading && p.state.messages.length === 0;
+  // Tool results are shown inside their call's card, not as messages.
+  const results = new Map<string, ToolResult>();
+  for (const m of p.state.messages) {
+    if (m.role === "tool" && m.tool_call_id !== null) {
+      results.set(m.tool_call_id, { text: messageText(m), isError: m.status === "error" });
+    }
+  }
 
   return (
     <section className="chat" aria-label="Conversation">
@@ -113,17 +139,35 @@ export function ChatView(p: Props) {
             </div>
           )}
           {!p.loading &&
-            p.state.messages.map((m) => (
-              <Message
-                key={m.id}
-                m={m}
-                catalog={p.catalog}
-                streaming={m.id === p.state.streamingId}
-                isLast={m.id === lastId}
-                canRetry={canRegenerate(p.state)}
-                onRetry={p.onRegenerate}
-              />
-            ))}
+            p.state.messages
+              .filter((m) => m.role !== "tool" && m.role !== "system")
+              .map((m) => (
+                <Message
+                  key={m.id}
+                  m={m}
+                  catalog={p.catalog}
+                  streaming={m.id === p.state.streamingId}
+                  isLast={m.id === lastId}
+                  canRetry={canRegenerate(p.state)}
+                  onRetry={p.onRegenerate}
+                  live={p.state.tools[m.id] ?? []}
+                  results={results}
+                />
+              ))}
+          {p.approvals.map((a) => (
+            <ApprovalCard
+              key={a.request_id}
+              prompt={a}
+              onDecide={(d) => p.onDecide(a.request_id, d)}
+            />
+          ))}
+          {p.unknowns.map((u) => (
+            <UnknownOutcomeCard
+              key={u.key}
+              outcome={u}
+              onResolve={(happened) => p.onResolveUnknown(u.key, happened)}
+            />
+          ))}
           {p.error !== null && (
             <InlineMessage tone="error">
               {p.error}
@@ -197,6 +241,8 @@ function Message({
   isLast,
   canRetry,
   onRetry,
+  live,
+  results,
 }: {
   m: StoredMessage;
   catalog: ModelCatalog | null;
@@ -204,9 +250,24 @@ function Message({
   isLast: boolean;
   canRetry: boolean;
   onRetry: () => void;
+  live: LiveToolCall[];
+  results: Map<string, ToolResult>;
 }) {
   const toast = useToast();
   const text = messageText(m);
+  // Stored calls (after the run) or live ones (while streaming).
+  const calls =
+    m.tool_calls.length > 0
+      ? m.tool_calls.map((c) => ({
+          call_id: c.id,
+          name: c.name,
+          arguments: c.arguments,
+          // No stored result means the call never finished.
+          status:
+            results.get(c.id)?.isError === false ? ("done" as const) : ("error" as const),
+          summary: results.get(c.id)?.text ?? "",
+        }))
+      : live;
   if (m.role === "user") {
     return (
       <article className="msg msg-user" aria-label="You" data-testid="message-user">
@@ -223,13 +284,30 @@ function Message({
       data-testid="message-assistant"
       data-status={m.status}
     >
-      {text === "" && streaming ? (
+      {text === "" && streaming && calls.length === 0 ? (
         <span className="thinking">Thinking…</span>
       ) : (
-        <div className="msg-body">
-          <Markdown source={text} />
-          {streaming && <span className="caret" aria-hidden="true" />}
-        </div>
+        text !== "" && (
+          <div className="msg-body">
+            <Markdown source={text} />
+            {streaming && <span className="caret" aria-hidden="true" />}
+          </div>
+        )
+      )}
+      {calls.map((c) => (
+        <ToolCallCard
+          key={c.call_id}
+          name={c.name}
+          args={c.arguments}
+          status={c.status}
+          result={c.summary}
+        />
+      ))}
+      {m.status === "complete" && m.finish_reason === "length" && isLast && (
+        <InlineMessage tone="info">The answer hit the length limit.</InlineMessage>
+      )}
+      {m.status === "complete" && m.finish_reason === "tool_calls" && isLast && (
+        <InlineMessage tone="info">Stopped after the maximum number of tool steps.</InlineMessage>
       )}
       {m.status === "cancelled" && (
         <InlineMessage
@@ -259,7 +337,7 @@ function Message({
           {m.error ?? "The answer failed."}
         </InlineMessage>
       )}
-      {!streaming && (
+      {!streaming && text !== "" && (
         <footer className="msg-footer">
           <IconButton
             size="sm"

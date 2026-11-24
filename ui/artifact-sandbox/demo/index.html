@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Artifact sandbox demo</title>
+  <link rel="stylesheet" href="./tokens.css">
+  <link rel="stylesheet" href="./base.css">
+  <link rel="stylesheet" href="./demo.css">
+  <script type="module" src="./main.js"></script>
+</head>
+<body>
+  <main id="app">
+    <section id="chat" aria-label="Simulated chat">
+      <h1>Artifact sandbox</h1>
+      <p class="hint">Simulates the model's artifact tools against an in-memory store.</p>
+      <div class="ops">
+        <button type="button" data-testid="op-create">artifact_create (HTML)</button>
+        <button type="button" data-testid="op-update">artifact_update</button>
+        <button type="button" data-testid="op-rewrite">artifact_rewrite</button>
+        <button type="button" data-testid="op-break">Introduce an error</button>
+      </div>
+      <div class="ops" aria-label="Samples">
+        <button type="button" data-sample="react">React</button>
+        <button type="button" data-sample="mermaid">Mermaid</button>
+        <button type="button" data-sample="markdown">Markdown</button>
+        <button type="button" data-sample="svg">SVG</button>
+        <button type="button" data-sample="code">Code</button>
+      </div>
+      <h2 class="log-title">Log</h2>
+      <ol id="log" data-testid="log" aria-live="polite"></ol>
+      <!-- Sentinels the escape tests check: artifacts must not be able to read or change these. -->
+      <div id="host-secret" data-testid="host-secret" hidden>host-secret-value</div>
+    </section>
+    <section id="panel" aria-label="Artifact panel"></section>
+  </main>
+</body>
+</html>
