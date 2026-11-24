@@ -191,8 +191,17 @@ enum Think {
 
 #[derive(Args)]
 struct FitArgs {
-    /// GGUF path or catalogue id (downloaded).
+    /// GGUF path, downloaded catalogue id, or Hugging Face `owner/name` (read remotely: only
+    /// the GGUF header is fetched).
     model: String,
+    /// Hugging Face: quant to check (default: every quant, estimated from one header).
+    #[arg(long)]
+    quant: Option<String>,
+    /// Hugging Face: exact variant name from `dn models files`.
+    #[arg(long, conflicts_with = "quant")]
+    variant: Option<String>,
+    #[arg(long)]
+    revision: Option<String>,
     /// Override detected RAM (GiB).
     #[arg(long)]
     ram_gb: Option<f64>,
@@ -396,15 +405,112 @@ pub fn machine(ram_gb: Option<f64>, vram_gb: Option<f64>, unified: bool) -> Mach
     m
 }
 
-fn fit_cmd(a: FitArgs) -> Result<(), String> {
+fn is_local_model(s: &str) -> bool {
+    PathBuf::from(s).exists()
+        || Catalog::builtin().get(s).is_some()
+        || dn_models::hub::validate_repo_id(s).is_err()
+}
+
+async fn fit_cmd(a: FitArgs) -> Result<(), String> {
+    let mach = machine(a.ram_gb, a.vram_gb, a.unified);
+    if !is_local_model(&a.model) {
+        return remote_fit(&a, &mach).await;
+    }
     let path = resolve_model(&a.model)?;
     let g = Gguf::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let fp = ModelFootprint::from_gguf(&g);
-    let mach = machine(a.ram_gb, a.vram_gb, a.unified);
-    let report = dn_models::fit(&fp, &mach);
+    print_fit(&path.display().to_string(), g.arch(), &fp, &mach, a.json)
+}
+
+/// Fit for a Hugging Face repo without downloading it: GGUF header via range reads.
+async fn remote_fit(a: &FitArgs, mach: &Machine) -> Result<(), String> {
+    let hub = hub_client().await?;
+    let info = hub
+        .repo(&a.model, a.revision.as_deref())
+        .await
+        .map_err(|e| e.to_string())?;
+    let variants = hub
+        .variants(&a.model, &info.sha)
+        .await
+        .map_err(|e| e.to_string())?;
+    let models: Vec<&GgufVariant> = variants
+        .iter()
+        .filter(|v| v.kind == VariantKind::Model)
+        .collect();
+    let chosen = models.iter().find(|v| match (&a.quant, &a.variant) {
+        (_, Some(n)) => &v.name == n,
+        (Some(q), _) => v
+            .quant
+            .as_deref()
+            .is_some_and(|x| x.eq_ignore_ascii_case(q)),
+        _ => false,
+    });
+    if a.quant.is_some() || a.variant.is_some() {
+        let v = chosen.ok_or("no such variant (see `dn models files`)")?;
+        let fp = hub.footprint(&info, v).await.map_err(|e| e.to_string())?;
+        let label = format!("{}@{} {}", info.id, &info.sha[..12], v.name);
+        return print_fit(&label, "", &fp, mach, a.json);
+    }
+    // Every quant: one header (the smallest variant), scaled to the others' sizes.
+    let base = models.first().ok_or("no GGUF model variants")?;
+    let fp = hub
+        .footprint(&info, base)
+        .await
+        .map_err(|e| e.to_string())?;
+    let rows: Vec<_> = models
+        .iter()
+        .map(|v| {
+            let est = dn_models::hub::estimate_variant(&fp, base.total_size, v);
+            (*v, dn_models::fit(&est, mach))
+        })
+        .collect();
     if a.json {
+        let v: Vec<_> = rows
+            .iter()
+            .map(|(v, r)| serde_json::json!({"variant": v.name, "quant": v.quant, "size": v.total_size, "report": r}))
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
+    println!(
+        "{}@{} ({} header read; others estimated from file size)",
+        info.id,
+        &info.sha[..12],
+        base.name
+    );
+    println!("machine   {} RAM\n", gib(mach.total_ram));
+    println!(
+        "{:<48} {:<9} {:>9}  {:<34} ctx",
+        "variant", "quant", "size", "status"
+    );
+    for (v, r) in rows {
+        println!(
+            "{:<48} {:<9} {:>9}  {:<34} {}",
+            v.name,
+            v.quant.as_deref().unwrap_or("-"),
+            format!("{:.2} GB", v.total_size as f64 / 1e9),
+            status_label(r.status),
+            r.recommended.n_ctx
+        );
+    }
+    Ok(())
+}
+
+fn print_fit(
+    label: &str,
+    arch: &str,
+    fp: &ModelFootprint,
+    mach: &Machine,
+    json: bool,
+) -> Result<(), String> {
+    let mach = *mach;
+    let report = dn_models::fit(fp, &mach);
+    if json {
         let v =
-            serde_json::json!({"model": path, "footprint": fp, "machine": mach, "report": report});
+            serde_json::json!({"model": label, "footprint": fp, "machine": mach, "report": report});
         println!(
             "{}",
             serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?
@@ -420,10 +526,10 @@ fn fit_cmd(a: FitArgs) -> Result<(), String> {
         MemoryKind::CpuOnly => "CPU only".into(),
         MemoryKind::Discrete { vram } => format!("discrete GPU, {} VRAM", gib(vram)),
     };
-    println!("model     {}", path.display());
+    println!("model     {label}");
     println!(
         "          {} {} · {:.2}B params · {} layers · train ctx {}{}",
-        g.arch(),
+        arch,
         fp.quant.as_deref().unwrap_or("?"),
         fp.n_params as f64 / 1e9,
         fp.n_layer,
@@ -760,7 +866,7 @@ async fn main() -> ExitCode {
     let cli = Cli::parse();
     let r = match cli.cmd {
         Cmd::Run(a) => run(a).await,
-        Cmd::Fit(a) => fit_cmd(a),
+        Cmd::Fit(a) => fit_cmd(a).await,
         Cmd::Bench(a) => bench::run(a).await,
         Cmd::Models { cmd } => models_cmd(cmd).await,
     };

@@ -18,6 +18,13 @@ pub enum GgufError {
     Malformed(String),
 }
 
+impl GgufError {
+    /// The header continues past the bytes we have (read more and retry).
+    pub fn is_truncated(&self) -> bool {
+        matches!(self, Self::Io(e) if e.kind() == io::ErrorKind::UnexpectedEof)
+    }
+}
+
 /// A scalar metadata value (arrays are kept as their length only, except small numeric ones).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -261,6 +268,27 @@ impl Gguf {
             tensors,
             file_size,
         })
+    }
+
+    /// Parse a header from the first bytes of a file of `file_size` bytes (e.g. an HTTP range
+    /// read). [`GgufError::is_truncated`] means `prefix` is too short.
+    pub fn from_prefix(prefix: &[u8], file_size: u64) -> Result<Self, GgufError> {
+        Self::read(std::io::Cursor::new(prefix), file_size)
+    }
+
+    /// One logical model from the headers of a split GGUF (`-00001-of-0000N`), in part order:
+    /// metadata from the first part, tensors from all of them.
+    pub fn merge_split(mut parts: Vec<Gguf>) -> Option<Gguf> {
+        if parts.is_empty() {
+            return None;
+        }
+        let rest: Vec<Gguf> = parts.drain(1..).collect();
+        let mut g = parts.pop()?;
+        for p in rest {
+            g.file_size += p.file_size;
+            g.tensors.extend(p.tensors);
+        }
+        Some(g)
     }
 
     pub fn get(&self, key: &str) -> Option<&MetaValue> {
