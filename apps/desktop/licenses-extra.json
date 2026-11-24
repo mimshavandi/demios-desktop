@@ -1,0 +1,35 @@
+{
+  "//": "C/C++ code compiled into the app from -sys crates, which cargo-about can't see (T-STORE-07). Review this list when llama-cpp-2 / rusqlite are upgraded or their features change. Texts are copied from the vendored sources into licenses/.",
+  "packages": [
+    {
+      "name": "llama.cpp and ggml",
+      "version": "vendored by llama-cpp-sys-2 0.1.161",
+      "licence": "MIT",
+      "text_files": ["licenses/llama.cpp-ggml.txt"]
+    },
+    {
+      "name": "nlohmann/json",
+      "version": "vendored by llama.cpp (common)",
+      "licence": "MIT",
+      "text_files": ["licenses/nlohmann-json.txt"]
+    },
+    {
+      "name": "cpp-httplib",
+      "version": "vendored by llama.cpp (common)",
+      "licence": "MIT",
+      "text_files": ["licenses/cpp-httplib.txt"]
+    },
+    {
+      "name": "subprocess.h (sheredom)",
+      "version": "vendored by llama.cpp (common)",
+      "licence": "Unlicense",
+      "text_files": ["licenses/sheredom-subprocess.txt"]
+    },
+    {
+      "name": "SQLite",
+      "version": "3.54.1, bundled by libsqlite3-sys 0.40.0",
+      "licence": "blessing",
+      "text_files": ["licenses/sqlite.txt"]
+    }
+  ]
+}

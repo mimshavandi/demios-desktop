@@ -187,6 +187,39 @@ jobs:
           name: msedgedriver-log
           path: ${{ env.MSEDGEDRIVER_LOG }}
           if-no-files-found: warn
+  # Open-source licences screen (T-STORE-07): every shipped Rust crate, npm package and
+  # bundled C/C++ library has an accepted licence (about.toml mirrors deny.toml) and its text.
+  licences:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CARGO_ABOUT_VERSION: 0.9.3
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - run: npm ci
+      - run: npm run test:scripts
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo-about
+        id: cargo-about-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-about
+          key: cargo-about-${{ env.CARGO_ABOUT_VERSION }}-${{ runner.os }}
+      - name: Install cargo-about
+        if: steps.cargo-about-cache.outputs.cache-hit != 'true'
+        run: cargo install cargo-about --version ${{ env.CARGO_ABOUT_VERSION }} --locked --features cli
+      # cargo-about runs --offline: fetch crate sources first (no build needed).
+      - run: cargo fetch --locked
+        working-directory: .
+      - run: npm run licenses -- --check
   supply-chain:
     runs-on: ubuntu-latest
     steps:
