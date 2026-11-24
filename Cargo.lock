@@ -1209,6 +1209,7 @@ dependencies = [
  "dn-core",
  "dn-inference",
  "dn-models",
+ "dn-secrets",
  "serde",
  "serde_json",
  "sysinfo",
@@ -1278,6 +1279,7 @@ name = "dn-models"
 version = "0.1.0"
 dependencies = [
  "dn-core",
+ "dn-secrets",
  "reqwest",
  "serde",
  "serde_json",
