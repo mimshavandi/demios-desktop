@@ -26,6 +26,9 @@
     "allow-respond-approval",
     "allow-list-unknown-outcomes",
     "allow-resolve-unknown-outcome",
+    "allow-watch-local-models",
+    "allow-download-model",
+    "allow-pause-download",
     "core:window:allow-start-dragging"
   ]
 }
