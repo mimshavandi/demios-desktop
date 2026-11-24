@@ -1,13 +1,26 @@
 import { useEffect, useMemo, useRef, type MouseEvent } from "react";
 import { renderMarkdown } from "../markdown";
 
-// Links in model output never navigate the app window. Opening them in the system
-// browser needs the opener plugin and a capability; that is a later, explicit decision.
+// Links in model output never navigate the app window. A click asks the backend to open it
+// in the system browser; it confirms with the full URL in a native dialog first (T-SHELL-09).
 // Code blocks get a Copy button (design-system §4, Message).
-function onClick(e: MouseEvent<HTMLDivElement>) {
-  if (!(e.target instanceof Element)) return;
-  if (e.target.closest("a") !== null) e.preventDefault();
-  const copy = e.target.closest<HTMLButtonElement>("button.code-copy");
+function makeOnClick(onOpenLink: ((href: string) => void) | undefined) {
+  return (e: MouseEvent<HTMLDivElement>) => {
+    if (!(e.target instanceof Element)) return;
+    const a = e.target.closest("a");
+    if (a !== null) {
+      e.preventDefault();
+      // The raw attribute, not a.href: the page's base URL must not turn "/x" into a link.
+      const href = a.getAttribute("href");
+      if (href !== null && onOpenLink !== undefined) onOpenLink(href);
+      return;
+    }
+    copyCode(e.target);
+  };
+}
+
+function copyCode(target: Element) {
+  const copy = target.closest<HTMLButtonElement>("button.code-copy");
   if (copy !== null) {
     const code = copy.closest("pre")?.querySelector("code")?.textContent ?? "";
     void navigator.clipboard?.writeText(code).then(() => {
@@ -17,7 +30,7 @@ function onClick(e: MouseEvent<HTMLDivElement>) {
   }
 }
 
-export function Markdown({ source }: { source: string }) {
+export function Markdown({ source, onOpenLink }: { source: string; onOpenLink?: (href: string) => void }) {
   const html = useMemo(() => renderMarkdown(source), [source]);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -35,5 +48,6 @@ export function Markdown({ source }: { source: string }) {
   }, [html]);
 
   // `html` is sanitised by DOMPurify in renderMarkdown.
+  const onClick = useMemo(() => makeOnClick(onOpenLink), [onOpenLink]);
   return <div ref={ref} className="md" onClick={onClick} dangerouslySetInnerHTML={{ __html: html }} />;
 }

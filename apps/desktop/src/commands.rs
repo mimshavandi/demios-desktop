@@ -680,3 +680,36 @@ pub async fn sign_in_mcp_server(
         }
     }
 }
+
+// ---- links in answers (T-SHELL-09)
+
+/// Opens a link from an answer in the system browser after a native confirmation that shows
+/// the full URL. Returns whether it was opened (false: the user chose Cancel).
+#[tauri::command]
+pub async fn open_link(app: tauri::AppHandle, url: String) -> IpcResult<bool> {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+    use tauri_plugin_opener::OpenerExt;
+    let u = crate::links::check_link(&url).map_err(|r| IpcError::invalid(r.0))?;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .message(crate::links::confirm_text(&u))
+        .title("Open link?")
+        .kind(MessageDialogKind::Info)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "Open in browser".into(),
+            "Cancel".into(),
+        ))
+        .show(move |ok| {
+            let _ = tx.send(ok);
+        });
+    if !rx.await.unwrap_or(false) {
+        return Ok(false);
+    }
+    app.opener()
+        .open_url(u.as_str(), None::<&str>)
+        .map_err(|e| {
+            eprintln!("could not open the browser: {e}");
+            IpcError::new("unavailable", "Couldn't open your browser.")
+        })?;
+    Ok(true)
+}

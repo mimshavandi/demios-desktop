@@ -28,6 +28,7 @@ interface Commands {
   delete_all_local_data: { args: Record<string, never>; ret: null };
   local_data_summary: { args: Record<string, never>; ret: LocalDataSummary };
   report_problem: { args: { kind: ReportKind; messageId: Id | null }; ret: null };
+  open_link: { args: { url: string }; ret: boolean };
   list_mcp_servers: { args: Record<string, never>; ret: McpServersView };
   save_mcp_server: { args: { input: McpServerInput; editing: string | null }; ret: McpServersView };
   remove_mcp_server: { args: { serverId: string }; ret: McpServersView };
@@ -93,6 +94,8 @@ export const api = {
    * backend reads the model from the database. No chat content is sent.
    */
   reportProblem: (kind: ReportKind, messageId: Id | null = null) => call("report_problem", { kind, messageId }),
+  /** Asks to open a link from an answer; the backend confirms with the full URL first. */
+  openLink: (url: string) => call("open_link", { url }),
   listConversations: () => call("list_conversations", {}),
   createConversation: () => call("create_conversation", {}),
   renameConversation: (conversationId: Id, title: string) =>

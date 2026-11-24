@@ -50,6 +50,7 @@ function fakeApi() {
   let settings: Settings = { slots: {}, telemetry_enabled: false };
   let n = 0;
   const reports: [string, string | null][] = [];
+  const links: string[] = [];
   let listener: ((ev: ChatEvent) => void) | null = null;
   const id = () => `id-${++n}`;
   const m = (cid: string, role: "user" | "assistant", text: string, status: StoredMessage["status"]): StoredMessage => ({
@@ -85,6 +86,10 @@ function fakeApi() {
     reconnectMcpServer: async () => null,
     signInMcpServer: async () => null,
     signOutMcpServer: async () => ({ servers: [], local_servers_allowed: true }),
+    openLink: async (url) => {
+      links.push(url);
+      return true;
+    },
     reportProblem: async (kind, messageId) => {
       reports.push([kind, messageId ?? null]);
       return null;
@@ -183,6 +188,7 @@ function fakeApi() {
     pauses,
     localRows,
     reports,
+    links,
   };
 }
 
@@ -277,6 +283,44 @@ describe("App", () => {
     await waitFor(() => expect(reports).toEqual([["answer", "id-3"], ["problem", null]]));
     // Only kinds and message ids went to the backend: no chat text.
     expect(JSON.stringify(reports)).not.toContain("private question");
+  });
+
+  it("links in answers go to the backend to confirm and open, never navigate the app", async () => {
+    const { api, emit, msgs, links } = fakeApi();
+    let refuse = false;
+    api.openLink = async (url) => {
+      links.push(url);
+      if (refuse) throw { code: "invalid_input", message: "Only web links (http and https) open from answers." };
+      return true;
+    };
+    render(<App api={api} />);
+    const box = await screen.findByLabelText("Message");
+    fireEvent.change(box, { target: { value: "Where?" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    await screen.findByRole("button", { name: "Stop answer" });
+    const text = "See [the docs](https://example.com/docs) or [mail us](mailto:a@example.com).";
+    const stored = [...msgs.values()].flat().find((x) => x.role === "assistant");
+    if (stored) {
+      stored.content = [{ type: "text", text }];
+      stored.status = "complete";
+    }
+    act(() => {
+      emit({ type: "text_delta", message_id: "id-3", offset: 0, text });
+      emit({ type: "done", message_id: "id-3", finish_reason: "stop", usage: { input_tokens: 1, output_tokens: 1 } });
+    });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Where?" })).toBeTruthy());
+    const before = window.location.href;
+    const docs = await screen.findByRole("link", { name: "the docs" });
+    const notPrevented = fireEvent.click(docs);
+    expect(notPrevented).toBe(false); // default navigation cancelled
+    expect(links).toEqual(["https://example.com/docs"]);
+    expect(window.location.href).toBe(before);
+
+    // Only http(s) opens: the backend refuses anything else and the user is told why.
+    refuse = true;
+    fireEvent.click(screen.getByRole("link", { name: "mail us" }));
+    expect(links[1]).toBe("mailto:a@example.com");
+    expect(await screen.findByText("Only web links (http and https) open from answers.")).toBeTruthy();
   });
 
   it("does not show the first-run notice once seen", async () => {

@@ -5,6 +5,7 @@ const COMMANDS: &[&str] = &[
     "delete_all_local_data",
     "local_data_summary",
     "report_problem",
+    "open_link",
     "list_mcp_servers",
     "save_mcp_server",
     "remove_mcp_server",

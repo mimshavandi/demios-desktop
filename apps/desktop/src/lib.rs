@@ -11,6 +11,7 @@ pub mod commands;
 pub mod error;
 #[cfg(any(fake_model, test))]
 pub mod fake;
+pub mod links;
 pub mod local;
 pub mod mcp;
 pub mod models;
@@ -123,6 +124,7 @@ pub fn run() {
             commands::delete_all_local_data,
             commands::local_data_summary,
             commands::report_problem,
+            commands::open_link,
             commands::list_mcp_servers,
             commands::save_mcp_server,
             commands::remove_mcp_server,

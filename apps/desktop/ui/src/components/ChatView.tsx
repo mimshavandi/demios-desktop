@@ -46,6 +46,8 @@ interface Props {
   onDismissAiNotice?: () => void;
   /** "Report this answer": opens a form in the browser with the answer's model, no chat content. */
   onReportAnswer?: (messageId: Id) => void;
+  /** A link in an answer was clicked. */
+  onOpenLink?: (href: string) => void;
 }
 
 interface ToolResult {
@@ -180,6 +182,7 @@ export function ChatView(p: Props) {
                   canRetry={canRegenerate(p.state)}
                   onRetry={p.onRegenerate}
                   onReport={p.onReportAnswer}
+                  onOpenLink={p.onOpenLink}
                   live={p.state.tools[m.id] ?? []}
                   results={results}
                 />
@@ -275,6 +278,7 @@ function Message({
   canRetry,
   onRetry,
   onReport,
+  onOpenLink,
   live,
   results,
 }: {
@@ -285,6 +289,7 @@ function Message({
   canRetry: boolean;
   onRetry: () => void;
   onReport?: ((messageId: Id) => void) | undefined;
+  onOpenLink?: ((href: string) => void) | undefined;
   live: LiveToolCall[];
   results: Map<string, ToolResult>;
 }) {
@@ -326,7 +331,7 @@ function Message({
       ) : (
         text !== "" && (
           <div className="msg-body">
-            <Markdown source={text} />
+            <Markdown source={text} {...(onOpenLink !== undefined ? { onOpenLink } : {})} />
             {streaming && <span className="caret" aria-hidden="true" />}
           </div>
         )
