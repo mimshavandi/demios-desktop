@@ -62,8 +62,7 @@ kbd { font-family: var(--dn-font-sans); font-size: var(--dn-text-xs); color: var
 .dn-btn-primary:active { background: var(--dn-color-accent-hover); }
 .dn-btn-ghost { border-color: transparent; background: transparent; color: var(--dn-color-text-muted); }
 .dn-btn-ghost:hover { background: var(--dn-color-surface-sunken); color: var(--dn-color-text); }
-/* Text in the page background colour: white on the dark theme's light red fails contrast (≈2.6:1); this gives ≥5.4:1 in both. */
-.dn-btn-danger { background: var(--dn-color-danger); border-color: var(--dn-color-danger); color: var(--dn-color-bg); }
+.dn-btn-danger { background: var(--dn-color-danger); border-color: var(--dn-color-danger); color: var(--dn-color-text-on-danger); }
 .dn-btn-danger:hover, .dn-btn-danger:active { background: var(--dn-color-danger); filter: brightness(0.92); }
 .dn-btn-danger:disabled { filter: none; }
 .dn-btn:disabled { opacity: 0.5; cursor: not-allowed; }
