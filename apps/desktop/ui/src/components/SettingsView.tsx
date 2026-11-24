@@ -511,6 +511,10 @@ function GeneralPage({ api, info }: { api: Api; info: AppInfo | null }) {
         <div className="row">
           <div className="row-main">
             <span className="row-title">Demios Desktop {info?.version ?? ""}</span>
+            <span className="dn-help">
+              Answers come from the AI model you choose, on this computer or from a provider you add a key for. Demios
+              doesn't check them: they can be wrong or made up, so verify anything important.
+            </span>
             <span className="dn-help">Your chats are stored in {info?.data_dir ?? "the app data folder"}</span>
             {info?.models_dir != null && <span className="dn-help">Downloaded models are stored in {info.models_dir}</span>}
           </div>

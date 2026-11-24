@@ -81,6 +81,19 @@ function Shell({ api }: { api: Api }) {
   const devFake = info?.dev_fake_model ?? false;
   const ready = chatModelReady(catalog, devFake);
   const activeConversation = conversations.find((c) => c.id === chat.conversationId);
+  // First-run AI notice (T-STORE-09): shown until dismissed; the dismissal is a setting, so
+  // "Delete all local data" brings it back.
+  const showAiNotice = catalog !== null && catalog.settings.ai_notice_seen !== true;
+  const dismissAiNotice = useCallback(async () => {
+    if (catalog === null) return;
+    try {
+      const settings = await api.updateSettings({ ...catalog.settings, ai_notice_seen: true });
+      setCatalog({ ...catalog, settings });
+    } catch {
+      // Hide it for this session anyway; it comes back next start if saving failed.
+      setCatalog({ ...catalog, settings: { ...catalog.settings, ai_notice_seen: true } });
+    }
+  }, [api, catalog]);
 
   const refreshConversations = useCallback(async () => {
     try {
@@ -465,6 +478,8 @@ function Shell({ api }: { api: Api }) {
             onDecide={decide}
             unknowns={unknowns}
             onResolveUnknown={resolveUnknown}
+            aiNotice={showAiNotice}
+            onDismissAiNotice={() => void dismissAiNotice()}
           />
         ) : (
           <SettingsView

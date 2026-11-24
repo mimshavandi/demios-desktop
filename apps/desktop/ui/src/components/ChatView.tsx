@@ -8,6 +8,7 @@ import {
   type StoredMessage,
   type UnknownOutcome,
 } from "../ipc/types";
+import { AI_DISCLOSURE, AI_FIRST_RUN_NOTICE } from "../ai";
 import { describeModel } from "../models";
 import { mod } from "../platform";
 import { canRegenerate, type ChatState, type LiveToolCall } from "../state/chat";
@@ -39,6 +40,9 @@ interface Props {
   /** Tool writes of this conversation whose outcome is unknown. */
   unknowns: UnknownOutcome[];
   onResolveUnknown: (key: string, happened: boolean) => Promise<void>;
+  /** Show the first-run AI notice (T-STORE-09). */
+  aiNotice?: boolean;
+  onDismissAiNotice?: () => void;
 }
 
 interface ToolResult {
@@ -97,6 +101,18 @@ export function ChatView(p: Props) {
       <div className="messages" ref={listRef}>
         <div className="column">
           {!empty && <h1 className="dn-visually-hidden">{p.title}</h1>}
+          {p.aiNotice === true && (
+            <InlineMessage
+              tone="info"
+              action={
+                <Button size="sm" onClick={p.onDismissAiNotice}>
+                  Got it
+                </Button>
+              }
+            >
+              {AI_FIRST_RUN_NOTICE}
+            </InlineMessage>
+          )}
           {!p.ready && (
             <InlineMessage
               tone="warning"
@@ -194,7 +210,7 @@ export function ChatView(p: Props) {
           rows={Math.min(8, Math.max(1, draft.split("\n").length))}
           placeholder={p.ready ? "Message Demios" : "Connect a model to start chatting"}
           disabled={!p.ready}
-          aria-describedby="composer-hint"
+          aria-describedby="composer-hint composer-disclosure"
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={onKeyDown}
         />
@@ -230,6 +246,9 @@ export function ChatView(p: Props) {
           )}
         </div>
       </form>
+      <p id="composer-disclosure" className="composer-disclosure">
+        {AI_DISCLOSURE}
+      </p>
     </section>
   );
 }
@@ -279,7 +298,9 @@ function Message({
   return (
     <article
       className="msg msg-assistant"
-      aria-label="Demios"
+      aria-label={`AI answer${m.model !== null ? ` from ${describeModel(m.model, catalog)?.text ?? m.model}` : ""}`}
+      data-ai-generated="true"
+      data-generator={m.model ?? undefined}
       aria-busy={streaming}
       data-testid="message-assistant"
       data-status={m.status}
