@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, describe, expect, it } from "vitest";
 import type { Api } from "../ipc/commands";
 import type {
+  AddModelLink,
   ApprovalPrompt,
   ChatEvent,
   Conversation,
@@ -336,6 +337,27 @@ describe("App", () => {
     await waitFor(() => expect(calls).toContain("done"));
     expect(screen.queryByText(/A link asked to add this model/)).toBeNull();
     expect(calls).not.toContain("pull");
+  });
+
+  it("a link mid-chat keeps the composer draft", async () => {
+    const { api } = fakeApi();
+    let deliver: ((l: AddModelLink) => void) | null = null;
+    api.watchAddLinks = async (on) => {
+      deliver = on;
+      return null;
+    };
+    api.hubResolveLink = async () => {
+      throw { code: "model_unavailable", message: "offline in this test" };
+    };
+    render(<App api={api} />);
+    const box = (await screen.findByLabelText("Message")) as HTMLTextAreaElement;
+    fireEvent.change(box, { target: { value: "half-written question" } });
+    await waitFor(() => expect(deliver).not.toBeNull());
+    act(() => deliver?.({ repo: "org/Tiny-GGUF", file: null, quant: null, revision: null }));
+    fireEvent.click(await screen.findByRole("button", { name: "Not now" }));
+    fireEvent.click(screen.getAllByRole("button", { name: /New chat/ })[0]!);
+    const back = (await screen.findByLabelText("Message")) as HTMLTextAreaElement;
+    expect(back.value).toBe("half-written question");
   });
 
   it("does not show the first-run notice once seen", async () => {

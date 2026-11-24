@@ -804,9 +804,9 @@ pub async fn watch_add_links(
     state: AppStateRef<'_>,
     on_event: Channel<dn_models::link::AddModelLink>,
 ) -> IpcResult<Option<dn_models::link::AddModelLink>> {
-    Ok(state.add_links.watch(Arc::new(move |l| {
-        let _ = on_event.send(l);
-    })))
+    Ok(state
+        .add_links
+        .watch(Arc::new(move |l| on_event.send(l).is_ok())))
 }
 
 /// The link's confirmation was closed: the next link may open it again.

@@ -44,6 +44,9 @@ interface Props {
   /** Show the first-run AI notice (T-STORE-09). */
   aiNotice?: boolean;
   onDismissAiNotice?: () => void;
+  /** The composer's text, kept by the parent across view switches. */
+  draft?: string;
+  onDraft?: (text: string) => void;
   /** "Report this answer": opens a form in the browser with the answer's model, no chat content. */
   onReportAnswer?: (messageId: Id) => void;
 }
@@ -61,7 +64,11 @@ const EXAMPLES = [
 
 export function ChatView(p: Props) {
   const connectRef = useRef<HTMLButtonElement>(null);
-  const [draft, setDraft] = useState("");
+  // The draft lives in App when it passes one, so switching to Settings (e.g. a demios://
+  // link) and back keeps it.
+  const [localDraft, setLocalDraft] = useState("");
+  const draft = p.draft ?? localDraft;
+  const setDraft = p.onDraft ?? setLocalDraft;
   const [sending, setSending] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const streaming = p.state.streamingId !== null;

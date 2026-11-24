@@ -99,6 +99,9 @@ function Shell({ api }: { api: Api }) {
     [api, toast],
   );
 
+  // The composer's draft survives a switch to Settings (a link, ⌘,) and back.
+  const [draft, setDraft] = useState("");
+
   // demios://models/add links from the OS open the add-model confirmation (T-INF-12).
   const [addLink, setAddLink] = useState<AddModelLink | null>(null);
   const addLinkRef = useRef<AddModelLink | null>(null);
@@ -527,6 +530,8 @@ function Shell({ api }: { api: Api }) {
             unknowns={unknowns}
             onResolveUnknown={resolveUnknown}
             onReportAnswer={(m) => void report("answer", m)}
+            draft={draft}
+            onDraft={setDraft}
             aiNotice={showAiNotice}
             onDismissAiNotice={() => void dismissAiNotice()}
           />

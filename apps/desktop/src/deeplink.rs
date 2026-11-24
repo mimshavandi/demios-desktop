@@ -11,7 +11,9 @@ use dn_models::link::{AddModelLink, LinkError};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-pub type LinkSink = Arc<dyn Fn(AddModelLink) + Send + Sync>;
+/// Delivers a link to the screen; returns false when it couldn't (e.g. the webview reloaded
+/// and its channel is gone).
+pub type LinkSink = Arc<dyn Fn(AddModelLink) -> bool + Send + Sync>;
 
 /// Why a link was not shown.
 #[derive(Debug, PartialEq, Eq)]
@@ -47,17 +49,25 @@ impl AddLinks {
             return Err(Ignored::Busy);
         }
         let sink = lock(&self.sink).clone();
-        match sink {
-            Some(s) => s(link),
-            None => *lock(&self.pending) = Some(link),
+        let delivered = sink.is_some_and(|s| s(link.clone()));
+        if !delivered {
+            // Nobody (alive) to show it: keep it for the next subscriber.
+            *lock(&self.sink) = None;
+            *lock(&self.pending) = Some(link);
         }
         Ok(())
     }
 
-    /// The screen subscribes; returns a link that arrived before it did.
+    /// The screen subscribes (at start, or again after the webview reloaded). Returns a link
+    /// that arrived before it did, or that the old screen never got. With nothing to show, a
+    /// confirmation the old screen had open is gone with it, so the next link may open.
     pub fn watch(&self, sink: LinkSink) -> Option<AddModelLink> {
         *lock(&self.sink) = Some(sink);
-        lock(&self.pending).take()
+        let pending = lock(&self.pending).take();
+        if pending.is_none() {
+            self.open.store(false, Ordering::SeqCst);
+        }
+        pending
     }
 
     /// The link's confirmation was closed (downloaded or dismissed): the next link may open.
@@ -86,7 +96,14 @@ mod tests {
         let links = AddLinks::default();
         let got = Arc::new(Mutex::new(Vec::new()));
         let g2 = Arc::clone(&got);
-        assert!(links.watch(Arc::new(move |l| lock(&g2).push(l))).is_none());
+        assert!(
+            links
+                .watch(Arc::new(move |l| {
+                    lock(&g2).push(l);
+                    true
+                }))
+                .is_none()
+        );
         (links, got)
     }
 
@@ -117,9 +134,9 @@ mod tests {
         links
             .receive("demios://models/add?repo=org/Tiny-GGUF")
             .unwrap();
-        let pending = links.watch(Arc::new(|_| {})).unwrap();
+        let pending = links.watch(Arc::new(|_| true)).unwrap();
         assert_eq!(pending.repo, "org/Tiny-GGUF");
-        assert!(links.watch(Arc::new(|_| {})).is_none(), "delivered once");
+        assert!(links.watch(Arc::new(|_| true)).is_none(), "delivered once");
     }
 
     #[test]
@@ -155,6 +172,53 @@ mod tests {
         links
             .receive("demios://models/add?repo=org/Tiny-GGUF")
             .unwrap();
+    }
+
+    #[test]
+    fn a_link_the_webview_couldnt_receive_waits_for_the_next_screen() {
+        let links = AddLinks::default();
+        // The webview reloaded: its channel is gone, sending fails.
+        assert!(links.watch(Arc::new(|_| false)).is_none());
+        links
+            .receive("demios://models/add?repo=org/Tiny-GGUF")
+            .unwrap();
+        // The reloaded screen subscribes and gets it.
+        let again = links.watch(Arc::new(|_| true)).unwrap();
+        assert_eq!(again.repo, "org/Tiny-GGUF");
+    }
+
+    #[test]
+    fn a_reloaded_screen_reopens_the_gate_for_new_links() {
+        let links = AddLinks::default();
+        links.watch(Arc::new(|_| true));
+        links
+            .receive("demios://models/add?repo=org/Tiny-GGUF")
+            .unwrap();
+        assert_eq!(
+            links.receive("demios://models/add?repo=org/Other-GGUF"),
+            Err(Ignored::Busy)
+        );
+        // The webview reloads mid-confirmation (never calls done): its new screen subscribes.
+        assert!(links.watch(Arc::new(|_| true)).is_none());
+        links
+            .receive("demios://models/add?repo=org/Other-GGUF")
+            .expect("not blocked by the confirmation that went away");
+    }
+
+    #[test]
+    fn every_accepted_link_round_trips_exactly() {
+        // revalidate's equality check guards against a future parser that normalises values;
+        // with today's parser every accepted link comes back identical.
+        for url in [
+            "demios://models/add?repo=org/Tiny-GGUF",
+            "demios://models/add?repo=org/Tiny-GGUF&quant=Q4_K_M&revision=main",
+            "demios://models/add?repo=org/Tiny-GGUF&file=sub/dir/m%C3%B3del-00001-of-00002.gguf",
+            "demios://models/add?repo=Org.Name/Model_v1.5-GGUF&revision=refs/pr/12",
+            "demios://models/add?repo=org/Tiny-GGUF&quant=iq3_xxs&utm_source=docs",
+        ] {
+            let l = AddModelLink::parse(url).unwrap();
+            assert_eq!(revalidate(&l).unwrap(), l, "{url}");
+        }
     }
 
     #[test]

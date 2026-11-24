@@ -64,9 +64,15 @@ fn navigation_guard<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
 /// (`deeplink::AddLinks::receive` parses them; nothing downloads from a link).
 fn install_add_links(app: &tauri::AppHandle, state: &std::sync::Arc<state::AppState>) {
     use tauri_plugin_deep_link::DeepLinkExt;
-    // Installers register the scheme; dev builds on Linux and Windows register it here.
-    #[cfg(any(target_os = "linux", all(debug_assertions, windows)))]
-    if let Err(e) = app.deep_link().register_all() {
+    // Installers (.app, MSI/NSIS, .deb/.rpm, Flatpak) register the scheme. Only dev builds and
+    // an AppImage (no installer) register it at run time, so a packaged release never
+    // rewrites a .desktop file or the registry on each launch.
+    #[cfg(any(target_os = "linux", windows))]
+    if register_scheme_at_runtime(
+        cfg!(debug_assertions),
+        std::env::var_os("APPIMAGE").is_some(),
+    ) && let Err(e) = app.deep_link().register_all()
+    {
         eprintln!("could not register demios:// links: {e}");
     }
     let receive = {
@@ -87,6 +93,11 @@ fn install_add_links(app: &tauri::AppHandle, state: &std::sync::Arc<state::AppSt
             receive(u.as_str());
         }
     });
+}
+
+/// Whether the app registers `demios://` itself: dev builds, and an AppImage on Linux.
+pub fn register_scheme_at_runtime(debug: bool, appimage: bool) -> bool {
+    debug || (cfg!(target_os = "linux") && appimage)
 }
 
 /// Asks with a native dialog (outside the webview) before a local MCP server starts.
@@ -288,5 +299,19 @@ mod tests {
                 "unexpected permission: {id}"
             );
         }
+    }
+
+    #[test]
+    fn only_dev_builds_and_appimages_register_the_scheme_themselves() {
+        assert!(super::register_scheme_at_runtime(true, false));
+        assert!(
+            !super::register_scheme_at_runtime(false, false),
+            "installed releases don't"
+        );
+        assert_eq!(
+            super::register_scheme_at_runtime(false, true),
+            cfg!(target_os = "linux"),
+            "an AppImage on Linux does"
+        );
     }
 }
