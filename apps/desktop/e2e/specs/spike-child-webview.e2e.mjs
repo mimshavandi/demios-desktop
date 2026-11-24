@@ -87,3 +87,21 @@ describe("spike: artifact child webview (#75)", () => {
     expect(r.cookie).toBe("");
   });
 });
+
+describe("spike: the main webview under `unstable` (WindowChild)", () => {
+  it("follows the window when it is resized", async () => {
+    const size = () => browser.execute(() => [window.innerWidth, window.innerHeight]);
+    const [w0, h0] = await size();
+    await browser.setWindowSize(1100, 760);
+    await browser.pause(800);
+    const [w1, h1] = await size();
+    await browser.setWindowSize(1400, 900);
+    await browser.pause(800);
+    const [w2, h2] = await size();
+    console.log(`main webview size: start ${w0}x${h0}, at 1100x760 -> ${w1}x${h1}, at 1400x900 -> ${w2}x${h2}`);
+    expect(w2).toBeGreaterThan(w1);
+    expect(h2).toBeGreaterThan(h1);
+    // The title bar's drag region is still there for the OS to use.
+    expect(await browser.execute(() => document.querySelectorAll("[data-tauri-drag-region]").length)).toBeGreaterThan(0);
+  });
+});

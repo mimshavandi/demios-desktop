@@ -134,8 +134,18 @@ pub fn autorun(app: &tauri::AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_secs(4)).await;
-        if let Err(e) = spike_open_child(app).await {
+        if let Err(e) = spike_open_child(app.clone()).await {
             eprintln!("spike: could not open the child webview: {e}");
+        }
+        // WindowChild check: the main webview must follow the window when it is resized.
+        use tauri::Manager;
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        if let (Some(w), Some(main)) = (app.get_window("main"), app.get_webview("main")) {
+            let before = (w.inner_size().ok(), main.size().ok());
+            let _ = w.set_size(tauri::LogicalSize::new(1100.0, 760.0));
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            let after = (w.inner_size().ok(), main.size().ok(), main.position().ok());
+            eprintln!("spike resize: before (window, main webview) {before:?}; after (window, main webview, position) {after:?}");
         }
     });
 }
