@@ -105,7 +105,7 @@ The app is not meant for children under 13 (or the minimum age in your country).
 
 Because your data is on your own computer, you control it:
 
-- **Delete a chat:** use Delete in the sidebar. You can undo this until you next start the app. At the next start, its messages are removed for good. *Today the chat's title and model name stay in the database as a marker, and tool history for that chat is not removed. We plan to fix this.*
+- **Delete a chat:** use Delete in the sidebar. You can undo this until you next start the app. At the next start, its messages are removed for good. *Today the chat's title and model name stay in the database as a marker, and tool history for that chat is not removed. This is being fixed: after the fix only the chat's internal id and the deletion time are kept (no title, model or content), so a future team-sync feature can tell other devices the chat was deleted; "Delete everything" removes that too. (verify once T-STORE-11 lands)*
 - **Remove an API key:** go to Settings › Provider keys and click Remove. The key is removed from the keychain straight away. For 15 seconds it is held in memory so you can undo.
 - **Remove a tool server's credentials:** there is no screen for this yet *(verify)*. Remove the `mcp/…` entries for `io.demios.app` in your keychain.
 - **Delete everything:** there is no "delete all data" button yet *(planned)*. For now, quit the app, then:
