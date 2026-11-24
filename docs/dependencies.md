@@ -8,7 +8,7 @@ Every direct dependency is listed here with why and its licence (ADR-0009). Anyt
 | thiserror | all | typed errors | MIT/Apache-2.0 | T-CORE-01 |
 | uuid (v7) | dn-core | time-ordered, sync-safe ids | MIT/Apache-2.0 | T-CORE-01 |
 | futures-core | dn-core | `Stream` trait for `ChatModel::chat` | MIT/Apache-2.0 | T-CORE-01 |
-| keyring 3 | dn-secrets | OS keychain for BYOK keys and MCP tokens(ADR-0007). Features `apple-native`, `windows-native`, `async-secret-service` + `tokio` + `crypto-rust`, so there are no C deps (libdbus/openssl) | MIT/Apache-2.0 | T-PRV-03 |
+| keyring 3 | dn-secrets | OS keychain for BYOK keys and MCP tokens (ADR-0007). Features `apple-native`, `windows-native`, `async-secret-service` + `tokio` + `crypto-rust`, so there are no C deps (libdbus/openssl) | MIT/Apache-2.0 | T-PRV-03 |
 | tokio | dn-agent, dn-secrets, dn-providers | async runtime; `sync` for streams/cancellation, `rt` for `AsyncSecrets::spawn_blocking`; dn-providers also `time` for SSE first-byte/idle timeouts (T-PRV-04); approved wave-1 dependency | MIT | T-AGT-02 |
 | reqwest 0.13 | dn-providers | HTTPS client for BYOK providers. `rustls` (aws-lc-rs, platform verifier) + `http2` + `charset`; no OpenSSL. SSE parsing is hand-rolled (`dn_providers::sse`) | MIT/Apache-2.0 | T-PRV-01 |
 | zeroize 1 | dn-secrets | wipe `Secret` buffers on drop (`Zeroizing<String>`); already a transitive dep of keyring | MIT/Apache-2.0 | T-PRV-03 |
