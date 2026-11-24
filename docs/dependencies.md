@@ -23,9 +23,9 @@ Every direct dependency is listed here with why and its licence (ADR-0009). Appr
 | process-wrap 10 (tokio1, process-group, job-object) | dn-tools | stdio MCP servers run in their own process group (Unix) / job object (Windows) so shutdown also stops grandchildren (e.g. npx → node); same major version rmcp already uses | Apache-2.0 OR MIT | T-CON-01 |
 | tokio | dn-inference, dn-models, dn | async runtime, channels, fs for downloads | MIT | T-INF-01 |
 | llama-cpp-2 (+ llama-cpp-sys-2, builds llama.cpp) | dn-inference | in-process llama.cpp backend; `metal` on macOS, `cuda`/`vulkan` features | MIT/Apache-2.0 (llama.cpp: MIT) | T-INF-02 |
-| reqwest 0.13 (rustls) | dn-models | resumable model downloads (`json` feature for the catalogue API is not needed) | MIT/Apache-2.0 | T-INF-05 |
+| reqwest 0.13 (rustls) | dn-models | resumable model downloads (HTTPS only, read timeout) | MIT/Apache-2.0 | T-INF-05 |
 | sha2 | dn-models | SHA-256 verification of downloads | MIT/Apache-2.0 | T-INF-05 |
-| sysinfo (`system` only) | dn-models, dn | RAM detection for the fit estimator; peak RSS in `dn bench` | MIT | T-INF-03 |
+| sysinfo (`system`; `disk` in dn-models) | dn-models, dn | RAM detection for the fit estimator; free disk space before a model download; peak RSS in `dn bench` | MIT | T-INF-03 |
 | clap (derive) | dn | `dn` command-line parsing | MIT/Apache-2.0 | T-INF-04 |
 
 Approved for wave 1 (D-012), add a row when first used: tauri 2, tokio, serde_yaml (or a maintained successor), llama-cpp-2, rmcp, rusqlite (chosen over sqlx: sync, SQLCipher + sqlite-vec support), keyring, reqwest, axum (team server).

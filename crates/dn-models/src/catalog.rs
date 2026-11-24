@@ -24,6 +24,13 @@ pub struct CatalogEntry {
 }
 
 impl CatalogEntry {
+    /// `file` is a plain file name (no `/`, `\\`, `..` or drive prefix), so a pull can't
+    /// write outside the models directory.
+    pub fn has_plain_file_name(&self) -> bool {
+        let f = &self.file;
+        !f.is_empty() && !f.contains(['/', '\\', ':']) && f != "." && !f.contains("..")
+    }
+
     pub fn url(&self) -> String {
         format!(
             "https://huggingface.co/{}/resolve/{}/{}",
@@ -65,6 +72,7 @@ mod tests {
             assert!(m.sha256.chars().all(|c| c.is_ascii_hexdigit()), "{}", m.id);
             assert_eq!(m.revision.len(), 40, "{}", m.id);
             assert!(m.file.ends_with(".gguf"), "{}", m.id);
+            assert!(m.has_plain_file_name(), "{}", m.id);
             assert!(m.size > 100_000_000, "{}", m.id);
             assert!(!m.capabilities.is_empty(), "{}", m.id);
         }
@@ -74,6 +82,15 @@ mod tests {
                 .iter()
                 .any(|m| m.capabilities.contains(&Capability::Embedding))
         );
+    }
+
+    #[test]
+    fn path_like_file_names_rejected() {
+        let mut m = Catalog::builtin().models[0].clone();
+        for bad in ["../x.gguf", "a/b.gguf", "a\\b.gguf", "C:x.gguf", "..", ""] {
+            m.file = bad.into();
+            assert!(!m.has_plain_file_name(), "{bad}");
+        }
     }
 
     #[test]

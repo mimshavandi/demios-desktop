@@ -220,7 +220,8 @@ impl Gguf {
             let v = r.value(ty)?;
             metadata.insert(key, v);
         }
-        let mut tensors = Vec::with_capacity(n_tensors as usize);
+        // The count comes from the file: cap the pre-allocation, let real entries grow it.
+        let mut tensors = Vec::with_capacity((n_tensors as usize).min(4096));
         for _ in 0..n_tensors {
             let name = r.string()?;
             let nd = r.u32()?;

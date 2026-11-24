@@ -1,13 +1,19 @@
 //! Incremental parser for the in-band tags local models emit:
 //! `<think>…</think>` → reasoning, `<tool_call>{json}</tool_call>` → tool calls (Hermes /
 //! Qwen convention, which [`crate::prompt`] also instructs and the grammar enforces).
+//!
+//! When the chat template already opened the think block (the rendered prompt ends with
+//! `<think>`), start with [`TagParser::in_think`]. A `</think>` seen while in text (a
+//! template that opened the block without telling us) is dropped rather than shown.
 
 use dn_core::chat::{StreamEvent, ToolCall};
 
-const THINK_OPEN: &str = "<think>";
-const THINK_CLOSE: &str = "</think>";
-const TOOL_OPEN: &str = "<tool_call>";
-const TOOL_CLOSE: &str = "</tool_call>";
+pub const THINK_OPEN: &str = "<think>";
+pub const THINK_CLOSE: &str = "</think>";
+pub const TOOL_OPEN: &str = "<tool_call>";
+pub const TOOL_CLOSE: &str = "</tool_call>";
+/// Every tag the parser understands.
+pub const TAGS: [&str; 4] = [THINK_OPEN, THINK_CLOSE, TOOL_OPEN, TOOL_CLOSE];
 
 #[derive(Debug, PartialEq)]
 enum State {
@@ -23,6 +29,8 @@ pub struct TagParser {
     buf: String,
     tool_buf: String,
     calls: u32,
+    /// Recognise `<tool_call>` (only when the request offered tools).
+    tools: bool,
 }
 
 impl Default for TagParser {
@@ -32,12 +40,38 @@ impl Default for TagParser {
 }
 
 impl TagParser {
+    /// Parser that starts in text and recognises `<think>` and `<tool_call>`.
     pub fn new() -> Self {
         Self {
             state: State::Text,
             buf: String::new(),
             tool_buf: String::new(),
             calls: 0,
+            tools: true,
+        }
+    }
+
+    /// Start inside a think block (the prompt already ends with `<think>`).
+    pub fn in_think(mut self, yes: bool) -> Self {
+        if yes {
+            self.state = State::Think;
+        }
+        self
+    }
+
+    /// Whether `<tool_call>` is parsed. Off: the text passes through unchanged, so a request
+    /// without tools never yields `ToolCall` events.
+    pub fn with_tools(mut self, yes: bool) -> Self {
+        self.tools = yes;
+        self
+    }
+
+    fn tags(&self) -> &'static [&'static str] {
+        match (&self.state, self.tools) {
+            (State::Text, true) => &[THINK_OPEN, THINK_CLOSE, TOOL_OPEN],
+            (State::Text, false) => &[THINK_OPEN, THINK_CLOSE],
+            (State::Think, _) => &[THINK_CLOSE],
+            (State::Tool, _) => &[TOOL_CLOSE],
         }
     }
 
@@ -50,11 +84,7 @@ impl TagParser {
         self.buf.push_str(chunk);
         let mut out = vec![];
         loop {
-            let tags: &[&str] = match self.state {
-                State::Text => &[THINK_OPEN, TOOL_OPEN],
-                State::Think => &[THINK_CLOSE],
-                State::Tool => &[TOOL_CLOSE],
-            };
+            let tags = self.tags();
             // Earliest complete tag.
             let hit = tags
                 .iter()
@@ -241,6 +271,48 @@ mod tests {
     fn unterminated_call_parsed_on_finish() {
         let ev = run(&["<tool_call>{\"name\":\"a\",\"arguments\":\"{}\"}"]);
         assert!(matches!(&ev[0], StreamEvent::ToolCall { call } if call.name == "a"));
+    }
+
+    #[test]
+    fn starts_in_think_when_prompt_opened_it() {
+        let mut p = TagParser::new().in_think(true);
+        let mut ev = p.push("plan</think>answer");
+        ev.extend(p.finish());
+        assert_eq!(
+            ev,
+            vec![
+                StreamEvent::ReasoningDelta {
+                    text: "plan".into()
+                },
+                StreamEvent::TextDelta {
+                    text: "answer".into()
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn lone_think_close_dropped() {
+        assert_eq!(
+            run(&["a</thi", "nk>b"]),
+            vec![StreamEvent::TextDelta { text: "ab".into() }]
+        );
+    }
+
+    #[test]
+    fn tool_tags_are_text_without_tools() {
+        let mut p = TagParser::new().with_tools(false);
+        let mut ev = p.push("<tool_call>{\"name\":\"a\"}</tool_call>");
+        ev.extend(p.finish());
+        let text: String = ev
+            .iter()
+            .map(|e| match e {
+                StreamEvent::TextDelta { text } => text.as_str(),
+                other => panic!("unexpected {other:?}"),
+            })
+            .collect();
+        assert_eq!(text, "<tool_call>{\"name\":\"a\"}</tool_call>");
+        assert_eq!(p.tool_calls(), 0);
     }
 
     #[test]

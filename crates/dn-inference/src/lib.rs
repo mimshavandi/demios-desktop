@@ -14,8 +14,14 @@
 //! Every loaded model can be wrapped in [`LoadedModel`], which implements
 //! [`dn_core::chat::ChatModel`], so the agent loop never knows which backend answered.
 //!
-//! Cancellation: dropping the returned stream stops generation (llama.cpp thread exits on
-//! its next token; HTTP task is aborted).
+//! Cancellation: dropping the returned stream stops generation (the llama.cpp thread exits
+//! between prompt batches or on its next token; the provider's HTTP task stops).
+//!
+//! GPU features in CI: CI builds the default features (Metal on macOS, CPU elsewhere).
+//! `cuda` and `vulkan` are not built there: each needs its SDK on the runner (CUDA toolkit;
+//! Vulkan headers + `glslc` for llama.cpp's shaders) and compiles llama.cpp again, which adds
+//! many minutes per job. Check them locally with `cargo check -p dn-inference --features
+//! vulkan` on a machine with the SDK; a separate manual CI job can come later.
 
 mod backend;
 mod error;

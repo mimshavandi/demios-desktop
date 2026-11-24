@@ -13,7 +13,8 @@ default = ["llamacpp", "openai-compat"]
 llamacpp = ["dep:llama-cpp-2"]
 cuda = ["llamacpp", "llama-cpp-2/cuda"]
 vulkan = ["llamacpp", "llama-cpp-2/vulkan"]
-openai-compat = ["dep:dn-providers"]
+# Any OpenAI-compatible server, through dn-providers.
+openai-compat = []
 
 [dependencies]
 dn-core.workspace = true
@@ -22,7 +23,7 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util"] }
-dn-providers = { workspace = true, optional = true }
+dn-providers.workspace = true
 llama-cpp-2 = { workspace = true, optional = true }
 
 [dev-dependencies]

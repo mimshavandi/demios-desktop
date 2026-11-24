@@ -130,11 +130,22 @@ struct RunArgs {
     /// JSON file with an array of tools: [{"name", "description", "input_schema"}].
     #[arg(long)]
     tools: Option<PathBuf>,
+    /// Thinking for reasoning models. `auto` thinks here, since `dn run` output is prose
+    /// for you (caller `chat.reply`); `off` pre-fills an empty think block.
+    #[arg(long, value_enum, default_value_t = Think::Auto)]
+    think: Think,
     /// Print load time, token counts and speed to stderr.
     #[arg(long, short)]
     verbose: bool,
     #[command(flatten)]
     load: LoadArgs,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum Think {
+    Auto,
+    On,
+    Off,
 }
 
 #[derive(Args)]
@@ -298,8 +309,13 @@ fn chat<B: InferenceBackend>(
         max_tokens: a.max_tokens,
         temperature: a.temperature,
         response_schema: None,
-        reasoning: Default::default(),
-        caller: "cli.run".into(),
+        reasoning: match a.think {
+            Think::Auto => dn_core::chat::Reasoning::Auto,
+            Think::On => dn_core::chat::Reasoning::On,
+            Think::Off => dn_core::chat::Reasoning::Off,
+        },
+        // A person reads this answer, like a chat reply.
+        caller: "chat.reply".into(),
     })
 }
 
@@ -468,7 +484,7 @@ async fn models_cmd(cmd: ModelsCmd) -> Result<(), String> {
                 e.license,
                 dir.display()
             );
-            let client = dn_models::download::Client::new();
+            let client = dn_models::download::client().map_err(|e| e.to_string())?;
             let mut last = std::time::Instant::now();
             let mut progress = |done: u64, total: u64| {
                 if last.elapsed().as_millis() > 500 || done == total {

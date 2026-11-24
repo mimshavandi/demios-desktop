@@ -15,7 +15,7 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util"] }
 reqwest.workspace = true
 sha2.workspace = true
-sysinfo.workspace = true
+sysinfo = { workspace = true, features = ["disk"] }
 
 [lints]
 workspace = true

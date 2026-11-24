@@ -183,8 +183,8 @@ impl ModelFootprint {
                 return p.get(l).is_some_and(|&x| x != 0);
             }
             match arch.as_str() {
-                "gemma3" => (l + 1) % 6 != 0,
-                "gemma2" | "gpt-oss" => l % 2 == 0,
+                "gemma3" => !(l + 1).is_multiple_of(6),
+                "gemma2" | "gpt-oss" => l.is_multiple_of(2),
                 _ => false,
             }
         };

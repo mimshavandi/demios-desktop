@@ -4,6 +4,12 @@
 //! (the existing bytes are re-hashed first). The file is renamed into place only after its
 //! size and SHA-256 match. A `<file>.sha256` marker records a verified file so later calls
 //! skip re-hashing.
+//!
+//! Safety rails: [`client`] is HTTPS-only with connect and read timeouts; a `<file>.lock`
+//! (OS file lock, released if the process dies) stops two pulls of the same file; free disk
+//! space is checked before any byte is written; a `206` whose `Content-Range` doesn't start
+//! where the partial file ends restarts the download from zero. Network errors, 429 and 5xx
+//! are retried with backoff, and the retry budget resets whenever bytes arrive.
 
 use crate::catalog::CatalogEntry;
 use sha2::{Digest, Sha256};
@@ -24,6 +30,31 @@ pub enum DownloadError {
     Size { expected: u64, actual: u64 },
     #[error("sha256 mismatch: expected {expected}, got {actual}")]
     Hash { expected: String, actual: String },
+    #[error("{0} is already being downloaded by another process")]
+    Busy(PathBuf),
+    #[error("not enough disk space: need {need} bytes, {free} free")]
+    DiskFull { need: u64, free: u64 },
+}
+
+impl DownloadError {
+    fn retryable(&self) -> bool {
+        match self {
+            Self::Http(_) => true,
+            Self::Status(s) => *s == 429 || *s >= 500,
+            _ => false,
+        }
+    }
+}
+
+/// The client downloads should use: HTTPS only, 15 s connect timeout, 60 s read timeout
+/// (a stalled transfer fails and is resumed instead of hanging).
+pub fn client() -> Result<Client, DownloadError> {
+    Client::builder()
+        .https_only(true)
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .read_timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|e| DownloadError::Http(e.to_string()))
 }
 
 /// Progress callback: (bytes done, bytes total).
@@ -46,9 +77,55 @@ fn marker(path: &Path) -> PathBuf {
 }
 
 fn part(path: &Path) -> PathBuf {
+    with_suffix(path, ".part")
+}
+
+fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
     let mut p = path.as_os_str().to_owned();
-    p.push(".part");
+    p.push(suffix);
     PathBuf::from(p)
+}
+
+/// Exclusive lock on `<dest>.lock`, held for the whole download.
+fn lock(dest: &Path) -> Result<std::fs::File, DownloadError> {
+    let f = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(with_suffix(dest, ".lock"))?;
+    match f.try_lock() {
+        Ok(()) => Ok(f),
+        Err(std::fs::TryLockError::WouldBlock) => Err(DownloadError::Busy(dest.to_path_buf())),
+        Err(std::fs::TryLockError::Error(e)) => Err(e.into()),
+    }
+}
+
+/// Free bytes on the volume holding `dir` (`None` if it can't be told).
+fn free_space(dir: &Path) -> Option<u64> {
+    let dir = std::fs::canonicalize(dir).ok()?;
+    let disks = sysinfo::Disks::new_with_refreshed_list();
+    disks
+        .list()
+        .iter()
+        .filter(|d| dir.starts_with(d.mount_point()))
+        .max_by_key(|d| d.mount_point().as_os_str().len())
+        .map(|d| d.available_space())
+}
+
+/// Start offset of a `Content-Range: bytes START-END/TOTAL` header.
+fn range_start(resp: &reqwest::Response) -> Option<u64> {
+    let v = resp
+        .headers()
+        .get(reqwest::header::CONTENT_RANGE)?
+        .to_str()
+        .ok()?;
+    v.trim()
+        .strip_prefix("bytes ")?
+        .split('-')
+        .next()?
+        .trim()
+        .parse()
+        .ok()
 }
 
 async fn hash_file(path: &Path, h: &mut Sha256) -> std::io::Result<u64> {
@@ -96,7 +173,17 @@ async fn fetch(
         .await
         .map_err(|e| DownloadError::Http(e.to_string()))?;
     let append = match resp.status().as_u16() {
-        206 => true,
+        206 if range_start(&resp) == Some(*have) => true,
+        206 => {
+            // The server answered a different range than we asked for: throw the partial
+            // file away and start again from byte 0 on the next attempt.
+            *hasher = Sha256::new();
+            *have = 0;
+            tokio::fs::write(part, b"").await?;
+            return Err(DownloadError::Http(
+                "unexpected Content-Range; restarting".into(),
+            ));
+        }
         200 => {
             if *have > 0 {
                 // Server ignored the range: start over.
@@ -159,6 +246,7 @@ pub async fn download_to(
     if let Some(dir) = dest.parent() {
         tokio::fs::create_dir_all(dir).await?;
     }
+    let _lock = lock(dest)?;
     let part = part(dest);
     let mut hasher = Sha256::new();
     let mut have: u64 = match tokio::fs::metadata(&part).await {
@@ -169,12 +257,27 @@ pub async fn download_to(
         }
         Err(_) => 0,
     };
+    let dir = dest.parent().unwrap_or(Path::new("."));
+    if let Some(free) = free_space(dir) {
+        let need = exp.size - have;
+        if need > free {
+            return Err(DownloadError::DiskFull { need, free });
+        }
+    }
     let mut attempt = 0;
     while have < exp.size {
+        let before = have;
         match fetch(client, exp, &part, &mut hasher, &mut have, &mut *progress).await {
             Ok(()) => break,
-            // Transient network errors: resume from what we have, with backoff.
-            Err(DownloadError::Http(e)) if attempt < RETRIES => {
+            // Transient errors: resume from what we have, with backoff. Progress since the
+            // last failure earns a fresh retry budget.
+            Err(e) if e.retryable() => {
+                if have > before {
+                    attempt = 0;
+                }
+                if attempt >= RETRIES {
+                    return Err(e);
+                }
                 attempt += 1;
                 eprintln!("dn-models: download interrupted ({e}); retry {attempt}/{RETRIES}");
                 tokio::time::sleep(std::time::Duration::from_millis(500 << attempt)).await;
@@ -208,6 +311,15 @@ pub async fn pull(
     models_dir: &Path,
     progress: Progress<'_>,
 ) -> Result<PathBuf, DownloadError> {
+    if !entry.has_plain_file_name() {
+        return Err(DownloadError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "catalogue file name {:?} is not a plain file name",
+                entry.file
+            ),
+        )));
+    }
     let url = entry.url();
     download_to(
         client,
@@ -262,17 +374,31 @@ mod tests {
         hex(&Sha256::digest(b))
     }
 
-    /// Serves `data`, honouring `Range: bytes=N-` when `ranges` is true.
-    async fn server(data: Vec<u8>, ranges: bool) -> (String, Arc<AtomicUsize>) {
-        server_with(data, ranges, false).await
+    #[derive(Clone, Copy, Default)]
+    struct Mode {
+        /// Honour `Range: bytes=N-`.
+        ranges: bool,
+        /// First response promises the full body but closes halfway.
+        cut_first: bool,
+        /// First ranged response is a 206 for the whole file (`bytes 0-…`).
+        wrong_range_first: bool,
+        /// First response is a 503.
+        unavailable_first: bool,
     }
 
-    /// `cut_first`: the first response promises the full body but closes halfway.
-    async fn server_with(
-        data: Vec<u8>,
-        ranges: bool,
-        cut_first: bool,
-    ) -> (String, Arc<AtomicUsize>) {
+    /// Serves `data`, honouring `Range: bytes=N-` when `ranges` is true.
+    async fn server(data: Vec<u8>, ranges: bool) -> (String, Arc<AtomicUsize>) {
+        server_with(
+            data,
+            Mode {
+                ranges,
+                ..Default::default()
+            },
+        )
+        .await
+    }
+
+    async fn server_with(data: Vec<u8>, mode: Mode) -> (String, Arc<AtomicUsize>) {
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}/m.gguf", l.local_addr().unwrap());
         let hits = Arc::new(AtomicUsize::new(0));
@@ -288,17 +414,35 @@ mod tests {
                     .lines()
                     .find_map(|l| l.strip_prefix("range: bytes="))
                     .and_then(|r| r.trim_end_matches('-').trim().parse::<usize>().ok())
-                    .filter(|_| ranges);
-                let (status, slice) = match start {
-                    Some(st) => ("206 Partial Content", &data[st..]),
-                    None => ("200 OK", &data[..]),
+                    .filter(|_| mode.ranges);
+                if mode.unavailable_first && nth == 0 {
+                    let _ = s
+                        .write_all(b"HTTP/1.1 503 Service Unavailable\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")
+                        .await;
+                    continue;
+                }
+                let start = match start {
+                    Some(_) if mode.wrong_range_first && nth == 0 => Some(0),
+                    st => st,
+                };
+                let (status, slice, range) = match start {
+                    Some(st) => (
+                        "206 Partial Content",
+                        &data[st..],
+                        format!(
+                            "content-range: bytes {st}-{}/{}\r\n",
+                            data.len() - 1,
+                            data.len()
+                        ),
+                    ),
+                    None => ("200 OK", &data[..], String::new()),
                 };
                 let head = format!(
-                    "HTTP/1.1 {status}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                    "HTTP/1.1 {status}\r\ncontent-length: {}\r\n{range}connection: close\r\n\r\n",
                     slice.len()
                 );
                 let _ = s.write_all(head.as_bytes()).await;
-                let slice = if cut_first && nth == 0 {
+                let slice = if mode.cut_first && nth == 0 {
                     &slice[..slice.len() / 2]
                 } else {
                     slice
@@ -389,7 +533,15 @@ mod tests {
     #[tokio::test]
     async fn retries_and_resumes_after_dropped_connection() {
         let data = body();
-        let (url, hits) = server_with(data.clone(), true, true).await;
+        let (url, hits) = server_with(
+            data.clone(),
+            Mode {
+                ranges: true,
+                cut_first: true,
+                ..Default::default()
+            },
+        )
+        .await;
         let dest = tmp("dropped").join("m.gguf");
         download_to(
             &reqwest::Client::new(),
@@ -405,6 +557,80 @@ mod tests {
         .unwrap();
         assert_eq!(std::fs::read(&dest).unwrap(), data);
         assert_eq!(hits.load(Ordering::SeqCst), 2);
+    }
+
+    async fn get(url: &str, data: &[u8], dest: &Path) -> Result<PathBuf, DownloadError> {
+        download_to(
+            &reqwest::Client::new(),
+            &Expected {
+                url,
+                size: data.len() as u64,
+                sha256: &sha(data),
+            },
+            dest,
+            &mut |_, _| {},
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn wrong_content_range_restarts_cleanly() {
+        let data = body();
+        let (url, hits) = server_with(
+            data.clone(),
+            Mode {
+                ranges: true,
+                wrong_range_first: true,
+                ..Default::default()
+            },
+        )
+        .await;
+        let dest = tmp("wrongrange").join("m.gguf");
+        std::fs::write(part(&dest), &data[..5000]).unwrap();
+        get(&url, &data, &dest).await.unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), data);
+        assert_eq!(hits.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn retries_5xx() {
+        let data = body();
+        let (url, hits) = server_with(
+            data.clone(),
+            Mode {
+                ranges: true,
+                unavailable_first: true,
+                ..Default::default()
+            },
+        )
+        .await;
+        let dest = tmp("503").join("m.gguf");
+        get(&url, &data, &dest).await.unwrap();
+        assert_eq!(hits.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn second_concurrent_pull_is_busy() {
+        let dest = tmp("busy").join("m.gguf");
+        let _held = lock(&dest).unwrap();
+        assert!(matches!(lock(&dest), Err(DownloadError::Busy(_))));
+    }
+
+    #[test]
+    fn https_only_client_refuses_http() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let e = rt
+            .block_on(client().unwrap().get("http://127.0.0.1:9/x").send())
+            .unwrap_err();
+        assert!(e.is_builder() || e.to_string().contains("https"), "{e}");
+    }
+
+    #[test]
+    fn free_space_is_known_for_temp_dir() {
+        assert!(free_space(&std::env::temp_dir()).is_some_and(|f| f > 0));
     }
 
     #[tokio::test]
