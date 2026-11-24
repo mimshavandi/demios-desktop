@@ -142,6 +142,7 @@ async fn run(inner: Arc<Inner>, req: ChatRequest, tx: Emit) {
             body: Some(body(&inner, &model, &req)),
             optional: OPTIONAL.to_vec(),
             secret: inner.key(),
+            first_byte: inner.cfg.first_byte_timeout,
         })
         .await?;
         let mut blocks: HashMap<u64, Block> = HashMap::new();
@@ -279,6 +280,7 @@ impl ProviderAdapter for Anthropic {
                 body: None,
                 optional: vec![],
                 secret: self.0.key(),
+                first_byte: self.0.cfg.first_byte_timeout,
             })
             .await?;
             let v = http::json(id, resp).await?;

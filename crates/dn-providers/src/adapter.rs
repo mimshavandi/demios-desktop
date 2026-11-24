@@ -96,14 +96,25 @@ impl ServerFamily {
 }
 
 /// Best-effort guess of an OpenAI-compatible server's family: `GET {base}/models` and its
-/// `owned_by`, else Ollama's native `GET /api/version`. Any failure is `Unknown`.
+/// `owned_by`, else Ollama's native `GET /api/version`. Any failure is `Unknown`. Bounded to
+/// 3 s in total so loading a model is never held up; other provider kinds return `Unknown`
+/// without a request.
 pub async fn detect_server_family(cfg: &ProviderConfig) -> ServerFamily {
+    if cfg.kind != ProviderKind::OpenAiCompatible {
+        return ServerFamily::Unknown;
+    }
+    tokio::time::timeout(Duration::from_secs(3), probe_family(cfg))
+        .await
+        .unwrap_or(ServerFamily::Unknown)
+}
+
+async fn probe_family(cfg: &ProviderConfig) -> ServerFamily {
     let Ok(base) = cfg.base_url() else {
         return ServerFamily::Unknown;
     };
     let Ok(client) = reqwest::Client::builder()
-        .connect_timeout(cfg.connect_timeout)
-        .timeout(Duration::from_secs(5))
+        .connect_timeout(Duration::from_secs(2))
+        .timeout(Duration::from_secs(3))
         .build()
     else {
         return ServerFamily::Unknown;

@@ -1011,3 +1011,69 @@ async fn detects_server_family() {
         ServerFamily::Unknown
     );
 }
+
+#[tokio::test]
+async fn server_withholding_headers_hits_first_byte_timeout() {
+    use std::time::Duration;
+    // Ollama-style: nothing at all (not even the status line) until the first token.
+    let mut r = Reply::sse("openai_compat/reasoning_text.sse");
+    r.hold_head = Some(Duration::from_secs(5));
+    let srv = serve(vec![r]).await;
+    let p = build(
+        compat(&srv).with_stream_timeouts(Duration::from_millis(200), Duration::from_secs(5)),
+    )
+    .unwrap();
+    let t0 = std::time::Instant::now();
+    let err = collect(&*p, request("remote:local:qwen3:8b", "chat.reply"))
+        .await
+        .unwrap_err();
+    retryable_unavailable(&err, "first-byte timeout");
+    assert!(t0.elapsed() < Duration::from_secs(3));
+}
+
+#[tokio::test]
+async fn idle_timer_resets_on_every_chunk() {
+    use std::time::Duration;
+    // Pieces 80 ms apart for well over 150 ms in total, with a 150 ms idle timeout.
+    let mut r = Reply::sse("openai_compat/reasoning_text.sse");
+    r.pace = Some(Duration::from_millis(80));
+    let srv = serve(vec![r]).await;
+    let p = build(
+        compat(&srv).with_stream_timeouts(Duration::from_secs(2), Duration::from_millis(150)),
+    )
+    .unwrap();
+    let t0 = std::time::Instant::now();
+    let evs = collect(&*p, request("remote:local:qwen3:8b", "chat.reply"))
+        .await
+        .unwrap();
+    assert_eq!(text(&evs), "Hi there!");
+    assert!(
+        t0.elapsed() > Duration::from_millis(150),
+        "stream must outlast one idle period"
+    );
+}
+
+#[tokio::test]
+async fn official_openai_never_gets_a_local_thinking_switch() {
+    let srv = serve(vec![Reply::sse("openai/text.sse")]).await;
+    let p = build(
+        cfg("openai", ProviderKind::OpenAi, &srv.base)
+            .with_server_family(dn_providers::ServerFamily::LlamaCpp),
+    )
+    .unwrap();
+    collect(&*p, request("byok:openai:gpt-4o-mini", "chat.reply"))
+        .await
+        .unwrap();
+    let b = &srv.requests()[0].body;
+    assert!(b.get("chat_template_kwargs").is_none(), "{b}");
+    assert!(b.get("think").is_none(), "{b}");
+}
+
+#[tokio::test]
+async fn detection_skips_non_compatible_providers() {
+    use dn_providers::{ServerFamily, detect_server_family};
+    let srv = serve(vec![]).await;
+    let c = cfg("openai", ProviderKind::OpenAi, &srv.base);
+    assert_eq!(detect_server_family(&c).await, ServerFamily::Unknown);
+    assert!(srv.requests().is_empty());
+}

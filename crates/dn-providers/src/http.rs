@@ -51,6 +51,9 @@ pub(crate) struct Call<'a> {
     pub optional: Vec<OptionalParam>,
     /// The key, so we can scrub it from anything echoed back in error bodies.
     pub secret: Option<&'a str>,
+    /// Limit on waiting for the response head. Some servers (Ollama) send headers only
+    /// with the first token, so this is the same allowance as the first body byte.
+    pub first_byte: std::time::Duration,
 }
 
 /// Sends the request. On a 400 that names one of `optional`, removes (or renames) that
@@ -75,9 +78,9 @@ pub(crate) async fn send(mut call: Call<'_>) -> Result<reqwest::Response, CoreEr
                 .header("content-type", "application/json")
                 .body(serde_json::to_vec(body).unwrap_or_default());
         }
-        let resp = rb
-            .send()
+        let resp = tokio::time::timeout(call.first_byte, rb.send())
             .await
+            .map_err(|_| stalled(call.provider_id, call.first_byte, false))?
             .map_err(|e| network_error(call.provider_id, &e))?;
         let status = resp.status();
         if status.is_success() {
