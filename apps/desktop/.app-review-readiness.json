@@ -1,0 +1,36 @@
+{
+  "build": "0.1.0 (unreleased, main d5f9463)",
+  "checked_on": "2026-11-24",
+  "enforce": false,
+  "checks": {
+    "demo_account": "n/a",
+    "live_backend": "n/a",
+    "review_notes": "todo",
+    "screenshots_match_build": "todo",
+    "account_deletion_device_test": "n/a",
+    "privacy_labels_match_runtime": "todo",
+    "iap_reachable_by_reviewer": "n/a"
+  },
+  "notes": {
+    "demo_account": "No accounts exist. The reviewer path is a local model download or an owner-provided spend-capped key (docs/store/review-notes.md section 3). It works only once local models are wired into the shell (audit S-07, S-08).",
+    "live_backend": "There is no Demios backend. Network services are the user's own provider, Hugging Face and MCP servers the user adds.",
+    "review_notes": "Draft in docs/store/review-notes.md. Placeholders and features not yet in the shell must be resolved before submission.",
+    "screenshots_match_build": "Existing screenshots in apps/desktop/docs/screenshots are dev captures with the fake model. Recapture from the release build (audit S-24).",
+    "account_deletion_device_test": "No accounts. Local data deletion is tracked separately (audit S-27).",
+    "privacy_labels_match_runtime": "Declaration drafted in docs/store/readiness-audit.md (no data collected by the developer). Still to do: verify against the release build's network traffic, including the update check once it exists.",
+    "iap_reachable_by_reviewer": "Free app with no in-app purchases (D-018)."
+  },
+  "targets": ["macos-direct", "microsoft-store-msix", "windows-direct", "flathub"],
+  "desktop_checks": {
+    "macos_signed_notarized_stapled": "todo",
+    "windows_authenticode_signed": "todo",
+    "msix_identity_matches_partner_center": "todo",
+    "flathub_manifest_builds_offline": "todo",
+    "privacy_policy_published_and_linked": "todo",
+    "third_party_notices_in_app": "todo",
+    "ai_disclosure_and_output_marking": "todo",
+    "updater_signed_and_off_in_store_builds": "todo",
+    "age_rating_questionnaires_answered": "todo"
+  },
+  "_comment": "The guard reads only build, checked_on, enforce, checks and notes. targets and desktop_checks track the desktop gates from docs/store/readiness-audit.md, which the mobile-oriented guard does not know about."
+}
