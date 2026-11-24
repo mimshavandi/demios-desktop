@@ -2,9 +2,12 @@
 // renderer), (3) the demo/test page. No CDN at runtime: every library is bundled from
 // node_modules at the exact versions pinned in package.json.
 import { build } from "esbuild";
-import { copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+// mermaid optionally uses elkjs (EPL-2.0 OR GPL-3.0): it is stubbed out, and the build fails
+// if any of it gets in (runtimes and every file of dist/).
+import { elkProblems, noElk } from "./no-elk.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const out = join(root, "build", "runtime");
@@ -15,20 +18,6 @@ await rm(join(root, "build"), { recursive: true, force: true });
 await rm(dist, { recursive: true, force: true });
 await mkdir(out, { recursive: true });
 
-// mermaid optionally uses elkjs (EPL-2.0 OR GPL-3.0) for its "elk" layout. Keep it out of the
-// bundle (licence policy, ADR-0009); diagrams asking for that layout get a clear error.
-// The licences check (apps/desktop/licenses-extra.json, `npm_exclude`) relies on this stub:
-// if it goes away, remove elkjs from that list too.
-const noElk = {
-  name: "no-elkjs",
-  setup(b) {
-    b.onResolve({ filter: /^elkjs(\/|$)/ }, () => ({ path: "elkjs", namespace: "stub" }));
-    b.onLoad({ filter: /.*/, namespace: "stub" }, () => ({
-      contents: "export default class ELK { layout() { return Promise.reject(new Error('The ELK layout is not available in artifacts; use the default layout.')); } }",
-      loader: "js",
-    }));
-  },
-};
 
 const sizes = {};
 for (const [name, file] of Object.entries(RUNTIMES)) {
@@ -43,9 +32,12 @@ for (const [name, file] of Object.entries(RUNTIMES)) {
     legalComments: "eof",
     plugins: [noElk],
     write: false,
+    metafile: true,
     logLevel: "warning",
   });
   const code = r.outputFiles[0].text;
+  const elk = elkProblems(r.metafile, { [name]: code });
+  if (elk.length > 0) throw new Error(`elkjs must not ship (EPL-2.0 OR GPL-3.0): ${elk.join("; ")}`);
   if (/<\/script/i.test(code)) throw new Error(`runtime ${name} contains </script`);
   await writeFile(join(out, `${name}.js`), code);
   sizes[name] = `${(code.length / 1024).toFixed(0)} KiB`;
@@ -103,4 +95,13 @@ await writeFile(
   join(dist, "frame", "csp.json"),
   JSON.stringify({ strict: artifactCsp(false), network: artifactCsp(true) }, null, 2) + "\n",
 );
+const shipped = {};
+for (const f of await readdir(dist, { recursive: true, withFileTypes: true })) {
+  if (f.isFile() && /\.(js|html)$/.test(f.name)) {
+    const p = join(f.parentPath, f.name);
+    shipped[p.slice(root.length + 1)] = await readFile(p, "utf8");
+  }
+}
+const leaked = elkProblems(undefined, shipped);
+if (leaked.length > 0) throw new Error(`elkjs must not ship (EPL-2.0 OR GPL-3.0): ${leaked.join("; ")}`);
 console.log("runtimes:", sizes);
