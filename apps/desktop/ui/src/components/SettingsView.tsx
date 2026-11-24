@@ -544,7 +544,11 @@ function GeneralPage({ api, info }: { api: Api; info: AppInfo | null }) {
             {summary === null
               ? "every chat"
               : `${summary.conversations} ${summary.conversations === 1 ? "chat" : "chats"}`}
-            {" "}(and recently deleted ones), settings and tool history
+            {" "}(and recently deleted ones),{" "}
+            {summary === null
+              ? "their artifacts"
+              : `${summary.artifacts} ${summary.artifacts === 1 ? "artifact" : "artifacts"}`}
+            , settings and tool history
           </li>
           <li>
             Downloaded models{modelsDir !== null ? ` in ${modelsDir}` : ""}

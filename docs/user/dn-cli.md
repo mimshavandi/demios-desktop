@@ -1,6 +1,6 @@
 # The dn command-line tool
 
-`dn` runs and manages models from the terminal. It uses the same model folder as the app, so catalogue models you download with `dn models pull <id>` show up in the app too. Models you download from Hugging Face with `dn` work only in `dn` for now; the app doesn't list them yet.
+`dn` runs and manages models from the terminal. It uses the same model folder as the app, so models you download with `dn`, from the catalogue or from Hugging Face, show up in the app too.
 
 ## Install
 

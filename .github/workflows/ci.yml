@@ -48,6 +48,10 @@ jobs:
         with:
           node-version: 22
       - run: node ui/design-tokens/scripts/build.mjs --check
+      # No raw colours, px font sizes, spacing, radii, shadows or z-index in UI code (T-DES-02):
+      # a ratchet against ui/design-tokens/lint-baseline.json.
+      - run: node --test ui/design-tokens/scripts/lint-ui.test.mjs
+      - run: node ui/design-tokens/scripts/lint-ui.mjs
   ui:
     runs-on: ubuntu-latest
     defaults:
@@ -187,7 +191,8 @@ jobs:
         run: |
           $debug = '--remote-debugging-port=0 --enable-automation'
           $wryDefault = '--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection'
-          $conf = Get-Content apps/desktop/tauri.conf.json -Raw | ConvertFrom-Json
+          # The Windows config's window (it carries the WebRTC policy switch, T-ART-06).
+          $conf = Get-Content apps/desktop/tauri.windows.conf.json -Raw | ConvertFrom-Json
           $windows = @($conf.app.windows | ForEach-Object {
             $base = if ($_.additionalBrowserArgs) { $_.additionalBrowserArgs } else { $wryDefault }
             $_ | Add-Member -NotePropertyName additionalBrowserArgs -NotePropertyValue "$base $debug" -Force -PassThru

@@ -26,7 +26,9 @@ await view.setArtifact(artifact); // dn_core::artifact::Artifact as JSON
 2. Main webview CSP: `frame-src <that origin>`; no inline scripts needed by this package (styles use constructable stylesheets).
 3. Ship `dist/index.js` and `dist/chunks/*` with the app. Renderer chunks load lazily: mermaid (≈5 MB) only when a diagram is shown.
 4. Follow shell requirements S1–S8 in the threat model (IPC main-frame only, WebRTC disabled in the engine, every `message` listener checks its source, …).
-5. The network toggle (`allowNetwork` / `onAllowNetwork`) opens `https:` to any host, including `https://localhost` and the LAN; the pane asks for a second, explicit confirmation.
+5. On Windows, WebView2 also runs the app's init scripts in the frame. The shell's boot script removes Tauri's IPC globals before any artifact code runs. If it can't, it posts `shell-refused`, and the pane shows "This artifact can't be shown safely in this window." (threat model R8).
+6. AI disclosure: pass `madeBy(version)` for the "Made by <model>" line and `mark(artifact, version)` to add the host's machine-readable marker to what is rendered. Stored versions are never changed. A leading front-matter block in Markdown is not shown.
+7. The network toggle (`allowNetwork` / `onAllowNetwork`) opens `https:` to any host, including `https://localhost` and the LAN; the pane asks for a second, explicit confirmation.
 
 ## React artifacts
 

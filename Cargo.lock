@@ -1067,6 +1067,7 @@ name = "demios-desktop"
 version = "0.1.0"
 dependencies = [
  "dn-agent",
+ "dn-artifacts",
  "dn-core",
  "dn-inference",
  "dn-models",

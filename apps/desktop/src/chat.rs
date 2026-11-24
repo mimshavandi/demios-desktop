@@ -4,6 +4,7 @@
 //! in order. Independent of Tauri so it can be tested with a plain event sink.
 
 use crate::agent::model_error;
+use crate::artifacts::{ArtifactMode, ArtifactTools, FencedRun, RunTools};
 use crate::error::{IpcError, IpcResult};
 use crate::state::AppState;
 use dn_agent::{AgentEvent, CancelToken, LoopConfig, RunOutcome, StopReason};
@@ -55,6 +56,22 @@ pub enum ChatEvent {
         message_id: Id,
         message: String,
         recovery: Vec<RecoveryAction>,
+    },
+    /// A fenced `<artifact>` block from a model without tool calling wasn't saved (cut off,
+    /// rejected, or refused by the store); `reason` says why.
+    ArtifactNotSaved {
+        message_id: Id,
+        conversation_id: Id,
+        title: String,
+        reason: String,
+    },
+    /// An artifact was created or got a new version in this turn (T-ART-06).
+    ArtifactChanged {
+        message_id: Id,
+        conversation_id: Id,
+        artifact_id: Id,
+        title: String,
+        version: u32,
     },
 }
 
@@ -154,6 +171,7 @@ pub fn send(
     // must get "busy", not load the weights again.
     let reservation = state.reserve(conversation_id)?;
     let (model, backend) = model_for_turn(state)?;
+    let mode = ArtifactMode::for_model(state, &model);
     let (user, assistant, title, history) = {
         let db = state.db()?;
         let conv = store::get_conversation(&db, conversation_id)?;
@@ -168,7 +186,7 @@ pub fn send(
             conversation_id,
             NewMessage::assistant_placeholder(Some(model.to_string())),
         )?;
-        let history = history(state, &db, conversation_id, assistant.id)?;
+        let history = history(state, &db, conversation_id, assistant.id, mode)?;
         (user, assistant, title, history)
     };
     start(
@@ -176,6 +194,7 @@ pub fn send(
         reservation,
         model,
         backend,
+        mode,
         &assistant,
         history,
         sink,
@@ -198,6 +217,7 @@ pub fn regenerate(
     // must get "busy", not load the weights again.
     let reservation = state.reserve(conversation_id)?;
     let (model, backend) = model_for_turn(state)?;
+    let mode = ArtifactMode::for_model(state, &model);
     let (assistant, history) = {
         let db = state.db()?;
         let msgs = store::list_messages(&db, conversation_id)?;
@@ -214,7 +234,7 @@ pub fn regenerate(
             conversation_id,
             NewMessage::assistant_placeholder(Some(model.to_string())),
         )?;
-        let history = history(state, &db, conversation_id, assistant.id)?;
+        let history = history(state, &db, conversation_id, assistant.id, mode)?;
         (assistant, history)
     };
     start(
@@ -222,6 +242,7 @@ pub fn regenerate(
         reservation,
         model,
         backend,
+        mode,
         &assistant,
         history,
         sink,
@@ -239,15 +260,26 @@ pub fn stop(state: &AppState, conversation_id: Id) -> bool {
 }
 
 /// System prompt + stored conversation, minus the new placeholder and failed empty turns.
+/// Models without tool calling get the fenced artifact format in the system prompt.
 fn history(
     state: &AppState,
     db: &dn_store::Connection,
     conversation_id: Id,
     exclude: Id,
+    mode: ArtifactMode,
 ) -> IpcResult<Vec<ChatMessage>> {
     let mut out = vec![];
-    if let Some(p) = state.agent.system_prompt() {
-        out.push(ChatMessage::text(Role::System, p));
+    let fenced = (mode == ArtifactMode::Fenced
+        && state.agent.manifest.allows_tool("artifact.create"))
+    .then_some(dn_artifacts::protocol::FENCED_INSTRUCTIONS);
+    let system: Vec<&str> = state
+        .agent
+        .system_prompt()
+        .into_iter()
+        .chain(fenced)
+        .collect();
+    if !system.is_empty() {
+        out.push(ChatMessage::text(Role::System, system.join("\n\n")));
     }
     out.extend(
         store::list_messages(db, conversation_id)?
@@ -259,11 +291,13 @@ fn history(
     Ok(out)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn start(
     state: &Arc<AppState>,
     reservation: crate::state::Reservation,
     model: ModelRef,
     backend: Arc<dyn ChatModel>,
+    mode: ArtifactMode,
     assistant: &StoredMessage,
     history: Vec<ChatMessage>,
     sink: impl EventSink,
@@ -275,9 +309,33 @@ fn start(
     let state = Arc::clone(state);
     let message_id = assistant.id;
     let model_ref = model.to_string();
+    let sink: Arc<dyn EventSink> = Arc::new(sink);
+    // Exactly one artifact protocol per run (ADR-0004): tools for tool-capable models, the
+    // fenced parser for the rest.
+    let tools = RunTools {
+        base: Arc::clone(&state.tools),
+        artifacts: (mode == ArtifactMode::Tools).then(|| ArtifactTools {
+            state: Arc::clone(&state),
+            conversation_id,
+            message_id,
+            sink: Arc::clone(&sink),
+        }),
+    };
+    let fenced = (mode == ArtifactMode::Fenced
+        && state.agent.manifest.allows_tool("artifact.create"))
+    .then(|| {
+        FencedRun::start(
+            Arc::clone(&state),
+            conversation_id,
+            message_id,
+            Arc::clone(&sink),
+        )
+    });
     tauri::async_runtime::spawn(async move {
-        let (result, failed_calls) =
-            run(&state, &*backend, &cfg, history, &cancel, message_id, &sink).await;
+        let (result, failed_calls) = run(
+            &*backend, &tools, fenced, &cfg, history, &cancel, &state, message_id, &*sink,
+        )
+        .await;
         let st = Arc::clone(&state);
         let live = state.live_text(message_id);
         // SQLite is blocking: keep it off the async workers.
@@ -312,20 +370,23 @@ fn start(
     });
 }
 
-/// Runs the agent loop and streams its events.
+/// Runs the agent loop and streams its events. With `fenced`, the model's text also goes
+/// through the fenced artifact parser (models without tool calling only).
+#[allow(clippy::too_many_arguments)]
 async fn run(
-    state: &AppState,
     model: &dyn ChatModel,
+    tools: &RunTools,
+    mut fenced: Option<FencedRun>,
     cfg: &LoopConfig,
     history: Vec<ChatMessage>,
     cancel: &CancelToken,
+    state: &AppState,
     message_id: Id,
-    sink: &impl EventSink,
+    sink: &dyn EventSink,
 ) -> (
     Result<RunOutcome, CoreError>,
     std::collections::HashSet<String>,
 ) {
-    let tools = Arc::clone(&state.tools);
     // Tool calls that came back as errors: their stored result rows say so.
     let mut failed = std::collections::HashSet::new();
     let mut on_event = |ev: AgentEvent| match ev {
@@ -340,6 +401,9 @@ async fn run(
             });
         }
         AgentEvent::TextDelta { text, .. } => {
+            if let Some(f) = fenced.as_mut() {
+                f.push(&text);
+            }
             let offset = state.append_live(message_id, &text);
             sink.send(ChatEvent::TextDelta {
                 message_id,
@@ -371,7 +435,10 @@ async fn run(
         }
         AgentEvent::StepStarted { .. } | AgentEvent::StepFinished { .. } => {}
     };
-    let result = dn_agent::run_loop(model, &*tools, cfg, history, cancel, &mut on_event).await;
+    let result = dn_agent::run_loop(model, tools, cfg, history, cancel, &mut on_event).await;
+    if let Some(f) = fenced {
+        f.finish().await;
+    }
     (result, failed)
 }
 
@@ -1005,6 +1072,263 @@ mod tests {
         let tool = tool.expect("tool result stored");
         assert_eq!(tool.status, MessageStatus::Error);
         assert!(tool.text().contains("calculator offline"));
+    }
+
+    // ---- artifacts (T-ART-06)
+
+    /// App state with the repo agent (its manifest allows `artifact.*`) and `model` as the chat model.
+    fn artifact_state(model: &str, backend: Arc<dyn ChatModel>, tools: bool) -> Arc<AppState> {
+        let mut models = crate::models::ModelRegistry::default();
+        if tools {
+            models.register(model.parse().unwrap(), backend);
+        } else {
+            models.register_without_tools(model.parse().unwrap(), backend);
+        }
+        let mut s = AppState::in_memory().unwrap();
+        s.models = models;
+        s.agent = crate::agent::Agent::load(crate::agent::skills_dir(None).as_deref());
+        let st = Arc::new(s);
+        let mut settings = crate::settings::Settings::default();
+        settings.slots.insert("chat".into(), model.into());
+        st.save_settings(&settings).unwrap();
+        st
+    }
+
+    async fn turn(st: &Arc<AppState>, conv: Id, text: &str) -> (TurnStarted, Vec<ChatEvent>) {
+        let (events, s) = sink();
+        let started = send(st, conv, text.into(), s).unwrap();
+        for _ in 0..400 {
+            if events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|e| matches!(e, ChatEvent::Done { .. } | ChatEvent::Error { .. }))
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        wait_idle(st, conv).await;
+        let evs = events.lock().unwrap().clone();
+        (started, evs)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn fake_model_creates_updates_and_restores_an_artifact() {
+        let st = artifact_state(
+            crate::fake::FAKE_MODEL_REF,
+            Arc::new(FakeChatModel {
+                delay: Duration::ZERO,
+            }),
+            true,
+        );
+        let conv = st.create_conversation().unwrap();
+
+        let (started, evs) = turn(&st, conv.id, "Make an HTML artifact").await;
+        let changed: Vec<_> = evs
+            .iter()
+            .filter_map(|e| match e {
+                ChatEvent::ArtifactChanged {
+                    artifact_id,
+                    version,
+                    message_id,
+                    ..
+                } => Some((*artifact_id, *version, *message_id)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(changed.len(), 1, "{evs:?}");
+        let (id, v, msg) = changed[0];
+        assert_eq!(v, 1);
+        assert_eq!(msg, started.assistant_message.id);
+
+        let a = crate::artifacts::get(&st, conv.id, id).unwrap();
+        assert_eq!(a.versions.len(), 1);
+        assert!(
+            a.versions[0]
+                .version
+                .content
+                .contains(crate::fake::FAKE_ARTIFACT_V1)
+        );
+        // Provenance for "Made by <model>".
+        assert_eq!(
+            a.versions[0].model.as_deref(),
+            Some(crate::fake::FAKE_MODEL_REF)
+        );
+
+        turn(&st, conv.id, "Please update the artifact").await;
+        let a = crate::artifacts::get(&st, conv.id, id).unwrap();
+        assert_eq!(a.versions.len(), 2);
+        assert!(
+            a.versions[1]
+                .version
+                .content
+                .contains(crate::fake::FAKE_ARTIFACT_V2)
+        );
+
+        let a = crate::artifacts::rollback(&st, conv.id, id, 1).unwrap();
+        let v3 = &a.versions[2].version;
+        assert_eq!(v3.n, 3);
+        assert_eq!(v3.parent_n, Some(1));
+        assert_eq!(v3.author, dn_core::artifact::Author::User);
+        assert_eq!(v3.content, a.versions[0].version.content);
+        assert_eq!(a.versions[2].model, None);
+
+        // Another conversation can't read it.
+        let other = st.create_conversation().unwrap();
+        assert_eq!(
+            crate::artifacts::get(&st, other.id, id).unwrap_err().code,
+            "not_found"
+        );
+        assert_eq!(crate::artifacts::list(&st, conv.id).unwrap().len(), 1);
+    }
+
+    const FENCED_REPLY: &str = "Here it is:\n<artifact id=\"page\" type=\"html\" title=\"Fenced page\">\n<p>fenced</p>\n</artifact>\nDone.";
+
+    /// Answers with `FENCED_REPLY` and records what it was sent.
+    #[derive(Default)]
+    struct Recorder {
+        requests: Mutex<Vec<dn_core::chat::ChatRequest>>,
+        /// Also try an `artifact_create` call (a tool-less model must not get one through).
+        call_tool: bool,
+    }
+
+    impl ChatModel for Recorder {
+        fn chat(&self, req: dn_core::chat::ChatRequest) -> dn_core::chat::EventStream {
+            use dn_core::chat::{StreamEvent, ToolCall};
+            let answered = req.messages.iter().any(|m| m.role == Role::Tool);
+            self.requests.lock().unwrap().push(req);
+            let mut events = vec![Ok(StreamEvent::TextDelta {
+                text: FENCED_REPLY.into(),
+            })];
+            if self.call_tool && !answered {
+                events.push(Ok(StreamEvent::ToolCall {
+                    call: ToolCall {
+                        id: "c1".into(),
+                        name: "artifact_create".into(),
+                        arguments: serde_json::json!({
+                            "type": "html", "title": "Sneaky", "content": "<p>x</p>"
+                        }),
+                    },
+                }));
+            }
+            events.push(Ok(StreamEvent::Done {
+                finish_reason: FinishReason::Stop,
+                usage: Usage::default(),
+            }));
+            Box::pin(Iter(events.into_iter()))
+        }
+    }
+
+    fn system_text(req: &dn_core::chat::ChatRequest) -> String {
+        req.messages
+            .iter()
+            .filter(|m| m.role == Role::System)
+            .map(|m| {
+                m.content
+                    .iter()
+                    .map(|p| match p {
+                        ContentPart::Text { text } => text.as_str(),
+                        ContentPart::Image { .. } => "",
+                    })
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tool_capable_models_never_get_the_fenced_parser() {
+        let rec = Arc::new(Recorder::default());
+        let st = artifact_state("local:scripted", rec.clone(), true);
+        let conv = st.create_conversation().unwrap();
+        let (_, evs) = turn(&st, conv.id, "make a page").await;
+        assert!(
+            !evs.iter()
+                .any(|e| matches!(e, ChatEvent::ArtifactChanged { .. })),
+            "{evs:?}"
+        );
+        assert!(crate::artifacts::list(&st, conv.id).unwrap().is_empty());
+        let reqs = rec.requests.lock().unwrap();
+        let names: Vec<&str> = reqs[0].tools.iter().map(|t| t.name.as_str()).collect();
+        for t in ["artifact_create", "artifact_update", "artifact_rewrite"] {
+            assert!(names.contains(&t), "{names:?}");
+        }
+        assert!(!system_text(&reqs[0]).contains("<artifact id="));
+    }
+
+    /// Writes an `<artifact>` block that never closes.
+    struct CutOff;
+    impl ChatModel for CutOff {
+        fn chat(&self, _req: dn_core::chat::ChatRequest) -> dn_core::chat::EventStream {
+            use dn_core::chat::StreamEvent;
+            Box::pin(Iter(
+                vec![
+                    Ok(StreamEvent::TextDelta {
+                        text: "<artifact id=\"p\" type=\"html\" title=\"Cut\">\n<p>half".into(),
+                    }),
+                    Ok(StreamEvent::Done {
+                        finish_reason: FinishReason::Length,
+                        usage: Usage::default(),
+                    }),
+                ]
+                .into_iter(),
+            ))
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn unsaved_fenced_blocks_are_reported() {
+        let st = artifact_state("local:plain", Arc::new(CutOff), false);
+        let conv = st.create_conversation().unwrap();
+        let (_, evs) = turn(&st, conv.id, "make a page").await;
+        assert!(
+            evs.iter().any(|e| matches!(e,
+                ChatEvent::ArtifactNotSaved { title, reason, .. }
+                    if title == "Cut" && reason.contains("not closed"))),
+            "{evs:?}"
+        );
+        assert!(crate::artifacts::list(&st, conv.id).unwrap().is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tool_less_models_use_the_fenced_format_only() {
+        let rec = Arc::new(Recorder {
+            call_tool: true,
+            ..Default::default()
+        });
+        let st = artifact_state("local:plain", rec.clone(), false);
+        let conv = st.create_conversation().unwrap();
+        let (started, evs) = turn(&st, conv.id, "make a page").await;
+        assert!(
+            evs.iter().any(
+                |e| matches!(e, ChatEvent::ArtifactChanged { title, .. } if title == "Fenced page")
+            ),
+            "{evs:?}"
+        );
+        let list = crate::artifacts::list(&st, conv.id).unwrap();
+        assert_eq!(list.len(), 1, "only the fenced block, not the tool call");
+        let a = crate::artifacts::get(&st, conv.id, list[0].id).unwrap();
+        assert_eq!(a.versions[0].version.content, "<p>fenced</p>");
+        assert_eq!(
+            a.versions[0].version.message_id,
+            Some(started.assistant_message.id)
+        );
+        let reqs = rec.requests.lock().unwrap();
+        assert!(
+            !reqs[0]
+                .tools
+                .iter()
+                .any(|t| t.name.starts_with("artifact_")),
+            "no artifact tools for a tool-less model"
+        );
+        assert!(system_text(&reqs[0]).contains(dn_artifacts::protocol::FENCED_INSTRUCTIONS));
+        // The stray tool call was refused, not run.
+        let msgs = store::list_messages(&st.db().unwrap(), conv.id).unwrap();
+        let tool = msgs
+            .iter()
+            .find(|m| m.role == Role::Tool)
+            .expect("tool result row");
+        assert!(tool.text().contains("isn't available"), "{}", tool.text());
     }
 
     #[tokio::test(flavor = "multi_thread")]

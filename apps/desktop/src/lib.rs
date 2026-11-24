@@ -6,12 +6,14 @@
 compile_error!("the dev fake model must never be in a release build");
 
 pub mod agent;
+pub mod artifacts;
 pub mod chat;
 pub mod commands;
 pub mod error;
 #[cfg(any(fake_model, test))]
 pub mod fake;
 pub mod hub;
+pub mod links;
 pub mod local;
 pub mod mcp;
 pub mod models;
@@ -41,6 +43,11 @@ pub fn allowed_navigation(url: &tauri::Url) -> bool {
         "tauri" => host == "localhost",
         // Windows serves the app from http(s)://tauri.localhost.
         "http" | "https" if host == "tauri.localhost" => true,
+        // The artifact frame shell (T-ART-06): WebKitGTK and WebView2 also ask about sub-frame
+        // navigations. Only the shell's own document; should the main window ever land there,
+        // the shell removes the IPC globals and refuses to run (it renders only for a parent).
+        "artifact" => host == "localhost" && artifacts::is_frame_path(url.path()),
+        "http" if host == "artifact.localhost" => artifacts::is_frame_path(url.path()),
         "http" if cfg!(debug_assertions) => {
             (host == "localhost" || host == "127.0.0.1") && url.port() == Some(1420)
         }
@@ -70,9 +77,12 @@ impl mcp::LaunchApprover for NativeLaunchApprover {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>> {
         use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
         let (tx, rx) = tokio::sync::oneshot::channel();
-        self.0
-            .dialog()
-            .message(request.dialog_text())
+        use tauri::Manager;
+        let mut dialog = self.0.dialog().message(request.dialog_text());
+        if let Some(w) = self.0.get_webview_window("main") {
+            dialog = dialog.parent(&w);
+        }
+        dialog
             .title("Start a tool server?")
             .kind(MessageDialogKind::Warning)
             .buttons(MessageDialogButtons::OkCancelCustom(
@@ -89,6 +99,10 @@ impl mcp::LaunchApprover for NativeLaunchApprover {
 pub fn run() {
     tauri::Builder::default()
         .plugin(navigation_guard())
+        // The artifact frame origin (T-ART-06): serves only the sandbox frame shell.
+        .register_uri_scheme_protocol(artifacts::SCHEME, |_ctx, request| {
+            artifacts::frame_response(&request)
+        })
         // Used from Rust only (`commands::report_problem`): no link-click handler is injected
         // into the webview, and none of its JS commands are granted (see capabilities).
         .plugin(
@@ -125,6 +139,7 @@ pub fn run() {
             commands::delete_all_local_data,
             commands::local_data_summary,
             commands::report_problem,
+            commands::open_link,
             commands::list_mcp_servers,
             commands::save_mcp_server,
             commands::remove_mcp_server,
@@ -161,6 +176,9 @@ pub fn run() {
             commands::respond_approval,
             commands::list_unknown_outcomes,
             commands::resolve_unknown_outcome,
+            commands::list_artifacts,
+            commands::get_artifact,
+            commands::rollback_artifact,
             commands::watch_local_models,
             commands::download_model,
             commands::pause_download,
@@ -206,6 +224,9 @@ mod tests {
             "tauri://localhost/",
             "http://tauri.localhost/index.html",
             "https://tauri.localhost/",
+            "artifact://localhost/frame/",
+            "artifact://localhost/frame/?net=1",
+            "http://artifact.localhost/frame/",
         ] {
             assert!(allowed_navigation(&ok.parse().unwrap()), "{ok}");
         }
@@ -215,6 +236,11 @@ mod tests {
             "file:///etc/passwd",
             "javascript:alert(1)",
             "tauri://evil/",
+            "artifact://localhost/",
+            "artifact://localhost/other",
+            "artifact://evil/frame/",
+            "https://artifact.localhost/frame/",
+            "http://artifact.localhost/x",
         ] {
             assert!(!allowed_navigation(&bad.parse().unwrap()), "{bad}");
         }

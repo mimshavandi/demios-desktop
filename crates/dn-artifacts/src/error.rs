@@ -37,6 +37,12 @@ pub enum ArtifactError {
         actual: usize,
     },
 
+    #[error(
+        "the limit of {max} {what} is reached, so this change was not saved; change an existing \
+         artifact instead of creating more, or start a new chat"
+    )]
+    TooMany { what: &'static str, max: usize },
+
     #[error("title is {actual} characters; use a short title (at most {max})")]
     TitleTooLong { max: usize, actual: usize },
 

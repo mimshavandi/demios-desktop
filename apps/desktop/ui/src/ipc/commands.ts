@@ -5,6 +5,8 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
   AppInfo,
   ApprovalDecision,
+  ArtifactDetail,
+  ArtifactSummary,
   LocalModelEvent,
   LocalModelRow,
   ToolEvent,
@@ -35,6 +37,7 @@ interface Commands {
   delete_all_local_data: { args: Record<string, never>; ret: null };
   local_data_summary: { args: Record<string, never>; ret: LocalDataSummary };
   report_problem: { args: { kind: ReportKind; messageId: Id | null }; ret: null };
+  open_link: { args: { url: string }; ret: boolean };
   list_mcp_servers: { args: Record<string, never>; ret: McpServersView };
   save_mcp_server: { args: { input: McpServerInput; editing: string | null }; ret: McpServersView };
   remove_mcp_server: { args: { serverId: string }; ret: McpServersView };
@@ -77,6 +80,12 @@ interface Commands {
   respond_approval: { args: { requestId: Id; decision: ApprovalDecision }; ret: null };
   list_unknown_outcomes: { args: { conversationId: Id | null }; ret: UnknownOutcome[] };
   resolve_unknown_outcome: { args: { key: string; happened: boolean }; ret: null };
+  list_artifacts: { args: { conversationId: Id }; ret: ArtifactSummary[] };
+  get_artifact: { args: { conversationId: Id; artifactId: Id }; ret: ArtifactDetail };
+  rollback_artifact: {
+    args: { conversationId: Id; artifactId: Id; toVersion: number };
+    ret: ArtifactDetail;
+  };
   watch_local_models: { args: { onEvent: Channel<LocalModelEvent> }; ret: LocalModelRow[] };
   download_model: { args: { modelId: string }; ret: null };
   pause_download: { args: { modelId: string }; ret: null };
@@ -134,6 +143,8 @@ export const api = {
    * backend reads the model from the database. No chat content is sent.
    */
   reportProblem: (kind: ReportKind, messageId: Id | null = null) => call("report_problem", { kind, messageId }),
+  /** Asks to open a link from an answer; the backend confirms with the full URL first. */
+  openLink: (url: string) => call("open_link", { url }),
   listConversations: () => call("list_conversations", {}),
   createConversation: () => call("create_conversation", {}),
   renameConversation: (conversationId: Id, title: string) =>
@@ -161,6 +172,11 @@ export const api = {
     call("list_unknown_outcomes", { conversationId }),
   resolveUnknownOutcome: (key: string, happened: boolean) =>
     call("resolve_unknown_outcome", { key, happened }),
+  listArtifacts: (conversationId: Id) => call("list_artifacts", { conversationId }),
+  getArtifact: (conversationId: Id, artifactId: Id) =>
+    call("get_artifact", { conversationId, artifactId }),
+  rollbackArtifact: (conversationId: Id, artifactId: Id, toVersion: number) =>
+    call("rollback_artifact", { conversationId, artifactId, toVersion }),
   watchLocalModels: (onEvent: (ev: LocalModelEvent) => void) =>
     call("watch_local_models", { onEvent: channel(onEvent) }),
   downloadModel: (modelId: string) => call("download_model", { modelId }),
