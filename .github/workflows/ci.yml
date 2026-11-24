@@ -203,8 +203,13 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: apps/desktop/package-lock.json
+          cache-dependency-path: |
+            apps/desktop/package-lock.json
+            ui/artifact-sandbox/package-lock.json
       - run: npm ci
+      # The artifact sandbox's build ships inside the app (npm_roots in licenses-extra.json).
+      - run: npm ci --ignore-scripts
+        working-directory: ui/artifact-sandbox
       - run: npm run test:scripts
       - uses: dtolnay/rust-toolchain@stable
       - name: Cache cargo-about

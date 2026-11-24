@@ -1,7 +1,7 @@
 // npm run test:scripts (T-STORE-07): the licence checks that gate CI.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { acceptedIds, build, dedupe, excludeNpm, listRequired, missingRequired, npmExceptions, satisfied } from "./licenses.mjs";
+import { acceptedIds, applyOverrides, build, dedupe, excludeNpm, listRequired, missingRequired, npmExceptions, satisfied } from "./licenses.mjs";
 import { npmLs } from "./npm-licenses.mjs";
 
 const accepted = new Set(["MIT", "Apache-2.0", "ISC", "Apache-2.0 WITH LLVM-exception"]);
@@ -99,4 +99,20 @@ test("npm exceptions apply to the named package only", () => {
     npmExceptions: exc,
   });
   assert.deepEqual(problems, ['npm other 1.0.0: licence "Unlicense" is not accepted']);
+});
+
+test("licence overrides fill only a missing field, for the exact version", () => {
+  const o = [{ name: "khroma", version: "2.1.0", licence: "MIT" }];
+  const list = [
+    { name: "khroma", version: "2.1.0", licence: "", texts: ["t"] },
+    { name: "khroma", version: "2.2.0", licence: "", texts: ["t"] },
+    { name: "x", version: "1", licence: "GPL-3.0", texts: ["t"] },
+  ];
+  assert.deepEqual(applyOverrides(list, [...o, { name: "x", version: "1", licence: "MIT" }]).map((p) => p.licence), ["MIT", "", "GPL-3.0"]);
+});
+
+test("a dependency that isn't installed fails instead of being skipped", async () => {
+  const { npmLicences } = await import("./npm-licenses.mjs");
+  const tree = JSON.stringify({ dependencies: { mermaid: { version: "12.3.0", missing: true } } });
+  assert.throws(() => npmLicences("/x", () => tree), /mermaid is not installed in \/x/);
 });

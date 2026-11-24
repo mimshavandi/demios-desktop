@@ -157,6 +157,18 @@ export function excludeNpm(list, exclude) {
   return list.filter((p) => !names.has(p.name));
 }
 
+/**
+ * `npm_licence_overrides`: for a package that declares no licence in package.json but ships a
+ * licence file, the licence read from that file by a reviewer. Pinned to an exact version so an
+ * upgrade is reviewed again; only fills a missing field, never replaces a declared licence.
+ */
+export function applyOverrides(list, overrides) {
+  return list.map((p) => {
+    const o = overrides.find((x) => x.name === p.name && x.version === p.version);
+    return o !== undefined && !p.licence ? { ...p, licence: o.licence } : p;
+  });
+}
+
 /** Per-package licence exceptions for npm (`npm_exceptions`), like deny.toml's crate ones. */
 export function npmExceptions(entries) {
   return new Map(entries.map((e) => [e.name, new Set(e.accepted)]));
@@ -219,15 +231,21 @@ function main() {
     ...p,
     texts: p.text_files.map((f) => readFileSync(join(appDir, f), "utf8")),
   }));
-  // Each npm root whose code ships: the UI, plus any listed in licenses-extra.json (e.g. the
-  // artifact sandbox once it has its own package.json). Missing roots are skipped.
+  // Each npm root whose code ships: the UI, plus those listed in licenses-extra.json
+  // (`npm_roots`, relative to the repo root; e.g. the artifact sandbox, whose build is bundled
+  // into the app). A listed root that doesn't exist is an error.
   const extraConfig = JSON.parse(readFileSync(join(appDir, "licenses-extra.json"), "utf8"));
   const extraRoots = extraConfig.npm_roots ?? [];
-  const npm = [appDir, ...extraRoots.map((r) => join(appDir, r)).filter((r) => existsSync(join(r, "package.json")))]
-    .flatMap((r) => npmLicences(r));
+  for (const r of extraRoots) {
+    if (!existsSync(join(repoDir, r, "package.json"))) {
+      console.error(`error: npm root ${r} (licenses-extra.json) has no package.json`);
+      process.exit(1);
+    }
+  }
+  const npm = [appDir, ...extraRoots.map((r) => join(repoDir, r))].flatMap((r) => npmLicences(r));
   const { problems, data } = build({
     rust: rustLicences(),
-    npm: excludeNpm(dedupe(npm), extraConfig.npm_exclude ?? []),
+    npm: applyOverrides(excludeNpm(dedupe(npm), extraConfig.npm_exclude ?? []), extraConfig.npm_licence_overrides ?? []),
     extra,
     accepted: acceptedIds(),
     npmExceptions: npmExceptions(extraConfig.npm_exceptions ?? []),

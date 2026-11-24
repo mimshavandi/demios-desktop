@@ -37,13 +37,17 @@ export function npmLs(cwd, run = execFileSync) {
 }
 
 /** @returns {{ name: string, version: string, licence: string, texts: string[] }[]} */
-export function npmLicences(appDir) {
-  const root = JSON.parse(npmLs(appDir));
+export function npmLicences(appDir, ls = npmLs) {
+  const root = JSON.parse(ls(appDir));
   const seen = new Map();
   const walk = (node) => {
     for (const [name, dep] of Object.entries(node.dependencies ?? {})) {
+      // Not installed: its licence can't be read, so don't silently leave it out.
+      if (dep.missing === true || dep.path === undefined) {
+        throw new Error(`${name} is not installed in ${appDir}; run npm ci there first`);
+      }
       const key = `${name}@${dep.version}`;
-      if (seen.has(key) || dep.path === undefined) continue;
+      if (seen.has(key)) continue;
       seen.set(key, { name, version: dep.version, path: dep.path });
       walk(dep);
     }
