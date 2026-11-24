@@ -5,6 +5,7 @@
 #[cfg(all(fake_model, not(debug_assertions)))]
 compile_error!("the dev fake model must never be in a release build");
 
+pub mod agent;
 pub mod chat;
 pub mod commands;
 pub mod error;
@@ -16,7 +17,6 @@ pub mod settings;
 pub mod state;
 
 use std::path::PathBuf;
-use std::sync::Arc;
 
 /// Where the app keeps its database. `DEMIOS_DATA_DIR` overrides the per-OS default
 /// (useful for a throwaway profile while developing).
@@ -56,17 +56,24 @@ fn navigation_guard<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
 }
 
 pub fn run() {
-    let dir = data_dir().expect("no home directory to keep app data in");
-    let state = state::AppState::open(&dir.join(dn_store::paths::DB_FILE)).unwrap_or_else(|e| {
-        panic!(
-            "could not open the local database in {}: {e}",
-            dir.display()
-        )
-    });
-
     tauri::Builder::default()
         .plugin(navigation_guard())
-        .manage(Arc::new(state))
+        .setup(|app| {
+            use tauri::Manager;
+            let dir = data_dir().ok_or("no home directory to keep app data in")?;
+            let resources = app.path().resource_dir().ok();
+            let skills = agent::skills_dir(resources.as_deref());
+            let state =
+                state::AppState::open(&dir.join(dn_store::paths::DB_FILE), skills.as_deref())
+                    .map_err(|e| {
+                        format!(
+                            "could not open the local database in {}: {e}",
+                            dir.display()
+                        )
+                    })?;
+            app.manage(state);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::app_info,
             commands::list_conversations,
@@ -84,6 +91,10 @@ pub fn run() {
             commands::set_provider_key,
             commands::delete_provider_key,
             commands::restore_provider_key,
+            commands::watch_approvals,
+            commands::respond_approval,
+            commands::list_unknown_outcomes,
+            commands::resolve_unknown_outcome,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Demios Desktop");

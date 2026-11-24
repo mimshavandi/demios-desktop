@@ -17,6 +17,10 @@ const COMMANDS: &[&str] = &[
     "set_provider_key",
     "delete_provider_key",
     "restore_provider_key",
+    "watch_approvals",
+    "respond_approval",
+    "list_unknown_outcomes",
+    "resolve_unknown_outcome",
 ];
 
 fn main() {

@@ -930,9 +930,12 @@ dependencies = [
 name = "demios-desktop"
 version = "0.1.0"
 dependencies = [
+ "dn-agent",
  "dn-core",
+ "dn-providers",
  "dn-secrets",
  "dn-store",
+ "dn-tools",
  "futures-core",
  "rusqlite",
  "serde",

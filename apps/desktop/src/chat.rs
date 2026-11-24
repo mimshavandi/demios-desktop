@@ -1,20 +1,21 @@
-//! Chat turns: write the user message and an assistant placeholder, stream the model's
-//! answer to the UI, then store the final text. Independent of Tauri so it can be tested
-//! with a plain event sink.
+//! Chat turns (T-SHELL-01, T-SHELL-04): write the user message and an assistant
+//! placeholder, run the agent loop (`dn_agent::run_loop`: model → tools → model, with
+//! approvals in dn-tools), stream progress to the UI, then store every message of the run
+//! in order. Independent of Tauri so it can be tested with a plain event sink.
 
+use crate::agent::model_error;
 use crate::error::{IpcError, IpcResult};
 use crate::state::AppState;
-use dn_core::chat::{
-    ChatRequest, ContentPart, FinishReason, Reasoning, Role, StreamEvent, ToolCall, Usage,
-};
-use dn_core::model::{Capability, ModelRef};
+use dn_agent::{AgentEvent, CancelToken, LoopConfig, RunOutcome, StopReason};
+use dn_core::chat::{ChatMessage, ChatModel, ContentPart, FinishReason, Role, Usage};
+use dn_core::model::ModelRef;
 use dn_core::{CoreError, Id, RecoveryAction};
 use dn_store::chat::{self as store, MessageOutcome, MessageStatus, NewMessage, StoredMessage};
 use serde::Serialize;
 use std::sync::Arc;
-use tokio::sync::oneshot;
 
-/// Events streamed to the UI for one assistant message.
+/// Events streamed to the UI for one turn. `message_id` is the turn's assistant message
+/// (the placeholder); tool messages of the run appear after `done` via `list_messages`.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ChatEvent {
@@ -29,10 +30,26 @@ pub enum ChatEvent {
         message_id: Id,
         text: String,
     },
+    /// The model asked for a tool; it may now wait for approval.
+    ToolCallStarted {
+        message_id: Id,
+        call_id: String,
+        name: String,
+        arguments: serde_json::Value,
+    },
+    ToolCallFinished {
+        message_id: Id,
+        call_id: String,
+        is_error: bool,
+        /// First part of the result text, for the collapsed card.
+        summary: String,
+    },
     Done {
         message_id: Id,
         finish_reason: FinishReason,
         usage: Usage,
+        /// `step_limit` or `length`: the UI may offer to continue.
+        stop: &'static str,
     },
     Error {
         message_id: Id,
@@ -75,47 +92,14 @@ fn title_from(text: &str) -> String {
     }
 }
 
-fn resolve_model(state: &AppState) -> Result<ModelRef, IpcError> {
+/// The model for the next turn and its backend. Blocking (settings, keychain).
+fn model_for_turn(state: &AppState) -> IpcResult<(ModelRef, Arc<dyn ChatModel>)> {
     let settings = state.settings()?;
-    if let Some(m) = settings.slot("chat") {
-        return Ok(m);
-    }
-    #[cfg(fake_model)]
-    {
-        Ok(crate::fake::FAKE_MODEL_REF.parse().expect("valid ref"))
-    }
-    #[cfg(not(fake_model))]
-    {
-        Err(model_source_required())
-    }
-}
-
-#[cfg_attr(fake_model, allow(dead_code))]
-fn model_source_required() -> IpcError {
-    let e = CoreError::ModelSourceRequired {
-        capability: Capability::Chat,
-        agent_id: "chat".into(),
-        slot_id: "chat".into(),
-        recovery: vec![
-            RecoveryAction::DownloadModel {
-                capability: Capability::Chat,
-            },
-            RecoveryAction::AddProviderKey,
-            RecoveryAction::ChooseModelForSlot {
-                agent_id: "chat".into(),
-                slot_id: "chat".into(),
-            },
-        ],
-    };
-    let recovery = match &e {
-        CoreError::ModelSourceRequired { recovery, .. } => recovery.clone(),
-        _ => vec![],
-    };
-    IpcError {
-        code: "model_source_required",
-        message: "No chat model is set up. Choose one in Settings → Models.".into(),
-        recovery,
-    }
+    let model = state
+        .agent
+        .resolve_model(&settings, &state.models, &state.keys)?;
+    let backend = state.models.get(&model, &state.keys).map_err(model_error)?;
+    Ok((model, backend))
 }
 
 /// Sends `text` as a new user message and streams the reply. Blocking (SQLite): call it
@@ -131,11 +115,7 @@ pub fn send(
     if text.trim().is_empty() {
         return Err(IpcError::invalid("Message is empty."));
     }
-    let model = resolve_model(state)?;
-    let backend = state
-        .models
-        .get(&model)
-        .ok_or_else(model_unavailable(&model))?;
+    let (model, backend) = model_for_turn(state)?;
     let reservation = state.reserve(conversation_id)?;
     let (user, assistant, title, history) = {
         let db = state.db()?;
@@ -151,7 +131,7 @@ pub fn send(
             conversation_id,
             NewMessage::assistant_placeholder(Some(model.to_string())),
         )?;
-        let history = history(&db, conversation_id, assistant.id)?;
+        let history = history(state, &db, conversation_id, assistant.id)?;
         (user, assistant, title, history)
     };
     start(
@@ -177,11 +157,7 @@ pub fn regenerate(
     conversation_id: Id,
     sink: impl EventSink,
 ) -> IpcResult<TurnStarted> {
-    let model = resolve_model(state)?;
-    let backend = state
-        .models
-        .get(&model)
-        .ok_or_else(model_unavailable(&model))?;
+    let (model, backend) = model_for_turn(state)?;
     let reservation = state.reserve(conversation_id)?;
     let (assistant, history) = {
         let db = state.db()?;
@@ -199,7 +175,7 @@ pub fn regenerate(
             conversation_id,
             NewMessage::assistant_placeholder(Some(model.to_string())),
         )?;
-        let history = history(&db, conversation_id, assistant.id)?;
+        let history = history(state, &db, conversation_id, assistant.id)?;
         (assistant, history)
     };
     start(
@@ -223,84 +199,135 @@ pub fn stop(state: &AppState, conversation_id: Id) -> bool {
     state.stop(conversation_id)
 }
 
-fn model_unavailable(model: &ModelRef) -> impl FnOnce() -> IpcError + '_ {
-    move || IpcError {
-        code: "model_unavailable",
-        message: format!(
-            "`{model}` is not available in this build yet. Choose another model in Settings → Models."
-        ),
-        recovery: vec![RecoveryAction::ChooseModelForSlot {
-            agent_id: "chat".into(),
-            slot_id: "chat".into(),
-        }],
-    }
-}
-
+/// System prompt + stored conversation, minus the new placeholder and failed empty turns.
 fn history(
+    state: &AppState,
     db: &dn_store::Connection,
     conversation_id: Id,
     exclude: Id,
-) -> IpcResult<Vec<dn_core::chat::ChatMessage>> {
-    Ok(store::list_messages(db, conversation_id)?
-        .into_iter()
-        .filter(|m| m.id != exclude)
-        // Failed or empty turns are not context the model should see.
-        .filter(|m| m.status == MessageStatus::Complete || !m.content.is_empty())
-        .map(|m| m.to_chat_message())
-        .collect())
+) -> IpcResult<Vec<ChatMessage>> {
+    let mut out = vec![];
+    if let Some(p) = state.agent.system_prompt() {
+        out.push(ChatMessage::text(Role::System, p));
+    }
+    out.extend(
+        store::list_messages(db, conversation_id)?
+            .into_iter()
+            .filter(|m| m.id != exclude)
+            .filter(|m| m.status == MessageStatus::Complete || !m.content.is_empty())
+            .map(|m| m.to_chat_message()),
+    );
+    Ok(out)
 }
 
 fn start(
     state: &Arc<AppState>,
     reservation: crate::state::Reservation,
     model: ModelRef,
-    backend: Arc<dyn dn_core::chat::ChatModel>,
+    backend: Arc<dyn ChatModel>,
     assistant: &StoredMessage,
-    history: Vec<dn_core::chat::ChatMessage>,
+    history: Vec<ChatMessage>,
     sink: impl EventSink,
 ) {
-    let req = ChatRequest {
-        model,
-        messages: history,
-        tools: vec![],
-        max_tokens: None,
-        temperature: None,
-        response_schema: None,
-        reasoning: Reasoning::Auto,
-        caller: "chat.reply".into(),
-    };
     let conversation_id = reservation.conversation_id;
-    let (token, rx) = reservation.into_parts();
+    let (token, cancel) = reservation.into_parts();
+    let mut cfg = LoopConfig::from_manifest(&state.agent.manifest, model.clone());
+    cfg.conversation_id = Some(conversation_id);
     let state = Arc::clone(state);
     let message_id = assistant.id;
+    let model_ref = model.to_string();
     tauri::async_runtime::spawn(async move {
-        let stream = backend.chat(req);
-        let outcome = drive(stream, rx, message_id, &state, &sink).await;
+        let result = run(&state, &*backend, &cfg, history, &cancel, message_id, &sink).await;
         let st = Arc::clone(&state);
+        let live = state.live_text(message_id);
         // SQLite is blocking: keep it off the async workers.
         let write = tauri::async_runtime::spawn_blocking(move || {
-            st.db()
-                .and_then(|db| store::finish_message(&db, message_id, outcome).map_err(Into::into))
+            persist(&st, conversation_id, message_id, &model_ref, result, live)
         })
         .await;
         state.end_live(message_id);
+        state.drop_approvals_for(conversation_id);
         state.release(conversation_id, token);
         match write {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => eprintln!("could not store message {message_id}: {e}"),
-            Err(e) => eprintln!("could not store message {message_id}: {e}"),
+            Ok(Ok(ev)) => sink.send(ev),
+            Ok(Err(e)) => {
+                eprintln!("could not store the answer {message_id}: {e}");
+                sink.send(ChatEvent::Error {
+                    message_id,
+                    message: "The answer couldn't be saved.".into(),
+                    recovery: vec![],
+                });
+            }
+            Err(e) => eprintln!("could not store the answer {message_id}: {e}"),
         }
     });
 }
 
-fn cancelled_outcome(text: String) -> MessageOutcome {
-    MessageOutcome {
-        content: text_parts(text),
-        tool_calls: vec![],
-        status: MessageStatus::Cancelled,
-        finish_reason: Some(FinishReason::Cancelled),
-        error: None,
+/// Runs the agent loop and streams its events.
+async fn run(
+    state: &AppState,
+    model: &dyn ChatModel,
+    cfg: &LoopConfig,
+    history: Vec<ChatMessage>,
+    cancel: &CancelToken,
+    message_id: Id,
+    sink: &impl EventSink,
+) -> Result<RunOutcome, CoreError> {
+    let tools = Arc::clone(&state.tools);
+    let mut on_event = |ev: AgentEvent| match ev {
+        AgentEvent::StepStarted { step } if step > 0 && state.live_len(message_id) > 0 => {
+            // Separate the text of successive steps (after tool results).
+            let text = "\n\n".to_string();
+            let offset = state.append_live(message_id, &text);
+            sink.send(ChatEvent::TextDelta {
+                message_id,
+                offset,
+                text,
+            });
+        }
+        AgentEvent::TextDelta { text, .. } => {
+            let offset = state.append_live(message_id, &text);
+            sink.send(ChatEvent::TextDelta {
+                message_id,
+                offset,
+                text,
+            });
+        }
+        AgentEvent::ReasoningDelta { text, .. } => {
+            sink.send(ChatEvent::ReasoningDelta { message_id, text })
+        }
+        AgentEvent::ToolCallStarted { call, .. } => sink.send(ChatEvent::ToolCallStarted {
+            message_id,
+            call_id: call.id,
+            name: call.name,
+            arguments: call.arguments,
+        }),
+        AgentEvent::ToolCallFinished {
+            call_id, output, ..
+        } => sink.send(ChatEvent::ToolCallFinished {
+            message_id,
+            call_id,
+            is_error: output.is_error,
+            summary: summary(&output.content),
+        }),
+        AgentEvent::StepStarted { .. } | AgentEvent::StepFinished { .. } => {}
+    };
+    dn_agent::run_loop(model, &*tools, cfg, history, cancel, &mut on_event).await
+}
+
+fn summary(parts: &[ContentPart]) -> String {
+    let text: String = parts
+        .iter()
+        .filter_map(|p| match p {
+            ContentPart::Text { text } => Some(text.as_str()),
+            ContentPart::Image { .. } => None,
+        })
+        .collect();
+    let mut s: String = text.chars().take(240).collect();
+    if text.chars().count() > 240 {
+        s.push('…');
     }
+    s
 }
 
 fn text_parts(text: String) -> Vec<ContentPart> {
@@ -311,91 +338,163 @@ fn text_parts(text: String) -> Vec<ContentPart> {
     }
 }
 
-/// Pulls the stream until it ends or `cancel` fires; dropping the stream cancels the call.
-async fn drive(
-    mut stream: dn_core::chat::EventStream,
-    mut cancel: oneshot::Receiver<()>,
-    message_id: Id,
-    state: &AppState,
-    sink: &impl EventSink,
-) -> MessageOutcome {
-    let mut text = String::new();
-    let mut tool_calls: Vec<ToolCall> = vec![];
-    loop {
-        tokio::select! {
-            biased;
-            _ = &mut cancel => {
-                drop(stream);
-                sink.send(ChatEvent::Done {
-                    message_id,
-                    finish_reason: FinishReason::Cancelled,
-                    usage: Usage::default(),
-                });
-                return cancelled_outcome(text);
-            }
-            ev = std::future::poll_fn(|cx| stream.as_mut().poll_next(cx)) => match ev {
-                Some(Ok(StreamEvent::TextDelta { text: t })) => {
-                    text.push_str(&t);
-                    let offset = state.append_live(message_id, &t);
-                    sink.send(ChatEvent::TextDelta { message_id, offset, text: t });
-                }
-                Some(Ok(StreamEvent::ReasoningDelta { text: t })) => {
-                    sink.send(ChatEvent::ReasoningDelta { message_id, text: t });
-                }
-                Some(Ok(StreamEvent::ToolCall { call })) => tool_calls.push(call),
-                Some(Ok(StreamEvent::Done { finish_reason, usage })) => {
-                    sink.send(ChatEvent::Done { message_id, finish_reason, usage });
-                    return MessageOutcome {
-                        content: text_parts(text),
-                        tool_calls,
-                        status: MessageStatus::Complete,
-                        finish_reason: Some(finish_reason),
-                        error: None,
-                    };
-                }
-                Some(Err(e)) => {
-                    let (message, recovery) = user_message(&e);
-                    sink.send(ChatEvent::Error { message_id, message: message.clone(), recovery });
-                    return MessageOutcome {
-                        content: text_parts(text),
-                        tool_calls,
-                        status: MessageStatus::Error,
-                        finish_reason: Some(FinishReason::Error),
-                        error: Some(message),
-                    };
-                }
-                None => {
-                    sink.send(ChatEvent::Done {
-                        message_id,
-                        finish_reason: FinishReason::Stop,
-                        usage: Usage::default(),
-                    });
-                    return MessageOutcome {
-                        content: text_parts(text),
-                        tool_calls,
-                        status: MessageStatus::Complete,
-                        finish_reason: Some(FinishReason::Stop),
-                        error: None,
-                    };
-                }
-            }
-        }
+fn finish_of(stop: StopReason) -> (FinishReason, MessageStatus, &'static str) {
+    match stop {
+        StopReason::Completed => (FinishReason::Stop, MessageStatus::Complete, "completed"),
+        StopReason::Length => (FinishReason::Length, MessageStatus::Complete, "length"),
+        StopReason::StepLimit => (
+            FinishReason::ToolCalls,
+            MessageStatus::Complete,
+            "step_limit",
+        ),
+        StopReason::Cancelled => (
+            FinishReason::Cancelled,
+            MessageStatus::Cancelled,
+            "cancelled",
+        ),
     }
 }
 
-fn user_message(e: &CoreError) -> (String, Vec<RecoveryAction>) {
-    match e {
-        CoreError::ModelSourceRequired { recovery, .. } => {
-            ("No model is set up for this chat.".into(), recovery.clone())
+/// Stores the run: the first assistant turn goes into the placeholder, later turns and
+/// tool results follow as their own rows (every tool call keeps its result). Returns the
+/// final event for the UI. Blocking.
+fn persist(
+    state: &AppState,
+    conversation_id: Id,
+    placeholder: Id,
+    model: &str,
+    result: Result<RunOutcome, CoreError>,
+    live_text: String,
+) -> IpcResult<ChatEvent> {
+    let db = state.db()?;
+    let outcome = match result {
+        Ok(o) => o,
+        Err(e) => {
+            let err = model_error(e);
+            store::finish_message(
+                &db,
+                placeholder,
+                MessageOutcome {
+                    content: text_parts(live_text),
+                    tool_calls: vec![],
+                    status: MessageStatus::Error,
+                    finish_reason: Some(FinishReason::Error),
+                    error: Some(err.message.clone()),
+                },
+            )?;
+            return Ok(ChatEvent::Error {
+                message_id: placeholder,
+                message: err.message,
+                recovery: err.recovery,
+            });
         }
-        CoreError::ModelUnavailable {
-            user_message,
-            recovery,
-            ..
-        } => (user_message.clone(), recovery.clone()),
-        CoreError::Capability { user_message, .. } => (user_message.clone(), vec![]),
-        CoreError::Cancelled => ("Cancelled.".into(), vec![]),
+    };
+    let (finish_reason, status, stop) = finish_of(outcome.stop);
+    let mut msgs = outcome.messages.into_iter();
+    match msgs.next() {
+        Some(first) if first.role == Role::Assistant => {
+            let last_row = msgs.len() == 0;
+            store::finish_message(
+                &db,
+                placeholder,
+                MessageOutcome {
+                    content: first.content,
+                    tool_calls: first.tool_calls,
+                    status: if last_row {
+                        status
+                    } else {
+                        MessageStatus::Complete
+                    },
+                    finish_reason: Some(if last_row {
+                        finish_reason
+                    } else {
+                        FinishReason::ToolCalls
+                    }),
+                    error: None,
+                },
+            )?;
+        }
+        other => {
+            // Cancelled before the model said anything: keep what streamed, if anything.
+            store::finish_message(
+                &db,
+                placeholder,
+                MessageOutcome {
+                    content: text_parts(live_text),
+                    tool_calls: vec![],
+                    status,
+                    finish_reason: Some(finish_reason),
+                    error: None,
+                },
+            )?;
+            if let Some(m) = other {
+                add_run_message(&db, conversation_id, model, m, status, finish_reason, true)?;
+            }
+        }
     }
+    let rest: Vec<ChatMessage> = msgs.collect();
+    let n = rest.len();
+    for (i, m) in rest.into_iter().enumerate() {
+        add_run_message(
+            &db,
+            conversation_id,
+            model,
+            m,
+            status,
+            finish_reason,
+            i + 1 == n,
+        )?;
+    }
+    Ok(ChatEvent::Done {
+        message_id: placeholder,
+        finish_reason,
+        usage: outcome.usage,
+        stop,
+    })
+}
+
+fn add_run_message(
+    db: &dn_store::Connection,
+    conversation_id: Id,
+    model: &str,
+    m: ChatMessage,
+    status: MessageStatus,
+    finish_reason: FinishReason,
+    last: bool,
+) -> IpcResult<()> {
+    let row = store::add_message(
+        db,
+        conversation_id,
+        NewMessage {
+            role: m.role,
+            content: m.content.clone(),
+            tool_call_id: m.tool_call_id.clone(),
+            model: (m.role == Role::Assistant).then(|| model.to_string()),
+            status: MessageStatus::Complete,
+        },
+    )?;
+    if m.role == Role::Assistant {
+        store::finish_message(
+            db,
+            row.id,
+            MessageOutcome {
+                content: m.content,
+                tool_calls: m.tool_calls,
+                status: if last {
+                    status
+                } else {
+                    MessageStatus::Complete
+                },
+                finish_reason: Some(if last {
+                    finish_reason
+                } else {
+                    FinishReason::ToolCalls
+                }),
+                error: None,
+            },
+        )?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -636,11 +735,145 @@ mod tests {
         assert_eq!(count(&st, conv.id), 0);
     }
 
+    /// Asks for one tool, then answers with its result.
+    struct ToolThenAnswer;
+
+    impl ChatModel for ToolThenAnswer {
+        fn chat(&self, req: dn_core::chat::ChatRequest) -> dn_core::chat::EventStream {
+            use dn_core::chat::{StreamEvent, ToolCall};
+            let has_result = req.messages.iter().any(|m| m.role == Role::Tool);
+            let events: Vec<Result<StreamEvent, CoreError>> = if has_result {
+                vec![
+                    Ok(StreamEvent::TextDelta {
+                        text: "The answer is 42.".into(),
+                    }),
+                    Ok(StreamEvent::Done {
+                        finish_reason: FinishReason::Stop,
+                        usage: Usage::default(),
+                    }),
+                ]
+            } else {
+                vec![
+                    Ok(StreamEvent::ToolCall {
+                        call: ToolCall {
+                            id: "call_1".into(),
+                            name: "calc".into(),
+                            arguments: serde_json::json!({ "q": "6*7" }),
+                        },
+                    }),
+                    Ok(StreamEvent::Done {
+                        finish_reason: FinishReason::ToolCalls,
+                        usage: Usage::default(),
+                    }),
+                ]
+            };
+            Box::pin(Iter(events.into_iter()))
+        }
+    }
+
+    struct Iter<I>(I);
+    impl<I: Iterator<Item = Result<dn_core::chat::StreamEvent, CoreError>> + Unpin>
+        futures_core::Stream for Iter<I>
+    {
+        type Item = Result<dn_core::chat::StreamEvent, CoreError>;
+        fn poll_next(
+            mut self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Self::Item>> {
+            std::task::Poll::Ready(self.0.next())
+        }
+    }
+
+    struct Calc;
+    impl dn_agent::ToolExecutor for Calc {
+        fn tools(&self) -> Vec<dn_core::chat::ToolSpec> {
+            vec![dn_core::chat::ToolSpec {
+                name: "calc".into(),
+                description: "Calculates".into(),
+                input_schema: serde_json::json!({ "type": "object" }),
+            }]
+        }
+        fn execute<'a>(
+            &'a self,
+            _call: &'a dn_core::chat::ToolCall,
+            _ctx: &'a dn_agent::ToolContext,
+        ) -> dn_agent::BoxFuture<'a, Result<dn_agent::ToolOutput, CoreError>> {
+            Box::pin(async { Ok(dn_agent::ToolOutput::text("42")) })
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tool_calls_run_and_are_stored_in_order() {
+        let mut models = crate::models::ModelRegistry::default();
+        models.register("local:scripted".parse().unwrap(), Arc::new(ToolThenAnswer));
+        let mut s = AppState::in_memory().unwrap();
+        s.models = models;
+        s.tools = Arc::new(Calc);
+        let st = Arc::new(s);
+        let mut settings = crate::settings::Settings::default();
+        settings
+            .slots
+            .insert("chat".into(), "local:scripted".into());
+        st.save_settings(&settings).unwrap();
+        let conv = st.create_conversation().unwrap();
+        let (events, s1) = sink();
+        let started = send(&st, conv.id, "what is 6*7?".into(), s1).unwrap();
+        wait_idle(&st, conv.id).await;
+        for _ in 0..100 {
+            if events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|e| matches!(e, ChatEvent::Done { .. }))
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+
+        let msgs = store::list_messages(&st.db().unwrap(), conv.id).unwrap();
+        let roles: Vec<Role> = msgs.iter().map(|m| m.role).collect();
+        assert_eq!(
+            roles,
+            [Role::User, Role::Assistant, Role::Tool, Role::Assistant]
+        );
+        assert_eq!(msgs[1].id, started.assistant_message.id);
+        assert_eq!(msgs[1].tool_calls[0].id, "call_1");
+        assert_eq!(msgs[2].tool_call_id.as_deref(), Some("call_1"));
+        assert_eq!(msgs[2].text(), "42");
+        assert_eq!(msgs[3].text(), "The answer is 42.");
+        assert!(msgs.iter().all(|m| m.status == MessageStatus::Complete));
+
+        let evs = events.lock().unwrap().clone();
+        assert!(
+            evs.iter()
+                .any(|e| matches!(e, ChatEvent::ToolCallStarted { name, .. } if name == "calc"))
+        );
+        assert!(evs.iter().any(|e| matches!(e, ChatEvent::ToolCallFinished { is_error: false, summary, .. } if summary == "42")));
+        assert!(matches!(
+            evs.last(),
+            Some(ChatEvent::Done {
+                stop: "completed",
+                ..
+            })
+        ));
+
+        // The stored history is valid input for the next turn (every call has its result).
+        let (_e, s2) = sink();
+        send(&st, conv.id, "thanks".into(), s2).unwrap();
+        wait_idle(&st, conv.id).await;
+        assert_eq!(
+            store::list_messages(&st.db().unwrap(), conv.id)
+                .unwrap()
+                .len(),
+            6
+        );
+    }
+
     #[test]
     fn titles() {
         assert_eq!(title_from("\n  hi there \nmore"), "hi there");
         assert_eq!(title_from(&"x".repeat(60)).chars().count(), 49);
         assert_eq!(title_from("   "), DEFAULT_TITLE);
-        assert_eq!(model_source_required().recovery.len(), 3);
     }
 }

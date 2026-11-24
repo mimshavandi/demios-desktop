@@ -22,6 +22,10 @@
     "allow-delete-provider-key",
     "allow-restore-conversation",
     "allow-restore-provider-key",
+    "allow-watch-approvals",
+    "allow-respond-approval",
+    "allow-list-unknown-outcomes",
+    "allow-resolve-unknown-outcome",
     "core:window:allow-start-dragging"
   ]
 }

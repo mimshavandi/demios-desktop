@@ -1,18 +1,24 @@
 //! Which `ChatModel`s the shell can call, and the catalog the settings screen shows.
-//! Real backends (`dn-inference`, `dn-providers`) register here when they merge; until
-//! then only the dev fake (T-SHELL-03) is callable.
+//!
+//! - BYOK models (`byok:<provider>:<model>`) are `dn-providers` adapters built from the
+//!   key in the OS keychain, cached per provider and dropped when the key changes.
+//! - The dev fake (T-SHELL-03, debug builds) is a fixed entry.
+//! - Local llama.cpp models join when `dn-inference` lands (#12).
 
 use crate::secrets::Keys;
 use crate::settings::{SLOTS, Settings, SlotInfo};
 use dn_core::chat::ChatModel;
-use dn_core::model::{Capability, ModelRef};
+use dn_core::model::{Capability, ModelRef, Readiness};
+use dn_core::{CoreError, RecoveryAction};
+use dn_providers::{ProviderAdapter, ProviderConfig, ProviderKind, SourceEntry};
 use serde::Serialize;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-#[derive(Default, Clone)]
+#[derive(Default)]
 pub struct ModelRegistry {
-    models: HashMap<String, Arc<dyn ChatModel>>,
+    fixed: HashMap<String, Arc<dyn ChatModel>>,
+    providers: Mutex<HashMap<String, Arc<dyn ProviderAdapter>>>,
 }
 
 impl ModelRegistry {
@@ -28,16 +34,101 @@ impl ModelRegistry {
         r
     }
 
+    /// Registers a fixed backend (dev fake, tests).
     pub fn register(&mut self, model: ModelRef, backend: Arc<dyn ChatModel>) {
-        self.models.insert(model.to_string(), backend);
+        self.fixed.insert(model.to_string(), backend);
     }
 
-    pub fn get(&self, model: &ModelRef) -> Option<Arc<dyn ChatModel>> {
-        self.models.get(&model.to_string()).cloned()
+    pub fn contains_fixed(&self, model: &str) -> bool {
+        self.fixed.contains_key(model)
     }
 
-    pub fn contains(&self, model: &str) -> bool {
-        self.models.contains_key(model)
+    /// The backend for `model`. Blocking: may read the key from the keychain.
+    pub fn get(&self, model: &ModelRef, keys: &Keys) -> Result<Arc<dyn ChatModel>, CoreError> {
+        if let Some(m) = self.fixed.get(&model.to_string()) {
+            return Ok(Arc::clone(m));
+        }
+        let ModelRef::Byok { provider_id, .. } = model else {
+            return Err(unavailable(
+                format!("`{model}` isn't available in this build yet."),
+                vec![RecoveryAction::ChooseModelForSlot {
+                    agent_id: crate::agent::AGENT_ID.into(),
+                    slot_id: "primary".into(),
+                }],
+            ));
+        };
+        let def = provider(provider_id)
+            .ok_or_else(|| unavailable(format!("Unknown provider `{provider_id}`."), vec![]))?;
+        if let Some(a) = lock(&self.providers).get(provider_id) {
+            let a: Arc<dyn ChatModel> = a.clone();
+            return Ok(a);
+        }
+        let key = keys
+            .get(provider_id)
+            .map_err(|e| unavailable(crate::error::IpcError::from(e).message, vec![]))?
+            .ok_or_else(|| {
+                unavailable(
+                    format!(
+                        "Add your {} key in Settings → Models to use this model.",
+                        def.name
+                    ),
+                    vec![RecoveryAction::AddProviderKey],
+                )
+            })?;
+        let adapter =
+            dn_providers::build(ProviderConfig::new(provider_id, def.kind).with_key(key))?;
+        lock(&self.providers).insert(provider_id.clone(), Arc::clone(&adapter));
+        let a: Arc<dyn ChatModel> = adapter;
+        Ok(a)
+    }
+
+    /// Forget a cached adapter (its key was replaced or removed).
+    pub fn invalidate(&self, provider_id: &str) {
+        lock(&self.providers).remove(provider_id);
+    }
+
+    /// What the resolver may pick from. Blocking: checks the keychain.
+    pub fn sources(&self, keys: &Keys) -> Vec<SourceEntry> {
+        let mut out: Vec<SourceEntry> = self
+            .fixed
+            .keys()
+            .filter_map(|r| r.parse().ok())
+            .map(|model| SourceEntry {
+                model,
+                capabilities: vec![Capability::Chat],
+                readiness: Readiness::Ready,
+            })
+            .collect();
+        for p in PROVIDERS {
+            let ready = keys.has(p.id).unwrap_or(false);
+            for m in p.suggested_models {
+                out.push(SourceEntry {
+                    model: ModelRef::Byok {
+                        provider_id: p.id.into(),
+                        model_id: (*m).into(),
+                    },
+                    capabilities: vec![Capability::Chat],
+                    readiness: if ready {
+                        Readiness::Ready
+                    } else {
+                        Readiness::Missing
+                    },
+                });
+            }
+        }
+        out
+    }
+}
+
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+fn unavailable(user_message: String, recovery: Vec<RecoveryAction>) -> CoreError {
+    CoreError::ModelUnavailable {
+        developer_message: user_message.clone(),
+        user_message,
+        recovery,
     }
 }
 
@@ -45,7 +136,8 @@ impl ModelRegistry {
 pub struct ProviderDef {
     pub id: &'static str,
     pub name: &'static str,
-    /// Model ids suggested once a key is set. Placeholder until `dn-providers` lists them.
+    pub kind: ProviderKind,
+    /// Model ids offered once a key is set (`list_models` can extend this later).
     pub suggested_models: &'static [&'static str],
 }
 
@@ -53,16 +145,19 @@ pub const PROVIDERS: &[ProviderDef] = &[
     ProviderDef {
         id: "anthropic",
         name: "Anthropic",
+        kind: ProviderKind::Anthropic,
         suggested_models: &["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"],
     },
     ProviderDef {
         id: "openai",
         name: "OpenAI",
+        kind: ProviderKind::OpenAi,
         suggested_models: &["gpt-5", "gpt-5-mini"],
     },
     ProviderDef {
         id: "gemini",
         name: "Google Gemini",
+        kind: ProviderKind::Gemini,
         suggested_models: &["gemini-2.5-pro", "gemini-2.5-flash"],
     },
 ];
@@ -120,7 +215,7 @@ pub struct ModelCatalog {
 
 pub fn catalog(registry: &ModelRegistry, keys: &Keys, settings: &Settings) -> ModelCatalog {
     let mut models = vec![];
-    if registry.contains("local:dev-fake") {
+    if registry.contains_fixed("local:dev-fake") {
         models.push(ModelOption {
             model_ref: "local:dev-fake".into(),
             label: "Dev fake model (canned replies)".into(),
@@ -143,14 +238,11 @@ pub fn catalog(registry: &ModelRegistry, keys: &Keys, settings: &Settings) -> Mo
             continue;
         }
         for m in p.suggested_models {
-            let model_ref = format!("byok:{}:{m}", p.id);
-            let available = registry.contains(&model_ref);
             models.push(ModelOption {
                 label: format!("{} · {m}", p.name),
-                available,
-                note: (!available)
-                    .then(|| "Provider backend not in this build yet (dn-providers).".into()),
-                model_ref,
+                available: true,
+                note: None,
+                model_ref: format!("byok:{}:{m}", p.id),
                 source: ModelSource::Byok,
                 capabilities: vec![Capability::Chat],
             });
@@ -201,7 +293,7 @@ mod tests {
             .filter(|m| m.source == ModelSource::Byok)
             .collect();
         assert!(!byok.is_empty());
-        assert!(byok.iter().all(|m| !m.available && m.note.is_some()));
+        assert!(byok.iter().all(|m| m.available));
         assert!(c.providers.iter().any(|p| p.id == "anthropic" && p.has_key));
     }
 
@@ -209,6 +301,9 @@ mod tests {
     #[test]
     fn builtin_has_fake() {
         let reg = ModelRegistry::with_builtin();
-        assert!(reg.get(&"local:dev-fake".parse().unwrap()).is_some());
+        assert!(
+            reg.get(&"local:dev-fake".parse().unwrap(), &Keys::memory())
+                .is_ok()
+        );
     }
 }
