@@ -20,6 +20,8 @@ use std::time::{Duration, Instant};
 struct TrackedMcpSecrets {
     inner: dn_tools::DnSecrets,
     state: std::sync::Weak<AppState>,
+    /// `AppState::mcp_epoch` when made; writes are refused once it changes.
+    epoch: u64,
 }
 
 impl dn_tools::SecretStore for TrackedMcpSecrets {
@@ -29,6 +31,11 @@ impl dn_tools::SecretStore for TrackedMcpSecrets {
     fn set(&self, id: &str, value: &str) -> Result<(), dn_tools::secrets::SecretError> {
         // Record first: an id we fail to record could outlive a wipe.
         if let Some(st) = self.state.upgrade() {
+            if st.mcp_epoch.load(Ordering::SeqCst) != self.epoch {
+                return Err(dn_tools::secrets::SecretError(
+                    "local data was deleted; not storing tool-server credentials".into(),
+                ));
+            }
             let db = st
                 .db()
                 .map_err(|e| dn_tools::secrets::SecretError(e.message))?;
@@ -41,6 +48,13 @@ impl dn_tools::SecretStore for TrackedMcpSecrets {
         self.inner.delete(id)
     }
 }
+
+/// How long "Delete all local data" waits for cancelled replies to end (shorter in tests).
+const REPLY_STOP_TIMEOUT: Duration = if cfg!(test) {
+    Duration::from_secs(1)
+} else {
+    Duration::from_secs(5)
+};
 
 /// Key-store id of the Hugging Face token (`dn_models::hub::hf_token_secret()`).
 pub const HF_TOKEN_PROVIDER_ID: &str = "huggingface";
@@ -319,14 +333,12 @@ impl AppState {
                         continue;
                     }
                 };
-                if state.mcp_epoch.load(Ordering::SeqCst) != epoch {
+                let Some(added) = state
+                    .add_mcp_server_if_current(&executor, client, epoch)
+                    .await
+                else {
                     return; // "Delete all local data" ran meanwhile.
-                }
-                let added = executor.add_server(client).await;
-                if state.mcp_epoch.load(Ordering::SeqCst) != epoch {
-                    executor.remove_server(&id).await;
-                    return;
-                }
+                };
                 match added {
                     Ok(caps) => state.set_mcp_status(status("connected", None, caps.len())),
                     Err(e) => {
@@ -438,12 +450,34 @@ impl AppState {
         }
     }
 
+    /// Adds an MCP server unless "Delete all local data" ran since `epoch` (before or while
+    /// connecting); then the server is removed again and `None` returned.
+    pub async fn add_mcp_server_if_current(
+        &self,
+        executor: &dn_tools::Executor,
+        client: dn_tools::McpClient,
+        epoch: u64,
+    ) -> Option<Result<Vec<dn_tools::McpCapability>, dn_core::CoreError>> {
+        if self.mcp_epoch.load(Ordering::SeqCst) != epoch {
+            return None;
+        }
+        let id = client.server_id().to_owned();
+        let added = executor.add_server(client).await;
+        if self.mcp_epoch.load(Ordering::SeqCst) != epoch {
+            executor.remove_server(&id).await;
+            return None;
+        }
+        Some(added)
+    }
+
     /// The secret store MCP servers use: the keychain, recording every id written so
-    /// "Delete all local data" finds it later.
+    /// "Delete all local data" finds it later. It refuses writes once a wipe has started
+    /// after it was made, so a server still shutting down can't store a token again.
     pub fn mcp_secret_store(self: &Arc<Self>) -> Arc<dyn dn_tools::SecretStore> {
         Arc::new(TrackedMcpSecrets {
             inner: dn_tools::DnSecrets(Arc::clone(&self.keys.store)),
             state: Arc::downgrade(self),
+            epoch: self.mcp_epoch.load(Ordering::SeqCst),
         })
     }
 
@@ -468,8 +502,9 @@ impl AppState {
     /// a failure and returns the parts it could not delete, in the user's words.
     pub async fn delete_all_local_data(self: &Arc<Self>) -> Vec<&'static str> {
         let mut failed = Vec::new();
-        if !self.stop_all_and_wait(Duration::from_secs(5)).await {
+        if !self.stop_all_and_wait(REPLY_STOP_TIMEOUT).await {
             eprintln!("some replies did not stop in time; deleting anyway");
+            failed.push("an answer that was still being written (it may have been saved again)");
         }
         self.mcp_epoch.fetch_add(1, Ordering::SeqCst);
         if let Some(exec) = &self.executor {
@@ -1269,6 +1304,58 @@ mod tests {
         let failed = st.wipe_local_data();
         assert!(
             failed.iter().any(|f| f.contains("settings unreadable")),
+            "{failed:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn after_a_wipe_old_mcp_connects_and_token_writes_are_refused() {
+        let (st, exec, keys) = state_with_executor();
+        let epoch = st.mcp_epoch.load(Ordering::SeqCst);
+        let store = st.mcp_secret_store();
+        assert!(st.delete_all_local_data().await.is_empty());
+
+        // A token refresh from a server that was still shutting down.
+        assert!(store.set("mcp.gh.oauth", "{}").is_err());
+        assert!(
+            keys.store
+                .get(&dn_secrets::SecretId::mcp("mcp.gh.oauth"))
+                .unwrap()
+                .is_none()
+        );
+        // A store made after the wipe works again.
+        st.mcp_secret_store().set("mcp.new.token", "x").unwrap();
+
+        // A connect that started before the wipe doesn't add its server.
+        let cfg = dn_tools::McpServerConfig::http("gh", "http://127.0.0.1:9/mcp");
+        let client = dn_tools::McpClient::new(cfg, st.mcp_secret_store()).unwrap();
+        assert!(
+            st.add_mcp_server_if_current(&exec, client, epoch)
+                .await
+                .is_none()
+        );
+        assert!(exec.client("gh").is_none());
+        // With the current epoch it is added (connect fails, the server is registered).
+        let cfg = dn_tools::McpServerConfig::http("gh", "http://127.0.0.1:9/mcp");
+        let client = dn_tools::McpClient::new(cfg, st.mcp_secret_store()).unwrap();
+        let now = st.mcp_epoch.load(Ordering::SeqCst);
+        assert!(
+            st.add_mcp_server_if_current(&exec, client, now)
+                .await
+                .is_some()
+        );
+        assert!(exec.client("gh").is_some());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_reply_that_does_not_stop_is_reported() {
+        let (st, _exec, _keys) = state_with_executor();
+        let c = st.create_conversation().unwrap();
+        // Reserved and never released: the reply ignores the cancel.
+        let (_token, _cancel) = st.reserve(c.id).unwrap().into_parts();
+        let failed = st.delete_all_local_data().await;
+        assert!(
+            failed.iter().any(|f| f.contains("still being written")),
             "{failed:?}"
         );
     }

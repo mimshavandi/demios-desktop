@@ -210,14 +210,15 @@ describe("App", () => {
       return update(s);
     };
     render(<App api={api} />);
-    expect(await screen.findByText(/Demios is an AI assistant/)).toBeTruthy();
+    expect(await screen.findByText(/Demios lets you chat with AI models you choose/)).toBeTruthy();
     // The persistent line is part of the composer's description for screen readers.
     const box = screen.getByLabelText("Message");
     expect(box.getAttribute("aria-describedby")).toContain("composer-disclosure");
     expect(document.getElementById("composer-disclosure")?.textContent).toContain("can be wrong");
 
     fireEvent.click(screen.getByRole("button", { name: "Got it" }));
-    await waitFor(() => expect(screen.queryByText(/Demios is an AI assistant/)).toBeNull());
+    await waitFor(() => expect(screen.queryByText(/Demios lets you chat with AI models you choose/)).toBeNull());
+    expect(document.activeElement).toBe(box);
     expect(saved).toMatchObject({ ai_notice_seen: true });
     // The line by the composer stays.
     expect(document.getElementById("composer-disclosure")).toBeTruthy();
@@ -240,7 +241,7 @@ describe("App", () => {
     await api.updateSettings({ slots: {}, telemetry_enabled: false, ai_notice_seen: true });
     render(<App api={api} />);
     expect(await screen.findByText("What can I help with?")).toBeTruthy();
-    expect(screen.queryByText(/Demios is an AI assistant/)).toBeNull();
+    expect(screen.queryByText(/Demios lets you chat with AI models you choose/)).toBeNull();
     expect(document.getElementById("composer-disclosure")).toBeTruthy();
   });
 

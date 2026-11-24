@@ -12,6 +12,7 @@ import {
   type Id,
   type McpServerStatus,
   type ModelCatalog,
+  type Settings,
   type UnknownOutcome,
 } from "../ipc/types";
 import { chatModel, chatModelReady, describeModel } from "../models";
@@ -85,15 +86,17 @@ function Shell({ api }: { api: Api }) {
   // "Delete all local data" brings it back.
   const showAiNotice = catalog !== null && catalog.settings.ai_notice_seen !== true;
   const dismissAiNotice = useCallback(async () => {
-    if (catalog === null) return;
+    const hide = (settings: Settings) =>
+      setCatalog((c) => (c === null ? c : { ...c, settings: { ...settings, ai_notice_seen: true } }));
     try {
-      const settings = await api.updateSettings({ ...catalog.settings, ai_notice_seen: true });
-      setCatalog({ ...catalog, settings });
+      // Start from the stored settings, not this render's copy (another screen may have saved).
+      const current = await api.getSettings();
+      hide(await api.updateSettings({ ...current, ai_notice_seen: true }));
     } catch {
       // Hide it for this session anyway; it comes back next start if saving failed.
-      setCatalog({ ...catalog, settings: { ...catalog.settings, ai_notice_seen: true } });
+      setCatalog((c) => (c === null ? c : { ...c, settings: { ...c.settings, ai_notice_seen: true } }));
     }
-  }, [api, catalog]);
+  }, [api]);
 
   const refreshConversations = useCallback(async () => {
     try {

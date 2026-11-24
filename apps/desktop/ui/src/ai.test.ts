@@ -10,6 +10,13 @@ describe("AI-generated markers", () => {
 
   it("keeps the XML comment well-formed", () => {
     expect(aiGeneratorComment("a--b")).toBe("<!-- generator: Demios (AI-generated with a- -b) -->");
+    for (const evil of ["x--->", "---", "-->", "a-->b", "--"]) {
+      const c = aiGeneratorComment(evil);
+      const inner = c.slice("<!--".length, -"-->".length);
+      expect(inner.includes("--"), `${evil} -> ${c}`).toBe(false);
+      expect(inner.endsWith("-"), `${evil} -> ${c}`).toBe(false);
+    }
+    expect(aiGeneratorComment("x--->")).toBe("<!-- generator: Demios (AI-generated with x- - ->) -->");
   });
 
   it("writes Markdown front matter", () => {

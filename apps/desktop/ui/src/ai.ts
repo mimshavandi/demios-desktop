@@ -11,7 +11,7 @@ export const AI_DISCLOSURE = "Answers come from the AI model you chose and can b
 
 /** Shown once on first run, until the user dismisses it. */
 export const AI_FIRST_RUN_NOTICE =
-  "Demios is an AI assistant. Answers are written by the model you choose: one running on this computer, or a provider you add a key for. They can be wrong or made up, so check anything important.";
+  "Demios lets you chat with AI models you choose: one running on this computer, or a provider you add a key for. Their answers can be wrong or made up, so check anything important.";
 
 /** Escapes text for an HTML attribute value. */
 function attr(s: string): string {
@@ -31,9 +31,12 @@ export function aiGeneratorMeta(model: string | null): string {
   return `<meta name="generator" content="${attr(generatorText(model))}">`;
 }
 
-/** Comment form of the marker for SVG or other XML artifacts. */
+/**
+ * Comment form of the marker for SVG or other XML artifacts. XML comments may not contain
+ * "--", so every hyphen followed by another gets a space after it ("-->" can't appear).
+ */
 export function aiGeneratorComment(model: string | null): string {
-  return `<!-- generator: ${generatorText(model).replace(/--/g, "- -")} -->`;
+  return `<!-- generator: ${generatorText(model).replace(/-(?=-)/g, "- ")} -->`;
 }
 
 /** Front matter for Markdown exports of model-made text. */

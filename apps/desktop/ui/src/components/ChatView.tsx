@@ -57,6 +57,7 @@ const EXAMPLES = [
 ];
 
 export function ChatView(p: Props) {
+  const connectRef = useRef<HTMLButtonElement>(null);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
@@ -105,7 +106,16 @@ export function ChatView(p: Props) {
             <InlineMessage
               tone="info"
               action={
-                <Button size="sm" onClick={p.onDismissAiNotice}>
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    p.onDismissAiNotice?.();
+                    // The notice goes away; don't drop focus to the page (§7).
+                    const box = p.composerRef.current;
+                    if (box !== null && !box.disabled) box.focus();
+                    else connectRef.current?.focus();
+                  }}
+                >
                   Got it
                 </Button>
               }
@@ -240,7 +250,7 @@ export function ChatView(p: Props) {
               <ArrowUp {...ICON} aria-hidden="true" />
             </IconButton>
           ) : (
-            <Button variant="primary" size="sm" onClick={p.onConnect}>
+            <Button ref={connectRef} variant="primary" size="sm" onClick={p.onConnect}>
               Connect a model
             </Button>
           )}

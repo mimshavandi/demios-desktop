@@ -25,7 +25,7 @@ Demios Desktop runs AI models the user chooses: local GGUF models through llama.
     - `aiFrontMatter()` for Markdown.
   - If image generation is ever added, it needs C2PA metadata as well.
 - **Show where an answer ran.** The model badge says "on this device" or names the provider. Provider rows in Settings say that messages go to that provider.
-- **Never auto-approve.** Model-requested actions with side effects need the user's approval, as described in the design system §4 approval card.
+- **Side effects need approval; read-only tools may run without asking.** A model-requested action that changes something needs the user's approval, as described in the design system §4 approval card. The approval never times out into "allow". Tools marked read-only (`RiskTier::Read`) run without asking.
 
 ## Known gaps
 
