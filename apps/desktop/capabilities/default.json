@@ -1,0 +1,22 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The main window may call the app's own chat, history and settings commands, and nothing else (no fs, shell, http or opener plugins).",
+  "windows": ["main"],
+  "permissions": [
+    "allow-app-info",
+    "allow-list-conversations",
+    "allow-create-conversation",
+    "allow-rename-conversation",
+    "allow-delete-conversation",
+    "allow-list-messages",
+    "allow-send-message",
+    "allow-regenerate",
+    "allow-stop-generation",
+    "allow-get-settings",
+    "allow-update-settings",
+    "allow-list-models",
+    "allow-set-provider-key",
+    "allow-delete-provider-key"
+  ]
+}

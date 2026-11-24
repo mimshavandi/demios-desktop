@@ -10,5 +10,18 @@ Every direct dependency is listed here with why and its licence (ADR-0009). Appr
 | futures-core | dn-core | `Stream` trait for `ChatModel::chat` | MIT/Apache-2.0 | T-CORE-01 |
 | rusqlite 0.43 (`bundled`) | dn-store | SQLite store and migration runner (ADR-0007); bundled SQLite so all three OSes build the same | MIT (SQLite: public domain) | T-CORE-02 |
 | ts-rs 12 (optional, `ts` feature; `serde-compat`, no default features) | dn-core | TypeScript bindings for the UI in `crates/dn-core/bindings/`; not in the default build | MIT | T-CORE-04 |
+| tauri 2, tauri-build 2 | apps/desktop | desktop shell, typed IPC, capabilities (ADR-0002, D-006) | MIT/Apache-2.0 | T-SHELL-01 |
+| tokio (`sync`, `macros`, `time`, `rt`) | apps/desktop | cancel a streaming answer (`select!` + `oneshot`); timer for the dev fake model | MIT | T-SHELL-01 |
+
+### UI (npm, `apps/desktop/package.json`)
+
+| Package | Why | Licence | Added in |
+|---|---|---|---|
+| react, react-dom 19 | UI framework (see the T-SHELL-01 PR for React vs Solid) | MIT | T-SHELL-01 |
+| @tauri-apps/api ~2.11 | `invoke` + `Channel` for typed IPC; pinned to the Rust `tauri` minor | MIT/Apache-2.0 | T-SHELL-01 |
+| marked | markdown → HTML for chat messages | MIT | T-SHELL-01 |
+| dompurify | sanitises rendered model output | MPL-2.0 OR Apache-2.0 | T-SHELL-01 |
+| highlight.js (core + 13 languages) | code highlighting | BSD-3-Clause | T-SHELL-01 |
+| dev: typescript 7, vite 8, @vitejs/plugin-react, vitest, @testing-library/react, jsdom, @types/react(-dom), @tauri-apps/cli ~2.11 | strict typecheck, build, unit tests, `tauri dev/build` | MIT / Apache-2.0 | T-SHELL-01 |
 
 Approved for wave 1 (D-012), add a row when first used: tauri 2, tokio, serde_yaml (or a maintained successor), llama-cpp-2, rmcp, rusqlite (chosen over sqlx: sync, SQLCipher + sqlite-vec support), keyring, reqwest, axum (team server).
