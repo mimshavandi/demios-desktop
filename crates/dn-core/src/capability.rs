@@ -1,0 +1,90 @@
+//! Tool capabilities, risk and preflight (ADR-0006).
+//! Ported concepts: Demios `AppCapability`, `capability_preflight.py`, Twin `approval_policy.py`.
+
+use serde::{Deserialize, Serialize};
+
+/// Side-effect risk of a capability. Ordered from least to most dangerous.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RiskTier {
+    Read,
+    LowWrite,
+    ExternalWrite,
+    Destructive,
+    Sensitive,
+}
+
+impl RiskTier {
+    /// Only reads run without asking by default (ADR-0006).
+    pub fn default_approval(self) -> ApprovalPolicy {
+        match self {
+            Self::Read => ApprovalPolicy::Auto,
+            Self::LowWrite => ApprovalPolicy::AskOncePerConversation,
+            _ => ApprovalPolicy::AlwaysAsk,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalPolicy {
+    AlwaysAsk,
+    AskOncePerConversation,
+    Auto,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CapabilitySource {
+    Builtin,
+    Mcp { server_id: String },
+    Skill { skill_id: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CapabilitySpec {
+    /// Dotted, globally unique, e.g. `mcp.filesystem.write_file`.
+    pub id: String,
+    pub source: CapabilitySource,
+    pub description: String,
+    pub input_schema: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_schema: Option<serde_json::Value>,
+    pub risk: RiskTier,
+    /// Input field whose value makes a write idempotent (enables safe retry/replay).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency_key_field: Option<String>,
+}
+
+impl CapabilitySpec {
+    /// Auto-retry is allowed only for reads and idempotent writes (Demios rule).
+    pub fn retry_safe(&self) -> bool {
+        self.risk == RiskTier::Read || self.idempotency_key_field.is_some()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum Preflight {
+    Ready,
+    NeedsInput { missing_fields: Vec<String> },
+    NeedsConnection { server_id: String },
+    ScopeMissing { scopes: Vec<String> },
+    ApprovalRequired,
+    Blocked { reason: String },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_reads_are_auto() {
+        assert_eq!(RiskTier::Read.default_approval(), ApprovalPolicy::Auto);
+        assert_eq!(
+            RiskTier::ExternalWrite.default_approval(),
+            ApprovalPolicy::AlwaysAsk
+        );
+        assert!(RiskTier::Destructive > RiskTier::LowWrite);
+    }
+}
