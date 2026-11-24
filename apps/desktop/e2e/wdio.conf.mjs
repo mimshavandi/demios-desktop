@@ -6,8 +6,6 @@
 //   DEMIOS_E2E_APP   path to the built app (default: target/debug/demios-desktop[.exe])
 //   TAURI_DRIVER     path to tauri-driver (default: ~/.cargo/bin/tauri-driver[.exe])
 //   MSEDGEDRIVER     Windows: path to msedgedriver matching the installed WebView2
-//   DEMIOS_E2E_WIN_DEVTOOLS  Windows: how msedgedriver finds the WebView2 DevTools endpoint,
-//                    any of `port`, `udd` joined by `+` (default `port`). See README.md.
 
 import { spawn } from "node:child_process";
 import fs from "node:fs";
@@ -31,23 +29,6 @@ process.env.DEMIOS_DATA_DIR = dataDir;
 // Slow the dev fake model down so Stop lands mid-answer.
 process.env.DEMIOS_FAKE_DELAY_MS ??= "80";
 
-// Windows (T-SHELL-06): msedgedriver starts WebView2 with `--remote-debugging-port=0` and then
-// looks for the `DevToolsActivePort` file in the user-data folder it expects. Tauri gives
-// WebView2 its own folder (%LOCALAPPDATA%\<identifier>\EBWebView), so the file lands
-// elsewhere and session creation times out. Browser args reach WebView2 through
-// tauri:options.args -> ms:edgeOptions.args:
-//   port: a fixed --remote-debugging-port, so the driver connects to it directly;
-//   udd:  --user-data-dir set to the app's real WebView2 folder, so the driver looks there.
-const winDevtools = (process.env.DEMIOS_E2E_WIN_DEVTOOLS ?? "port").split("+");
-const winArgs = [];
-if (win) {
-  if (winDevtools.includes("udd")) {
-    const ebwebview = path.join(process.env.LOCALAPPDATA ?? "", "io.demios.app", "EBWebView");
-    winArgs.push(`--user-data-dir=${ebwebview}`);
-  }
-  if (winDevtools.includes("port")) winArgs.push("--remote-debugging-port=9222");
-}
-
 let driver;
 
 export const config = {
@@ -61,7 +42,7 @@ export const config = {
       maxInstances: 1,
       // tauri-driver speaks classic WebDriver only.
       "wdio:enforceWebDriverClassic": true,
-      "tauri:options": { application, ...(winArgs.length ? { args: winArgs } : {}) },
+      "tauri:options": { application },
     },
   ],
   logLevel: "warn",
@@ -77,7 +58,6 @@ export const config = {
       );
     }
     console.log(`e2e data dir: ${dataDir}`);
-    if (win) console.log(`WebView2 DevTools strategy: ${winDevtools.join("+")} -> ${JSON.stringify(winArgs)}`);
   },
 
   // tauri-driver stays up for the whole worker, so reloadSession() relaunches the app
