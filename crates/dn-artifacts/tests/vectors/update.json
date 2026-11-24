@@ -1,0 +1,13 @@
+{
+  "_comment": "Exact-match update semantics shared by the Rust store and ui/artifact-sandbox's in-memory store. Matches are counted overlapping.",
+  "cases": [
+    { "name": "one match", "content": "<h1>Hello</h1>", "old_str": "Hello", "new_str": "Hi", "expect": { "ok": "<h1>Hi</h1>" } },
+    { "name": "zero matches", "content": "<h1>Hello</h1>", "old_str": "hello", "new_str": "x", "expect": { "error": "no_match" } },
+    { "name": "many matches", "content": "<li>a</li><li>b</li><li>c</li>", "old_str": "<li>", "new_str": "<li class=x>", "expect": { "error": "ambiguous", "count": 3 } },
+    { "name": "overlapping", "content": "xaaay", "old_str": "aa", "new_str": "b", "expect": { "error": "ambiguous", "count": 2 } },
+    { "name": "empty old_str", "content": "abc", "old_str": "", "new_str": "x", "expect": { "error": "empty_old_str" } },
+    { "name": "delete text", "content": "keep-drop-keep", "old_str": "-drop", "new_str": "", "expect": { "ok": "keep-keep" } },
+    { "name": "multibyte", "content": "سلام 👋 world", "old_str": "👋", "new_str": "🌍", "expect": { "ok": "سلام 🌍 world" } },
+    { "name": "whitespace matters", "content": "a  b", "old_str": "a b", "new_str": "x", "expect": { "error": "no_match" } }
+  ]
+}

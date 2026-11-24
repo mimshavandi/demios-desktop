@@ -648,6 +648,14 @@ dependencies = [
 [[package]]
 name = "dn-artifacts"
 version = "0.1.0"
+dependencies = [
+ "dn-core",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "uuid",
+]
 
 [[package]]
 name = "dn-core"
