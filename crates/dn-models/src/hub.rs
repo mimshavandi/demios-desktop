@@ -10,7 +10,8 @@
 //! 4. Before download, [`HubClient::footprint`] reads only the GGUF header(s) of a variant
 //!    with HTTP range requests (a few MB, growing until the header parses) and returns the
 //!    [`ModelFootprint`] for [`crate::fit`]. To rate every quant of a repo, read one header and
-//!    scale it to the other variants' file sizes with [`estimate_variant`].
+//!    scale it to the other variants' file sizes with [`estimate_variant`] (an
+//!    [`Estimated`] value, so the "estimated" label can't get lost).
 //! 5. [`HubClient::pull`] downloads a variant (resumable, every part checked against its LFS
 //!    sha256; a file without one is refused) and writes a [`SourceManifest`] next to it.
 //!
@@ -765,6 +766,9 @@ impl HubClient {
     /// Bytes `[start, end)` of a repo file, via `Range`. A `200` answer is accepted only for
     /// `start == 0` and is cut at `end` (the rest of the body is never read).
     async fn fetch_range(&self, url: &str, start: u64, end: u64) -> Result<Vec<u8>> {
+        if end <= start {
+            return Ok(vec![]);
+        }
         let u = reqwest::Url::parse(url).map_err(|e| HubError::Parse(e.to_string()))?;
         let mut rb = self
             .http
@@ -824,10 +828,11 @@ impl HubClient {
     }
 
     /// Parse the GGUF header of one repo file from its first bytes only: starts with 1 MiB and
-    /// fetches the next, doubling chunk until the header parses (at most 128 MiB).
+    /// fetches the next, doubling chunk until the header parses (at most
+    /// [`crate::gguf::MAX_HEADER_BYTES`], 64 MiB).
     pub async fn gguf_header(&self, repo: &str, sha: &str, file: &RepoFile) -> Result<Gguf> {
         const FIRST: u64 = 1 << 20;
-        const MAX: u64 = 128 << 20;
+        const MAX: u64 = crate::gguf::MAX_HEADER_BYTES;
         let url = self.file_url(repo, sha, &file.path)?;
         let limit = file.size.min(MAX);
         let mut buf = self.fetch_range(&url, 0, FIRST.min(limit)).await?;
@@ -1055,20 +1060,48 @@ fn next_link(resp: &reqwest::Response) -> Option<String> {
     })
 }
 
-/// Footprint of `other` estimated from `base` (read from the header of a variant of the same
-/// model whose files total `base_size` bytes): architecture and KV shape are shared, and
-/// weights scale with file size. Exact for `base`'s own variant.
+/// A value that may be an estimate. The flag travels with the value so a UI can't show an
+/// estimated fit as if it had been read from that file.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Estimated<T> {
+    pub value: T,
+    /// `true`: derived from another variant's header; `false`: read from this variant.
+    pub estimated: bool,
+}
+
+impl Estimated<ModelFootprint> {
+    /// [`crate::fit`] on the footprint, keeping the flag.
+    pub fn fit(&self, machine: &crate::fit::Machine) -> Estimated<crate::fit::FitReport> {
+        Estimated {
+            value: crate::fit::fit(&self.value, machine),
+            estimated: self.estimated,
+        }
+    }
+}
+
+/// Footprint of `other` from `base_fp`, the footprint read from `base`'s header (same repo,
+/// same model, another quant): architecture and KV shape are shared, and weights scale with
+/// file size. `estimated` is false only for `base` itself.
 pub fn estimate_variant(
-    base: &ModelFootprint,
-    base_size: u64,
+    base_fp: &ModelFootprint,
+    base: &GgufVariant,
     other: &GgufVariant,
-) -> ModelFootprint {
-    let r = other.total_size as f64 / base_size.max(1) as f64;
-    ModelFootprint {
-        weight_bytes: (base.weight_bytes as f64 * r) as u64,
-        expert_bytes: (base.expert_bytes as f64 * r) as u64,
-        quant: other.quant.clone().or_else(|| base.quant.clone()),
-        ..base.clone()
+) -> Estimated<ModelFootprint> {
+    if other == base {
+        return Estimated {
+            value: base_fp.clone(),
+            estimated: false,
+        };
+    }
+    let r = other.total_size as f64 / base.total_size.max(1) as f64;
+    Estimated {
+        value: ModelFootprint {
+            weight_bytes: (base_fp.weight_bytes as f64 * r) as u64,
+            expert_bytes: (base_fp.expert_bytes as f64 * r) as u64,
+            quant: other.quant.clone().or_else(|| base_fp.quant.clone()),
+            ..base_fp.clone()
+        },
+        estimated: true,
     }
 }
 
@@ -1749,10 +1782,23 @@ mod tests {
             files: vec![],
             total_size: 8_200,
         };
-        let e = estimate_variant(&base, 4_100, &other);
+        let base_v = GgufVariant {
+            name: "m-Q4_K_M".into(),
+            quant: Some("Q4_K_M".into()),
+            kind: VariantKind::Model,
+            files: vec![],
+            total_size: 4_100,
+        };
+        let e = estimate_variant(&base, &base_v, &other);
+        assert!(e.estimated);
+        let e = e.value;
         assert_eq!((e.weight_bytes, e.expert_bytes), (8_000, 4_000));
         assert_eq!(e.quant.as_deref(), Some("Q8_0"));
         assert_eq!(e.kv_elems_per_token, 128);
+        // The variant whose header was read is exact.
+        let own = estimate_variant(&base, &base_v, &base_v);
+        assert!(!own.estimated);
+        assert_eq!(own.value, base);
     }
 
     #[tokio::test]
