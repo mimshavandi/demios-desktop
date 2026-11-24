@@ -4,6 +4,7 @@ const COMMANDS: &[&str] = &[
     "app_info",
     "delete_all_local_data",
     "local_data_summary",
+    "report_problem",
     "list_conversations",
     "create_conversation",
     "rename_conversation",

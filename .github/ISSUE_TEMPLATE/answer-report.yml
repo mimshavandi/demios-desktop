@@ -1,0 +1,43 @@
+name: Report an answer
+description: A model's answer was harmful, offensive, unsafe or otherwise worth reporting.
+labels: ["answer-report", "from-app"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Demios doesn't write answers: they come from the model you chose, running on your computer or at a provider you added a key for. Reports help us improve defaults, warnings and documentation.
+
+        This issue is **public**. Nothing from your chat was sent. Include only what you are comfortable sharing, and never keys, tokens or personal data.
+  - type: dropdown
+    id: reason
+    attributes:
+      label: What's wrong with the answer?
+      options:
+        - Harmful or dangerous
+        - Hateful, harassing or sexual content
+        - Wrong or misleading in a way that matters
+        - Something else
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: Describe the answer, or paste a short excerpt if you want to.
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Model
+      description: Filled in by the app (the model that wrote the answer).
+  - type: input
+    id: version
+    attributes:
+      label: App version
+      description: Filled in by the app.
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      description: Filled in by the app.

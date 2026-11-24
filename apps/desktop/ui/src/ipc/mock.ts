@@ -208,6 +208,10 @@ export function createMockApi(): Api {
 
   return {
     appInfo: async () => ({ version: "0.1.0 (browser mock)", dev_fake_model: true, data_dir: null, models_dir: null }),
+    reportProblem: async (kind, messageId) => {
+      console.info("mock: would open the report form", kind, messageId);
+      return null;
+    },
     localDataSummary: async () => ({
       conversations: convs.filter((c) => !deleted.has(c.id)).length,
       data_dir: null,

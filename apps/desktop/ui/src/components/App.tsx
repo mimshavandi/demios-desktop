@@ -12,6 +12,7 @@ import {
   type Id,
   type McpServerStatus,
   type ModelCatalog,
+  type ReportKind,
   type Settings,
   type UnknownOutcome,
 } from "../ipc/types";
@@ -85,6 +86,18 @@ function Shell({ api }: { api: Api }) {
   // First-run AI notice (T-STORE-09): shown until dismissed; the dismissal is a setting, so
   // "Delete all local data" brings it back.
   const showAiNotice = catalog !== null && catalog.settings.ai_notice_seen !== true;
+  const report = useCallback(
+    async (kind: ReportKind, messageId: Id | null) => {
+      try {
+        await api.reportProblem(kind, messageId);
+        toast({ tone: "info", title: "Opened the report form in your browser" });
+      } catch (e) {
+        toast({ tone: "error", title: errorMessage(e) });
+      }
+    },
+    [api, toast],
+  );
+
   const dismissAiNotice = useCallback(async () => {
     const hide = (settings: Settings) =>
       setCatalog((c) => (c === null ? c : { ...c, settings: { ...settings, ai_notice_seen: true } }));
@@ -481,6 +494,7 @@ function Shell({ api }: { api: Api }) {
             onDecide={decide}
             unknowns={unknowns}
             onResolveUnknown={resolveUnknown}
+            onReportAnswer={(m) => void report("answer", m)}
             aiNotice={showAiNotice}
             onDismissAiNotice={() => void dismissAiNotice()}
           />
