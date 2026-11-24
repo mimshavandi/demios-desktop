@@ -21,6 +21,12 @@ Every direct dependency is listed here with why and its licence (ADR-0009). Appr
 | reqwest 0.13 (rustls) | dn-tools | HTTP client handed to rmcp (no redirects for MCP traffic) | MIT/Apache-2.0 | T-CON-01 |
 | axum 0.8 (dev only) | dn-tools tests | in-process Streamable HTTP + OAuth test servers | MIT | T-CON-01 |
 | process-wrap 10 (tokio1, process-group, job-object) | dn-tools | stdio MCP servers run in their own process group (Unix) / job object (Windows) so shutdown also stops grandchildren (e.g. npx → node); same major version rmcp already uses | Apache-2.0 OR MIT | T-CON-01 |
+| tokio | dn-inference, dn-models, dn | async runtime, channels, fs for downloads | MIT | T-INF-01 |
+| llama-cpp-2 (+ llama-cpp-sys-2, builds llama.cpp) | dn-inference | in-process llama.cpp backend; `metal` on macOS, `cuda`/`vulkan` features | MIT/Apache-2.0 (llama.cpp: MIT) | T-INF-02 |
+| reqwest 0.13 (rustls) | dn-models, dn-inference | resumable model downloads (HTTPS only, read timeout); `/v1/embeddings` for OpenAI-compatible servers (chat goes through dn-providers) | MIT/Apache-2.0 | T-INF-05, T-INF-06 |
+| sha2 | dn-models | SHA-256 verification of downloads | MIT/Apache-2.0 | T-INF-05 |
+| sysinfo (`system`; `disk` in dn-models) | dn-models, dn | RAM detection for the fit estimator; free disk space before a model download; peak RSS in `dn bench` | MIT | T-INF-03 |
+| clap (derive) | dn | `dn` command-line parsing | MIT/Apache-2.0 | T-INF-04 |
 | tauri 2, tauri-build 2 | apps/desktop | desktop shell, typed IPC, capabilities (ADR-0002, D-006) | MIT/Apache-2.0 | T-SHELL-01 |
 | tokio (`sync`, `macros`, `time`, `rt`) | apps/desktop | cancel a streaming answer (`select!` + `oneshot`); timer for the dev fake model | MIT | T-SHELL-01 |
 

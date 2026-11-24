@@ -16,11 +16,15 @@ The lead session plans, writes briefs, reviews every PR against its done-check, 
 | T-PRV-01..02 | W-providers | #8 | done |
 | T-AGT-01, 03 (+ loop) | W-providers | #15 | done |
 | T-SHELL-01..03 | W-shell | #14 | done (real-window check replaced by T-SHELL-05 e2e, D-015) |
-| T-INF-01..06 | W-inference | #12 | review fixes pending |
-| T-ART-01..05 | W-artifacts | #11, #16 | review fixes pending |
+| T-INF-01..06 | W-inference | #12 | final fixes pending (Windows free-space check) |
+| T-ART-01..05 | W-artifacts | #11, #16 | done |
 | T-ART-06 (sandbox in the app + in-app escape suite) | W-artifacts | – | after #16 |
-| T-SHELL-04 (wire real backends + approval cards) | W-shell | – | in progress |
-| T-SHELL-05 (real-app e2e, Linux + Windows) | W-shell | – | in progress |
+| T-SHELL-04 (wire real backends + approval cards) | W-shell | #22 | done |
+| T-SHELL-05 (real-app e2e, Linux + Windows) | W-shell | #23 | Linux green; Windows split out |
+| T-SHELL-06 (Windows e2e: WebView2 driver handshake) | W-shell | – | follow-up |
+| T-INF-08..12 (HF Hub source, fit preview, add-model UI, HF cache, deep links — ADR-0011) | W-inference | – | after #12 |
+| T-STORE-01 (app-store-compliance audit + verdict) | W-store | – | in progress |
+| T-PRV-04 (SSE idle timeout; thinking switch for local OpenAI-compatible servers) | – | – | follow-up |
 | T-INF-07 (fit estimator drives `dn run` defaults) | W-inference | – | follow-up |
 | T-DES-02 | lead | – | after #14 |
 

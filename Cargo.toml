@@ -34,6 +34,13 @@ dn-store = { path = "crates/dn-store", version = "0.1.0" }
 dn-agent = { path = "crates/dn-agent", version = "0.1.0" }
 dn-secrets = { path = "crates/dn-secrets", version = "0.1.0" }
 process-wrap = { version = "10", default-features = false, features = ["tokio1", "process-group", "job-object"] }
+dn-providers = { path = "crates/dn-providers", version = "0.1.0" }
+dn-inference = { path = "crates/dn-inference", version = "0.1.0", default-features = false }
+dn-models = { path = "crates/dn-models", version = "0.1.0" }
+llama-cpp-2 = { version = "0.1.161", default-features = false, features = ["common"] }
+sha2 = "0.11"
+sysinfo = { version = "0.36", default-features = false, features = ["system"] }
+clap = { version = "4", features = ["derive"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
