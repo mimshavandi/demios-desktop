@@ -18,7 +18,7 @@ describe("Licences", () => {
     render(<Licences load={async () => data} />);
     fireEvent.click(screen.getByRole("button", { name: "Show licences" }));
     expect(await screen.findByRole("button", { name: /tokio/ })).toBeTruthy();
-    expect(screen.getByText("3 of 3 packages")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toBe("3 of 3 packages");
 
     fireEvent.change(screen.getByLabelText("Search packages"), { target: { value: "apache" } });
     expect(screen.queryByRole("button", { name: /tokio/ })).toBeNull();
@@ -58,14 +58,20 @@ describe("Licences", () => {
     expect(await screen.findByRole("button", { name: /tokio/ })).toBeTruthy();
   });
 
-  it("treats a 404 or a non-list response (dev server fallback) as missing", async () => {
-    const res = (status: number, body: unknown) =>
-      (async () => new Response(JSON.stringify(body), { status })) as unknown as typeof fetch;
-    expect(await loadLicences(res(404, {}))).toBeNull();
-    expect(await loadLicences(res(200, { html: true }))).toBeNull();
-    const html = (async () => new Response("<!doctype html><html></html>", { status: 200 })) as unknown as typeof fetch;
-    expect(await loadLicences(html)).toBeNull();
-    expect((await loadLicences(res(200, data)))?.packages.length).toBe(3);
-    await expect(loadLicences(res(500, {}))).rejects.toThrow("HTTP 500");
+  it("loads the bundled module; no module or a wrong shape means missing", async () => {
+    const mod = (d: unknown) => ({ "../generated/licenses.json": async () => ({ default: d }) });
+    expect(await loadLicences({})).toBeNull();
+    expect(await loadLicences(mod({ html: true }))).toBeNull();
+    expect(await loadLicences(mod(null))).toBeNull();
+    expect((await loadLicences(mod(data)))?.packages.length).toBe(3);
+  });
+
+  it("hides the list and returns focus to Show licences", async () => {
+    render(<Licences load={async () => data} />);
+    fireEvent.click(screen.getByRole("button", { name: "Show licences" }));
+    await screen.findByRole("button", { name: /tokio/ });
+    expect(screen.getByRole("status").textContent).toBe("3 of 3 packages");
+    fireEvent.click(screen.getByRole("button", { name: "Hide" }));
+    await waitFor(() => expect(document.activeElement?.textContent).toBe("Show licences"));
   });
 });

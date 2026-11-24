@@ -1,7 +1,8 @@
 // npm run test:scripts (T-STORE-07): the licence checks that gate CI.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { acceptedIds, build, missingRequired, satisfied } from "./licenses.mjs";
+import { acceptedIds, build, dedupe, listRequired, missingRequired, satisfied } from "./licenses.mjs";
+import { npmLs } from "./npm-licenses.mjs";
 
 const accepted = new Set(["MIT", "Apache-2.0", "ISC", "Apache-2.0 WITH LLVM-exception"]);
 
@@ -55,4 +56,29 @@ test("texts are stored once and referenced by index", () => {
 test("llama.cpp and SQLite must be listed", () => {
   const data = { packages: [{ name: "SQLite" }], texts: [] };
   assert.deepEqual(missingRequired(data), ["llama.cpp and ggml"]);
+});
+
+test("release builds require the list; dev and debug builds may skip it", () => {
+  const skip = new Set(["--if-available"]);
+  assert.equal(listRequired({}, skip), false);
+  assert.equal(listRequired({ TAURI_ENV_DEBUG: "true" }, skip), false);
+  assert.equal(listRequired({ TAURI_ENV_DEBUG: "false" }, skip), true);
+  assert.equal(listRequired({ DEMIOS_REQUIRE_LICENSES: "1" }, skip), true);
+  assert.equal(listRequired({}, new Set()), true);
+});
+
+test("npm ls: a non-zero exit with JSON output is used, without JSON it fails", () => {
+  const failing = (stdout) => () => {
+    const e = new Error("exit 1");
+    e.stdout = stdout;
+    e.stderr = "npm error extraneous: x";
+    throw e;
+  };
+  assert.equal(npmLs(".", failing('{"dependencies":{}}')), '{"dependencies":{}}');
+  assert.throws(() => npmLs(".", failing("")), /exit 1/);
+});
+
+test("packages shared by several npm roots are listed once", () => {
+  const p = { name: "a", version: "1", licence: "MIT", texts: ["t"] };
+  assert.equal(dedupe([p, { ...p }, { ...p, version: "2" }]).length, 2);
 });

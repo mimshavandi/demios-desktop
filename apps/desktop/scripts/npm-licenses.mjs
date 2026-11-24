@@ -12,16 +12,33 @@ import { fileURLToPath } from "node:url";
 
 const LICENCE_FILE = /^(licen[cs]e|copying|notice)([-._].*)?$/i;
 
+/**
+ * `npm ls` output. npm exits 1 when the tree has extraneous or invalid packages but still prints
+ * the full JSON; use it then, and fail only when there is no JSON at all.
+ */
+export function npmLs(cwd, run = execFileSync) {
+  try {
+    return run("npm", ["ls", "--omit=dev", "--all", "--json", "--long"], {
+      cwd,
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "pipe"],
+      // On Windows `npm` is a .cmd shim.
+      shell: process.platform === "win32",
+    });
+  } catch (e) {
+    const out = typeof e?.stdout === "string" ? e.stdout : (e?.stdout?.toString?.() ?? "");
+    if (out.trim().startsWith("{")) {
+      console.warn(`warning: npm ls reported problems (${String(e?.stderr ?? "").trim().split("\n")[0]}); using its output`);
+      return out;
+    }
+    throw e;
+  }
+}
+
 /** @returns {{ name: string, version: string, licence: string, texts: string[] }[]} */
 export function npmLicences(appDir) {
-  const out = execFileSync("npm", ["ls", "--omit=dev", "--all", "--json", "--long"], {
-    cwd: appDir,
-    encoding: "utf8",
-    maxBuffer: 64 * 1024 * 1024,
-    // On Windows `npm` is a .cmd shim.
-    shell: process.platform === "win32",
-  });
-  const root = JSON.parse(out);
+  const root = JSON.parse(npmLs(appDir));
   const seen = new Map();
   const walk = (node) => {
     for (const [name, dep] of Object.entries(node.dependencies ?? {})) {

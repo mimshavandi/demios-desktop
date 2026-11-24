@@ -1,5 +1,6 @@
 {
   "//": "C/C++ code compiled into the app from -sys crates, which cargo-about can't see (T-STORE-07). Review this list when llama-cpp-2 / rusqlite are upgraded or their features change. Texts are copied from the vendored sources into licenses/.",
+  "npm_roots": ["ui/artifact-sandbox"],
   "packages": [
     {
       "name": "llama.cpp and ggml",

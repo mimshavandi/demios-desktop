@@ -1,4 +1,5 @@
-// Builds ui/public/licenses.json for Settings › About › Open-source licences (T-STORE-07).
+// Builds ui/src/generated/licenses.json for Settings › About › Open-source licences
+// (T-STORE-07). The UI bundles it as a lazily loaded module, so no fetch and no CSP change.
 //
 // Sources:
 // - Rust: `cargo about generate --format json` on the app's dependency graph (normal deps only;
@@ -13,11 +14,12 @@
 //   node scripts/licenses.mjs            generate (fails if cargo-about is missing)
 //   node scripts/licenses.mjs --if-available
 //                                        skip with a warning when cargo-about is missing, unless
-//                                        DEMIOS_REQUIRE_LICENSES=1 (release builds)
+//                                        this is a release build: `tauri build` without --debug
+//                                        (TAURI_ENV_DEBUG=false) or DEMIOS_REQUIRE_LICENSES=1
 //   node scripts/licenses.mjs --check    generate into memory and validate only (CI)
 
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,7 +27,15 @@ import { npmLicences } from "./npm-licenses.mjs";
 
 const appDir = fileURLToPath(new URL("..", import.meta.url));
 const repoDir = join(appDir, "..", "..");
-const outFile = join(appDir, "ui", "public", "licenses.json");
+const outFile = join(appDir, "ui", "src", "generated", "licenses.json");
+
+/** A release build must ship the list; dev, test and debug builds may skip it. */
+export function listRequired(env = process.env, args = new Set()) {
+  if (env.DEMIOS_REQUIRE_LICENSES === "1") return true;
+  // `tauri build` sets TAURI_ENV_DEBUG for beforeBuildCommand: "false" for release builds.
+  if (env.TAURI_ENV_DEBUG === "false") return true;
+  return !args.has("--if-available");
+}
 
 /**
  * SPDX ids accepted for Rust and npm packages: about.toml's top-level `accepted` (mirrors
@@ -133,6 +143,13 @@ export function missingRequired(data, required = REQUIRED) {
   return required.filter((n) => !data.packages.some((p) => p.name === n));
 }
 
+/** One entry per name@version (several npm roots can share packages). */
+export function dedupe(list) {
+  const seen = new Map();
+  for (const p of list) if (!seen.has(`${p.name}@${p.version}`)) seen.set(`${p.name}@${p.version}`, p);
+  return [...seen.values()];
+}
+
 /** Combines and validates; texts are stored once and referenced by index. */
 export function build({ rust, npm, extra, accepted }) {
   const problems = [];
@@ -167,7 +184,7 @@ export function build({ rust, npm, extra, accepted }) {
 
 function main() {
   const args = new Set(process.argv.slice(2));
-  const required = process.env.DEMIOS_REQUIRE_LICENSES === "1" || !args.has("--if-available");
+  const required = listRequired(process.env, args);
   if (!cargoAboutAvailable()) {
     const msg =
       "cargo-about is not installed; the licences screen will say the list isn't in this build. " +
@@ -183,7 +200,12 @@ function main() {
     ...p,
     texts: p.text_files.map((f) => readFileSync(join(appDir, f), "utf8")),
   }));
-  const { problems, data } = build({ rust: rustLicences(), npm: npmLicences(appDir), extra, accepted: acceptedIds() });
+  // Each npm root whose code ships: the UI, plus any listed in licenses-extra.json (e.g. the
+  // artifact sandbox once it has its own package.json). Missing roots are skipped.
+  const extraRoots = JSON.parse(readFileSync(join(appDir, "licenses-extra.json"), "utf8")).npm_roots ?? [];
+  const npm = [appDir, ...extraRoots.map((r) => join(appDir, r)).filter((r) => existsSync(join(r, "package.json")))]
+    .flatMap((r) => npmLicences(r));
+  const { problems, data } = build({ rust: rustLicences(), npm: dedupe(npm), extra, accepted: acceptedIds() });
   for (const n of missingRequired(data)) problems.push(`${n} is missing from the list`);
   if (problems.length > 0) {
     console.error(`Licence check failed:\n  ${problems.join("\n  ")}`);

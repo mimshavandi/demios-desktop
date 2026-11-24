@@ -50,9 +50,9 @@ Every direct dependency is listed here with why and its licence (ADR-0009). Appr
 | Tool | Where | Why | Licence |
 |---|---|---|---|
 | cargo-about 0.9.3 (`--features cli`) | CI job `licences`, release builds; not a crate dependency | licence texts for the app's Rust graph (`about.toml`, accepted list mirrors deny.toml) → Settings › About › Open-source licences | MIT OR Apache-2.0 |
-| `apps/desktop/scripts/npm-licenses.mjs`, `licenses.mjs` | our code, zero dependencies | npm production licences, hand-listed bundled C/C++ (`licenses-extra.json`), validation, `ui/public/licenses.json` (gitignored) | Apache-2.0 (this repo) |
+| `apps/desktop/scripts/npm-licenses.mjs`, `licenses.mjs` | our code, zero dependencies | npm production licences, hand-listed bundled C/C++ (`licenses-extra.json`), validation, `ui/src/generated/licenses.json` (gitignored; bundled as a lazy module, no fetch) | Apache-2.0 (this repo) |
 
-Release builds set `DEMIOS_REQUIRE_LICENSES=1`, so the build fails if cargo-about is missing. Dev and e2e builds skip the list with a warning.
+Release builds (`tauri build` without `--debug`, i.e. `TAURI_ENV_DEBUG=false`, or `DEMIOS_REQUIRE_LICENSES=1`) fail if cargo-about is missing. Dev, test and debug builds skip the list with a warning.
 
 ### e2e (`apps/desktop/e2e`, dev only; D-015)
 

@@ -2,7 +2,7 @@ import { ArrowLeft, ScrollText } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { Button, ICON, InlineMessage, Skeleton, TextField } from "./primitives";
 
-/** ui/public/licenses.json, written by scripts/licenses.mjs (T-STORE-07). */
+/** ui/src/generated/licenses.json, written by scripts/licenses.mjs (T-STORE-07). */
 export interface LicenceData {
   packages: { name: string; version: string; source: "rust" | "npm" | "bundled"; licence: string; texts: number[] }[];
   texts: string[];
@@ -20,18 +20,17 @@ const SOURCE: Record<LicenceData["packages"][number]["source"], string> = {
   bundled: "Bundled C/C++",
 };
 
-export async function loadLicences(fetchFn: typeof fetch = fetch): Promise<LicenceData | null> {
-  const r = await fetchFn("/licenses.json");
-  if (r.status === 404) return null;
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  // Dev servers answer unknown paths with index.html; treat anything but our JSON as missing.
-  let data: Partial<LicenceData>;
-  try {
-    data = JSON.parse(await r.text()) as Partial<LicenceData>;
-  } catch {
-    return null;
-  }
-  return Array.isArray(data.packages) && Array.isArray(data.texts) ? (data as LicenceData) : null;
+// Bundled at build time as a lazily loaded chunk (no fetch: the CSP allows no connect to
+// 'self'). The glob matches nothing when the file wasn't generated, e.g. in dev builds.
+const generated = import.meta.glob<{ default: unknown }>("../generated/licenses.json");
+
+export async function loadLicences(
+  modules: Record<string, () => Promise<{ default: unknown }>> = generated,
+): Promise<LicenceData | null> {
+  const load = Object.values(modules)[0];
+  if (load === undefined) return null;
+  const data = (await load()).default as Partial<LicenceData> | null;
+  return data !== null && Array.isArray(data?.packages) && Array.isArray(data?.texts) ? (data as LicenceData) : null;
 }
 
 /**
@@ -44,6 +43,8 @@ export function Licences({ load = loadLicences }: { load?: () => Promise<Licence
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<number | null>(null);
   const textRef = useRef<HTMLHeadingElement>(null);
+  const showRef = useRef<HTMLButtonElement>(null);
+  const reopened = useRef(false);
   const listButtons = useRef(new Map<number, HTMLButtonElement>());
 
   const fetchData = async () => {
@@ -65,6 +66,11 @@ export function Licences({ load = loadLicences }: { load?: () => Promise<Licence
     if (selected !== null) textRef.current?.focus();
   }, [selected]);
 
+  // After "Hide", focus goes back to "Show licences" (§7).
+  useEffect(() => {
+    if (!open && reopened.current) showRef.current?.focus();
+  }, [open]);
+
   const matches = useMemo(() => {
     if (state.kind !== "ready") return [];
     const q = query.trim().toLowerCase();
@@ -81,7 +87,7 @@ export function Licences({ load = loadLicences }: { load?: () => Promise<Licence
           <span className="dn-help">Demios is built on open-source software. See each package and its licence.</span>
         </div>
         <div className="row-actions">
-          <Button icon={<ScrollText {...ICON} aria-hidden="true" />} onClick={() => setOpen(true)}>
+          <Button ref={showRef} icon={<ScrollText {...ICON} aria-hidden="true" />} onClick={() => setOpen(true)}>
             Show licences
           </Button>
         </div>
@@ -95,7 +101,14 @@ export function Licences({ load = loadLicences }: { load?: () => Promise<Licence
         <h3 id="licences-h" className="card-subhead">
           Open-source licences
         </h3>
-        <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => {
+            reopened.current = true;
+            setOpen(false);
+          }}
+        >
           Hide
         </Button>
       </div>
@@ -107,7 +120,7 @@ export function Licences({ load = loadLicences }: { load?: () => Promise<Licence
       )}
       {state.kind === "missing" && (
         <InlineMessage tone="info">
-          This build doesn't include the licence list. Release builds do. Developers: run npm run licenses.
+          This build doesn't include the licence list. The released app does.
         </InlineMessage>
       )}
       {state.kind === "error" && (
@@ -129,9 +142,11 @@ export function Licences({ load = loadLicences }: { load?: () => Promise<Licence
             type="search"
             value={query}
             placeholder="Name or licence, e.g. tokio or MIT"
-            help={`${matches.length} of ${state.data.packages.length} packages`}
             onChange={(e) => setQuery(e.target.value)}
           />
+          <p className="dn-help" role="status" aria-live="polite">
+            {matches.length} of {state.data.packages.length} packages
+          </p>
           {matches.length === 0 ? (
             <p className="dn-help">No package matches “{query.trim()}”.</p>
           ) : (
