@@ -43,6 +43,15 @@ Every direct dependency is listed here with why and its licence (ADR-0009). Appr
 | lucide-react | icons, 16 px / 1.5 stroke (design standard §4) | ISC | T-SHELL-01 |
 | dev: typescript 7, vite 8, @vitejs/plugin-react, vitest, @testing-library/react, jsdom, @types/react(-dom), @types/node 22, @tauri-apps/cli ~2.11 | strict typecheck, build, unit tests, `tauri dev/build` | MIT / Apache-2.0 | T-SHELL-01 |
 
+### e2e (`apps/desktop/e2e`, dev only; D-015)
+
+| Package | Why | Licence | Added in |
+|---|---|---|---|
+| @wdio/cli, @wdio/local-runner, @wdio/mocha-framework, @wdio/spec-reporter, @wdio/globals 9.33.1 | WebdriverIO runner for the real-app tests (v9: Node 22 LTS, classic WebDriver for tauri-driver) | MIT | T-SHELL-05 |
+| axe-core 4.14.1 | accessibility check on the chat screen (injected via WebDriver) | MPL-2.0 | T-SHELL-05 |
+| tauri-driver 2.0.6 (CI tool, `cargo install --locked`, not a dependency of any crate) | WebDriver server that launches the Tauri app | Apache-2.0 OR MIT | T-SHELL-05 |
+| msedgedriver (CI tool, Windows; runner's copy or Microsoft's download matching WebView2) | native WebDriver for WebView2 | Microsoft | T-SHELL-05 |
+
 Approved for wave 1 (D-012), add a row when first used: tauri 2, tokio, serde_yaml (or a maintained successor), llama-cpp-2, rmcp, rusqlite (chosen over sqlx: sync, SQLCipher + sqlite-vec support), keyring, reqwest, axum (team server).
 
 ## npm (`ui/artifact-sandbox`)
