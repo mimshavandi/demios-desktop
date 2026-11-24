@@ -47,6 +47,10 @@ thiserror.workspace = true
 tauri.workspace = true
 # Opens the "Report a problem" form in the system browser, from Rust only (T-STORE-14).
 tauri-plugin-opener = "2"
+# Native confirm before launching a local MCP server, shown from Rust only (T-SHELL-08).
+tauri-plugin-dialog = "2"
+# Parse the OAuth sign-in URL before opening it (T-SHELL-08); already in the tree via reqwest.
+url = "2"
 tokio = { workspace = true, features = ["sync", "macros", "time", "rt"] }
 
 [dev-dependencies]

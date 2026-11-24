@@ -415,6 +415,21 @@ pre.code .code-copy { position: absolute; top: var(--dn-space-1); right: var(--d
 .data-flow { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--dn-space-3); }
 .data-flow li { display: grid; gap: calc(var(--dn-space-1) / 2); }
 
+/* ---------- MCP tool servers (T-SHELL-08) ---------- */
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: var(--dn-space-3); }
+.mcp-where { font-family: var(--dn-font-mono); font-size: var(--dn-text-xs); overflow-wrap: anywhere; }
+.mcp-actions { padding-top: 0; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
+.mcp-form { display: grid; gap: var(--dn-space-4); }
+.mcp-form h2 { font-size: var(--dn-text-base); line-height: var(--dn-leading-base); font-weight: var(--dn-weight-semibold); }
+.mcp-form h2:focus { outline: none; }
+.mcp-kind, .mcp-values { display: grid; gap: var(--dn-space-2); margin: 0; padding: 0; border: 0; min-width: 0; }
+.mcp-kind legend, .mcp-values legend { font-weight: var(--dn-weight-medium); margin-bottom: var(--dn-space-1); }
+.mcp-kind label, .mcp-secret { display: flex; align-items: center; gap: var(--dn-space-2); }
+.mcp-value-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) auto auto; gap: var(--dn-space-2); align-items: end; }
+.mcp-secret { height: var(--dn-space-8); font-size: var(--dn-text-sm); }
+.mcp-textarea { padding: var(--dn-space-2) var(--dn-space-3); border: 1px solid var(--dn-color-border-strong); border-radius: var(--dn-radius-md); background: var(--dn-color-surface); color: var(--dn-color-text); font-family: var(--dn-font-mono); font-size: var(--dn-text-sm); resize: vertical; }
+.mcp-form-actions { display: flex; justify-content: flex-end; gap: var(--dn-space-2); }
+
 /* ---------- open-source licences (T-STORE-07) ---------- */
 .licences { display: grid; gap: var(--dn-space-3); padding-top: var(--dn-space-3); border-top: 1px solid var(--dn-color-border); }
 .licences-head { display: flex; align-items: center; justify-content: space-between; }

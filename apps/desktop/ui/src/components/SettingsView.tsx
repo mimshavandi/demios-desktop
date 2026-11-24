@@ -14,6 +14,7 @@ import {
 import { Badge, Button, ICON, InlineMessage, Select, Skeleton, TextField, type SelectGroup } from "./primitives";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Licences } from "./Licences";
+import { McpServersCard } from "./McpServers";
 import { LocalModelsCard, formatBytes } from "./LocalModels";
 import { useToast } from "./toast";
 
@@ -211,30 +212,7 @@ function ModelsPage({
 
       <LocalModelsCard api={api} initial={catalog.local_models} onReady={refreshCatalog} />
 
-      {servers.length > 0 && (
-        <section className="card" aria-labelledby="servers-h">
-          <h2 id="servers-h">Tool servers</h2>
-          {[...servers]
-            .sort((a, b) => a.name.localeCompare(b.name))
-            .map((s) => (
-              <div className="row" key={s.server_id} data-testid="mcp-server-row">
-                <div className="row-main">
-                  <span className="row-title">{s.name}</span>
-                  <span className="dn-help">
-                    {s.state === "connected"
-                      ? `${s.tools} ${s.tools === 1 ? "tool" : "tools"}`
-                      : s.state === "connecting"
-                        ? "Connecting…"
-                        : (s.message ?? "Couldn't connect.")}
-                  </span>
-                </div>
-                <Badge tone={s.state === "connected" ? "success" : s.state === "failed" ? "danger" : "neutral"}>
-                  {s.state === "connected" ? "Connected" : s.state === "failed" ? "Failed" : "Connecting"}
-                </Badge>
-              </div>
-            ))}
-        </section>
-      )}
+      <McpServersCard api={api} live={servers} />
 
       <section className="card" aria-labelledby="keys-h">
         <h2 id="keys-h">Provider keys</h2>
