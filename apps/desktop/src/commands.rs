@@ -690,10 +690,17 @@ pub async fn open_link(app: tauri::AppHandle, url: String) -> IpcResult<bool> {
     use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
     use tauri_plugin_opener::OpenerExt;
     let u = crate::links::check_link(&url).map_err(|r| IpcError::invalid(r.0))?;
+    use tauri::Manager;
     let (tx, rx) = tokio::sync::oneshot::channel();
-    app.dialog()
+    let mut dialog = app
+        .dialog()
         .message(crate::links::confirm_text(&u))
-        .title("Open link?")
+        .title("Open link?");
+    // Attached to the main window, so it can't be mistaken for another app's prompt.
+    if let Some(w) = app.get_webview_window("main") {
+        dialog = dialog.parent(&w);
+    }
+    dialog
         .kind(MessageDialogKind::Info)
         .buttons(MessageDialogButtons::OkCancelCustom(
             "Open in browser".into(),

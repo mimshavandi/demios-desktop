@@ -298,7 +298,8 @@ describe("App", () => {
     fireEvent.change(box, { target: { value: "Where?" } });
     fireEvent.keyDown(box, { key: "Enter" });
     await screen.findByRole("button", { name: "Stop answer" });
-    const text = "See [the docs](https://example.com/docs) or [mail us](mailto:a@example.com).";
+    const text =
+      "See [the docs](https://example.com/docs) or [mail us](mailto:a@example.com), https://auto.example/x and [rel](/x).";
     const stored = [...msgs.values()].flat().find((x) => x.role === "assistant");
     if (stored) {
       stored.content = [{ type: "text", text }];
@@ -316,10 +317,28 @@ describe("App", () => {
     expect(links).toEqual(["https://example.com/docs"]);
     expect(window.location.href).toBe(before);
 
+    // Ctrl/Cmd-click is a normal click: same confirmed path, no new window.
+    expect(fireEvent.click(docs, { ctrlKey: true })).toBe(false);
+    expect(fireEvent.click(docs, { metaKey: true })).toBe(false);
+    expect(links).toEqual(["https://example.com/docs", "https://example.com/docs", "https://example.com/docs"]);
+    // Middle-click and drag can't bypass the confirmation.
+    expect(fireEvent(docs, new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 1 }))).toBe(false);
+    expect(docs.getAttribute("draggable")).toBe("false");
+    expect(fireEvent.dragStart(docs)).toBe(false);
+    expect(links.length).toBe(3);
+    // A bare URL is autolinked and takes the same path.
+    fireEvent.click(screen.getByRole("link", { name: "https://auto.example/x" }));
+    expect(links[3]).toBe("https://auto.example/x");
+    // A relative link loses its href when sanitised: not a link, clicking does nothing.
+    expect(screen.queryByRole("link", { name: "rel" })).toBeNull();
+    fireEvent.click(screen.getByText("rel"));
+    expect(links.length).toBe(4);
+    links.splice(0);
+
     // Only http(s) opens: the backend refuses anything else and the user is told why.
     refuse = true;
     fireEvent.click(screen.getByRole("link", { name: "mail us" }));
-    expect(links[1]).toBe("mailto:a@example.com");
+    expect(links[0]).toBe("mailto:a@example.com");
     expect(await screen.findByText("Only web links (http and https) open from answers.")).toBeTruthy();
   });
 

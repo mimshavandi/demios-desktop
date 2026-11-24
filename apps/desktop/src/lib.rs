@@ -69,9 +69,12 @@ impl mcp::LaunchApprover for NativeLaunchApprover {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>> {
         use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
         let (tx, rx) = tokio::sync::oneshot::channel();
-        self.0
-            .dialog()
-            .message(request.dialog_text())
+        use tauri::Manager;
+        let mut dialog = self.0.dialog().message(request.dialog_text());
+        if let Some(w) = self.0.get_webview_window("main") {
+            dialog = dialog.parent(&w);
+        }
+        dialog
             .title("Start a tool server?")
             .kind(MessageDialogKind::Warning)
             .buttons(MessageDialogButtons::OkCancelCustom(
