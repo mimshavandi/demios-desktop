@@ -6,7 +6,7 @@ No model is ready yet. Select **Connect a model** and add one: download a model 
 
 ## A model shows "Won't fit" or "Memory pressure"
 
-Your computer probably doesn't have enough memory for that model. Choose one marked **Ready** instead. Closing other apps can help a model marked **Caution** or **Memory pressure**.
+Your computer probably doesn't have enough memory for that model. Choose one marked **Ready** instead, or a smaller version of the same model from Hugging Face (see [Adding a model](models.md#add-a-model-from-hugging-face)). Closing other apps can help a model marked **Caution** or **Memory pressure**.
 
 ## A download failed or stopped
 

@@ -1,6 +1,7 @@
 // postMessage protocol between the sandboxed frame and the host.
 // Handshake: the frame shell posts `shell-ready`; the host answers once with `render` (the full
-// artifact document). After that, messages only go frame → host (ready, size, issue).
+// artifact document). After that, messages only go frame → host (ready, size, issue). A shell that
+// finds host IPC objects it can't remove posts `shell-refused` instead and never runs artifact code.
 
 import type { SandboxIssue } from "./types";
 

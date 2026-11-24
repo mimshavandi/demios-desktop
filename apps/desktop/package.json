@@ -5,14 +5,17 @@
   "license": "Apache-2.0",
   "type": "module",
   "scripts": {
+    "predev": "node scripts/sandbox.mjs",
     "dev": "vite",
+    "prebuild": "node scripts/sandbox.mjs",
     "build": "node scripts/licenses.mjs --if-available && tsc --noEmit -p . && vite build",
     "typecheck": "tsc --noEmit -p .",
     "test": "vitest run",
     "test:scripts": "node --test \"scripts/*.test.mjs\"",
     "licenses": "node scripts/licenses.mjs",
     "tauri": "tauri",
-    "dev:app": "tauri dev --features dev-fake-model"
+    "dev:app": "tauri dev --features dev-fake-model",
+    "sandbox": "node scripts/sandbox.mjs --force"
   },
   "dependencies": {
     "@radix-ui/react-alert-dialog": "^1.2.1",

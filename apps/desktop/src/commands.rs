@@ -98,6 +98,8 @@ pub async fn report_problem(
 #[derive(Debug, Serialize)]
 pub struct LocalDataSummary {
     pub conversations: usize,
+    /// Artifacts in the database (all versions go with them).
+    pub artifacts: u64,
     pub data_dir: Option<String>,
     pub models_dir: Option<String>,
     pub models_bytes: u64,
@@ -108,10 +110,22 @@ pub struct LocalDataSummary {
 #[tauri::command]
 pub async fn local_data_summary(state: AppStateRef<'_>) -> IpcResult<LocalDataSummary> {
     blocking(&state, |s| {
-        let conversations = store::list_conversations(&*s.db()?)?.len();
+        let (conversations, artifacts) = {
+            let db = s.db()?;
+            let n = store::list_conversations(&db)?.len();
+            let a = dn_artifacts::ArtifactStore::new(&db)
+                .counts()
+                .map(|(a, _)| a)
+                .map_err(|e| {
+                    eprintln!("could not count artifacts: {e}");
+                    IpcError::new("storage", "Could not read local data.")
+                })?;
+            (n, a)
+        };
         let local = s.models.local.as_ref();
         Ok(LocalDataSummary {
             conversations,
+            artifacts,
             data_dir: crate::data_dir().map(|p| p.display().to_string()),
             models_dir: local.map(|l| l.dir().display().to_string()),
             models_bytes: local.map(|l| l.disk_usage()).unwrap_or(0),
@@ -266,11 +280,11 @@ pub async fn update_settings(
 fn catalog(s: &AppState) -> IpcResult<ModelCatalog> {
     let settings = s.settings()?;
     let mut c = models::catalog(&s.models, &s.keys, &settings);
-    c.chat_model = s
-        .agent
-        .resolve_model(&settings, &s.models, &s.keys)
-        .ok()
-        .map(|m| m.to_string());
+    let resolved = s.agent.resolve_model(&settings, &s.models, &s.keys).ok();
+    c.chat_model_tools = resolved
+        .as_ref()
+        .is_some_and(|m| s.models.supports_tools(m));
+    c.chat_model = resolved.map(|m| m.to_string());
     Ok(c)
 }
 
@@ -454,6 +468,42 @@ pub async fn resolve_unknown_outcome(
             eprintln!("could not clear a resolved tool call: {e}");
         }
         Ok(())
+    })
+    .await
+}
+
+// ---- artifacts (T-ART-06)
+
+#[tauri::command]
+pub async fn list_artifacts(
+    state: AppStateRef<'_>,
+    conversation_id: Id,
+) -> IpcResult<Vec<dn_artifacts::ArtifactSummary>> {
+    blocking(&state, move |s| crate::artifacts::list(s, conversation_id)).await
+}
+
+#[tauri::command]
+pub async fn get_artifact(
+    state: AppStateRef<'_>,
+    conversation_id: Id,
+    artifact_id: Id,
+) -> IpcResult<crate::artifacts::ArtifactView> {
+    blocking(&state, move |s| {
+        crate::artifacts::get(s, conversation_id, artifact_id)
+    })
+    .await
+}
+
+/// "Restore this version": appends a new version (by the user) with `to_version`'s content.
+#[tauri::command]
+pub async fn rollback_artifact(
+    state: AppStateRef<'_>,
+    conversation_id: Id,
+    artifact_id: Id,
+    to_version: u32,
+) -> IpcResult<crate::artifacts::ArtifactView> {
+    blocking(&state, move |s| {
+        crate::artifacts::rollback(s, conversation_id, artifact_id, to_version)
     })
     .await
 }
@@ -679,6 +729,46 @@ pub async fn sign_in_mcp_server(
             Err(e)
         }
     }
+}
+
+// ---- links in answers (T-SHELL-09)
+
+/// Opens a link from an answer in the system browser after a native confirmation that shows
+/// the full URL. Returns whether it was opened (false: the user chose Cancel).
+#[tauri::command]
+pub async fn open_link(app: tauri::AppHandle, url: String) -> IpcResult<bool> {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+    use tauri_plugin_opener::OpenerExt;
+    let u = crate::links::check_link(&url).map_err(|r| IpcError::invalid(r.0))?;
+    use tauri::Manager;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let mut dialog = app
+        .dialog()
+        .message(crate::links::confirm_text(&u))
+        .title("Open link?");
+    // Attached to the main window, so it can't be mistaken for another app's prompt.
+    if let Some(w) = app.get_webview_window("main") {
+        dialog = dialog.parent(&w);
+    }
+    dialog
+        .kind(MessageDialogKind::Info)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "Open in browser".into(),
+            "Cancel".into(),
+        ))
+        .show(move |ok| {
+            let _ = tx.send(ok);
+        });
+    if !rx.await.unwrap_or(false) {
+        return Ok(false);
+    }
+    app.opener()
+        .open_url(u.as_str(), None::<&str>)
+        .map_err(|e| {
+            eprintln!("could not open the browser: {e}");
+            IpcError::new("unavailable", "Couldn't open your browser.")
+        })?;
+    Ok(true)
 }
 
 // ---- add a model from Hugging Face (T-INF-10)

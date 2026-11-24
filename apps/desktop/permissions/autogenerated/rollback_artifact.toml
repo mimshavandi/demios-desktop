@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-rollback-artifact"
+description = "Enables the rollback_artifact command without any pre-configured scope."
+commands.allow = ["rollback_artifact"]
+
+[[permission]]
+identifier = "deny-rollback-artifact"
+description = "Denies the rollback_artifact command without any pre-configured scope."
+commands.deny = ["rollback_artifact"]

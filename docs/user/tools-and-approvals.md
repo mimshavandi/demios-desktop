@@ -2,11 +2,36 @@
 
 Tools let a model do things beyond writing an answer, like reading a file or calling a service. They come from tool servers that use the Model Context Protocol (MCP).
 
-**Not in the app yet:** you can't add a tool server from the app. Until a screen for that arrives, chats don't use tools. This page describes how approvals work, so you know what to expect.
+## Add a tool server
+
+Go to **Settings → Models → Tool servers** and select **Add server**. Give it a name; the ID is suggested from the name and can't change later. Then choose where it runs:
+
+- **On this computer (a program Demios starts):** enter the command, its arguments and any environment variables. The program runs with your permissions, so add only programs you trust.
+- **Remote (an HTTPS address):** enter the server address and any headers. If the server needs you to sign in with an account, turn on **Sign in with the server's account (OAuth)**.
+
+Mark a variable or header as secret, such as an API token, and its value goes into your system keychain. It is never shown again; leave a saved one empty to keep it. Names that look like secrets are marked secret for you.
+
+Select **Add server** to save. The server connects, and its row shows **Connected** with the number of tools, or why it failed.
+
+### Starting a local server
+
+Before Demios starts a program for the first time, a system dialog, **Start a tool server?**, shows the exact command, every argument and the environment variables (secret values are hidden). Select **Allow and start** or **Don't start**. Your answer is remembered for that exact command; if the command changes, you're asked again.
+
+Some versions of Demios, such as the Flatpak, can't start programs on your computer. They offer remote servers only.
+
+### Signing in to a remote server
+
+For a server that uses sign-in, select **Sign in** on its row. The server's sign-in page opens in your browser; finish there, and the row changes to **Connected**. **Sign out** deletes the stored sign-in and keeps the server's other settings.
+
+### Change or remove a server
+
+- **Edit** changes a server's settings. If its address or program changes, type its secrets again.
+- **Reconnect** tries again after a server failed.
+- **Remove** stops the server and, after a confirmation, deletes its settings, the secrets and sign-in saved for it in your keychain, and the "Always allow in this chat" approvals for its tools. Chats that used its tools keep their history. This can't be undone.
 
 ## What asks first
 
-Each tool is put in a risk group from what its server says about it. A server the app reaches over HTTP isn't trusted to call its own tools harmless, so its tools never go below "Changes local data".
+Each tool is put in a risk group from what its server says about it. A remote server isn't trusted to call its own tools harmless, so its tools never go below "Changes local data".
 
 | Badge | Meaning | Asks first? |
 |---|---|---|

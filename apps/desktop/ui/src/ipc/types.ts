@@ -5,6 +5,8 @@
 //   app:       apps/desktop/src/{chat,commands,models,settings,error}.rs
 
 import type { ApprovalPolicy } from "@dn-core/ApprovalPolicy";
+import type { ArtifactType } from "@dn-core/ArtifactType";
+import type { ArtifactVersion } from "@dn-core/ArtifactVersion";
 import type { Capability } from "@dn-core/Capability";
 import type { FitStatus } from "@dn-core/FitStatus";
 import type { ContentPart } from "@dn-core/ContentPart";
@@ -18,6 +20,8 @@ import type { Usage } from "@dn-core/Usage";
 
 export type {
   ApprovalPolicy,
+  ArtifactType,
+  ArtifactVersion,
   Capability,
   ContentPart,
   FitStatus,
@@ -84,7 +88,18 @@ export type ChatEvent =
       /** Why the run ended; `step_limit` / `length` may be continued. */
       stop?: "completed" | "length" | "step_limit" | "cancelled";
     }
-  | { type: "error"; message_id: Id; message: string; recovery: RecoveryAction[] };
+  | { type: "error"; message_id: Id; message: string; recovery: RecoveryAction[] }
+  /** A fenced artifact block (model without tool calling) wasn't saved; `reason` says why. */
+  | { type: "artifact_not_saved"; message_id: Id; conversation_id: Id; title: string; reason: string }
+  /** An artifact was created or got a new version in this turn. */
+  | {
+      type: "artifact_changed";
+      message_id: Id;
+      conversation_id: Id;
+      artifact_id: Id;
+      title: string;
+      version: number;
+    };
 
 export interface TurnStarted {
   user_message: StoredMessage | null;
@@ -303,6 +318,8 @@ export interface ModelCatalog {
   settings: Settings;
   /** The model chat uses now (chosen or picked automatically); null if none is usable. */
   chat_model: string | null;
+  /** Whether the chat model makes tool calls (artifact tools) or uses the fenced format. */
+  chat_model_tools: boolean;
 }
 
 export interface AppInfo {
@@ -375,6 +392,8 @@ export type ReportKind = "problem" | "answer";
 /** What "Delete all local data" removes (confirm dialog). */
 export interface LocalDataSummary {
   conversations: number;
+  /** Artifacts in the database. */
+  artifacts: number;
   data_dir: string | null;
   models_dir: string | null;
   models_bytes: number;
@@ -405,4 +424,29 @@ export function errorMessage(e: unknown): string {
 
 export function messageText(m: Pick<StoredMessage, "content">): string {
   return m.content.map((p) => (p.type === "text" ? p.text : "")).join("");
+}
+
+// ---- artifacts (apps/desktop/src/artifacts.rs, dn-artifacts)
+
+/** `dn_artifacts::ArtifactSummary`. */
+export interface ArtifactSummary {
+  id: Id;
+  conversation_id: Id;
+  artifact_type: ArtifactType;
+  title: string;
+  latest_n: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/** A version plus the model that made it (`null` for the user's own restores). */
+export type ArtifactVersionView = ArtifactVersion & { model: string | null };
+
+/** `artifacts::ArtifactView`: one artifact with every version. */
+export interface ArtifactDetail {
+  id: Id;
+  conversation_id: Id;
+  artifact_type: ArtifactType;
+  title: string;
+  versions: ArtifactVersionView[];
 }

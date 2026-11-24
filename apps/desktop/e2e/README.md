@@ -15,6 +15,18 @@ WebDriver (WebKitWebDriver on Linux, msedgedriver on Windows).
 3. axe-core on the chat screen: no `serious` or `critical` violations.
 4. Quit and relaunch on the **same data dir**. Assert one conversation, both user messages, and both answers with their final status.
 
+## Scenario (`specs/artifacts.e2e.mjs`, T-ART-06)
+1. "Make an HTML artifact" → the dev fake model calls `artifact_create`. Assert the answer has an artifact card (title, `v1`) and the pane renders v1 in the sandboxed frame. The version label reads `v1 · model` and the pane says "Made by …".
+2. "Please update the artifact" → `artifact_update` (exact match). Assert the frame shows v2.
+3. Go back to v1 and press **Restore this version**. Assert `v3 — restored from v1 · you` and v1's content.
+4. **In-app escape cases** (threat model S6). Run as artifact code inside the frame, judged from outside it:
+   - the frame is on `artifact://localhost/frame/` with `sandbox="allow-scripts"` and origin `null`;
+   - no `__TAURI_INTERNALS__` or `ipc` in the frame;
+   - no access to the parent's DOM or IPC;
+   - `fetch` to the network, `ipc://` and `tauri://` is blocked, and a local spy server gets no request (fetch or image);
+   - a raw `webkit.messageHandlers.ipc` message with a guessed key creates no conversation;
+   - `RTCPeerConnection` is absent.
+
 The app is a **debug** build with `--features dev-fake-model,custom-protocol`: the canned streaming model plus the UI embedded from `dist/`. `DEMIOS_DATA_DIR` points at a temp dir for the run, and `DEMIOS_FAKE_DELAY_MS=80` slows the stream so Stop lands mid-answer. Selectors are `data-testid` only.
 
 ## Run locally (Linux or Windows)
@@ -74,8 +86,13 @@ macOS has no WebDriver for WKWebView, so run this before every release, on a sig
 - [ ] Settings → Models: save a provider key → macOS asks for keychain access the first time; "Key saved". Remove key → Undo restores it.
 - [ ] ⌘N, ⌘,, ⌘\, ⌘⇧C work; Tab reaches every control with a visible focus ring; VoiceOver announces "Answer complete" once per answer.
 - [ ] Light and dark appearance (System Settings) both follow the design tokens.
-- [ ] **WKWebView sub-frame IPC** (from the artifact review, W-artifacts): with an artifact open in its sandboxed frame, run `window.__TAURI_INTERNALS__?.invoke?.("list_conversations")` in the frame's Web Inspector console. It must be `undefined` or fail. wry's IPC handler must ignore sub-frames, and init scripts are main-frame only.
-- [ ] WebRTC is not exposed to artifact frames (`typeof RTCPeerConnection` in the frame console is `"undefined"`, or connections fail).
+- [ ] **Artifacts:** "Make an HTML artifact" opens the pane with v1. "Please update the artifact" shows v2. Restoring v1 makes v3. Light and dark both read correctly.
+- [ ] **WKWebView sub-frame IPC** (artifact review, S1): open an artifact, choose the artifact frame in Web Inspector, and run the checks below in its console.
+  - `typeof window.__TAURI_INTERNALS__` is `"undefined"`.
+  - `window.webkit.messageHandlers.ipc.postMessage(JSON.stringify({cmd:"create_conversation",callback:1,error:2,payload:{},options:{},__TAURI_INVOKE_KEY__:"guess"}))` creates **no** chat (check the chat list). Don't copy app logs into issues: Tauri's rejection message includes the live invoke key.
+  - wry's WKWebView handler does **not** filter sub-frames, and it reports the frame's URL (`artifact://localhost/frame/`), which Tauri counts as a local origin. The invoke key, injected only into the main frame, is what stops this.
+- [ ] WebRTC is not exposed to artifact frames: in the frame console, `typeof RTCPeerConnection` is `"undefined"`. WKWebView can't turn WebRTC off without a private API, so the in-frame bridge is the control there.
+- [ ] Network stays off: in the frame console, `fetch("https://example.com")` is blocked by CSP. **Allow network for this artifact** asks a second time before it turns on.
 - [ ] Links in answers don't navigate the window (the navigation guard logs "blocked navigation").
 
 ## demios:// links: manual checks per OS (T-INF-12)
@@ -106,3 +123,29 @@ Expect:
 - A packaged release doesn't rewrite `~/.local/share/applications` at launch. Only dev builds and the AppImage register the scheme at run time.
 - Single instance works over D-Bus: a link while the app runs focuses the existing window, and `pgrep -c demios-desktop` stays 1.
 - Flatpak: a link from the host browser reaches the sandboxed app through the portal and opens the confirmation.
+
+## Windows: artifacts are off (threat model R8)
+WebView2 runs the app's init scripts in sub-frames too, and Tauri defines its IPC object there so that it can't be removed. The artifact frame shell refuses to run artifact code in a frame that can still reach the app's IPC. So for now artifacts are saved but not shown on Windows, and the pane says "Artifacts aren't available on Windows yet". On Windows the `artifact` scheme serves an inert page with no script. `e2e-windows` asserts the gate message and that no artifact frame is created. Making artifacts safe on WebView2 is tracked in #75.
+
+## Release checklist: artifacts
+Run these on the signed release build of each platform, in addition to the lists above.
+
+**macOS (WKWebView)**
+- [ ] Create, update and restore an artifact (HTML, SVG, Markdown, Mermaid, React, code): each renders, and the version label and "AI-generated · Made by <model>" are right.
+- [ ] In the artifact frame's Web Inspector console:
+  - `typeof __TAURI_INTERNALS__`, `typeof ipc` and `typeof RTCPeerConnection` are `"undefined"`;
+  - `fetch("https://example.com")` is blocked by CSP;
+  - `parent.document` throws.
+- [ ] The raw `webkit.messageHandlers.ipc` message above creates no chat.
+- [ ] **Ask to fix** sends a message whose report is inside the `ARTIFACT_REPORT` block.
+- [ ] **Allow network for this artifact** needs the second confirm. After the model makes a new version, network is off again.
+- [ ] Delete all local data → the confirm lists the artifact count → afterwards no artifact is listed.
+
+**Windows (WebView2)**
+- [ ] An artifact request saves the artifact: the card shows. **Open** shows "Artifacts aren't available on Windows yet" and creates no frame.
+- [ ] `http://artifact.localhost/frame/` opened in DevTools serves the inert page (no script).
+
+**Linux (WebKitGTK, release build)**
+- [ ] The same artifact flow as macOS, on the release `.deb`/AppImage, not just the debug e2e build.
+- [ ] The artifact frame loads, so the navigation guard allows `artifact://localhost/frame/` in a release build too.
+- [ ] `typeof RTCPeerConnection` is `"undefined"` in the main window too (WebKitGTK `enable-webrtc` is off).
