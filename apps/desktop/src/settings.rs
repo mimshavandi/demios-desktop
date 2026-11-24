@@ -1,5 +1,6 @@
 //! App settings (T-SHELL-02), stored as JSON values in the app's own `app_settings`
-//! table. Telemetry is off by default and nothing in the app sends any yet.
+//! table. The app collects no usage data; `telemetry_enabled` is kept only so older saved
+//! settings still load (T-STORE-11 removed the switch).
 
 use dn_core::model::{Capability, ModelRef};
 use dn_store::{Connection, Result, StoreError, now_ms};
@@ -9,11 +10,43 @@ use std::collections::BTreeMap;
 
 /// The app's migration set (name `app`), composed by `dn_store::open`.
 pub fn migrations() -> &'static [&'static str] {
-    &["CREATE TABLE app_settings (
+    &[
+        "CREATE TABLE app_settings (
         key        TEXT    PRIMARY KEY NOT NULL,
         value      TEXT    NOT NULL,
         updated_at INTEGER NOT NULL
-    );"]
+    );",
+        // T-STORE-11: every keychain id dn-tools stored for an MCP server, so "Delete all
+        // local data" also finds secrets of servers no longer in settings (the keychain
+        // can't be listed).
+        "CREATE TABLE app_mcp_secret_ids (
+        id         TEXT    PRIMARY KEY NOT NULL,
+        created_at INTEGER NOT NULL
+    );",
+    ]
+}
+
+/// Remembers that an MCP secret id was written to the keychain.
+pub fn record_mcp_secret_id(conn: &Connection, id: &str) -> Result<()> {
+    conn.execute(
+        "INSERT OR IGNORE INTO app_mcp_secret_ids (id, created_at) VALUES (?1, ?2)",
+        params![id, now_ms()],
+    )?;
+    Ok(())
+}
+
+/// Every MCP secret id ever written (and not yet forgotten).
+pub fn known_mcp_secret_ids(conn: &Connection) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare("SELECT id FROM app_mcp_secret_ids ORDER BY id")?;
+    let ids = stmt
+        .query_map([], |r| r.get(0))?
+        .collect::<rusqlite::Result<Vec<String>>>()?;
+    Ok(ids)
+}
+
+pub fn forget_mcp_secret_id(conn: &Connection, id: &str) -> Result<()> {
+    conn.execute("DELETE FROM app_mcp_secret_ids WHERE id = ?1", [id])?;
+    Ok(())
 }
 
 /// A model slot the shell exposes in settings.
@@ -51,8 +84,12 @@ pub const SLOTS: &[SlotInfo] = &[
 pub struct Settings {
     /// slot id → `ModelRef` string. Missing = not configured (never a silent fallback).
     pub slots: BTreeMap<String, String>,
-    /// Off by default. No telemetry is collected in this build either way.
+    /// Unused: no telemetry exists, and the switch was removed (T-STORE-11). Kept so older
+    /// saved settings round-trip.
     pub telemetry_enabled: bool,
+    /// The user dismissed the first-run AI notice (T-STORE-09). "Delete all local data"
+    /// clears it, so the notice shows again.
+    pub ai_notice_seen: bool,
     /// MCP servers the tool runtime connects to at startup (secret *ids* only).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub mcp_servers: Vec<dn_tools::McpServerConfig>,
@@ -106,6 +143,13 @@ pub fn save(conn: &Connection, s: &Settings) -> Result<()> {
     Ok(())
 }
 
+/// Deletes the saved settings ("Delete all local data").
+pub fn delete_all(conn: &Connection) -> Result<()> {
+    conn.execute("DELETE FROM app_settings", [])?;
+    conn.execute("DELETE FROM app_mcp_secret_ids", [])?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,6 +163,7 @@ mod tests {
         let c = db();
         let s = load(&c).unwrap();
         assert!(!s.telemetry_enabled);
+        assert!(!s.ai_notice_seen);
         assert!(s.slots.is_empty());
     }
 

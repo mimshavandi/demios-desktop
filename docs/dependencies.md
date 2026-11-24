@@ -9,7 +9,7 @@ Every direct dependency is listed here with why and its licence (ADR-0009). Appr
 | uuid (v7) | dn-core | time-ordered, sync-safe ids | MIT/Apache-2.0 | T-CORE-01 |
 | futures-core | dn-core | `Stream` trait for `ChatModel::chat` | MIT/Apache-2.0 | T-CORE-01 |
 | keyring 3 | dn-secrets | OS keychain for BYOK keys and MCP tokens (D-012, ADR-0007). Features `apple-native`, `windows-native`, `async-secret-service` + `tokio` + `crypto-rust`, so there are no C deps (libdbus/openssl) | MIT/Apache-2.0 | T-PRV-03 |
-| tokio | dn-agent, dn-secrets, dn-providers | async runtime; `sync` for streams/cancellation, `rt` for `AsyncSecrets::spawn_blocking` (D-012) | MIT | T-AGT-02 |
+| tokio | dn-agent, dn-secrets, dn-providers | async runtime; `sync` for streams/cancellation, `rt` for `AsyncSecrets::spawn_blocking`; dn-providers also `time` for SSE first-byte/idle timeouts (T-PRV-04); approved wave-1 dependency | MIT | T-AGT-02 |
 | reqwest 0.13 | dn-providers | HTTPS client for BYOK providers (D-012). `rustls` (aws-lc-rs, platform verifier) + `http2` + `charset`; no OpenSSL. SSE parsing is hand-rolled (`dn_providers::sse`) | MIT/Apache-2.0 | T-PRV-01 |
 | zeroize 1 | dn-secrets | wipe `Secret` buffers on drop (`Zeroizing<String>`); already a transitive dep of keyring | MIT/Apache-2.0 | T-PRV-03 |
 | ts-rs 12 (optional, `ts` feature; `serde-compat`, no default features) | dn-core | TypeScript bindings for the UI in `crates/dn-core/bindings/`; not in the default build | MIT | T-CORE-04 |
@@ -40,6 +40,7 @@ Every direct dependency is listed here with why and its licence (ADR-0009). Appr
 | dompurify | sanitises rendered model output | MPL-2.0 OR Apache-2.0 | T-SHELL-01 |
 | highlight.js (core + 13 languages) | code highlighting | BSD-3-Clause | T-SHELL-01 |
 | @radix-ui/react-{tooltip,switch,select,toast} | headless primitives required by the design standard (D-014, §4) | MIT | T-SHELL-01 |
+| @radix-ui/react-alert-dialog | shared confirm for irreversible actions (design-system §4 Dialog, alert variant; lead approved 2026-11-24) | MIT | T-STORE-11 |
 | lucide-react | icons, 16 px / 1.5 stroke (design standard §4) | ISC | T-SHELL-01 |
 | dev: typescript 7, vite 8, @vitejs/plugin-react, vitest, @testing-library/react, jsdom, @types/react(-dom), @types/node 22, @tauri-apps/cli ~2.11 | strict typecheck, build, unit tests, `tauri dev/build` | MIT / Apache-2.0 | T-SHELL-01 |
 

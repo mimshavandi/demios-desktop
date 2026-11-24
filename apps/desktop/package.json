@@ -13,6 +13,7 @@
     "dev:app": "tauri dev --features dev-fake-model"
   },
   "dependencies": {
+    "@radix-ui/react-alert-dialog": "^1.2.1",
     "@radix-ui/react-select": "^2.4.1",
     "@radix-ui/react-switch": "^1.4.1",
     "@radix-ui/react-toast": "^1.3.1",

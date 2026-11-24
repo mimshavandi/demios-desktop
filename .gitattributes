@@ -1,0 +1,3 @@
+# Recorded/hand-written HTTP fixtures are byte-exact (SSE framing is "\n\n"): never
+# convert line endings on checkout.
+crates/dn-providers/tests/fixtures/** -text

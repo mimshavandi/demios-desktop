@@ -30,6 +30,12 @@ pub struct Reply {
     pub body: Vec<u8>,
     /// Send the body in SSE-event-sized pieces, pausing after the second until `gate` fires.
     pub gate: Option<Arc<Notify>>,
+    /// Wait this long after the response head before sending any body byte.
+    pub hold: Option<std::time::Duration>,
+    /// Wait this long before sending the response head at all.
+    pub hold_head: Option<std::time::Duration>,
+    /// Pause between body pieces.
+    pub pace: Option<std::time::Duration>,
 }
 
 impl Reply {
@@ -39,6 +45,22 @@ impl Reply {
             content_type: "text/event-stream",
             body: read(fixture),
             gate: None,
+            hold: None,
+            hold_head: None,
+            pace: None,
+        }
+    }
+
+    /// A body given inline (small JSON answers that don't merit a fixture file).
+    pub fn inline(status: u16, content_type: &'static str, body: &str) -> Self {
+        Self {
+            status,
+            content_type,
+            body: body.as_bytes().to_vec(),
+            gate: None,
+            hold: None,
+            hold_head: None,
+            pace: None,
         }
     }
 
@@ -48,6 +70,9 @@ impl Reply {
             content_type: "application/json",
             body: read(fixture),
             gate: None,
+            hold: None,
+            hold_head: None,
+            pace: None,
         }
     }
 }
@@ -56,7 +81,11 @@ pub fn read(fixture: &str) -> Vec<u8> {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures")
         .join(fixture);
-    std::fs::read(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()))
+    let bytes = std::fs::read(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+    // Belt and braces next to `.gitattributes`: a CRLF checkout must not change framing.
+    String::from_utf8(bytes)
+        .map(|t| t.replace("\r\n", "\n").into_bytes())
+        .unwrap_or_else(|e| e.into_bytes())
 }
 
 pub struct Server {
@@ -124,6 +153,9 @@ pub async fn serve(replies: Vec<Reply>) -> Server {
             let (mut sock, _) = listener.accept().await.unwrap();
             let recorded = read_request(&mut sock).await;
             rec.lock().unwrap().push(recorded);
+            if let Some(d) = reply.hold_head {
+                tokio::time::sleep(d).await;
+            }
             let head = format!(
                 "HTTP/1.1 {} X\r\ncontent-type: {}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
                 reply.status,
@@ -131,6 +163,10 @@ pub async fn serve(replies: Vec<Reply>) -> Server {
                 reply.body.len()
             );
             sock.write_all(head.as_bytes()).await.unwrap();
+            let _ = sock.flush().await;
+            if let Some(d) = reply.hold {
+                tokio::time::sleep(d).await;
+            }
             // Write event by event so the client must parse incrementally.
             let text = reply.body;
             let mut pieces: Vec<&[u8]> = Vec::new();
@@ -145,6 +181,9 @@ pub async fn serve(replies: Vec<Reply>) -> Server {
                     break; // client hung up (cancellation tests)
                 }
                 let _ = sock.flush().await;
+                if let Some(d) = reply.pace {
+                    tokio::time::sleep(d).await;
+                }
                 if i == 1
                     && let Some(g) = &reply.gate
                 {

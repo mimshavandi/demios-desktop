@@ -143,6 +143,8 @@ export interface Settings {
   /** slot id → ModelRef string (`local:…`, `byok:…:…`, `remote:…:…`). */
   slots: Record<string, string>;
   telemetry_enabled: boolean;
+  /** First-run AI notice dismissed (T-STORE-09). Missing in older saves = not seen. */
+  ai_notice_seen?: boolean;
   /** Passed through untouched (no screen edits MCP servers yet). */
   mcp_servers?: unknown[];
 }
@@ -226,6 +228,18 @@ export interface AppInfo {
   version: string;
   dev_fake_model: boolean;
   data_dir: string | null;
+  /** Where downloaded models live (shared with the `dn` CLI). */
+  models_dir: string | null;
+}
+
+/** What "Delete all local data" removes (confirm dialog). */
+export interface LocalDataSummary {
+  conversations: number;
+  data_dir: string | null;
+  models_dir: string | null;
+  models_bytes: number;
+  /** Keychain entries in the user's words ("OpenAI key", "Hugging Face token", …). */
+  keychain: string[];
 }
 
 export interface IpcError {
