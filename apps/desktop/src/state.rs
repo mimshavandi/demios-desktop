@@ -205,12 +205,12 @@ impl AppState {
         let mut msgs = store::list_messages(&*self.db()?, conversation_id)?;
         let live = lock(&self.live);
         for m in &mut msgs {
-            if m.status == store::MessageStatus::Streaming {
-                if let Some(l) = live.get(&m.id) {
-                    m.content = vec![dn_core::chat::ContentPart::Text {
-                        text: l.text.clone(),
-                    }];
-                }
+            if m.status == store::MessageStatus::Streaming
+                && let Some(l) = live.get(&m.id)
+            {
+                m.content = vec![dn_core::chat::ContentPart::Text {
+                    text: l.text.clone(),
+                }];
             }
         }
         Ok(msgs)
