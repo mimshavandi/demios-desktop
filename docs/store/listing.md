@@ -1,0 +1,47 @@
+# Store listing copy (draft, T-STORE-12)
+
+**Status: draft for the owner to approve.** It describes only what the current build does (audit S-07: no future functionality in the listing). Update it when a feature ships, not before.
+
+The same text is in `apps/desktop/tauri.conf.json` (`bundle.shortDescription`, `bundle.longDescription`). Installers (MSI/NSIS properties, DMG, .deb/.rpm) and later MSIX and AppStream metainfo read it from there. Keep both in sync.
+
+## Name
+
+Demios Desktop
+
+## Short description (≤ 100 characters)
+
+Chat with AI models on your own computer, or with providers you bring your own key for.
+
+## Long description
+
+Demios Desktop is an open-source app for chatting with AI models.
+
+- **Run models on your computer.** Download a model from the built-in list and chat with it through llama.cpp. The app shows whether it fits in your computer's memory before you download it.
+- **Or bring your own key.** Add an API key for Anthropic, OpenAI or Google Gemini and chat with their models under your own account and their terms.
+- **Your data stays with you.** There is no Demios account and no Demios server. Chats and settings stay on your computer, keys stay in your system keychain, and the app collects no usage data. "Delete all local data" removes everything in one step (ships with #40).
+
+Answers come from the model you choose and can be wrong. Check important facts.
+
+## Category
+
+Productivity
+
+## Not in the listing yet
+
+These wait until they ship in the build being listed:
+- tool servers (MCP), until the MCP settings screen ships;
+- artifacts (T-ART-06);
+- adding models from Hugging Face (T-INF-10).
+
+## Bundle fields
+
+| Field | Value | Who decides |
+|---|---|---|
+| `copyright` | Copyright © 2026 The Demios Desktop contributors. Licensed under the Apache License 2.0. | Set (Apache-2.0 line; change the holder if the owner prefers a name) |
+| `category` | Productivity | Set |
+| `homepage` | https://github.com/mimshavandi/demios-desktop | Placeholder until the owner supplies a product URL |
+| `publisher` | *not set*. Tauri falls back to the identifier's second part (`demios`). | **Owner** (must match the Partner Center publisher for MSIX) |
+
+## Still to do (T-STORE-12)
+
+- **Release-build screenshots** (S-24). Capture them from a signed release build with a real local model and with a BYOK model. The existing screenshots are dev captures with the fake model and must not be used in a listing.
