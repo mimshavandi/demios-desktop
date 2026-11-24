@@ -99,7 +99,9 @@ jobs:
           key: tauri-driver-${{ env.TAURI_DRIVER_VERSION }}-${{ runner.os }}
       - name: Install tauri-driver
         if: steps.tauri-driver-cache.outputs.cache-hit != 'true'
-        run: cargo install tauri-driver --version ${{ env.TAURI_DRIVER_VERSION }} --locked
+        # --force: rust-cache may already have restored ~/.cargo/bin with the binary in it
+        # when this cache entry has been evicted ("binary already exists in destination").
+        run: cargo install tauri-driver --version ${{ env.TAURI_DRIVER_VERSION }} --locked --force
       - name: Build the UI
         working-directory: apps/desktop
         run: |
@@ -143,7 +145,9 @@ jobs:
           key: tauri-driver-${{ env.TAURI_DRIVER_VERSION }}-${{ runner.os }}
       - name: Install tauri-driver
         if: steps.tauri-driver-cache.outputs.cache-hit != 'true'
-        run: cargo install tauri-driver --version ${{ env.TAURI_DRIVER_VERSION }} --locked
+        # --force: rust-cache may already have restored ~/.cargo/bin with the binary in it
+        # when this cache entry has been evicted ("binary already exists in destination").
+        run: cargo install tauri-driver --version ${{ env.TAURI_DRIVER_VERSION }} --locked --force
       - name: msedgedriver matching WebView2 (verbose log)
         shell: pwsh
         run: |
