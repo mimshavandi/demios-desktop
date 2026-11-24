@@ -219,3 +219,28 @@ async fn spawn_failure_and_missing_secret() {
     assert_eq!(e.kind, dn_tools::error::ToolErrorKind::Config);
     assert!(e.developer_message.contains("mcp.fixture.token"));
 }
+
+#[tokio::test]
+async fn cancel_during_approval_wait_returns_cancelled() {
+    let (ex, mut rx) = executor();
+    ex.add_server(client(stdio_cfg())).await.unwrap();
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let ex2 = ex.clone();
+    let task = tokio::spawn(async move {
+        ex2.execute_with_cancel(
+            &ctx(),
+            &call("k1", "mcp.fixture.delete_all", serde_json::json!({})),
+            async {
+                let _ = stop_rx.await;
+            },
+        )
+        .await
+    });
+    let _pending = rx.recv().await.unwrap(); // approval is waiting, never answered
+    stop_tx.send(()).unwrap();
+    let r = tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .expect("cancel must return promptly")
+        .unwrap();
+    assert_eq!(r.unwrap_err(), CoreError::Cancelled);
+}

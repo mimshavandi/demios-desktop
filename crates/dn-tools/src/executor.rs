@@ -275,13 +275,29 @@ impl Executor {
         ctx: &CallContext,
         call: &ToolCall,
     ) -> Result<ToolOutcome, CoreError> {
-        Ok(self.execute_inner(ctx, call).await?)
+        self.execute_with_cancel(ctx, call, std::future::pending())
+            .await
+    }
+
+    /// Like [`Self::execute`], but stops when `cancel` resolves: the approval wait and the
+    /// tool call are abandoned and the result is [`CoreError::Cancelled`]. A write cancelled
+    /// mid-call is recorded as failed (`cancelled`) in the ledger; its side effect may or may
+    /// not have happened.
+    pub async fn execute_with_cancel(
+        &self,
+        ctx: &CallContext,
+        call: &ToolCall,
+        cancel: impl std::future::Future<Output = ()> + Send,
+    ) -> Result<ToolOutcome, CoreError> {
+        let cancel = std::pin::pin!(cancel);
+        Ok(self.execute_inner(ctx, call, cancel).await?)
     }
 
     async fn execute_inner(
         &self,
         ctx: &CallContext,
         call: &ToolCall,
+        mut cancel: std::pin::Pin<&mut (impl std::future::Future<Output = ()> + Send)>,
     ) -> Result<ToolOutcome, ToolError> {
         let cap = self
             .resolve(&call.name)
@@ -353,19 +369,22 @@ impl Executor {
             }
         }
 
-        let outcome = self
-            .gate
-            .check(ApprovalPrompt {
-                request_id: Id::new(),
-                conversation_id: ctx.conversation_id.clone(),
-                capability_id: id.clone(),
-                title: cap.title.clone().unwrap_or_else(|| cap.tool_name.clone()),
-                description: cap.spec.description.clone(),
-                risk: cap.spec.risk,
-                policy: cap.approval,
-                arguments: call.arguments.clone(),
-            })
-            .await;
+        let approval = self.gate.check(ApprovalPrompt {
+            request_id: Id::new(),
+            conversation_id: ctx.conversation_id.clone(),
+            capability_id: id.clone(),
+            title: cap.title.clone().unwrap_or_else(|| cap.tool_name.clone()),
+            description: cap.spec.description.clone(),
+            risk: cap.spec.risk,
+            policy: cap.approval,
+            arguments: call.arguments.clone(),
+        });
+        let outcome = tokio::select! {
+            o = approval => o,
+            () = cancel.as_mut() => {
+                return Err(ToolError::new(&id, ToolErrorKind::Cancelled, "cancelled while waiting for approval"));
+            }
+        };
         match outcome {
             GateOutcome::AutoAllowed | GateOutcome::Approved => {}
             GateOutcome::Denied => {
@@ -412,19 +431,29 @@ impl Executor {
             1
         };
         let mut tries = 0;
-        let result = loop {
-            tries += 1;
-            match client
-                .call_tool(&cap.tool_name, call.arguments.clone())
-                .await
-            {
-                Ok(out) => break Ok(out),
-                Err(e) if e.retryable() && tries < max => {
-                    tokio::time::sleep(self.retry.backoff * tries).await;
-                    continue;
+        let attempts = async {
+            loop {
+                tries += 1;
+                match client
+                    .call_tool(&cap.tool_name, call.arguments.clone())
+                    .await
+                {
+                    Ok(out) => break Ok(out),
+                    Err(e) if e.retryable() && tries < max => {
+                        tokio::time::sleep(self.retry.backoff * tries).await;
+                        continue;
+                    }
+                    Err(e) => break Err(ToolError::new(&id, e.kind, e.developer_message)),
                 }
-                Err(e) => break Err(ToolError::new(&id, e.kind, e.developer_message)),
             }
+        };
+        let result = tokio::select! {
+            r = attempts => r,
+            () = cancel.as_mut() => Err(ToolError::new(
+                &id,
+                ToolErrorKind::Cancelled,
+                "cancelled during the tool call; outcome unknown",
+            )),
         };
 
         let result = result.and_then(|out| {

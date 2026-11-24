@@ -35,6 +35,8 @@ pub enum ToolErrorKind {
     InFlight,
     /// Ledger (SQLite) failure.
     Ledger,
+    /// The run was cancelled (becomes [`CoreError::Cancelled`]).
+    Cancelled,
 }
 
 impl ToolError {
@@ -80,6 +82,7 @@ impl ToolError {
             ToolErrorKind::Blocked => format!("\"{tool}\" is turned off."),
             ToolErrorKind::InFlight => format!("\"{tool}\" is already running this action."),
             ToolErrorKind::Ledger => format!("Couldn't record the result of \"{tool}\"."),
+            ToolErrorKind::Cancelled => format!("\"{tool}\" was stopped."),
         }
     }
 }
@@ -91,6 +94,9 @@ fn display_name(capability_id: &str) -> &str {
 
 impl From<ToolError> for CoreError {
     fn from(e: ToolError) -> Self {
+        if e.kind == ToolErrorKind::Cancelled {
+            return CoreError::Cancelled;
+        }
         CoreError::Capability {
             user_message: e.user_message(),
             retryable: e.retryable(),
