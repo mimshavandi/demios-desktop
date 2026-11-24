@@ -45,6 +45,8 @@ const COMMANDS: &[&str] = &[
     "watch_local_models",
     "download_model",
     "pause_download",
+    "spike_open_child",
+    "spike_child_report",
 ];
 
 /// Copies the artifact frame shell (`ui/artifact-sandbox/dist/frame/`) into OUT_DIR for

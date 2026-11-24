@@ -19,6 +19,7 @@ pub mod mcp;
 pub mod models;
 pub mod secrets;
 pub mod settings;
+pub mod spike;
 pub mod state;
 pub mod support;
 
@@ -57,7 +58,7 @@ pub fn allowed_navigation(url: &tauri::Url) -> bool {
 fn navigation_guard<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
     tauri::plugin::Builder::new("navigation-guard")
         .on_navigation(|_webview, url| {
-            let ok = allowed_navigation(url);
+            let ok = allowed_navigation(url) || (cfg!(fake_model) && spike::is_spike_url(url));
             if !ok {
                 eprintln!("blocked navigation to {url}");
             }
@@ -100,6 +101,9 @@ pub fn run() {
         .plugin(navigation_guard())
         // The artifact frame origin (T-ART-06): serves only the sandbox frame shell.
         .register_uri_scheme_protocol(artifacts::SCHEME, |_ctx, request| {
+            if let Some(r) = spike::response(&request) {
+                return r;
+            }
             artifacts::frame_response(&request)
         })
         // Used from Rust only (`commands::report_problem`): no link-click handler is injected
@@ -131,6 +135,7 @@ pub fn run() {
                 )
             })?;
             app.manage(state);
+            spike::autorun(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -178,6 +183,8 @@ pub fn run() {
             commands::watch_local_models,
             commands::download_model,
             commands::pause_download,
+            spike::spike_open_child,
+            spike::spike_child_report,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Demios Desktop")

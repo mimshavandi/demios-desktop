@@ -50,6 +50,8 @@
     "allow-watch-local-models",
     "allow-download-model",
     "allow-pause-download",
-    "core:window:allow-start-dragging"
+    "core:window:allow-start-dragging",
+    "allow-spike-open-child",
+    "allow-spike-child-report"
   ]
 }

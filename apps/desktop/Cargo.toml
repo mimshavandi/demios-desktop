@@ -45,7 +45,8 @@ rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tauri.workspace = true
+# SPIKE (#75): multiwebview (`Window::add_child`) is behind `unstable`.
+tauri = { workspace = true, features = ["unstable"] }
 # Opens the "Report a problem" form in the system browser, from Rust only (T-STORE-14).
 tauri-plugin-opener = "2"
 # Native confirm before launching a local MCP server, shown from Rust only (T-SHELL-08).

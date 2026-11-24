@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-spike-open-child"
+description = "Enables the spike_open_child command without any pre-configured scope."
+commands.allow = ["spike_open_child"]
+
+[[permission]]
+identifier = "deny-spike-open-child"
+description = "Denies the spike_open_child command without any pre-configured scope."
+commands.deny = ["spike_open_child"]
