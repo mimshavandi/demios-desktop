@@ -270,3 +270,25 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod capability_tests {
+    /// The capability is granted to the main webview by its label, not to the `main` window:
+    /// a child webview added to that window later (such as an artifact webview, #75) must not
+    /// inherit the app's commands.
+    #[test]
+    fn capability_is_scoped_to_the_main_webview_only() {
+        let cap: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
+        assert_eq!(cap["webviews"], serde_json::json!(["main"]));
+        assert!(
+            cap.get("windows").is_none(),
+            "a `windows` entry would grant every webview in that window"
+        );
+        assert!(
+            cap.get("remote").is_none(),
+            "no remote origin may call app commands"
+        );
+        assert!(cap.get("local").is_none_or(|l| l == true));
+    }
+}
