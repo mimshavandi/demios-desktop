@@ -138,6 +138,14 @@ pub struct Settings {
     /// MCP servers the tool runtime connects to at startup (secret *ids* only).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub mcp_servers: Vec<dn_tools::McpServerConfig>,
+    /// The user's choice per tool ("always ask", "off", ...), keyed by capability id
+    /// (`mcp.<server>.<tool>`); applied after every connect (T-SHELL-11).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub tool_overrides: BTreeMap<String, dn_tools::CapabilityOverride>,
+    /// server id → tool name → fingerprint of the tool as last reviewed (the first connect
+    /// counts). Tools that are new or differ always ask until reviewed (T-SHELL-11).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub reviewed_tools: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 impl Settings {
@@ -155,6 +163,14 @@ impl Settings {
                 .map_err(|e| format!("MCP server `{}`: {e}", s.id))?;
         }
         Ok(())
+    }
+
+    /// Takes the parts other commands manage (MCP servers, tool choices and reviews) from
+    /// `stored`, so saving the rest of the settings can't change or drop them.
+    pub fn keep_managed(&mut self, stored: Settings) {
+        self.mcp_servers = stored.mcp_servers;
+        self.tool_overrides = stored.tool_overrides;
+        self.reviewed_tools = stored.reviewed_tools;
     }
 
     pub fn slot(&self, slot_id: &str) -> Option<ModelRef> {
@@ -215,6 +231,40 @@ mod tests {
             "local:dev-fake"
         );
         assert!(!SLOTS.iter().find(|s| s.slot_id == "fast").unwrap().shown);
+    }
+
+    #[test]
+    fn a_settings_save_keeps_servers_and_tool_choices() {
+        let mut stored = Settings {
+            mcp_servers: vec![dn_tools::McpServerConfig::http(
+                "work",
+                "https://mcp.example.test/mcp",
+            )],
+            ..Default::default()
+        };
+        stored.tool_overrides.insert(
+            "mcp.work.write".into(),
+            dn_tools::CapabilityOverride {
+                disabled: true,
+                ..Default::default()
+            },
+        );
+        stored
+            .reviewed_tools
+            .insert("work".into(), [("write".into(), "fp".into())].into());
+        // What the UI sends: its own fields only, or an edited copy of the stored ones.
+        let mut from_ui = Settings {
+            ai_notice_seen: true,
+            ..Default::default()
+        };
+        from_ui
+            .reviewed_tools
+            .insert("work".into(), Default::default());
+        from_ui.keep_managed(stored.clone());
+        assert!(from_ui.ai_notice_seen);
+        assert_eq!(from_ui.mcp_servers, stored.mcp_servers);
+        assert_eq!(from_ui.tool_overrides, stored.tool_overrides);
+        assert_eq!(from_ui.reviewed_tools, stored.reviewed_tools);
     }
 
     #[test]

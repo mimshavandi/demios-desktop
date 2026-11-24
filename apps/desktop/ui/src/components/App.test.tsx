@@ -133,6 +133,9 @@ function fakeApi() {
     reconnectMcpServer: async () => null,
     signInMcpServer: async () => null,
     signOutMcpServer: async () => ({ servers: [], local_servers_allowed: true }),
+    listMcpTools: async (serverId) => ({ server_id: serverId, connected: false, tools: [] }),
+    setMcpToolChoice: async (serverId) => ({ server_id: serverId, connected: false, tools: [] }),
+    markMcpToolsReviewed: async (serverId) => ({ server_id: serverId, connected: false, tools: [] }),
     openLink: async (url) => {
       links.push(url);
       return true;
@@ -817,7 +820,7 @@ describe("App", () => {
     act(() =>
       f.approve({
         type: "mcp_server",
-        status: { server_id: "fs", name: "Files", state: "failed", message: "It didn't start.", tools: 0 },
+        status: { server_id: "fs", name: "Files", state: "failed", message: "It didn't start.", tools: 0, review: 0 },
       }),
     );
     expect(await screen.findByText("Files couldn't connect. It didn't start.")).toBeTruthy();

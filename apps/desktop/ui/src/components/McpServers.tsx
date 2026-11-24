@@ -1,5 +1,5 @@
-import { LogIn, LogOut, Pencil, Plus, RotateCcw, Trash2, X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { ChevronRight, LogIn, LogOut, Pencil, Plus, RotateCcw, Trash2, X } from "lucide-react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import type { Api } from "../ipc/commands";
 import {
   errorMessage,
@@ -10,6 +10,7 @@ import {
   type McpValueView,
 } from "../ipc/types";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { McpToolsPanel } from "./McpTools";
 import { Badge, Button, EmptyState, ICON, IconButton, InlineMessage, Skeleton, Switch, TextField } from "./primitives";
 import { useToast } from "./toast";
 
@@ -26,6 +27,14 @@ export function McpServersCard({ api, live }: { api: Api; live: McpServerStatus[
   const [removing, setRemoving] = useState<McpServerView | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [removeError, setRemoveError] = useState<string | null>(null);
+  // Servers whose Tools section is open (T-SHELL-11).
+  const [openTools, setOpenTools] = useState<ReadonlySet<string>>(new Set());
+  const toggleTools = (id: string) =>
+    setOpenTools((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
   const addRef = useRef<HTMLButtonElement>(null);
   const removeTrigger = useRef<HTMLButtonElement | null>(null);
   const cardRef = useRef<HTMLElement>(null);
@@ -129,7 +138,8 @@ export function McpServersCard({ api, live }: { api: Api; live: McpServerStatus[
       </div>
       <p className="dn-help">
         Tool servers (MCP) give models tools, such as reading files or searching an issue tracker. Read-only tools run
-        without asking. Tools that change something ask for your approval first.
+        without asking. Tools that change something ask for your approval first. Open a server's Tools to see what each
+        tool does and choose when it asks.
       </p>
       {view === null && loadError === null && (
         <div aria-busy="true" aria-label="Loading tool servers">
@@ -174,8 +184,11 @@ export function McpServersCard({ api, live }: { api: Api; live: McpServerStatus[
             const st = status(s);
             const oauth = s.transport.type === "streamable_http" ? s.transport.oauth : null;
             const signedIn = oauth?.signed_in === true && st?.state !== "needs_auth";
+            const toolsOpen = openTools.has(s.id);
+            const toolsId = `mcp-tools-${s.id}`;
             return (
-              <div className="row" key={s.id} data-testid="mcp-server-row">
+              <Fragment key={s.id}>
+              <div className="row" data-testid="mcp-server-row">
                 <div className="row-main">
                   <span className="row-title">{s.name}</span>
                   <span className="dn-help mcp-where">
@@ -189,6 +202,18 @@ export function McpServersCard({ api, live }: { api: Api; live: McpServerStatus[
                 </div>
                 <div className="row-actions mcp-actions">
                   <StatusBadge status={st} />
+                  {st?.state === "connected" && st.review > 0 && <Badge tone="warning">{st.review} to review</Badge>}
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    aria-expanded={toolsOpen}
+                    aria-controls={toolsOpen ? toolsId : undefined}
+                    aria-label={`Tools of ${s.name}`}
+                    icon={<ChevronRight {...ICON} className="mcp-tools-chevron" aria-hidden="true" />}
+                    onClick={() => toggleTools(s.id)}
+                  >
+                    Tools
+                  </Button>
                   {oauth !== null && !signedIn && (
                     <Button
                       size="sm"
@@ -250,6 +275,17 @@ export function McpServersCard({ api, live }: { api: Api; live: McpServerStatus[
                   </IconButton>
                 </div>
               </div>
+              {toolsOpen && (
+                <div id={toolsId}>
+                  <McpToolsPanel
+                    api={api}
+                    serverId={s.id}
+                    serverName={s.name}
+                    version={`${st?.state ?? "none"}:${st?.tools ?? 0}:${st?.review ?? 0}`}
+                  />
+                </div>
+              )}
+              </Fragment>
             );
           })}
       <ConfirmDialog

@@ -22,6 +22,7 @@ pub mod secrets;
 pub mod settings;
 pub mod state;
 pub mod support;
+pub mod tool_review;
 
 use std::path::PathBuf;
 
@@ -198,6 +199,9 @@ pub fn run() {
             commands::remove_mcp_server,
             commands::reconnect_mcp_server,
             commands::sign_in_mcp_server,
+            commands::list_mcp_tools,
+            commands::set_mcp_tool_choice,
+            commands::mark_mcp_tools_reviewed,
             commands::sign_out_mcp_server,
             commands::hub_search,
             commands::hub_repo,

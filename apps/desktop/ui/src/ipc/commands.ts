@@ -23,6 +23,8 @@ import type {
   ReportKind,
   McpServerInput,
   McpServersView,
+  McpServerToolsView,
+  ToolChoice,
   HubPullEvent,
   HubRepoView,
   HubSearchPage,
@@ -43,6 +45,12 @@ interface Commands {
   reconnect_mcp_server: { args: { serverId: string }; ret: null };
   sign_in_mcp_server: { args: { serverId: string }; ret: null };
   sign_out_mcp_server: { args: { serverId: string }; ret: McpServersView };
+  list_mcp_tools: { args: { serverId: string }; ret: McpServerToolsView };
+  set_mcp_tool_choice: { args: { serverId: string; tool: string; choice: ToolChoice }; ret: McpServerToolsView };
+  mark_mcp_tools_reviewed: {
+    args: { serverId: string; tools: { name: string; fingerprint: string }[] };
+    ret: McpServerToolsView;
+  };
   hub_search: { args: { text: string; sort: HubSort; cursor: string | null }; ret: HubSearchPage };
   hub_repo: { args: { repo: string }; ret: HubRepoView };
   hub_pull: { args: { repo: string; sha: string; variant: string; onEvent: Channel<HubPullEvent> }; ret: string };
@@ -114,6 +122,14 @@ export const api = {
   signInMcpServer: (serverId: string) => call("sign_in_mcp_server", { serverId }),
   /** Deletes the server's stored sign-in tokens. */
   signOutMcpServer: (serverId: string) => call("sign_out_mcp_server", { serverId }),
+  /** A server's tools with their risk tier, approval and review flag. */
+  listMcpTools: (serverId: string) => call("list_mcp_tools", { serverId }),
+  /** Saves the user's choice for one tool and applies it now. */
+  setMcpToolChoice: (serverId: string, tool: string, choice: ToolChoice) =>
+    call("set_mcp_tool_choice", { serverId, tool, choice }),
+  /** Marks new or changed tools reviewed (only the versions the user was shown). */
+  markMcpToolsReviewed: (serverId: string, tools: { name: string; fingerprint: string }[]) =>
+    call("mark_mcp_tools_reviewed", { serverId, tools }),
   hubSearch: (text: string, sort: HubSort, cursor: string | null = null) => call("hub_search", { text, sort, cursor }),
   hubRepo: (repo: string) => call("hub_repo", { repo }),
   /** Downloads one quantisation (verified, resumable); resolves to its model ref. */
