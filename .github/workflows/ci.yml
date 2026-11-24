@@ -139,6 +139,15 @@ jobs:
         if: runner.os == 'Linux'
         working-directory: apps/desktop/e2e
         run: xvfb-run -a npm test
+      - name: App starts on its own (diagnostic)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:DEMIOS_DATA_DIR = Join-Path $env:RUNNER_TEMP 'demios-diag'
+          $p = Start-Process -FilePath target\debug\demios-desktop.exe -PassThru -RedirectStandardOutput diag-out.txt -RedirectStandardError diag-err.txt
+          Start-Sleep -Seconds 8
+          if ($p.HasExited) { Write-Host "app exited early with code $($p.ExitCode)" } else { Write-Host "app still running after 8 s"; Stop-Process -Id $p.Id }
+          Get-Content diag-out.txt, diag-err.txt -ErrorAction SilentlyContinue
       - name: e2e (Windows)
         if: runner.os == 'Windows'
         working-directory: apps/desktop/e2e

@@ -11,6 +11,9 @@ const axeSource = fs.readFileSync(require.resolve("axe-core/axe.min.js"), "utf8"
 const MOD = process.platform === "darwin" ? "Meta" : "Control";
 
 const byTestId = (id) => $(`[data-testid="${id}"]`);
+// textContent, not getText(): WebDriver's "visible text" rules differ between engines
+// (WebKitWebDriver returned "" for rendered markdown).
+const textOf = (el) => browser.execute((e) => e.textContent ?? "", el);
 const allByTestId = (id) => $$(`[data-testid="${id}"]`);
 
 async function send(text) {
@@ -47,14 +50,14 @@ describe("desktop chat", () => {
       timeout: 60_000,
       timeoutMsg: "the answer never completed",
     });
-    expect(await (await assistant(0)).getText()).toContain("Hello from the e2e suite");
+    expect(await textOf(await assistant(0))).toContain("Hello from the e2e suite");
 
     // 2. Second send, stop mid-answer with Ctrl+. (⌘. on macOS) → "Stopped".
     await send("Second message, please stop me");
     await browser.waitUntil(
       async () => {
         const m = await assistant(1);
-        return m !== undefined && (await m.getText()).length > 20;
+        return m !== undefined && (await textOf(m)).length > 20;
       },
       { timeout: 20_000, timeoutMsg: "the second answer never streamed" },
     );
@@ -63,7 +66,7 @@ describe("desktop chat", () => {
       timeout: 20_000,
       timeoutMsg: "Stop did not stop the answer",
     });
-    expect(await (await assistant(1)).getText()).toContain("Stopped");
+    expect(await textOf(await assistant(1))).toContain("Stopped");
 
     // 3. Accessibility: nothing serious or critical on the chat screen.
     await browser.execute(axeSource);
@@ -84,7 +87,7 @@ describe("desktop chat", () => {
     await (await byTestId("conversation-item")).waitForExist({ timeout: 60_000 });
     const conversations = await allByTestId("conversation-item");
     expect(conversations.length).toBe(1);
-    expect(await conversations[0].getText()).toContain("Hello from the e2e suite");
+    expect(await textOf(conversations[0])).toContain("Hello from the e2e suite");
     await conversations[0].click();
 
     await browser.waitUntil(async () => (await allByTestId("message-user")).length === 2, {
@@ -92,8 +95,8 @@ describe("desktop chat", () => {
       timeoutMsg: "the user messages did not survive the restart",
     });
     const users = await allByTestId("message-user");
-    expect(await users[0].getText()).toContain("Hello from the e2e suite");
-    expect(await users[1].getText()).toContain("Second message, please stop me");
+    expect(await textOf(users[0])).toContain("Hello from the e2e suite");
+    expect(await textOf(users[1])).toContain("Second message, please stop me");
     const answers = await allByTestId("message-assistant");
     expect(answers.length).toBe(2);
     expect(await answers[0].getAttribute("data-status")).toBe("complete");
