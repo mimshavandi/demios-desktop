@@ -120,9 +120,9 @@ jobs:
         working-directory: apps/desktop/e2e
         run: xvfb-run -a npm test
 
-  # Windows (WebView2 + msedgedriver) doesn't create a WebDriver session yet:
-  # "DevToolsActivePort file doesn't exist". Non-blocking until T-SHELL-06 fixes it
-  # (what was tried and next hypotheses: apps/desktop/e2e/README.md).
+  # Windows (WebView2 + msedgedriver): runs the same specs as `e2e`, including the axe check,
+  # and is a required check. Its e2e build turns on WebView2 remote debugging through the
+  # window config (apps/desktop/e2e/README.md, "T-SHELL-06: Windows WebView2 session").
   e2e-windows:
     runs-on: windows-latest
     timeout-minutes: 25
