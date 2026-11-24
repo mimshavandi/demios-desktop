@@ -87,9 +87,9 @@ function Shell({ api }: { api: Api }) {
   // "Delete all local data" brings it back.
   const showAiNotice = catalog !== null && catalog.settings.ai_notice_seen !== true;
   const report = useCallback(
-    async (kind: ReportKind, model: string | null) => {
+    async (kind: ReportKind, messageId: Id | null) => {
       try {
-        await api.reportProblem(kind, model);
+        await api.reportProblem(kind, messageId);
         toast({ tone: "info", title: "Opened the report form in your browser" });
       } catch (e) {
         toast({ tone: "error", title: errorMessage(e) });
