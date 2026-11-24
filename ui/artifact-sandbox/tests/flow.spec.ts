@@ -67,6 +67,9 @@ test("runtime errors surface with a Fix this button", async ({ page }) => {
   const req = await page.evaluate(() => window.dnDemo.fixRequests[0] as { version: number; issues: { kind: string }[] });
   expect(req.version).toBe(2);
   expect(req.issues[0]?.kind).toBe("error");
+  const prompt = await page.evaluate(() => (window.dnDemo.fixRequests[0] as { prompt: string }).prompt);
+  expect(prompt).toContain("<<<ARTIFACT_REPORT");
+  expect(prompt).toContain("untrusted data");
 });
 
 test("web components with shadow DOM still work (guard does not break them)", async ({ page }) => {
@@ -100,7 +103,14 @@ test("blocked network shows the notice; the per-artifact toggle re-renders with 
   const notice = page.getByTestId("network-blocked");
   await expect(notice).toBeVisible();
   await expect(page.getByTestId("artifact-issues")).toBeHidden();
+  // Two steps: the first only explains the risk and does nothing.
   await page.getByTestId("network-allow").click();
+  await expect(page.getByTestId("network-text")).toContainText("text from this chat");
+  await expect(page.getByTestId("log")).not.toContainText("network allowed for");
+  await page.getByTestId("network-cancel").click();
+  await expect(page.getByTestId("network-confirm")).toBeHidden();
+  await page.getByTestId("network-allow").click();
+  await page.getByTestId("network-confirm").click();
   await expect(page.getByTestId("log")).toContainText("network allowed for");
   await expect(frame(page).locator("#p")).toHaveText("hi");
   await expect(notice).toBeHidden();

@@ -5,6 +5,7 @@
 // tokens from ui/design-tokens (the host loads tokens.css). Styles go in through a constructable
 // stylesheet, so the host CSP needs no 'unsafe-inline'.
 
+import { buildFixPrompt } from "./fix";
 import { ArtifactFrame } from "./frame";
 import { latest, type Artifact, type ArtifactVersion, type SandboxIssue } from "./types";
 
@@ -12,6 +13,8 @@ export interface FixRequest {
   artifactId: string;
   version: number;
   issues: SandboxIssue[];
+  /** Message for the model: the issues as delimited, labelled, capped untrusted data (fix.ts). */
+  prompt: string;
 }
 
 export interface ArtifactViewOptions {
@@ -41,6 +44,7 @@ const CSS = `
 .dn-av-icon { min-width: var(--dn-hit-target); padding: 0 !important; }
 .dn-av button.dn-av-primary { background: var(--dn-color-accent); border-color: var(--dn-color-accent); color: var(--dn-color-text-on-accent); }
 .dn-av button.dn-av-primary:hover:not(:disabled) { background: var(--dn-color-accent-hover); }
+.dn-av button.dn-av-danger { background: var(--dn-color-surface); border-color: var(--dn-color-danger); color: var(--dn-color-danger); font-weight: var(--dn-weight-semibold); }
 .dn-av-notice { display: flex; gap: var(--dn-space-3); align-items: center; justify-content: space-between; flex-wrap: wrap; padding: var(--dn-space-2) var(--dn-space-3); font-size: var(--dn-text-sm); line-height: var(--dn-leading-sm); border-bottom: 1px solid var(--dn-color-border); }
 .dn-av-old { background: var(--dn-color-accent-soft); color: var(--dn-color-accent-text); }
 .dn-av-net { background: var(--dn-color-warning-soft); color: var(--dn-color-text); }
@@ -94,6 +98,7 @@ export class ArtifactView {
   private shown = 0;
   private issues: SandboxIssue[] = [];
   private networkBlocked = false;
+  private confirming = false;
   private readonly frame: ArtifactFrame;
   private readonly opts: ArtifactViewOptions;
   private readonly ui: {
@@ -107,6 +112,9 @@ export class ArtifactView {
     restore: HTMLButtonElement;
     net: HTMLElement;
     allowNet: HTMLButtonElement;
+    netText: HTMLElement;
+    confirmNet: HTMLButtonElement;
+    cancelNet: HTMLButtonElement;
     skeleton: HTMLElement;
     error: HTMLElement;
     errorFirst: HTMLElement;
@@ -137,9 +145,14 @@ export class ArtifactView {
     old.hidden = true;
 
     const net = el("div", { class: "dn-av-notice dn-av-net", role: "status", "data-testid": "network-blocked" });
-    const netText = el("span", {}, "This artifact tried to use the network, which is off for artifacts.");
-    const allowNet = el("button", { type: "button", "data-testid": "network-allow" }, "Allow network for this artifact");
-    net.append(netText, allowNet);
+    // The notice can be triggered by artifact code (it can fake a blocked request), so turning the
+    // network on always takes a second, explicit step that says what is at stake. None of this
+    // text comes from the artifact.
+    const netText = el("span", { "data-testid": "network-text" });
+    const allowNet = el("button", { type: "button", "data-testid": "network-allow" }, "Allow network for this artifact…");
+    const confirmNet = el("button", { type: "button", class: "dn-av-danger", "data-testid": "network-confirm" }, "Allow network");
+    const cancelNet = el("button", { type: "button", "data-testid": "network-cancel" }, "Keep it off");
+    net.append(netText, allowNet, confirmNet, cancelNet);
     net.hidden = true;
 
     const body = el("div", { class: "dn-av-body" });
@@ -171,7 +184,7 @@ export class ArtifactView {
       },
     });
     body.appendChild(skeleton);
-    this.ui = { title, kind, prev, next, select, old, oldText, restore, net, allowNet, skeleton, error, errorFirst, errorMore, issueList, fix };
+    this.ui = { title, kind, prev, next, select, old, oldText, restore, net, allowNet, netText, confirmNet, cancelNet, skeleton, error, errorFirst, errorMore, issueList, fix };
 
     prev.addEventListener("click", () => void this.show(this.shown - 1));
     next.addEventListener("click", () => void this.show(this.shown + 1));
@@ -181,11 +194,28 @@ export class ArtifactView {
     });
     fix.addEventListener("click", () => {
       if (this.artifact && this.issues.length) {
-        this.opts.onFix?.({ artifactId: this.artifact.id, version: this.shown, issues: [...this.issues] });
+        const a = this.artifact;
+        this.opts.onFix?.({
+          artifactId: a.id,
+          version: this.shown,
+          issues: [...this.issues],
+          prompt: buildFixPrompt(a.id, a.title, this.shown, this.issues),
+        });
       }
     });
     allowNet.addEventListener("click", () => {
-      if (!this.artifact) return;
+      this.confirming = true;
+      this.renderIssues();
+      confirmNet.focus();
+    });
+    cancelNet.addEventListener("click", () => {
+      this.confirming = false;
+      this.renderIssues();
+      allowNet.focus();
+    });
+    confirmNet.addEventListener("click", () => {
+      if (!this.artifact || !this.confirming) return;
+      this.confirming = false;
       this.opts.onAllowNetwork?.(this.artifact.id);
       void this.show(this.shown);
     });
@@ -239,6 +269,7 @@ export class ArtifactView {
     this.ui.restore.hidden = !this.opts.onRestore;
     this.issues = [];
     this.networkBlocked = false;
+    this.confirming = false;
     this.renderIssues();
     this.ui.skeleton.hidden = false;
     this.ui.skeleton.parentElement?.setAttribute("aria-busy", "true");
@@ -263,7 +294,13 @@ export class ArtifactView {
     const n = this.issues.length;
     const allowed = this.artifact ? (this.opts.allowNetwork?.(this.artifact.id) ?? false) : false;
     this.ui.net.hidden = !this.networkBlocked || allowed;
-    this.ui.allowNet.hidden = !this.opts.onAllowNetwork;
+    const canAllow = !!this.opts.onAllowNetwork;
+    this.ui.allowNet.hidden = !canAllow || this.confirming;
+    this.ui.confirmNet.hidden = !canAllow || !this.confirming;
+    this.ui.cancelNet.hidden = !canAllow || !this.confirming;
+    this.ui.netText.textContent = this.confirming
+      ? "Allow network access for this artifact? It could send anything it shows, including text from this chat, to any website. Plain http and other artifacts stay blocked."
+      : "This artifact tried to use the network, which is off for artifacts.";
     this.ui.error.hidden = n === 0;
     const firstIssue = this.issues[0];
     this.ui.errorFirst.textContent = firstIssue ? firstIssue.message : "";

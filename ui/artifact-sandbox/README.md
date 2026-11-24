@@ -25,7 +25,8 @@ await view.setArtifact(artifact); // dn_core::artifact::Artifact as JSON
 1. Serve `dist/frame/index.html` on a scheme/origin that is **not** the app's, e.g. `artifact://localhost/frame/`, with the `Content-Security-Policy` header from `dist/frame/csp.json` (`network` when the URL has `?net=1`, else `strict`) and `X-Content-Type-Options: nosniff`. Serve nothing else there.
 2. Main webview CSP: `frame-src <that origin>`; no inline scripts needed by this package (styles use constructable stylesheets).
 3. Ship `dist/index.js` and `dist/chunks/*` with the app. Renderer chunks load lazily: mermaid (≈5 MB) only when a diagram is shown.
-4. Follow shell requirements S1–S6 in the threat model (IPC main-frame only, WebRTC disabled in the engine, …).
+4. Follow shell requirements S1–S8 in the threat model (IPC main-frame only, WebRTC disabled in the engine, every `message` listener checks its source, …).
+5. The network toggle (`allowNetwork` / `onAllowNetwork`) opens `https:` to any host, including `https://localhost` and the LAN; the pane asks for a second, explicit confirmation.
 
 ## React artifacts
 

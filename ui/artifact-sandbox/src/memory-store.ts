@@ -32,8 +32,16 @@ export function countMatches(hay: string, needle: string): { count: number; firs
   return { count, first };
 }
 
+/** Artifacts are stored with LF line endings (same as dn-artifacts). */
+export function normaliseNewlines(s: string): string {
+  return s.replace(/\r\n?/g, "\n");
+}
+
 export function applyUpdate(content: string, oldStr: string, newStr: string): string {
   if (oldStr === "") throw new StoreError("empty_old_str", "old_str must not be empty");
+  content = normaliseNewlines(content);
+  oldStr = normaliseNewlines(oldStr);
+  newStr = normaliseNewlines(newStr);
   const { count, first } = countMatches(content, oldStr);
   if (count === 0) throw new StoreError("no_match", "old_str was not found");
   if (count > 1) throw new StoreError("ambiguous", `old_str matches ${count} times`, count);

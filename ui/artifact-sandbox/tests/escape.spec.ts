@@ -134,6 +134,7 @@ test("cannot use the network (markup and CSS)", async ({ page }) => {
 <link rel="prefetch" href="${u("prefetch")}">
 <link rel="preload" as="image" href="${u("preload")}">
 <link rel="preconnect" href="${SPY}">
+<link rel="dns-prefetch" href="${SPY}">
 <link rel="icon" href="${u("icon")}">
 <script src="${u("script")}"></script>
 <style>
@@ -265,3 +266,59 @@ for (const [route, doc] of Object.entries(NESTED_FRAME_ROUTES)) {
     expect(await spyLog(page)).toEqual([]);
   });
 }
+
+test("forged messages don't reach app listeners that check their source (S7)", async ({ page }) => {
+  // An app listener written the way S7 requires, plus a record of what arrives at the window.
+  await page.evaluate(() => {
+    const w = window as unknown as { __appActions: string[]; __seenOrigins: string[] };
+    w.__appActions = [];
+    w.__seenOrigins = [];
+    window.addEventListener("message", (e) => {
+      w.__seenOrigins.push(e.origin);
+      if (e.source !== window || e.origin !== location.origin) return;
+      const d = e.data as { action?: string } | null;
+      if (d?.action) w.__appActions.push(d.action);
+    });
+  });
+  await show(
+    page,
+    { kind: "html" },
+    `<script>
+      for (const t of [parent, top]) {
+        t.postMessage({ action: "open-settings" }, "*");
+        t.postMessage({ action: "delete-chat", id: "all" }, "*");
+        try { t.postMessage({ action: "x" }, "http://127.0.0.1:4173"); } catch (e) {}
+      }
+      parent.postMessage({ probe: ["done", "sent"] }, "*");
+    </script>`,
+  );
+  await probes(page, 1);
+  const r = await page.evaluate(() => {
+    const w = window as unknown as { __appActions: string[]; __seenOrigins: string[] };
+    return { actions: w.__appActions, origins: [...new Set(w.__seenOrigins)] };
+  });
+  expect(r.actions).toEqual([]);
+  expect(r.origins).toEqual(["null"]);
+});
+
+test("cannot move the host through session history", async ({ page }) => {
+  // Give the host page history to go back to.
+  await page.goto("/demo/index.html?first");
+  await openDemo(page);
+  await instrumentHost(page);
+  const before = await page.evaluate(() => location.href);
+  await show(
+    page,
+    { kind: "html" },
+    `<script>
+      try { history.pushState({}, "", "/evil"); } catch (e) {}
+      try { history.replaceState({}, "", "${SPY_URL}?replace"); } catch (e) {}
+      setTimeout(() => { try { history.back(); } catch (e) {} }, 50);
+      setTimeout(() => { try { history.go(-2); } catch (e) {} }, 150);
+    </script><p id="h">history</p>`,
+  );
+  await page.waitForTimeout(1500);
+  expect(await page.evaluate(() => location.href)).toBe(before);
+  expect(await spyLog(page)).toEqual([]);
+});
+

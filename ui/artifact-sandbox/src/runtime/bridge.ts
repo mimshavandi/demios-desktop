@@ -125,6 +125,30 @@ import type { SandboxIssue } from "../types";
   const parseUnsafe = docCtor["parseHTMLUnsafe"];
   if (parseUnsafe) docCtor["parseHTMLUnsafe"] = (h: unknown, o?: unknown) => apply(parseUnsafe, Document, [noDsd(h), o]);
 
+  // Session history is shared with the host page: WebKit lets a sandboxed frame's
+  // history.back()/go() move the app itself. Artifacts get no history or Navigation API
+  // traversal. Locked (non-writable, non-configurable) so artifact code can't put them back.
+  const blockHistory = (proto: object | undefined, names: string[], label: string): void => {
+    if (!proto) return;
+    for (const name of names) {
+      try {
+        Object.defineProperty(proto, name, {
+          value: function blocked(): undefined {
+            issue({ kind: "csp", message: `Blocked by the sandbox: ${label}.${name}()`, detail: "Artifacts cannot use session history." });
+            return undefined;
+          },
+          writable: false,
+          configurable: false,
+        });
+      } catch {
+        // Already locked.
+      }
+    }
+  };
+  blockHistory(History.prototype, ["back", "forward", "go", "pushState", "replaceState"], "history");
+  const nav = (window as unknown as { Navigation?: { prototype: object } }).Navigation;
+  blockHistory(nav?.prototype, ["back", "forward", "traverseTo", "navigate", "reload"], "navigation");
+
   window.addEventListener("error", (e: ErrorEvent) => {
     const where = e.filename ? ` (line ${e.lineno}:${e.colno})` : "";
     // WebKit hides the details of errors in sandboxed frames ("Script error.", no error object).

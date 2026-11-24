@@ -10,12 +10,14 @@
 // - Messages from the frame are accepted only from that frame's window and current nonce, and
 //   are treated as untrusted data (parseFrameMessage).
 
+import { isSeparateOrigin } from "./origin";
 import { CHANNEL, parseFrameMessage } from "./protocol";
 import { runtimesFor } from "./runtimes";
 import { buildDocument, rendererFor } from "./document";
 import type { ArtifactType, SandboxIssue } from "./types";
 
 export const SANDBOX = "allow-scripts";
+
 
 export interface ArtifactFrameOptions {
   /**
@@ -43,8 +45,7 @@ export class ArtifactFrame {
   private readonly onMessage = (e: MessageEvent): void => this.handle(e);
 
   constructor(container: HTMLElement, opts: ArtifactFrameOptions) {
-    const shell = new URL(opts.frameUrl, location.href);
-    if (shell.origin === location.origin && shell.origin !== "null") {
+    if (!isSeparateOrigin(opts.frameUrl, location.href)) {
       throw new Error("artifact frameUrl must be on a separate origin from the host");
     }
     this.opts = opts;
@@ -104,7 +105,9 @@ export class ArtifactFrame {
 
   private handle(e: MessageEvent): void {
     const iframe = this.iframe;
-    if (!iframe || e.source !== iframe.contentWindow) return;
+    // The frame is sandboxed without allow-same-origin, so its messages always come from the
+    // opaque origin "null"; anything else is not our frame.
+    if (!iframe || e.source !== iframe.contentWindow || e.origin !== "null") return;
     const d = e.data as { channel?: unknown; type?: unknown } | null;
     if (d && d.channel === CHANNEL && d.type === "shell-ready") {
       // The shell asks for its content. Answer once per frame: a frame that navigated or
