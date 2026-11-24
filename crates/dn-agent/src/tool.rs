@@ -22,6 +22,10 @@ pub struct ToolContext {
     pub caller: String,
     /// Conversation the call belongs to, if any (ledger / approval scope).
     pub conversation_id: Option<dn_core::Id>,
+    /// Fresh UUIDv7 per agent run (one user turn). Scope for tool-call idempotency:
+    /// key ledgers and replays on `(run_id, call.id)`, because model-provided call ids are
+    /// not unique (local models reuse `call_0` or send "").
+    pub run_id: dn_core::Id,
     /// 0-based model step that produced this call.
     pub step: u32,
     /// Fires when the user stops the run. Long-running tools and approval waits must honour it.
@@ -100,6 +104,7 @@ mod tests {
             agent_id: "test".into(),
             caller: "chat.reply".into(),
             conversation_id: None,
+            run_id: dn_core::Id::new(),
             step: 0,
             cancel: CancelToken::new(),
         };
