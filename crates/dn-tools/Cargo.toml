@@ -5,8 +5,32 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+description = "MCP client, capability wrapper, approval gate and side-effect ledger (ADR-0006)"
 
 [dependencies]
+dn-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "sync", "time", "process", "net", "io-util"] }
+rusqlite.workspace = true
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+rmcp = { version = "3.11", default-features = false, features = [
+    "client",
+    "transport-child-process",
+    "transport-streamable-http-client-reqwest",
+    "auth",
+    "reqwest",
+] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "process", "net", "io-util", "io-std"] }
+axum = { version = "0.8", default-features = false, features = ["tokio", "http1", "json", "form", "query"] }
+rmcp = { version = "3.11", default-features = false, features = [
+    "server",
+    "transport-io",
+    "transport-streamable-http-server",
+] }
 
 [lints]
 workspace = true
