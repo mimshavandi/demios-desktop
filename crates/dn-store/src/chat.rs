@@ -10,7 +10,8 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use serde::{Deserialize, Serialize};
 
-pub(crate) const MIGRATIONS: &[&str] = &["
+pub(crate) const MIGRATIONS: &[&str] = &[
+    "
 CREATE TABLE store_conversations (
     id         TEXT    PRIMARY KEY NOT NULL,
     title      TEXT    NOT NULL,
@@ -36,7 +37,11 @@ CREATE TABLE store_messages (
     updated_at      INTEGER NOT NULL
 );
 CREATE INDEX store_messages_conversation ON store_messages (conversation_id, created_at, id);
-"];
+",
+    "
+ALTER TABLE store_conversations ADD COLUMN purged_at INTEGER;
+",
+];
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Conversation {
@@ -260,20 +265,52 @@ fn touch(conn: &Connection, id: Id, set: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
-/// Soft-deletes a conversation (a tombstone sync can carry) and hard-deletes its messages.
+/// Soft-deletes a conversation: it disappears from lists and can be brought back with
+/// [`restore_conversation`] until [`purge_deleted`] removes its messages. The row stays as
+/// a tombstone sync can carry (ADR-0008).
 pub fn delete_conversation(conn: &Connection, id: Id) -> Result<()> {
     let now = now_ms();
-    let tx = conn.unchecked_transaction()?;
-    tx.execute(
-        "DELETE FROM store_messages WHERE conversation_id = ?1",
-        [id.to_string()],
-    )?;
-    tx.execute(
-        "UPDATE store_conversations SET deleted_at = ?2, updated_at = ?2 WHERE id = ?1",
+    let n = conn.execute(
+        "UPDATE store_conversations SET deleted_at = ?2, updated_at = ?2
+         WHERE id = ?1 AND deleted_at IS NULL",
         params![id.to_string(), now],
     )?;
-    tx.commit()?;
+    if n == 0 {
+        return Err(StoreError::NotFound(format!("conversation {id}")));
+    }
     Ok(())
+}
+
+/// Undoes [`delete_conversation`] if the messages have not been purged yet.
+pub fn restore_conversation(conn: &Connection, id: Id) -> Result<()> {
+    let n = conn.execute(
+        "UPDATE store_conversations SET deleted_at = NULL, updated_at = ?2
+         WHERE id = ?1 AND deleted_at IS NOT NULL AND purged_at IS NULL",
+        params![id.to_string(), now_ms()],
+    )?;
+    if n == 0 {
+        return Err(StoreError::NotFound(format!("deleted conversation {id}")));
+    }
+    Ok(())
+}
+
+/// Permanently removes the messages of conversations deleted at or before `before_ms`
+/// (the tombstone row stays). Returns how many conversations were purged.
+pub fn purge_deleted(conn: &Connection, before_ms: i64) -> Result<usize> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
+        "DELETE FROM store_messages WHERE conversation_id IN (
+             SELECT id FROM store_conversations
+             WHERE deleted_at IS NOT NULL AND deleted_at <= ?1 AND purged_at IS NULL)",
+        [before_ms],
+    )?;
+    let n = tx.execute(
+        "UPDATE store_conversations SET purged_at = ?2
+         WHERE deleted_at IS NOT NULL AND deleted_at <= ?1 AND purged_at IS NULL",
+        params![before_ms, now_ms()],
+    )?;
+    tx.commit()?;
+    Ok(n)
 }
 
 pub fn add_message(conn: &Connection, conversation_id: Id, m: NewMessage) -> Result<StoredMessage> {
@@ -516,6 +553,27 @@ mod tests {
     }
 
     #[test]
+    fn delete_restore_and_purge() {
+        let c = open_in_memory(&[]).unwrap();
+        let conv = create_conversation(&c, "t").unwrap();
+        add_message(&c, conv.id, NewMessage::user_text("keep")).unwrap();
+        delete_conversation(&c, conv.id).unwrap();
+        assert!(list_conversations(&c).unwrap().is_empty());
+        assert!(matches!(
+            delete_conversation(&c, conv.id),
+            Err(StoreError::NotFound(_))
+        ));
+        restore_conversation(&c, conv.id).unwrap();
+        assert_eq!(list_messages(&c, conv.id).unwrap()[0].text(), "keep");
+
+        delete_conversation(&c, conv.id).unwrap();
+        assert_eq!(purge_deleted(&c, now_ms()).unwrap(), 1);
+        assert!(list_messages(&c, conv.id).unwrap().is_empty());
+        assert!(restore_conversation(&c, conv.id).is_err());
+        assert_eq!(purge_deleted(&c, now_ms()).unwrap(), 0);
+    }
+
+    #[test]
     fn tool_call_id_round_trips() {
         let c = open_in_memory(&[]).unwrap();
         let conv = create_conversation(&c, "t").unwrap();
@@ -582,6 +640,6 @@ mod tests {
         const OTHER: &[&str] = &["CREATE TABLE artifact_things (id TEXT PRIMARY KEY)"];
         let c = open_in_memory(&[crate::MigrationSet::new("artifact", OTHER)]).unwrap();
         assert_eq!(crate::migrate::applied_version(&c, "artifact").unwrap(), 1);
-        assert_eq!(crate::migrate::applied_version(&c, "store").unwrap(), 1);
+        assert_eq!(crate::migrate::applied_version(&c, "store").unwrap(), 2);
     }
 }

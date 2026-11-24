@@ -1,0 +1,52 @@
+[package]
+name = "demios-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Demios Desktop: Tauri 2 shell (ADR-0002)."
+publish = false
+default-run = "demios-desktop"
+
+[lib]
+name = "demios_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "demios-desktop"
+path = "src/main.rs"
+
+[features]
+default = []
+# T-SHELL-03: registers `FakeChatModel` as `local:dev-fake` so the app answers before a
+# real backend merges. Debug builds only: build.rs sets `cfg(fake_model)` when this feature
+# is on *and* debug assertions are enabled, so a release build never contains it.
+# `npm run dev:app` turns it on.
+dev-fake-model = []
+# Set by `tauri build`: embed the built UI instead of using the dev server.
+custom-protocol = ["tauri/custom-protocol"]
+
+[build-dependencies]
+tauri-build.workspace = true
+
+[dependencies]
+dn-core.workspace = true
+dn-store.workspace = true
+dn-secrets.workspace = true
+dn-agent.workspace = true
+dn-providers = { path = "../../crates/dn-providers", version = "0.1.0" }
+dn-tools = { path = "../../crates/dn-tools", version = "0.1.0" }
+futures-core.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tauri.workspace = true
+tokio = { workspace = true, features = ["sync", "macros", "time", "rt"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+
+[lints]
+workspace = true

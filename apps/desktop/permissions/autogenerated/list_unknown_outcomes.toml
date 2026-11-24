@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-list-unknown-outcomes"
+description = "Enables the list_unknown_outcomes command without any pre-configured scope."
+commands.allow = ["list_unknown_outcomes"]
+
+[[permission]]
+identifier = "deny-list-unknown-outcomes"
+description = "Denies the list_unknown_outcomes command without any pre-configured scope."
+commands.deny = ["list_unknown_outcomes"]
