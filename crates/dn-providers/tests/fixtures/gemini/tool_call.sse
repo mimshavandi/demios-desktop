@@ -1,0 +1,2 @@
+data: {"candidates": [{"content": {"parts": [{"functionCall": {"name": "get_weather","args": {"city": "Berlin"}},"thoughtSignature": "c2lnLVJFREFDVEVE"}],"role": "model"},"finishReason": "STOP","index": 0}],"usageMetadata": {"promptTokenCount": 70,"candidatesTokenCount": 16,"totalTokenCount": 120,"thoughtsTokenCount": 34},"modelVersion": "gemini-2.5-flash","responseId": "REDACTED"}
+
