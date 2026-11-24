@@ -624,9 +624,12 @@ mod tests {
     }
 
     /// Waits until no message in the conversation is still streaming (stored outcome).
+    /// Waits until the run is fully over: its row stored (not "streaming") *and* the chat's
+    /// busy flag released. The flag is cleared just after the row is written, so waiting on
+    /// the row alone let the next send hit "busy" (flaky on CI).
     async fn wait_idle(state: &AppState, conv: Id) {
         for _ in 0..600 {
-            let streaming = {
+            let streaming = state.is_generating(conv) || {
                 let db = state.db().unwrap();
                 store::list_messages(&db, conv)
                     .unwrap()
