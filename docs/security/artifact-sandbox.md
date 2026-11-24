@@ -82,7 +82,7 @@ The host never parses or runs artifact content. It escapes data into the documen
 ### How the app meets them (T-ART-06)
 | | In `apps/desktop` | Checked by |
 |---|---|---|
-| S1 | `register_uri_scheme_protocol("artifact")` serves `/frame/` (GET only) with the CSP from `csp.json`. The `network` policy is sent only for `?net=1`, along with `nosniff`, `Referrer-Policy: no-referrer` and `Cache-Control: no-store`. Every other path gets a 404. `build.rs` embeds `dist/frame/`. | `artifacts::tests`, e2e |
+| S1 | `register_uri_scheme_protocol("artifact")` serves `/frame/` (GET only) with the CSP from `csp.json`. The `network` policy is sent only for `?net=1`, along with `nosniff`, `Referrer-Policy: no-referrer` and `Cache-Control: no-store`. Every other path gets a 404. `build.rs` embeds `dist/frame/`. The window's navigation guard allows only that path on the artifact origin, because WebKitGTK also reports sub-frame navigations to it. Opened as a top-level page, the shell removes the IPC globals and does nothing. | `artifacts::tests`, e2e |
 | S2 | `tauri.conf.json` sets `frame-src artifact://localhost`. `tauri.windows.conf.json` sets `frame-src http://artifact.localhost`. | e2e (frame loads; no other frame source) |
 | S3 | The capability names the `main` window only and has no `remote` URLs. Init scripts are Tauri's own, all main-frame-only. **But see R8.** | e2e (Linux), manual checklist (macOS, Windows) |
 | S4 | Windows uses `additionalBrowserArgs --force-webrtc-ip-handling-policy=disable_non_proxied_udp`, keeping wry's default `--disable-features`. WebKitGTK has WebRTC off by default (`enable-webrtc`). WKWebView has no public switch, so the in-frame bridge is the control there (R3). | e2e (`RTCPeerConnection` absent in the frame), manual checklist |
