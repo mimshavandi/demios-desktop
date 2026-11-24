@@ -1,8 +1,9 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Api } from "../ipc/commands";
 import type {
   ApprovalPrompt,
+  ArtifactDetail,
   ChatEvent,
   Conversation,
   ModelCatalog,
@@ -16,6 +17,32 @@ import type {
 import { App } from "./App";
 
 afterEach(cleanup);
+
+// The real renderer needs a webview (constructable stylesheets, sandboxed frames); record
+// what the pane hands it instead. Its own behaviour is tested in ui/artifact-sandbox.
+const shown = vi.hoisted(() => ({
+  artifacts: [] as { id: string; versions: unknown[] }[],
+  madeBy: [] as (string | null)[],
+  opts: null as null | { allowNetwork?: (id: string) => boolean; onAllowNetwork?: (id: string) => void },
+}));
+vi.mock("@dn-artifacts", () => ({
+  ArtifactView: class {
+    constructor(
+      private el: HTMLElement,
+      private opts: { madeBy?: (v: { author: string; model?: string | null }) => string | null },
+    ) {
+      this.el.append(Object.assign(document.createElement("div"), { textContent: "sandbox view" }));
+      shown.opts = this.opts as typeof shown.opts;
+    }
+    setArtifact(a: { id: string; versions: { author: string; model?: string | null }[] }) {
+      shown.artifacts.push(a);
+      const last = a.versions[a.versions.length - 1];
+      shown.madeBy.push(last ? (this.opts.madeBy?.(last) ?? null) : null);
+      return Promise.resolve();
+    }
+    destroy() {}
+  },
+}));
 
 /** In-memory stand-in for the Rust commands. */
 function fakeApi() {
@@ -31,6 +58,8 @@ function fakeApi() {
   const localRows: LocalModelRow[] = [
     {
       id: "m1",
+      origin: "catalog",
+      location: null,
       model_ref: "local:m1",
       name: "Tiny Model",
       repo: "org/tiny",
@@ -47,9 +76,11 @@ function fakeApi() {
     },
   ];
   const msgs = new Map<string, StoredMessage[]>();
+  const artifacts: ArtifactDetail[] = [];
   let settings: Settings = { slots: {}, telemetry_enabled: false };
   let n = 0;
   const reports: [string, string | null][] = [];
+  const links: string[] = [];
   let listener: ((ev: ChatEvent) => void) | null = null;
   const id = () => `id-${++n}`;
   const m = (cid: string, role: "user" | "assistant", text: string, status: StoredMessage["status"]): StoredMessage => ({
@@ -76,21 +107,37 @@ function fakeApi() {
     key_store: "memory",
     settings,
     chat_model: null,
+    chat_model_tools: true,
   });
   const api: Api = {
     appInfo: async () => ({ version: "0.1.0", dev_fake_model: true, data_dir: "/tmp", models_dir: "/tmp/models" }),
+    hubSearch: async () => ({ items: [], next: null }),
+    hubRepo: async () => {
+      throw { code: "model_unavailable", message: "not in this test" };
+    },
+    hubPull: async () => "local:x",
+    hubCancel: async () => true,
+    hubPullStatus: async () => ({}),
+    hfTokenStatus: async () => false,
+    setHfToken: async () => true,
+    deleteHfToken: async () => false,
     listMcpServers: async () => ({ servers: [], local_servers_allowed: true }),
     saveMcpServer: async () => ({ servers: [], local_servers_allowed: true }),
     removeMcpServer: async () => ({ servers: [], local_servers_allowed: true }),
     reconnectMcpServer: async () => null,
     signInMcpServer: async () => null,
     signOutMcpServer: async () => ({ servers: [], local_servers_allowed: true }),
+    openLink: async (url) => {
+      links.push(url);
+      return true;
+    },
     reportProblem: async (kind, messageId) => {
       reports.push([kind, messageId ?? null]);
       return null;
     },
     localDataSummary: async () => ({
       conversations: convs.length,
+      artifacts: artifacts.length,
       data_dir: "/tmp",
       models_dir: "/tmp/models",
       models_bytes: 4_200_000_000,
@@ -163,6 +210,22 @@ function fakeApi() {
       responses.push([requestId, decision]);
       return null;
     },
+    listArtifacts: async (cid) =>
+      artifacts
+        .filter((a) => a.conversation_id === cid)
+        .map((a) => ({ id: a.id, conversation_id: cid, artifact_type: a.artifact_type, title: a.title, latest_n: a.versions.length, created_at: "", updated_at: "" })),
+    getArtifact: async (_cid, aid) => {
+      const a = artifacts.find((x) => x.id === aid);
+      if (!a) throw { code: "not_found", message: "gone" };
+      return structuredClone(a);
+    },
+    rollbackArtifact: async (_cid, aid, to) => {
+      const a = artifacts.find((x) => x.id === aid);
+      const src = a?.versions.find((v) => v.n === to);
+      if (!a || !src) throw { code: "not_found", message: "gone" };
+      a.versions.push({ ...src, n: a.versions.length + 1, parent_n: to, author: "user", model: null, message_id: null });
+      return structuredClone(a);
+    },
     listUnknownOutcomes: async () => [...unknowns],
     resolveUnknownOutcome: async (key, happened) => {
       resolved.push([key, happened]);
@@ -178,15 +241,62 @@ function fakeApi() {
     responses,
     resolved,
     unknowns,
+    artifacts,
     local: (e: LocalModelEvent) => localSink?.(e),
     downloads,
     pauses,
     localRows,
     reports,
+    links,
   };
 }
 
 describe("App", () => {
+  it("shows a card for an artifact the answer made and opens it in the pane", async () => {
+    const { api, emit, artifacts } = fakeApi();
+    render(<App api={api} />);
+    const box = await screen.findByLabelText("Message");
+    fireEvent.change(box, { target: { value: "Make an HTML artifact" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(await screen.findByRole("button", { name: "Stop answer" })).toBeTruthy();
+    const conv = "id-1";
+    const assistantId = "id-3";
+    artifacts.push({
+      id: "art-1",
+      conversation_id: conv,
+      artifact_type: { kind: "html" },
+      title: "Fake artifact",
+      versions: [
+        { n: 1, content: "<h1>Version one</h1>", author: "model", parent_n: null, message_id: assistantId, created_at: "2026-11-24T10:00:00Z", model: "local:dev-fake" },
+      ],
+    });
+    act(() => {
+      emit({ type: "artifact_changed", message_id: assistantId, conversation_id: conv, artifact_id: "art-1", title: "Fake artifact", version: 1 });
+      emit({ type: "text_delta", message_id: assistantId, offset: 0, text: "Made it." });
+      emit({ type: "done", message_id: assistantId, finish_reason: "stop", usage: { input_tokens: 1, output_tokens: 2 } });
+    });
+    const card = await screen.findByTestId("artifact-card");
+    expect(card.textContent).toContain("Fake artifact");
+    expect(card.textContent).toContain("HTML · v1");
+    // The pane opened on it and named the model that made it.
+    await waitFor(() => expect(shown.artifacts.at(-1)?.id).toBe("art-1"));
+    expect(shown.madeBy.at(-1)).toBe("Dev fake");
+    fireEvent.click(screen.getByRole("button", { name: "Open Fake artifact" }));
+    expect(screen.getByTestId("artifact-host").hidden).toBe(false);
+
+    // Network allowed for v1 doesn't carry over to a new version the model writes.
+    shown.opts?.onAllowNetwork?.("art-1");
+    expect(shown.opts?.allowNetwork?.("art-1")).toBe(true);
+    const art = artifacts[0];
+    if (!art) throw new Error("no artifact");
+    art.versions.push({ ...art.versions[0]!, n: 2, parent_n: 1, content: "<h1>Version two</h1>" });
+    act(() => {
+      emit({ type: "artifact_changed", message_id: assistantId, conversation_id: conv, artifact_id: "art-1", title: "Fake artifact", version: 2 });
+    });
+    await waitFor(() => expect(shown.artifacts.at(-1)?.versions.length).toBe(2));
+    expect(shown.opts?.allowNetwork?.("art-1")).toBe(false);
+  });
+
   it("sends a message and renders the streamed answer as markdown", async () => {
     const { api, emit } = fakeApi();
     render(<App api={api} />);
@@ -277,6 +387,63 @@ describe("App", () => {
     await waitFor(() => expect(reports).toEqual([["answer", "id-3"], ["problem", null]]));
     // Only kinds and message ids went to the backend: no chat text.
     expect(JSON.stringify(reports)).not.toContain("private question");
+  });
+
+  it("links in answers go to the backend to confirm and open, never navigate the app", async () => {
+    const { api, emit, msgs, links } = fakeApi();
+    let refuse = false;
+    api.openLink = async (url) => {
+      links.push(url);
+      if (refuse) throw { code: "invalid_input", message: "Only web links (http and https) open from answers." };
+      return true;
+    };
+    render(<App api={api} />);
+    const box = await screen.findByLabelText("Message");
+    fireEvent.change(box, { target: { value: "Where?" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    await screen.findByRole("button", { name: "Stop answer" });
+    const text =
+      "See [the docs](https://example.com/docs) or [mail us](mailto:a@example.com), https://auto.example/x and [rel](/x).";
+    const stored = [...msgs.values()].flat().find((x) => x.role === "assistant");
+    if (stored) {
+      stored.content = [{ type: "text", text }];
+      stored.status = "complete";
+    }
+    act(() => {
+      emit({ type: "text_delta", message_id: "id-3", offset: 0, text });
+      emit({ type: "done", message_id: "id-3", finish_reason: "stop", usage: { input_tokens: 1, output_tokens: 1 } });
+    });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Where?" })).toBeTruthy());
+    const before = window.location.href;
+    const docs = await screen.findByRole("link", { name: "the docs" });
+    const notPrevented = fireEvent.click(docs);
+    expect(notPrevented).toBe(false); // default navigation cancelled
+    expect(links).toEqual(["https://example.com/docs"]);
+    expect(window.location.href).toBe(before);
+
+    // Ctrl/Cmd-click is a normal click: same confirmed path, no new window.
+    expect(fireEvent.click(docs, { ctrlKey: true })).toBe(false);
+    expect(fireEvent.click(docs, { metaKey: true })).toBe(false);
+    expect(links).toEqual(["https://example.com/docs", "https://example.com/docs", "https://example.com/docs"]);
+    // Middle-click and drag can't bypass the confirmation.
+    expect(fireEvent(docs, new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 1 }))).toBe(false);
+    expect(docs.getAttribute("draggable")).toBe("false");
+    expect(fireEvent.dragStart(docs)).toBe(false);
+    expect(links.length).toBe(3);
+    // A bare URL is autolinked and takes the same path.
+    fireEvent.click(screen.getByRole("link", { name: "https://auto.example/x" }));
+    expect(links[3]).toBe("https://auto.example/x");
+    // A relative link loses its href when sanitised: not a link, clicking does nothing.
+    expect(screen.queryByRole("link", { name: "rel" })).toBeNull();
+    fireEvent.click(screen.getByText("rel"));
+    expect(links.length).toBe(4);
+    links.splice(0);
+
+    // Only http(s) opens: the backend refuses anything else and the user is told why.
+    refuse = true;
+    fireEvent.click(screen.getByRole("link", { name: "mail us" }));
+    expect(links[0]).toBe("mailto:a@example.com");
+    expect(await screen.findByText("Only web links (http and https) open from answers.")).toBeTruthy();
   });
 
   it("does not show the first-run notice once seen", async () => {

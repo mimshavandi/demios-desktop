@@ -2,6 +2,13 @@
 
 Docs for people who use, build or contribute to Demios Desktop. Start with the [project README](../README.md) and [CONTRIBUTING.md](../CONTRIBUTING.md).
 
+## Using the app
+
+| Doc | What it covers |
+|---|---|
+| [user/](user/README.md) | User guide: getting started, adding a model, chats, tools and approvals, privacy, reporting a problem, shortcuts, troubleshooting, the `dn` tool |
+| [../CHANGELOG.md](../CHANGELOG.md) | What changed in each version |
+
 ## Building and testing
 
 | Doc | What it covers |
@@ -9,6 +16,7 @@ Docs for people who use, build or contribute to Demios Desktop. Start with the [
 | [apps/desktop/README.md](../apps/desktop/README.md) | The desktop app: layout, dev commands, the test model, IPC rules |
 | [apps/desktop/e2e/README.md](../apps/desktop/e2e/README.md) | Real-app end-to-end tests and the manual macOS release checklist |
 | [dependencies.md](dependencies.md) | Every direct dependency, why it is used and its licence |
+| [releasing.md](releasing.md) | How changelog entries are written and how a release turns them into release notes |
 
 ## Architecture
 

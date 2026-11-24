@@ -5,7 +5,7 @@
 // tokens from ui/design-tokens (the host loads tokens.css). Styles go in through a constructable
 // stylesheet, so the host CSP needs no 'unsafe-inline'.
 
-import { buildFixPrompt } from "./fix";
+import { buildFixPrompt, type FixMode } from "./fix";
 import { ArtifactFrame } from "./frame";
 import { latest, type Artifact, type ArtifactVersion, type SandboxIssue } from "./types";
 
@@ -29,6 +29,18 @@ export interface ArtifactViewOptions {
   /** "Allow network for this artifact" in the blocked-network notice. The view re-renders after. */
   onAllowNetwork?: (artifactId: string) => void;
   maxHeight?: number;
+  /**
+   * Who made a version, shown in the bar as "AI-generated · Made by <name>" (AI disclosure, T-STORE-09);
+   * `null` hides the line (for example the user's own restore).
+   */
+  madeBy?: (v: ArtifactVersion) => string | null;
+  /**
+   * Content as rendered, e.g. with the host's machine-readable "AI-generated" marker added.
+   * The stored versions are never changed; this only affects what the frame gets.
+   */
+  mark?: (artifact: Artifact, v: ArtifactVersion) => string;
+  /** How the current chat model changes artifacts, for the "Ask to fix" wording (default `tools`). */
+  fixMode?: () => FixMode;
 }
 
 const CSS = `
@@ -36,6 +48,7 @@ const CSS = `
 .dn-av-bar { display: flex; align-items: center; gap: var(--dn-space-2); padding: var(--dn-space-2) var(--dn-space-3); border-bottom: 1px solid var(--dn-color-border); flex-wrap: wrap; }
 .dn-av-title { margin: 0; font-size: inherit; font-weight: var(--dn-weight-semibold); flex: 1 1 auto; min-width: 8em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dn-av-kind { font-size: var(--dn-text-xs); line-height: var(--dn-leading-xs); color: var(--dn-color-text-muted); background: var(--dn-color-surface-sunken); border-radius: var(--dn-radius-full); padding: 0 var(--dn-space-2); }
+.dn-av-by { flex-basis: 100%; order: 9; font-size: var(--dn-text-xs); line-height: var(--dn-leading-xs); color: var(--dn-color-text-muted); }
 .dn-av-versions { display: flex; align-items: center; gap: var(--dn-space-1); }
 .dn-av button, .dn-av select { font: inherit; font-size: var(--dn-text-sm); min-height: var(--dn-hit-target); padding: 0 var(--dn-space-3); border-radius: var(--dn-radius-md); border: 1px solid var(--dn-color-border-strong); background: var(--dn-color-surface); color: var(--dn-color-text); cursor: pointer; transition: background var(--dn-motion-fast) var(--dn-motion-ease); }
 .dn-av button:hover:not(:disabled), .dn-av select:hover { background: var(--dn-color-surface-sunken); }
@@ -108,6 +121,7 @@ export class ArtifactView {
   private readonly ui: {
     title: HTMLElement;
     kind: HTMLElement;
+    by: HTMLElement;
     prev: HTMLButtonElement;
     next: HTMLButtonElement;
     select: HTMLSelectElement;
@@ -140,7 +154,9 @@ export class ArtifactView {
     const select = el("select", { "aria-label": "Version", "data-testid": "version-select" });
     const next = el("button", { type: "button", class: "dn-av-icon", "aria-label": "Next version", title: "Next version", "data-testid": "version-next" }, "›");
     versions.append(prev, select, next);
-    bar.append(title, kind, versions);
+    const by = el("span", { class: "dn-av-by", "data-testid": "artifact-made-by" });
+    by.hidden = true;
+    bar.append(title, kind, versions, by);
 
     const old = el("div", { class: "dn-av-notice dn-av-old", "data-testid": "old-version-banner" });
     const oldText = el("span");
@@ -188,7 +204,7 @@ export class ArtifactView {
       },
     });
     body.appendChild(skeleton);
-    this.ui = { title, kind, prev, next, select, old, oldText, restore, net, allowNet, netText, confirmNet, cancelNet, skeleton, error, errorFirst, errorMore, issueList, fix };
+    this.ui = { title, kind, by, prev, next, select, old, oldText, restore, net, allowNet, netText, confirmNet, cancelNet, skeleton, error, errorFirst, errorMore, issueList, fix };
 
     prev.addEventListener("click", () => void this.show(this.shown - 1));
     next.addEventListener("click", () => void this.show(this.shown + 1));
@@ -203,7 +219,7 @@ export class ArtifactView {
           artifactId: a.id,
           version: this.shown,
           issues: [...this.issues],
-          prompt: buildFixPrompt(a.id, a.title, this.shown, this.issues),
+          prompt: buildFixPrompt(a.id, a.title, this.shown, this.issues, this.opts.fixMode?.() ?? "tools"),
         });
       }
     });
@@ -265,6 +281,9 @@ export class ArtifactView {
     const t = a.artifact_type;
     this.ui.title.textContent = a.title;
     this.ui.kind.textContent = t.kind === "code" ? t.language : (TYPE_LABEL[t.kind] ?? t.kind);
+    const by = this.opts.madeBy?.(v) ?? null;
+    this.ui.by.textContent = by === null ? "" : `AI-generated · Made by ${by}`;
+    this.ui.by.hidden = by === null;
     this.ui.select.replaceChildren(
       ...[...a.versions].reverse().map((x) => {
         const o = el("option", { value: String(x.n) }, versionLabel(x));
@@ -284,7 +303,7 @@ export class ArtifactView {
     this.renderIssues();
     this.ui.skeleton.hidden = false;
     this.ui.skeleton.parentElement?.setAttribute("aria-busy", "true");
-    await this.frame.render(t, v.content, {
+    await this.frame.render(t, this.opts.mark?.(a, v) ?? v.content, {
       title: a.title,
       allowNetwork: this.opts.allowNetwork?.(a.id) ?? false,
     });

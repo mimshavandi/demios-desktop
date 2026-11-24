@@ -5,6 +5,8 @@
 //   app:       apps/desktop/src/{chat,commands,models,settings,error}.rs
 
 import type { ApprovalPolicy } from "@dn-core/ApprovalPolicy";
+import type { ArtifactType } from "@dn-core/ArtifactType";
+import type { ArtifactVersion } from "@dn-core/ArtifactVersion";
 import type { Capability } from "@dn-core/Capability";
 import type { FitStatus } from "@dn-core/FitStatus";
 import type { ContentPart } from "@dn-core/ContentPart";
@@ -18,6 +20,8 @@ import type { Usage } from "@dn-core/Usage";
 
 export type {
   ApprovalPolicy,
+  ArtifactType,
+  ArtifactVersion,
   Capability,
   ContentPart,
   FitStatus,
@@ -84,7 +88,18 @@ export type ChatEvent =
       /** Why the run ended; `step_limit` / `length` may be continued. */
       stop?: "completed" | "length" | "step_limit" | "cancelled";
     }
-  | { type: "error"; message_id: Id; message: string; recovery: RecoveryAction[] };
+  | { type: "error"; message_id: Id; message: string; recovery: RecoveryAction[] }
+  /** A fenced artifact block (model without tool calling) wasn't saved; `reason` says why. */
+  | { type: "artifact_not_saved"; message_id: Id; conversation_id: Id; title: string; reason: string }
+  /** An artifact was created or got a new version in this turn. */
+  | {
+      type: "artifact_changed";
+      message_id: Id;
+      conversation_id: Id;
+      artifact_id: Id;
+      title: string;
+      version: number;
+    };
 
 export interface TurnStarted {
   user_message: StoredMessage | null;
@@ -194,8 +209,14 @@ export interface FitView {
 }
 
 /** A curated catalogue model on (or for) this device. */
+/** Where a local model comes from (T-INF-10). */
+export type ModelOrigin = "catalog" | "hub" | "hf_cache";
+
 export interface LocalModelRow {
   id: string;
+  origin: ModelOrigin;
+  /** Hub and cache models: where the file is. */
+  location: string | null;
   model_ref: string;
   name: string;
   repo: string;
@@ -212,7 +233,69 @@ export interface LocalModelRow {
   fit: FitView;
 }
 
-export type LocalModelEvent = { type: "changed"; row: LocalModelRow };
+export type LocalModelEvent = { type: "changed"; row: LocalModelRow } | { type: "removed"; id: string };
+
+// ---- add a model from Hugging Face (T-INF-10)
+
+export type HubSort = "downloads" | "likes" | "trending" | "updated";
+
+export interface HubRepoSummary {
+  id: string;
+  author: string;
+  downloads: number;
+  likes: number;
+  last_modified: string | null;
+  gated: boolean;
+  pipeline_tag: string | null;
+  license: string | null;
+  tags: string[];
+}
+
+export interface HubSearchPage {
+  items: HubRepoSummary[];
+  next: string | null;
+}
+
+export type LicenseWarning = "missing" | "non_commercial" | "custom" | "use_policy";
+
+export interface HubLicense {
+  id: string | null;
+  name: string | null;
+  link: string | null;
+  warning: LicenseWarning | null;
+}
+
+export interface HubVariant {
+  name: string;
+  quant: string | null;
+  total_size: number;
+  parts: number;
+  /** Every part has a published checksum; only then can it be downloaded. */
+  verifiable: boolean;
+  fit: FitView | null;
+  /** Already downloaded: its model ref. */
+  downloaded: string | null;
+  /** Downloading now (started earlier): the latest progress. */
+  progress: HubPullProgress | null;
+}
+
+export interface HubRepoView {
+  id: string;
+  sha: string;
+  gated: boolean;
+  license: HubLicense;
+  card_url: string;
+  variants: HubVariant[];
+}
+
+export interface HubPullProgress {
+  part: number;
+  parts: number;
+  done_bytes: number;
+  total_bytes: number;
+}
+
+export type HubPullEvent = { type: "progress" } & HubPullProgress;
 
 export interface ModelCatalog {
   slots: SlotInfo[];
@@ -223,6 +306,8 @@ export interface ModelCatalog {
   settings: Settings;
   /** The model chat uses now (chosen or picked automatically); null if none is usable. */
   chat_model: string | null;
+  /** Whether the chat model makes tool calls (artifact tools) or uses the fenced format. */
+  chat_model_tools: boolean;
 }
 
 export interface AppInfo {
@@ -295,6 +380,8 @@ export type ReportKind = "problem" | "answer";
 /** What "Delete all local data" removes (confirm dialog). */
 export interface LocalDataSummary {
   conversations: number;
+  /** Artifacts in the database. */
+  artifacts: number;
   data_dir: string | null;
   models_dir: string | null;
   models_bytes: number;
@@ -325,4 +412,29 @@ export function errorMessage(e: unknown): string {
 
 export function messageText(m: Pick<StoredMessage, "content">): string {
   return m.content.map((p) => (p.type === "text" ? p.text : "")).join("");
+}
+
+// ---- artifacts (apps/desktop/src/artifacts.rs, dn-artifacts)
+
+/** `dn_artifacts::ArtifactSummary`. */
+export interface ArtifactSummary {
+  id: Id;
+  conversation_id: Id;
+  artifact_type: ArtifactType;
+  title: string;
+  latest_n: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/** A version plus the model that made it (`null` for the user's own restores). */
+export type ArtifactVersionView = ArtifactVersion & { model: string | null };
+
+/** `artifacts::ArtifactView`: one artifact with every version. */
+export interface ArtifactDetail {
+  id: Id;
+  conversation_id: Id;
+  artifact_type: ArtifactType;
+  title: string;
+  versions: ArtifactVersionView[];
 }

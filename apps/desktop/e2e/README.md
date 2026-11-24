@@ -5,15 +5,27 @@ Real-app tests: WebdriverIO drives the built app through
 WebDriver (WebKitWebDriver on Linux, msedgedriver on Windows).
 
 - CI job **`e2e`** (required): `ubuntu-latest`, WebKitGTK.
-- CI job **`e2e-windows`** (`continue-on-error`): `windows-latest`, WebView2. It doesn't
-  create a session yet; see [T-SHELL-06](#t-shell-06-windows-webview2-session) below. Its
-  msedgedriver log is uploaded as the `msedgedriver-log` artifact.
+- CI job **`e2e-windows`** (required): `windows-latest`, WebView2. Its e2e build turns on WebView2 remote debugging through
+  the window config; see [Windows WebView2 session](#t-shell-06-windows-webview2-session).
+  Its msedgedriver log is uploaded as the `msedgedriver-log` artifact.
 
 ## Scenario (`specs/chat.e2e.mjs`)
 1. Launch, new chat, send. Assert the answer streams (`data-status="streaming"`), completes and quotes the prompt.
 2. Send a second message and press **Ctrl+.** mid-answer. Assert it ends `cancelled` with "Stopped".
 3. axe-core on the chat screen: no `serious` or `critical` violations.
 4. Quit and relaunch on the **same data dir**. Assert one conversation, both user messages, and both answers with their final status.
+
+## Scenario (`specs/artifacts.e2e.mjs`, T-ART-06)
+1. "Make an HTML artifact" → the dev fake model calls `artifact_create`. Assert the answer has an artifact card (title, `v1`) and the pane renders v1 in the sandboxed frame. The version label reads `v1 · model` and the pane says "Made by …".
+2. "Please update the artifact" → `artifact_update` (exact match). Assert the frame shows v2.
+3. Go back to v1 and press **Restore this version**. Assert `v3 — restored from v1 · you` and v1's content.
+4. **In-app escape cases** (threat model S6). Run as artifact code inside the frame, judged from outside it:
+   - the frame is on `artifact://localhost/frame/` with `sandbox="allow-scripts"` and origin `null`;
+   - no `__TAURI_INTERNALS__` or `ipc` in the frame;
+   - no access to the parent's DOM or IPC;
+   - `fetch` to the network, `ipc://` and `tauri://` is blocked, and a local spy server gets no request (fetch or image);
+   - a raw `webkit.messageHandlers.ipc` message with a guessed key creates no conversation;
+   - `RTCPeerConnection` is absent.
 
 The app is a **debug** build with `--features dev-fake-model,custom-protocol`: the canned streaming model plus the UI embedded from `dist/`. `DEMIOS_DATA_DIR` points at a temp dir for the run, and `DEMIOS_FAKE_DELAY_MS=80` slows the stream so Stop lands mid-answer. Selectors are `data-testid` only.
 
@@ -28,47 +40,40 @@ cd apps/desktop/e2e && npm ci && npm test        # Linux headless: xvfb-run -a n
 - Windows needs an msedgedriver whose major version matches the installed WebView2 runtime; set `MSEDGEDRIVER=<path>`.
 
 ## T-SHELL-06: Windows WebView2 session
-**Symptom.** Every `POST /session` fails with `session not created: DevToolsActivePort file
-doesn't exist` (4 retries, 60 s each). Seen on `windows-latest` with WebView2 runtime
-157.0.4341.46 and msedgedriver 157.0.4341.60 (runner copy, same major).
+**Symptom (fixed).** Every `POST /session` failed with `session not created:
+DevToolsActivePort file doesn't exist` (60 s per try).
 
-**Ruled out**
-- *App crashes at start:* launched directly, it is still running after 8 s, with no output
-  and no panic.
-- *Driver/runtime mismatch:* same major version. The job also downloads the exact runtime
-  version from Microsoft when the majors differ.
-- *App pre-started:* the driver launches it. msedgedriver's log shows
-  `Launching Microsoft Edge: "…\target\debug\demios-desktop.exe"` with `browserName:
-  webview2` and `binary` set by tauri-driver.
-- *Linux-specific setup:* the same suite, binary features and data-dir env pass on Linux.
+**Cause.** msedgedriver turns on WebView2 remote debugging only through the
+`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` environment variable (`--remote-debugging-port=0
+--enable-automation …`). wry always sets `AdditionalBrowserArguments` through the WebView2
+API (at least `--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection`), and on this
+runtime the API value wins: the environment variable's switches never arrive, no DevTools
+port opens, and no `DevToolsActivePort` file is written.
 
-**What the verbose msedgedriver log shows.** It sets
-`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` (including `--remote-debugging-port=0` and
-`--enable-automation`, with no `--user-data-dir`), launches the binary, waits 60 s, then logs
-`Failed to connect to msedge`. So the WebView2 browser process never reports a DevTools port
-where the driver looks for it.
+Evidence from CI:
+- Launched by hand with `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9333`,
+  nothing listens on 9333.
+- `WEBVIEW2_USER_DATA_FOLDER` *is* honoured: the profile lands there, not in
+  `%LOCALAPPDATA%\io.demios.app\EBWebView`. So it was never a user-data-folder mismatch.
+- `ms:edgeOptions.args` (`tauri:options.args`) are passed to the app's command line, not to
+  WebView2, so they can't carry the switches either.
 
-**Hypotheses, most likely first**
-1. *User-data folder mismatch.* msedgedriver points WebView2 at its own temp profile
-   (probably via `WEBVIEW2_USER_DATA_FOLDER`) and reads `DevToolsActivePort` from there.
-   Tauri passes its own data directory (`…\io.demios.desktop\EBWebView`) through the
-   WebView2 API, which may win, so the file is written elsewhere.
-   Try: in e2e builds (`fake_model`), if `WEBVIEW2_USER_DATA_FOLDER` is set, create the
-   main window in `setup` with `.data_directory(that)` (window config `create: false`).
-   Or list `%LOCALAPPDATA%\io.demios.desktop\EBWebView` after a failed run to see
-   whether a `DevToolsActivePort` file landed there.
-2. *Browser-args precedence.* wry/Tauri pass their own `AdditionalBrowserArguments`
-   (`--disable-features=msWebOOUI,…`). If the API value replaces the env var on this runtime,
-   `--remote-debugging-port` never arrives. Try: window config `additionalBrowserArgs`
-   that includes the env var's content, or set `browserArgs` from the env in e2e builds.
-3. *Port vs pipe.* The log suggests `--remote-debugging-pipe`; not controllable through
-   tauri-driver 2.0.6. Try tauri-driver 3.x when it is stable.
-4. *Alternative driver.* `tauri-plugin-wdio-webdriver` (an embedded WebDriver, no
-   msedgedriver) would avoid the handshake. It is a new dependency, so it needs the lead's
-   OK.
+**Fix.** The e2e-windows job builds the app with the debugging switches in the window's
+`additionalBrowserArgs`. It generates `TAURI_CONFIG` from `tauri.conf.json` at build time:
+each window gets its own value (or wry's default) plus `--remote-debugging-port=0
+--enable-automation`. WebView2 then writes `DevToolsActivePort` into the profile folder
+msedgedriver chose, and the session starts. Only the CI e2e build is affected; the app's
+config and release builds are unchanged.
 
-Done-check for T-SHELL-06: `e2e-windows` green three runs in a row, then drop
-`continue-on-error` and make it required.
+To reproduce locally on Windows, build the same way:
+```powershell
+$env:TAURI_CONFIG = '{"app":{"windows":[{"label":"main","title":"Demios","width":1280,"height":820,"minWidth":900,"minHeight":560,"additionalBrowserArgs":"--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port=0 --enable-automation"}]}}'
+cargo build -p demios-desktop --features dev-fake-model,custom-protocol
+```
+(The CI step derives this from `tauri.conf.json`, so keep the two in step if you copy it.)
+
+Done: `e2e-windows` was green three runs in a row on the fix, and no longer has
+`continue-on-error`.
 
 ## macOS: manual release checklist
 macOS has no WebDriver for WKWebView, so run this before every release, on a signed build where possible.
@@ -81,6 +86,37 @@ macOS has no WebDriver for WKWebView, so run this before every release, on a sig
 - [ ] Settings → Models: save a provider key → macOS asks for keychain access the first time; "Key saved". Remove key → Undo restores it.
 - [ ] ⌘N, ⌘,, ⌘\, ⌘⇧C work; Tab reaches every control with a visible focus ring; VoiceOver announces "Answer complete" once per answer.
 - [ ] Light and dark appearance (System Settings) both follow the design tokens.
-- [ ] **WKWebView sub-frame IPC** (from the artifact review, W-artifacts): with an artifact open in its sandboxed frame, run `window.__TAURI_INTERNALS__?.invoke?.("list_conversations")` in the frame's Web Inspector console. It must be `undefined` or fail. wry's IPC handler must ignore sub-frames, and init scripts are main-frame only.
-- [ ] WebRTC is not exposed to artifact frames (`typeof RTCPeerConnection` in the frame console is `"undefined"`, or connections fail).
+- [ ] **Artifacts:** "Make an HTML artifact" opens the pane with v1. "Please update the artifact" shows v2. Restoring v1 makes v3. Light and dark both read correctly.
+- [ ] **WKWebView sub-frame IPC** (artifact review, S1): open an artifact, choose the artifact frame in Web Inspector, and run the checks below in its console.
+  - `typeof window.__TAURI_INTERNALS__` is `"undefined"`.
+  - `window.webkit.messageHandlers.ipc.postMessage(JSON.stringify({cmd:"create_conversation",callback:1,error:2,payload:{},options:{},__TAURI_INVOKE_KEY__:"guess"}))` creates **no** chat (check the chat list). Don't copy app logs into issues: Tauri's rejection message includes the live invoke key.
+  - wry's WKWebView handler does **not** filter sub-frames, and it reports the frame's URL (`artifact://localhost/frame/`), which Tauri counts as a local origin. The invoke key, injected only into the main frame, is what stops this.
+- [ ] WebRTC is not exposed to artifact frames: in the frame console, `typeof RTCPeerConnection` is `"undefined"`. WKWebView can't turn WebRTC off without a private API, so the in-frame bridge is the control there.
+- [ ] Network stays off: in the frame console, `fetch("https://example.com")` is blocked by CSP. **Allow network for this artifact** asks a second time before it turns on.
 - [ ] Links in answers don't navigate the window (the navigation guard logs "blocked navigation").
+
+## Windows: artifacts are off (threat model R8)
+WebView2 runs the app's init scripts in sub-frames too, and Tauri defines its IPC object there so that it can't be removed. The artifact frame shell refuses to run artifact code in a frame that can still reach the app's IPC. So for now artifacts are saved but not shown on Windows, and the pane says "Artifacts aren't available on Windows yet". On Windows the `artifact` scheme serves an inert page with no script. `e2e-windows` asserts the gate message and that no artifact frame is created. Making artifacts safe on WebView2 is tracked in #75.
+
+## Release checklist: artifacts
+Run these on the signed release build of each platform, in addition to the lists above.
+
+**macOS (WKWebView)**
+- [ ] Create, update and restore an artifact (HTML, SVG, Markdown, Mermaid, React, code): each renders, and the version label and "AI-generated · Made by <model>" are right.
+- [ ] In the artifact frame's Web Inspector console:
+  - `typeof __TAURI_INTERNALS__`, `typeof ipc` and `typeof RTCPeerConnection` are `"undefined"`;
+  - `fetch("https://example.com")` is blocked by CSP;
+  - `parent.document` throws.
+- [ ] The raw `webkit.messageHandlers.ipc` message above creates no chat.
+- [ ] **Ask to fix** sends a message whose report is inside the `ARTIFACT_REPORT` block.
+- [ ] **Allow network for this artifact** needs the second confirm. After the model makes a new version, network is off again.
+- [ ] Delete all local data → the confirm lists the artifact count → afterwards no artifact is listed.
+
+**Windows (WebView2)**
+- [ ] An artifact request saves the artifact: the card shows. **Open** shows "Artifacts aren't available on Windows yet" and creates no frame.
+- [ ] `http://artifact.localhost/frame/` opened in DevTools serves the inert page (no script).
+
+**Linux (WebKitGTK, release build)**
+- [ ] The same artifact flow as macOS, on the release `.deb`/AppImage, not just the debug e2e build.
+- [ ] The artifact frame loads, so the navigation guard allows `artifact://localhost/frame/` in a release build too.
+- [ ] `typeof RTCPeerConnection` is `"undefined"` in the main window too (WebKitGTK `enable-webrtc` is off).

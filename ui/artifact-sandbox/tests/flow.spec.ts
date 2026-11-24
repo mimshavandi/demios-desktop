@@ -1,6 +1,6 @@
 // Done-check: create → render → update → v2 → rollback, through the real UI.
 import { expect, test } from "@playwright/test";
-import { frame, openDemo } from "./helpers";
+import { ART, frame, openDemo } from "./helpers";
 
 test("create → render → update → v2 → rollback", async ({ page }) => {
   await openDemo(page);
@@ -16,6 +16,9 @@ test("create → render → update → v2 → rollback", async ({ page }) => {
   await expect(f.locator("#count")).toHaveText("2");
   await expect(select.locator("option:checked")).toHaveText(/^v1 · model/);
   await expect(page.getByTestId("old-version-banner")).toBeHidden();
+  // AI disclosure: the pane names the model, the rendered document carries the host's marker.
+  await expect(page.getByTestId("artifact-made-by")).toHaveText("AI-generated · Made by demo model");
+  await expect(f.locator('meta[name="generator"]')).toHaveAttribute("content", /AI-generated/);
 
   // Update (exact-match patch) → v2 is a new frame showing the new content.
   await page.getByTestId("op-update").click();
@@ -37,6 +40,7 @@ test("create → render → update → v2 → rollback", async ({ page }) => {
   // Roll back: a new v3 whose parent is v1.
   await page.getByTestId("version-restore").click();
   await expect(select.locator("option:checked")).toHaveText(/^v3 — restored from v1 · you/);
+  await expect(page.getByTestId("artifact-made-by")).toBeHidden();
   await expect(f.locator("#greeting")).toHaveText("Hello from version 1");
   await expect(page.getByTestId("old-version-banner")).toBeHidden();
   const versions = await page.evaluate(() => window.dnDemo.store.list("conv-demo")[0]?.versions.map((v) => [v.n, v.parent_n, v.author]));
@@ -192,4 +196,29 @@ test.describe("every v1 type renders", () => {
     );
     await expect(frame(page).locator(".dn-code span").first()).toHaveText('<script>parent.postMessage({probe:"ran"},"*")</script><b>x</b>');
   });
+});
+
+test("markdown front matter (the host's AI marker) is not shown", async ({ page }) => {
+  await openDemo(page);
+  await page.evaluate(() =>
+    window.dnDemo.show({ kind: "markdown" }, "---\ngenerator: Demios\nai_generated: true\n---\n---\ntitle: model_own_meta\n---\n# Notes\n\nBody text.\n"),
+  );
+  const f = frame(page);
+  await expect(f.locator("h1")).toHaveText("Notes");
+  await expect(f.locator("body")).not.toContainText("ai_generated");
+  // Exactly one block is the host's; a second one is the artifact's own text and stays visible.
+  await expect(f.locator("body")).toContainText("model_own_meta");
+});
+
+test("the frame shell opened as a top-level page stays inert", async ({ page }) => {
+  // A link or stray navigation in the app's window must not turn the shell into a renderer.
+  await page.addInitScript(() => {
+    const seen: unknown[] = [];
+    (window as unknown as { __seen: unknown[] }).__seen = seen;
+    window.addEventListener("message", (e) => seen.push(e.data));
+  });
+  await page.goto(`${ART}/frame/`);
+  await expect(page.locator("html")).toContainText("artifact pane");
+  await page.waitForTimeout(300);
+  expect(await page.evaluate(() => (window as unknown as { __seen: unknown[] }).__seen)).toEqual([]);
 });

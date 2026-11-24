@@ -38,4 +38,11 @@ test("fix prompt wraps artifact text as capped, delimited untrusted data", () =>
   expect(p.split("ARTIFACT_REPORT>>>").length).toBe(2);
   expect(p.endsWith("ARTIFACT_REPORT>>>")).toBe(true);
   expect(p).toMatch(/\(\d+ more not shown\)/);
+  expect(p).toContain("artifact_update or artifact_rewrite");
+});
+
+test("fix prompt for a model without tools asks for the whole block again", () => {
+  const p = buildFixPrompt("art-9", "Page", 2, [{ kind: "error", message: "boom" }], "fenced");
+  expect(p).toContain('<artifact id="art-9">');
+  expect(p).not.toContain("artifact_update");
 });

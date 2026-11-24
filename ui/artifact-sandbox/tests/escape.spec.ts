@@ -321,3 +321,44 @@ test("cannot move the host through session history", async ({ page }) => {
   expect(await spyLog(page)).toEqual([]);
 });
 
+
+// WebView2 (Windows) runs the app's init scripts in sub-frames too, so the frame itself can
+// start with Tauri's IPC object (and its invoke key). The shell must remove it before artifact
+// code runs, or refuse to render. `addInitScript` runs in every frame, like WebView2 does.
+function injectFrameIpc(configurable: boolean): string {
+  return `(() => {
+    if (location.port !== "4175") return;
+    const report = (what) => parent.postMessage({ probe: ["injectedIpc", what] }, "*");
+    const internals = { invoke: () => report("invoke-called"), postMessage: () => report("pm-called") };
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: internals, configurable: ${configurable}, writable: ${configurable} });
+    Object.defineProperty(window, "ipc", { value: Object.freeze({ postMessage: () => report("ipc-called") }), configurable: ${configurable} });
+    window.chrome = Object.assign(window.chrome || {}, { webview: { postMessage: () => report("webview-called") } });
+  })();`;
+}
+
+test("injected IPC globals in the frame are removed before artifact code runs", async ({ page }) => {
+  await page.addInitScript(injectFrameIpc(true));
+  await openDemo(page);
+  await instrumentHost(page);
+  const attacks = {
+    internals: `if (typeof window.__TAURI_INTERNALS__ !== "undefined") { window.__TAURI_INTERNALS__.invoke("list_conversations"); return "present"; } throw new Error("absent");`,
+    ipc: `if (typeof window.ipc !== "undefined") { window.ipc.postMessage("{}"); return "present"; } throw new Error("absent");`,
+    webview: `if (window.chrome && window.chrome.webview) { window.chrome.webview.postMessage("{}"); return "present"; } throw new Error("absent");`,
+  };
+  await show(page, { kind: "html" }, attackDoc(attacks));
+  const r = await probes(page, Object.keys(attacks).length);
+  expect(r).toMatchObject({ internals: "blocked:Error", ipc: "blocked:Error", webview: "blocked:Error" });
+  expect(r["injectedIpc"]).toBeUndefined();
+});
+
+test("a frame whose injected IPC can't be removed refuses to render", async ({ page }) => {
+  await page.addInitScript(injectFrameIpc(false));
+  await openDemo(page);
+  await instrumentHost(page);
+  await show(page, { kind: "html" }, attackDoc({ ran: `return "artifact code ran";` }));
+  await expect(frame(page).locator("html")).toContainText("can't be shown safely", { timeout: 10_000 });
+  await expect(page.locator(".dn-av-error")).toContainText("can't be shown safely");
+  await page.waitForTimeout(500);
+  const all = await page.evaluate(() => (window as unknown as { __probes: unknown[] }).__probes);
+  expect(all).toEqual([]);
+});

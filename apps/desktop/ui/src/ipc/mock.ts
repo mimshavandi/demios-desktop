@@ -6,6 +6,7 @@ import type { Api } from "./commands";
 import type {
   ApprovalDecision,
   ApprovalPrompt,
+  ArtifactDetail,
   ChatEvent,
   Conversation,
   ModelCatalog,
@@ -19,6 +20,8 @@ import type {
   McpServerView,
   McpServersView,
   McpValueInput,
+  HubRepoView,
+  HubSearchPage,
 } from "./types";
 
 const REPLY = (q: string, turn: number) =>
@@ -42,6 +45,8 @@ export function createMockApi(): Api {
   const localRows: LocalModelRow[] = [
     {
       id: "qwen2.5-0.5b-instruct-q4_k_m",
+      origin: "catalog",
+      location: null,
       model_ref: "local:qwen2.5-0.5b-instruct-q4_k_m",
       name: "Qwen2.5 0.5B Instruct",
       repo: "Qwen/Qwen2.5-0.5B-Instruct-GGUF",
@@ -58,6 +63,8 @@ export function createMockApi(): Api {
     },
     {
       id: "llama-3.2-3b-instruct-q4_k_m",
+      origin: "catalog",
+      location: null,
       model_ref: "local:llama-3.2-3b-instruct-q4_k_m",
       name: "Llama 3.2 3B Instruct",
       repo: "bartowski/Llama-3.2-3B-Instruct-GGUF",
@@ -74,6 +81,8 @@ export function createMockApi(): Api {
     },
     {
       id: "example-70b-nc",
+      origin: "catalog",
+      location: null,
       model_ref: "local:example-70b-nc",
       name: "Example 70B (research licence)",
       repo: "example/Example-70B-GGUF",
@@ -135,6 +144,13 @@ export function createMockApi(): Api {
     mcpStatus.set(s.id, status);
     approvalSink?.({ type: "mcp_server", status });
   };
+  // Hugging Face (T-INF-10): a few repos to search in the browser preview.
+  let hfToken = false;
+  const hubRepos = [
+    { id: "Qwen/Qwen2.5-1.5B-Instruct-GGUF", author: "Qwen", downloads: 182_000, likes: 120, last_modified: null, gated: false, pipeline_tag: "text-generation", license: "apache-2.0", tags: ["gguf"] },
+    { id: "bartowski/Llama-3.2-1B-Instruct-GGUF", author: "bartowski", downloads: 95_000, likes: 80, last_modified: null, gated: true, pipeline_tag: "text-generation", license: "llama3.2", tags: ["gguf"] },
+    { id: "example/Tiny-Research-GGUF", author: "example", downloads: 120, likes: 2, last_modified: null, gated: false, pipeline_tag: null, license: "cc-by-nc-4.0", tags: ["gguf"] },
+  ];
   const timersDl = new Map<string, number>();
   const emitRow = (r: LocalModelRow) => localSink?.({ type: "changed", row: { ...r } });
   const deleted = new Set<string>();
@@ -162,7 +178,6 @@ export function createMockApi(): Api {
   const catalog = (): ModelCatalog => ({
     slots: [
       { slot_id: "chat", label: "Chat", description: "Answers in conversations.", capability: "chat" },
-      { slot_id: "fast", label: "Fast", description: "Titles, summaries and other quick background tasks.", capability: "chat" },
       { slot_id: "embed", label: "Embeddings", description: "Knowledge search (arrives with dn-knowledge).", capability: "embedding" },
     ],
     models: [
@@ -187,6 +202,7 @@ export function createMockApi(): Api {
     key_store: "session only (browser mock)",
     settings,
     chat_model: settings.slots["chat"] ?? "local:dev-fake",
+    chat_model_tools: true,
   });
 
   const stream = (cid: string, a: StoredMessage, q: string, onEvent: (e: ChatEvent) => void) => {
@@ -256,14 +272,58 @@ export function createMockApi(): Api {
     window.setTimeout(() => approvalSink?.({ type: "requested", prompt }), 300);
   };
 
+  // Artifacts: "make an html artifact" creates one, "update the artifact" patches it
+  // (mirrors the Rust dev fake model in apps/desktop/src/fake.rs).
+  const artifacts: ArtifactDetail[] = [];
+  const iso = () => new Date().toISOString();
+  const artifactTurn = (cid: string, a: StoredMessage, q: string, onEvent: (ev: ChatEvent) => void) => {
+    const existing = artifacts.filter((x) => x.conversation_id === cid).at(-1);
+    let text = "Done. The artifact is open next to the chat.";
+    let target: ArtifactDetail | undefined;
+    if (/update the artifact/i.test(q) && existing !== undefined) {
+      const last = existing.versions.at(-1);
+      if (last !== undefined) {
+        existing.versions.push({ ...last, n: last.n + 1, parent_n: last.n, content: last.content.replace("Version one", "Version two"), message_id: a.id, author: "model", model: "local:dev-fake", created_at: iso() });
+      }
+      target = existing;
+    } else {
+      target = {
+        id: id(),
+        conversation_id: cid,
+        artifact_type: { kind: "html" },
+        title: "Fake artifact",
+        versions: [{ n: 1, content: "<!doctype html><html><head><title>Fake</title></head><body><h1>Version one</h1><p>Made by the dev fake model.</p></body></html>", author: "model", parent_n: null, message_id: a.id, created_at: iso(), model: "local:dev-fake" }],
+      };
+      artifacts.push(target);
+    }
+    const v = target.versions.at(-1)?.n ?? 1;
+    a.content = [{ type: "text", text }];
+    a.status = "complete";
+    window.setTimeout(() => {
+      onEvent({ type: "artifact_changed", message_id: a.id, conversation_id: cid, artifact_id: target.id, title: target.title, version: v });
+      onEvent({ type: "text_delta", message_id: a.id, offset: 0, text });
+      onEvent({ type: "done", message_id: a.id, finish_reason: "stop", usage: { input_tokens: 1, output_tokens: 1 }, stop: "completed" });
+    }, 200);
+  };
+  const findArtifact = (cid: string, aid: string): ArtifactDetail => {
+    const x = artifacts.find((y) => y.id === aid && y.conversation_id === cid);
+    if (x === undefined) throw { code: "not_found", message: "That artifact isn't in this chat." };
+    return x;
+  };
+
   return {
     appInfo: async () => ({ version: "0.1.0 (browser mock)", dev_fake_model: true, data_dir: null, models_dir: null }),
+    openLink: async (url) => {
+      console.info("mock: would confirm and open", url);
+      return false;
+    },
     reportProblem: async (kind, messageId) => {
       console.info("mock: would open the report form", kind, messageId);
       return null;
     },
     localDataSummary: async () => ({
       conversations: convs.filter((c) => !deleted.has(c.id)).length,
+      artifacts: artifacts.length,
       data_dir: null,
       models_dir: null,
       models_bytes: localRows
@@ -313,6 +373,7 @@ export function createMockApi(): Api {
       const a = message(cid, "assistant", "", "streaming");
       msgs.get(cid)?.push(u, a);
       if (/^write\b/i.test(text)) toolTurn(cid, a, text, onEvent);
+      else if (/html artifact|update the artifact/i.test(text)) artifactTurn(cid, a, text, onEvent);
       else stops.set(cid, stream(cid, a, text, onEvent));
       // IPC serialises; hand out copies so the UI never shares objects with the mock.
       return structuredClone({ user_message: u, assistant_message: a, title });
@@ -354,6 +415,62 @@ export function createMockApi(): Api {
       approvalSink = onEvent;
       return { approvals: [...waiting.values()].map((w) => w.prompt), servers: [...mcpStatus.values()] };
     },
+    hubSearch: async (text) => {
+      await new Promise((r) => setTimeout(r, 300));
+      const items = hubRepos.filter((r) => r.id.toLowerCase().includes(text.trim().toLowerCase()));
+      return { items, next: null } satisfies HubSearchPage;
+    },
+    hubRepo: async (repo) => {
+      await new Promise((r) => setTimeout(r, 600));
+      const meta = hubRepos.find((r) => r.id === repo);
+      if (meta === undefined) throw { code: "model_unavailable", message: "That model or version doesn't exist on Hugging Face." };
+      const gated = meta.gated;
+      const view: HubRepoView = {
+        id: repo,
+        sha: "0123456789abcdef0123456789abcdef01234567",
+        gated,
+        license: {
+          id: meta.license,
+          name: null,
+          link: null,
+          warning: meta.license?.includes("-nc") ? "non_commercial" : meta.license?.startsWith("llama") ? "use_policy" : null,
+        },
+        card_url: `https://huggingface.co/${repo}`,
+        variants: [
+          { name: "Q4_K_M", quant: "Q4_K_M", total_size: 1_100_000_000, parts: 1, verifiable: true, fit: fit("ready", "Fits this computer with room to spare.", false), downloaded: null, progress: null },
+          { name: "Q8_0", quant: "Q8_0", total_size: 2_000_000_000, parts: 1, verifiable: true, fit: { ...fit("caution", "Fits, with little memory left for other apps."), estimated: true }, downloaded: null, progress: null },
+          { name: "F16", quant: "F16", total_size: 3_800_000_000, parts: 2, verifiable: false, fit: { ...fit("memory_blocked", "Won't fit in this computer's memory."), estimated: true }, downloaded: null, progress: null },
+        ],
+      };
+      return view;
+    },
+    hubPull: async (repo, _sha, variant, onEvent) => {
+      const total = 1_100_000_000;
+      for (let done = 0; done <= total; done += total / 10) {
+        await new Promise((r) => setTimeout(r, 200));
+        onEvent({ type: "progress", part: 0, parts: 1, done_bytes: Math.min(done, total), total_bytes: total });
+      }
+      const row: LocalModelRow = {
+        ...localRows[0]!,
+        id: `hf/${repo}/${variant}`,
+        model_ref: `local:hf/${repo}/${variant}`,
+        name: repo.split("/")[1] ?? repo,
+        repo,
+        quant: variant,
+        origin: "hub",
+        location: `~/Library/Application Support/demios/models/hf/${repo.replace("/", "--")}/${variant}.gguf`,
+        notes: "Downloaded from Hugging Face.",
+        state: { state: "ready" },
+      };
+      localRows.push(row);
+      emitRow(row);
+      return row.model_ref;
+    },
+    hubCancel: async () => true,
+    hubPullStatus: async () => ({}),
+    hfTokenStatus: async () => hfToken,
+    setHfToken: async () => (hfToken = true),
+    deleteHfToken: async () => (hfToken = false),
     listMcpServers: async () => mcpView(),
     saveMcpServer: async (input, editing) => {
       if (editing === null && mcpServers.some((s) => s.id === input.id)) {
@@ -422,6 +539,18 @@ export function createMockApi(): Api {
       approvalSink?.({ type: "resolved", request_id: requestId, expired: false });
       w.done(decision);
       return null;
+    },
+    listArtifacts: async (cid) =>
+      artifacts
+        .filter((x) => x.conversation_id === cid)
+        .map((x) => ({ id: x.id, conversation_id: cid, artifact_type: x.artifact_type, title: x.title, latest_n: x.versions.at(-1)?.n ?? 0, created_at: x.versions[0]?.created_at ?? iso(), updated_at: x.versions.at(-1)?.created_at ?? iso() })),
+    getArtifact: async (cid, aid) => structuredClone(findArtifact(cid, aid)),
+    rollbackArtifact: async (cid, aid, to) => {
+      const x = findArtifact(cid, aid);
+      const src = x.versions.find((v) => v.n === to);
+      if (src === undefined) throw { code: "not_found", message: `No version ${to}.` };
+      x.versions.push({ ...src, n: x.versions.length + 1, parent_n: to, author: "user", model: null, message_id: null, created_at: iso() });
+      return structuredClone(x);
     },
     listUnknownOutcomes: async () => [...unknown],
     resolveUnknownOutcome: async (key) => {

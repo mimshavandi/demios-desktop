@@ -385,6 +385,36 @@ pre.code .code-copy { position: absolute; top: var(--dn-space-1); right: var(--d
   grid-area: art; min-width: 0; display: grid; place-items: center;
   background: var(--dn-color-bg); border-left: 1px solid var(--dn-color-border);
 }
+.artifact-pane-body {
+  align-self: stretch; justify-self: stretch; min-width: 0; min-height: 0; overflow: auto;
+  display: flex; flex-direction: column; gap: var(--dn-space-3); padding: var(--dn-space-3);
+}
+.artifact-list { display: flex; flex-wrap: wrap; gap: var(--dn-space-1); }
+.artifact-tab {
+  display: inline-flex; align-items: center; gap: var(--dn-space-1); max-width: 100%;
+  min-height: var(--dn-hit-target); padding: 0 var(--dn-space-2);
+  border: 1px solid var(--dn-color-border); border-radius: var(--dn-radius-md);
+  background: var(--dn-color-surface); color: var(--dn-color-text-muted); cursor: pointer;
+  font-size: var(--dn-text-sm);
+}
+.artifact-tab span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.artifact-tab:hover { color: var(--dn-color-text); background: var(--dn-color-surface-sunken); }
+.artifact-tab.selected { color: var(--dn-color-text); border-color: var(--dn-color-accent); }
+.artifact-tab:focus-visible { outline: 2px solid var(--dn-color-focus); outline-offset: 2px; }
+.artifact-host { min-width: 0; }
+.artifact-card {
+  display: flex; align-items: center; gap: var(--dn-space-3); margin-top: var(--dn-space-2);
+  padding: var(--dn-space-2) var(--dn-space-3); max-width: 28rem;
+  background: var(--dn-color-surface); border: 1px solid var(--dn-color-border);
+  border-radius: var(--dn-radius-lg); box-shadow: var(--dn-shadow-1);
+}
+.artifact-card-icon {
+  display: grid; place-items: center; width: var(--dn-hit-target); height: var(--dn-hit-target);
+  border-radius: var(--dn-radius-md); background: var(--dn-color-accent-soft); color: var(--dn-color-accent-text);
+}
+.artifact-card-text { flex: 1; min-width: 0; display: grid; }
+.artifact-card-title { font-weight: var(--dn-weight-medium); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.artifact-card-meta { font-size: var(--dn-text-xs); line-height: var(--dn-leading-xs); color: var(--dn-color-text-muted); }
 
 /* ---------- settings ---------- */
 .settings { flex: 1; overflow-y: auto; padding: var(--dn-space-6); }
@@ -414,6 +444,28 @@ pre.code .code-copy { position: absolute; top: var(--dn-space-1); right: var(--d
 .card-subhead { font-size: var(--dn-text-sm); line-height: var(--dn-leading-sm); font-weight: var(--dn-weight-semibold); margin-top: var(--dn-space-2); }
 .data-flow { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--dn-space-3); }
 .data-flow li { display: grid; gap: calc(var(--dn-space-1) / 2); }
+
+/* ---------- add a model from Hugging Face (T-INF-10) ---------- */
+.hub { display: grid; gap: var(--dn-space-3); padding: var(--dn-space-3) 0; border-top: 1px solid var(--dn-color-border); justify-items: stretch; }
+.hub > .dn-btn-ghost { justify-self: start; }
+.hub-head { display: flex; align-items: center; justify-content: space-between; }
+.hub-head h3:focus, .hub-repo-name:focus { outline: none; }
+.hub-repo-name { overflow-wrap: anywhere; }
+.hub-search { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--dn-space-2) var(--dn-space-3); align-items: end; }
+.hub-search > .dn-field:first-child { grid-column: 1 / -1; }
+.hub-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--dn-color-border); border-radius: var(--dn-radius-md); max-height: 360px; overflow: auto; }
+.hub-list li + li { border-top: 1px solid var(--dn-color-border); }
+.hub-item { display: grid; gap: calc(var(--dn-space-1) / 2); width: 100%; padding: var(--dn-space-2) var(--dn-space-3); background: transparent; border: 0; color: var(--dn-color-text); text-align: left; cursor: pointer; font: inherit; }
+.hub-item:hover { background: var(--dn-color-surface-sunken); }
+.hub-item:focus-visible { outline: 2px solid var(--dn-color-focus); outline-offset: -2px; }
+.hub-name { font-weight: var(--dn-weight-medium); overflow-wrap: anywhere; }
+.hub-meta { font-size: var(--dn-text-sm); color: var(--dn-color-text-subtle); }
+.hub-variants { list-style: none; margin: 0; padding: 0; display: grid; }
+.hub-variant { display: flex; justify-content: space-between; gap: var(--dn-space-3); padding: var(--dn-space-3) 0; border-top: 1px solid var(--dn-color-border); }
+.hub-variant:first-child { border-top: 0; }
+.hub-token { display: grid; gap: var(--dn-space-2); }
+.local-origin code { overflow-wrap: anywhere; }
+@media (max-width: 500px) { .hub-search { grid-template-columns: 1fr; } }
 
 /* ---------- MCP tool servers (T-SHELL-08) ---------- */
 .card-head { display: flex; align-items: center; justify-content: space-between; gap: var(--dn-space-3); }
