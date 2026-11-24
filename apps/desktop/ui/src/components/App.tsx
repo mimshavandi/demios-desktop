@@ -453,6 +453,7 @@ function Shell({ api }: { api: Api }) {
             loading={loadingMessages}
             ready={ready}
             catalog={catalog}
+            title={activeConversation?.title ?? "New chat"}
             model={model}
             error={error}
             composerRef={composerRef}

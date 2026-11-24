@@ -21,7 +21,13 @@ interface Props {
 export function Sidebar(p: Props) {
   return (
     <nav className="sidebar" aria-label="Chats">
-      <button type="button" className="nav nav-new" onClick={p.onNew} aria-keyshortcuts={`${mod}N`}>
+      <button
+        type="button"
+        className="nav nav-new"
+        onClick={p.onNew}
+        aria-keyshortcuts={`${mod}N`}
+        data-testid="new-chat"
+      >
         <MessageSquarePlus {...ICON} aria-hidden="true" />
         New chat
         <kbd>{mod}N</kbd>
@@ -60,6 +66,7 @@ export function Sidebar(p: Props) {
                 <button
                   type="button"
                   className="conv-open"
+                  data-testid="conversation-item"
                   aria-current={c.id === p.activeId ? "page" : undefined}
                   onClick={() => p.onOpen(c.id)}
                   title={c.title}
