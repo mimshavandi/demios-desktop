@@ -61,6 +61,9 @@ const CSS = `
 .dn-av [hidden] { display: none !important; }
 `;
 
+/** How long "Allow network" stays disabled after the confirm step opens. */
+export const CONFIRM_DELAY_MS = 500;
+
 let sheetInstalled = false;
 function installStyles(): void {
   if (sheetInstalled) return;
@@ -99,6 +102,7 @@ export class ArtifactView {
   private issues: SandboxIssue[] = [];
   private networkBlocked = false;
   private confirming = false;
+  private confirmTimer = 0;
   private readonly frame: ArtifactFrame;
   private readonly opts: ArtifactViewOptions;
   private readonly ui: {
@@ -206,7 +210,14 @@ export class ArtifactView {
     allowNet.addEventListener("click", () => {
       this.confirming = true;
       this.renderIssues();
-      confirmNet.focus();
+      // Focus the safe choice, and keep the confirm button inert briefly, so a double-click or
+      // Enter-Enter can't turn the network on.
+      confirmNet.disabled = true;
+      cancelNet.focus();
+      window.clearTimeout(this.confirmTimer);
+      this.confirmTimer = window.setTimeout(() => {
+        confirmNet.disabled = false;
+      }, CONFIRM_DELAY_MS);
     });
     cancelNet.addEventListener("click", () => {
       this.confirming = false;
@@ -214,7 +225,7 @@ export class ArtifactView {
       allowNet.focus();
     });
     confirmNet.addEventListener("click", () => {
-      if (!this.artifact || !this.confirming) return;
+      if (!this.artifact || !this.confirming || confirmNet.disabled) return;
       this.confirming = false;
       this.opts.onAllowNetwork?.(this.artifact.id);
       void this.show(this.shown);

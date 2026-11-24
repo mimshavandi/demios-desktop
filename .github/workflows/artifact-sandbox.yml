@@ -12,7 +12,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        # Pinned: Playwright 1.57 doesn't support ubuntu-latest (26.04).
+        os: [ubuntu-24.04, macos-15]
     runs-on: ${{ matrix.os }}
     defaults:
       run:

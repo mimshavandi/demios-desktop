@@ -88,7 +88,7 @@ The host never parses or runs artifact content. It escapes data into the documen
 | Tauri IPC | `parent.__TAURI_INTERNALS__.invoke`, `parent.ipc.postMessage`, own-realm `__TAURI_INTERNALS__`/`__TAURI__`/`ipc`, `fetch("ipc://localhost/…")`, `fetch("http://ipc.localhost/…")` |
 | Storage | `document.cookie` read/write, localStorage, sessionStorage, IndexedDB, CacheStorage, service worker |
 | Scripted network | fetch (cors / no-cors), XHR, WebSocket, EventSource, sendBeacon, Worker, blob Worker, dynamic `import()`, `window.open`, WebRTC (direct and via fresh realms) |
-| Markup / CSS network | stylesheet, prefetch, preload, preconnect, dns-prefetch (HTTP level only), icon, script src, `@import`, `@font-face`, `url()` / `image-set()`, `<base>`, img/srcset/picture, video/poster/audio, iframe, object, embed, SVG `<image>`/`<use>`, form submit, anchor + `ping`, `target=_top`, `target=_blank`, `top.location` |
+| Markup / CSS network | stylesheet, prefetch, preload, preconnect, icon, script src, `@import`, `@font-face`, `url()` / `image-set()`, `<base>`, img/srcset/picture, video/poster/audio, iframe, object, embed, SVG `<image>`/`<use>`, form submit, anchor + `ping`, `target=_top`, `target=_blank`, `top.location` |
 | Navigation | self-navigation, meta refresh, `data:` navigation, link click, navigating to the `?net=1` shell, `history.pushState` / `back()` / `go(-1)` against the host's history |
 | App listeners | forged messages to an app `message` listener that follows S7 are ignored; frame messages always carry origin `"null"` |
 | Origin guard | `isSeparateOrigin` with custom schemes (`artifact://` vs `tauri://`, same-scheme refusal, `http://artifact.localhost` on Windows) |

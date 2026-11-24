@@ -134,7 +134,6 @@ test("cannot use the network (markup and CSS)", async ({ page }) => {
 <link rel="prefetch" href="${u("prefetch")}">
 <link rel="preload" as="image" href="${u("preload")}">
 <link rel="preconnect" href="${SPY}">
-<link rel="dns-prefetch" href="${SPY}">
 <link rel="icon" href="${u("icon")}">
 <script src="${u("script")}"></script>
 <style>

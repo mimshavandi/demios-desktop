@@ -106,10 +106,19 @@ test("blocked network shows the notice; the per-artifact toggle re-renders with 
   // Two steps: the first only explains the risk and does nothing.
   await page.getByTestId("network-allow").click();
   await expect(page.getByTestId("network-text")).toContainText("text from this chat");
+  // The safe choice has focus and the confirm button starts disabled, so Enter-Enter or a
+  // double-click can't enable the network.
+  await expect(page.getByTestId("network-cancel")).toBeFocused();
+  await expect(page.getByTestId("network-confirm")).toBeDisabled();
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("network-confirm")).toBeHidden();
+  await page.getByTestId("network-allow").dblclick();
+  await expect(page.getByTestId("log")).not.toContainText("network allowed for");
   await expect(page.getByTestId("log")).not.toContainText("network allowed for");
   await page.getByTestId("network-cancel").click();
   await expect(page.getByTestId("network-confirm")).toBeHidden();
   await page.getByTestId("network-allow").click();
+  await expect(page.getByTestId("network-confirm")).toBeEnabled();
   await page.getByTestId("network-confirm").click();
   await expect(page.getByTestId("log")).toContainText("network allowed for");
   await expect(frame(page).locator("#p")).toHaveText("hi");
