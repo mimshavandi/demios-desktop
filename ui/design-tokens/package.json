@@ -1,0 +1,10 @@
+{
+  "name": "@demios/design-tokens",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "description": "Design tokens for demios-desktop (ADR-0010). Generated from tokens.json.",
+  "type": "module",
+  "exports": { "./tokens.css": "./tokens.css", "./base.css": "./base.css", ".": "./tokens.ts" },
+  "scripts": { "build": "node scripts/build.mjs", "check": "node scripts/build.mjs --check" }
+}
