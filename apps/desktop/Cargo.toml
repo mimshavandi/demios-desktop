@@ -33,6 +33,7 @@ tauri-build.workspace = true
 [dependencies]
 dn-core.workspace = true
 dn-store.workspace = true
+dn-secrets = { path = "../../crates/dn-secrets", version = "0.1.0" }
 futures-core.workspace = true
 rusqlite.workspace = true
 serde.workspace = true

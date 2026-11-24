@@ -2,7 +2,7 @@
 
 use crate::error::{IpcError, IpcResult};
 use crate::models::ModelRegistry;
-use crate::secrets::{KeyStore, MemoryKeyStore};
+use crate::secrets::{Keys, Secret};
 use crate::settings::{self, Settings};
 use dn_core::Id;
 use dn_store::{Connection, MigrationSet, chat as store};
@@ -37,7 +37,7 @@ struct Live {
 }
 
 struct RemovedKey {
-    secret: String,
+    secret: Secret,
     slots: Vec<(String, String)>,
     at: Instant,
 }
@@ -45,7 +45,7 @@ struct RemovedKey {
 pub struct AppState {
     db: Mutex<Connection>,
     pub models: ModelRegistry,
-    pub keys: Arc<dyn KeyStore>,
+    pub keys: Keys,
     running: Mutex<HashMap<Id, Running>>,
     live: Mutex<HashMap<Id, Live>>,
     removed_keys: Mutex<HashMap<String, RemovedKey>>,
@@ -84,7 +84,7 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl AppState {
-    pub fn new(conn: Connection, models: ModelRegistry, keys: Arc<dyn KeyStore>) -> Self {
+    pub fn new(conn: Connection, models: ModelRegistry, keys: Keys) -> Self {
         Self {
             db: Mutex::new(conn),
             models,
@@ -108,7 +108,7 @@ impl AppState {
         Ok(Self::new(
             conn,
             ModelRegistry::with_builtin(),
-            Arc::new(MemoryKeyStore::default()),
+            Keys::os_keychain(),
         ))
     }
 
@@ -117,7 +117,7 @@ impl AppState {
         Ok(Self::new(
             dn_store::open_in_memory(&migration_sets())?,
             ModelRegistry::with_builtin(),
-            Arc::new(MemoryKeyStore::default()),
+            Keys::memory(),
         ))
     }
 
@@ -221,7 +221,7 @@ impl AppState {
     pub fn remember_removed_key(
         &self,
         provider_id: &str,
-        secret: String,
+        secret: Secret,
         slots: Vec<(String, String)>,
     ) {
         let mut m = lock(&self.removed_keys);
@@ -237,7 +237,7 @@ impl AppState {
     }
 
     /// The removed key and the slots it was cleared from, if still within the window.
-    pub fn take_removed_key(&self, provider_id: &str) -> Option<(String, Vec<(String, String)>)> {
+    pub fn take_removed_key(&self, provider_id: &str) -> Option<(Secret, Vec<(String, String)>)> {
         let mut m = lock(&self.removed_keys);
         m.retain(|_, k| k.at.elapsed() < KEY_UNDO_WINDOW);
         m.remove(provider_id).map(|k| (k.secret, k.slots))

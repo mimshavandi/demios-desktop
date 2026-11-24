@@ -1,69 +1,51 @@
-//! Provider keys (T-SHELL-02). Keys go to the OS keychain through `dn-secrets`, which
-//! W-providers is building; until it lands the app uses [`MemoryKeyStore`], which keeps
-//! keys for the session only. Keys are never written to SQLite, never logged and never
-//! sent back to the UI (only "has a key" is).
+//! Provider keys (T-SHELL-02) live in the OS keychain through `dn-secrets`
+//! (`KeyringStore`); tests use its `MemoryStore`. Keys are never written to SQLite, never
+//! logged and never sent to the UI (only "has a key" is). Every call can block on the
+//! keychain, so callers run on a blocking thread.
 
-use std::collections::HashMap;
-use std::sync::Mutex;
+use dn_secrets::{SecretId, SecretStore};
+use std::sync::Arc;
 
-#[derive(Debug, thiserror::Error)]
-pub enum KeyStoreError {
-    #[error("key store unavailable: {0}")]
-    Unavailable(String),
+pub use dn_secrets::{Secret, SecretError};
+
+/// The key store plus a short description the settings screen shows.
+#[derive(Clone)]
+pub struct Keys {
+    pub store: Arc<dyn SecretStore>,
+    pub description: &'static str,
 }
 
-/// The slice of the `dn-secrets` trait the shell needs. Swap the implementation, not the
-/// callers, when `dn-secrets` merges.
-pub trait KeyStore: Send + Sync {
-    fn set(&self, account: &str, secret: &str) -> Result<(), KeyStoreError>;
-    fn has(&self, account: &str) -> Result<bool, KeyStoreError>;
-    /// Backend use only (provider calls, Undo after removal); never sent to the UI.
-    fn get(&self, account: &str) -> Result<Option<String>, KeyStoreError>;
-    fn delete(&self, account: &str) -> Result<(), KeyStoreError>;
-    /// Short human description shown in settings, e.g. "session only (dev)".
-    fn describe(&self) -> &'static str;
-}
-
-/// Account name under which a provider's API key is stored.
-pub fn provider_account(provider_id: &str) -> String {
-    format!("provider:{provider_id}:api_key")
-}
-
-/// In-memory stand-in. Not persisted: keys are gone after a restart.
-#[derive(Default)]
-pub struct MemoryKeyStore {
-    inner: Mutex<HashMap<String, String>>,
-}
-
-impl KeyStore for MemoryKeyStore {
-    fn set(&self, account: &str, secret: &str) -> Result<(), KeyStoreError> {
-        self.lock()?.insert(account.to_string(), secret.to_string());
-        Ok(())
+impl Keys {
+    /// The OS keychain (macOS Keychain, Windows Credential Manager, Secret Service).
+    pub fn os_keychain() -> Self {
+        Self {
+            store: Arc::new(dn_secrets::KeyringStore::default()),
+            description: "your system keychain",
+        }
     }
 
-    fn has(&self, account: &str) -> Result<bool, KeyStoreError> {
-        Ok(self.lock()?.contains_key(account))
+    /// In-memory store for tests.
+    pub fn memory() -> Self {
+        Self {
+            store: Arc::new(dn_secrets::MemoryStore::new()),
+            description: "memory (tests)",
+        }
     }
 
-    fn get(&self, account: &str) -> Result<Option<String>, KeyStoreError> {
-        Ok(self.lock()?.get(account).cloned())
+    pub fn has(&self, provider_id: &str) -> Result<bool, SecretError> {
+        Ok(self.store.get(&SecretId::provider(provider_id))?.is_some())
     }
 
-    fn delete(&self, account: &str) -> Result<(), KeyStoreError> {
-        self.lock()?.remove(account);
-        Ok(())
+    pub fn get(&self, provider_id: &str) -> Result<Option<Secret>, SecretError> {
+        self.store.get(&SecretId::provider(provider_id))
     }
 
-    fn describe(&self) -> &'static str {
-        "session only: keys are kept in memory until the OS keychain store (dn-secrets) lands"
+    pub fn set(&self, provider_id: &str, value: &Secret) -> Result<(), SecretError> {
+        self.store.set(&SecretId::provider(provider_id), value)
     }
-}
 
-impl MemoryKeyStore {
-    fn lock(&self) -> Result<std::sync::MutexGuard<'_, HashMap<String, String>>, KeyStoreError> {
-        self.inner
-            .lock()
-            .map_err(|_| KeyStoreError::Unavailable("lock poisoned".into()))
+    pub fn delete(&self, provider_id: &str) -> Result<bool, SecretError> {
+        self.store.delete(&SecretId::provider(provider_id))
     }
 }
 
@@ -73,12 +55,12 @@ mod tests {
 
     #[test]
     fn set_has_delete() {
-        let s = MemoryKeyStore::default();
-        let a = provider_account("openai");
-        assert!(!s.has(&a).unwrap());
-        s.set(&a, "test-value").unwrap();
-        assert!(s.has(&a).unwrap());
-        s.delete(&a).unwrap();
-        assert!(!s.has(&a).unwrap());
+        let k = Keys::memory();
+        assert!(!k.has("openai").unwrap());
+        k.set("openai", &Secret::new("test-value")).unwrap();
+        assert!(k.has("openai").unwrap());
+        assert_eq!(k.get("openai").unwrap().unwrap().expose(), "test-value");
+        assert!(k.delete("openai").unwrap());
+        assert!(!k.has("openai").unwrap());
     }
 }

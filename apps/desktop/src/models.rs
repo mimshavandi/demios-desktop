@@ -2,7 +2,7 @@
 //! Real backends (`dn-inference`, `dn-providers`) register here when they merge; until
 //! then only the dev fake (T-SHELL-03) is callable.
 
-use crate::secrets::{KeyStore, provider_account};
+use crate::secrets::Keys;
 use crate::settings::{SLOTS, Settings, SlotInfo};
 use dn_core::chat::ChatModel;
 use dn_core::model::{Capability, ModelRef};
@@ -118,7 +118,7 @@ pub struct ModelCatalog {
     pub settings: Settings,
 }
 
-pub fn catalog(registry: &ModelRegistry, keys: &dyn KeyStore, settings: &Settings) -> ModelCatalog {
+pub fn catalog(registry: &ModelRegistry, keys: &Keys, settings: &Settings) -> ModelCatalog {
     let mut models = vec![];
     if registry.contains("local:dev-fake") {
         models.push(ModelOption {
@@ -135,7 +135,7 @@ pub fn catalog(registry: &ModelRegistry, keys: &dyn KeyStore, settings: &Setting
         .map(|p| ProviderInfo {
             id: p.id.into(),
             name: p.name.into(),
-            has_key: keys.has(&provider_account(p.id)).unwrap_or(false),
+            has_key: keys.has(p.id).unwrap_or(false),
         })
         .collect();
     for (p, info) in PROVIDERS.iter().zip(&providers) {
@@ -174,7 +174,7 @@ pub fn catalog(registry: &ModelRegistry, keys: &dyn KeyStore, settings: &Setting
         models,
         providers,
         local_models,
-        key_store: keys.describe().into(),
+        key_store: keys.description.into(),
         settings: settings.clone(),
     }
 }
@@ -182,18 +182,18 @@ pub fn catalog(registry: &ModelRegistry, keys: &dyn KeyStore, settings: &Setting
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::secrets::MemoryKeyStore;
+    use crate::secrets::Secret;
 
     #[test]
     fn byok_models_appear_only_with_a_key() {
-        let keys = MemoryKeyStore::default();
+        let keys = Keys::memory();
         let reg = ModelRegistry::default();
         let c = catalog(&reg, &keys, &Settings::default());
         assert!(c.models.iter().all(|m| m.source != ModelSource::Byok));
         assert!(c.providers.iter().all(|p| !p.has_key));
         assert_eq!(c.slots.len(), 3);
 
-        keys.set(&provider_account("anthropic"), "x").unwrap();
+        keys.set("anthropic", &Secret::new("x")).unwrap();
         let c = catalog(&reg, &keys, &Settings::default());
         let byok: Vec<_> = c
             .models

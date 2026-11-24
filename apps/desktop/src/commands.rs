@@ -8,7 +8,7 @@
 use crate::chat::{self, ChatEvent, TurnStarted};
 use crate::error::{IpcError, IpcResult};
 use crate::models::{self, ModelCatalog};
-use crate::secrets::provider_account;
+use crate::secrets::Secret;
 use crate::settings::Settings;
 use crate::state::AppState;
 use dn_core::Id;
@@ -157,7 +157,7 @@ pub async fn update_settings(state: AppStateRef<'_>, settings: Settings) -> IpcR
 
 fn catalog(s: &AppState) -> IpcResult<ModelCatalog> {
     let settings = s.settings()?;
-    Ok(models::catalog(&s.models, s.keys.as_ref(), &settings))
+    Ok(models::catalog(&s.models, &s.keys, &settings))
 }
 
 #[tauri::command]
@@ -185,7 +185,7 @@ pub async fn set_provider_key(
         ));
     }
     blocking(&state, move |s| {
-        s.keys.set(&provider_account(&provider_id), &key)?;
+        s.keys.set(&provider_id, &Secret::new(key))?;
         catalog(s)
     })
     .await
@@ -200,9 +200,8 @@ pub async fn delete_provider_key(
 ) -> IpcResult<ModelCatalog> {
     known_provider(&provider_id)?;
     blocking(&state, move |s| {
-        let account = provider_account(&provider_id);
-        let secret = s.keys.get(&account)?;
-        s.keys.delete(&account)?;
+        let secret = s.keys.get(&provider_id)?;
+        s.keys.delete(&provider_id)?;
         // A slot pointing at this provider would now fail; clear it rather than fall back.
         let mut settings = s.settings()?;
         let prefix = format!("byok:{provider_id}:");
@@ -235,7 +234,7 @@ pub async fn restore_provider_key(
                 "The key can no longer be restored. Paste it again.",
             )
         })?;
-        s.keys.set(&provider_account(&provider_id), &secret)?;
+        s.keys.set(&provider_id, &secret)?;
         let mut settings = s.settings()?;
         for (slot, model) in slots {
             settings.slots.entry(slot).or_insert(model);

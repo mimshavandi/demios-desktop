@@ -40,9 +40,25 @@ impl From<dn_store::StoreError> for IpcError {
     }
 }
 
-impl From<crate::secrets::KeyStoreError> for IpcError {
-    fn from(e: crate::secrets::KeyStoreError) -> Self {
-        Self::new("key_store", e.to_string())
+impl From<crate::secrets::SecretError> for IpcError {
+    fn from(e: crate::secrets::SecretError) -> Self {
+        use crate::secrets::SecretError as E;
+        // SecretError never contains secret values.
+        match e {
+            E::Denied(_) => Self::new(
+                "key_store_denied",
+                "Access to your system keychain was denied. Allow it, then try again.",
+            ),
+            E::Unavailable(_) => Self::new(
+                "key_store_unavailable",
+                "Your system keychain isn't available, so the key can't be stored.",
+            ),
+            E::TooLarge { .. } | E::EmptyValue(_) | E::InvalidId(_) => Self::invalid(e.to_string()),
+            E::Backend { .. } => {
+                eprintln!("keychain error: {e}");
+                Self::new("key_store", "Couldn't use your system keychain. Try again.")
+            }
+        }
     }
 }
 
