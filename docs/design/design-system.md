@@ -1,6 +1,6 @@
 # Design standard — demios-desktop
 
-Status: **accepted** (D-014, 2026-11-24) (T-DES-01, ADR-0010). Visual preview: `docs/design/preview.html` (also shared as a private artifact for owner review). Applies to `apps/desktop/ui` and the chrome of `ui/artifact-sandbox`. Tokens: `ui/design-tokens`. Built from the `design:design-system` and `ui-ux-behaves` guidance: tokens → components with defined states → patterns, WCAG 2.2 AA, and every container covering `loading · empty · ready · error` (+ `warning` where there is risk).
+Status: **accepted** (2026-11-24) (T-DES-01, ADR-0010). Visual preview: `docs/design/preview.html`. Applies to `apps/desktop/ui` and the chrome of `ui/artifact-sandbox`. Tokens: `ui/design-tokens`. Built from the `design:design-system` and `ui-ux-behaves` guidance: tokens → components with defined states → patterns, WCAG 2.2 AA, and every container covering `loading · empty · ready · error` (+ `warning` where there is risk).
 
 ## 1. Principles
 
@@ -17,7 +17,7 @@ All values live in `ui/design-tokens/tokens.json`; components use CSS variables 
 
 | Group | Tokens | Rule |
 |---|---|---|
-| Colour roles | `bg, surface, surface-sunken, surface-raised, sidebar, border, border-strong, text, text-muted, text-subtle, accent, accent-hover, accent-soft, accent-text, local, local-soft, danger(-soft), warning(-soft), success(-soft), focus, code-bg, overlay` | Roles, not hues. Each role has a light and dark value; contrast verified by script (body text ≥ 7:1, secondary ≥ 4.5:1, focus ring ≥ 3:1). |
+| Colour roles | `bg, surface, surface-sunken, surface-raised, sidebar, border, border-strong, text, text-muted, text-subtle, text-on-danger, accent, accent-hover, accent-soft, accent-text, local, local-soft, danger(-soft), warning(-soft), success(-soft), focus, code-bg, overlay` | Roles, not hues. Each role has a light and dark value; contrast verified by script (body text ≥ 7:1, secondary ≥ 4.5:1, focus ring ≥ 3:1). |
 | Brand | accent `#5658DD` (Demios indigo), local `#24E5AF` family (Demios mint, darkened for light-mode text) | Carried from the Demios palette for continuity. |
 | Type | `--dn-font-sans` (SF Pro / Segoe UI Variable / system), `--dn-font-mono`, optional `--dn-font-serif` for long-form reading mode | Scale `xs 12 · sm 13 · base 14 · md 15 · lg 17 · xl 20 · 2xl 24`. Messages use `md` (15/24) for reading comfort; UI uses `base`. Weights 400/500/600 only. |
 | Space | 4-px grid: `1=4 … 16=64` | Proximity groups: 4–8 inside a control, 12–16 between related items, 24–32 between sections. |

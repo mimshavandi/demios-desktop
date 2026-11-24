@@ -39,15 +39,112 @@ pub struct AppInfo {
     pub version: &'static str,
     pub dev_fake_model: bool,
     pub data_dir: Option<String>,
+    /// Where downloaded models live (shared with the `dn` CLI).
+    pub models_dir: Option<String>,
 }
 
 #[tauri::command]
-pub async fn app_info() -> IpcResult<AppInfo> {
+pub async fn app_info(state: AppStateRef<'_>) -> IpcResult<AppInfo> {
     Ok(AppInfo {
         version: env!("CARGO_PKG_VERSION"),
         dev_fake_model: cfg!(fake_model),
         data_dir: crate::data_dir().map(|p| p.display().to_string()),
+        models_dir: state
+            .models
+            .local
+            .as_ref()
+            .map(|l| l.dir().display().to_string()),
     })
+}
+
+/// Opens the "Report a problem" / "Report this answer" form in the system browser
+/// (T-STORE-14). The URL is fixed in [`crate::support`]. For an answer the webview passes the
+/// message id and the model ref is read from the database, so the webview can't choose what
+/// goes into the URL.
+#[tauri::command]
+pub async fn report_problem(
+    app: tauri::AppHandle,
+    state: AppStateRef<'_>,
+    kind: crate::support::ReportKind,
+    message_id: Option<Id>,
+) -> IpcResult<()> {
+    use tauri_plugin_opener::OpenerExt;
+    let model = match (kind, message_id) {
+        (crate::support::ReportKind::Answer, Some(id)) => {
+            blocking(&state, move |s| {
+                let m = store::get_message(&*s.db()?, id)?;
+                Ok(crate::support::answer_model(&m))
+            })
+            .await?
+        }
+        _ => None,
+    };
+    let url = crate::support::report_url(
+        kind,
+        env!("CARGO_PKG_VERSION"),
+        &crate::support::os_label(),
+        model.as_ref(),
+    );
+    app.opener().open_url(url, None::<&str>).map_err(|e| {
+        eprintln!("could not open the browser: {e}");
+        IpcError::new(
+            "unavailable",
+            "Couldn't open your browser. Report at github.com/mimshavandi/demios-desktop/issues.",
+        )
+    })
+}
+
+/// What "Delete all local data" removes, for the confirm dialog.
+#[derive(Debug, Serialize)]
+pub struct LocalDataSummary {
+    pub conversations: usize,
+    pub data_dir: Option<String>,
+    pub models_dir: Option<String>,
+    pub models_bytes: u64,
+    /// Keychain entries in the user's words ("OpenAI key", "Hugging Face token", …).
+    pub keychain: Vec<String>,
+}
+
+#[tauri::command]
+pub async fn local_data_summary(state: AppStateRef<'_>) -> IpcResult<LocalDataSummary> {
+    blocking(&state, |s| {
+        let conversations = store::list_conversations(&*s.db()?)?.len();
+        let local = s.models.local.as_ref();
+        Ok(LocalDataSummary {
+            conversations,
+            data_dir: crate::data_dir().map(|p| p.display().to_string()),
+            models_dir: local.map(|l| l.dir().display().to_string()),
+            models_bytes: local.map(|l| l.disk_usage()).unwrap_or(0),
+            keychain: s.keychain_entries(),
+        })
+    })
+    .await
+}
+
+/// "Delete all local data" (T-STORE-11): stops replies and downloads, then deletes chats,
+/// settings, tool history, downloaded models, keychain entries and webview storage. It
+/// keeps going after a failure and reports what could not be deleted. The UI reloads after.
+#[tauri::command]
+pub async fn delete_all_local_data(
+    state: AppStateRef<'_>,
+    webview: tauri::Webview,
+) -> IpcResult<()> {
+    let mut failed = state.delete_all_local_data().await;
+    if let Err(e) = webview.clear_all_browsing_data() {
+        eprintln!("could not clear webview storage: {e}");
+        failed.push("window storage");
+    }
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(IpcError::new(
+            "partial",
+            format!(
+                "Some data could not be deleted: {}. Try again.",
+                failed.join(", ")
+            ),
+        ))
+    }
 }
 
 #[tauri::command]
@@ -347,7 +444,61 @@ pub async fn resolve_unknown_outcome(
             dn_tools::ledger::Resolution::DidNotHappen
         };
         exec.resolve_unknown(&key, &resolution)
-            .map_err(crate::agent::model_error)
+            .map_err(crate::agent::model_error)?;
+        // If its chat was purged meanwhile, the resolved row has nothing left to protect.
+        if let Ok(Some(entry)) = exec.ledger_entry(&key)
+            && let Some(conv) = entry.conversation_id.strip_prefix("conv:")
+            && conversation_purged(s, conv)
+            && let Err(e) = exec.forget_call(&key)
+        {
+            eprintln!("could not clear a resolved tool call: {e}");
+        }
+        Ok(())
     })
     .await
+}
+
+/// Whether `conversation_id` was purged (a soft-deleted chat can still come back).
+fn conversation_purged(s: &AppState, conversation_id: &str) -> bool {
+    s.db()
+        .ok()
+        .and_then(|db| store::is_purged(&db, conversation_id).ok())
+        .unwrap_or(false)
+}
+
+// ---- local models (T-SHELL-07)
+
+fn local(state: &AppState) -> IpcResult<Arc<crate::local::LocalModels>> {
+    state.models.local.clone().ok_or_else(|| {
+        IpcError::new(
+            "unavailable",
+            "Local models aren't available in this build.",
+        )
+    })
+}
+
+/// Subscribes to download progress and state changes; returns the current rows.
+#[tauri::command]
+pub async fn watch_local_models(
+    state: AppStateRef<'_>,
+    on_event: Channel<crate::local::LocalModelEvent>,
+) -> IpcResult<Vec<crate::local::LocalModelRow>> {
+    Ok(local(&state)?.watch(Arc::new(move |ev| {
+        let _ = on_event.send(ev);
+    })))
+}
+
+/// Starts or resumes a catalogue download (resumable, SHA-256 verified).
+#[tauri::command]
+pub async fn download_model(state: AppStateRef<'_>, model_id: String) -> IpcResult<()> {
+    local(&state)?
+        .download(&model_id)
+        .map_err(IpcError::invalid)
+}
+
+/// Pauses a download; the partial file is kept and resumed by the next download.
+#[tauri::command]
+pub async fn pause_download(state: AppStateRef<'_>, model_id: String) -> IpcResult<()> {
+    local(&state)?.pause(&model_id);
+    Ok(())
 }

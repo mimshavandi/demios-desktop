@@ -1,1 +1,1 @@
-//! dn-plugin-api — see docs/adr and docs/workers.md for scope and owner.
+//! dn-plugin-api — see docs/adr for scope.

@@ -109,8 +109,20 @@ fn apply_pragmas(conn: &Connection) -> Result<()> {
     // WAL lets readers and one writer on separate connections proceed together.
     // In-memory databases ignore it, which is fine.
     conn.pragma_update(None, "journal_mode", "WAL")?;
+    // Deleted content is overwritten with zeros instead of left in free pages
+    // (T-STORE-11: a purged chat must not be recoverable from the file).
+    conn.pragma_update(None, "secure_delete", true)?;
     conn.busy_timeout(BUSY_TIMEOUT)?;
     Ok(())
+}
+
+/// Copies the WAL into the main file and truncates it, so content deleted by the last
+/// transactions doesn't linger in old WAL frames. Best effort: another connection reading
+/// at the same time can keep frames; the next checkpoint gets them.
+pub fn checkpoint(conn: &Connection) {
+    if let Err(e) = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(())) {
+        eprintln!("database checkpoint failed: {e}");
+    }
 }
 
 fn prepare(conn: &mut Connection, sets: &[MigrationSet]) -> Result<()> {

@@ -22,9 +22,16 @@ pub struct FakeChatModel {
 }
 
 impl Default for FakeChatModel {
+    /// 18 ms between chunks; `DEMIOS_FAKE_DELAY_MS` overrides it (the e2e suite slows the
+    /// stream down so it can press Stop mid-answer).
     fn default() -> Self {
+        let ms = std::env::var("DEMIOS_FAKE_DELAY_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(18)
+            .min(2_000);
         Self {
-            delay: Duration::from_millis(18),
+            delay: Duration::from_millis(ms),
         }
     }
 }

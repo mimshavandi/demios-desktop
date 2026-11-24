@@ -5,6 +5,8 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
   AppInfo,
   ApprovalDecision,
+  LocalModelEvent,
+  LocalModelRow,
   ToolEvent,
   ToolSnapshot,
   UnknownOutcome,
@@ -15,10 +17,15 @@ import type {
   Settings,
   StoredMessage,
   TurnStarted,
+  LocalDataSummary,
+  ReportKind,
 } from "./types";
 
 interface Commands {
   app_info: { args: Record<string, never>; ret: AppInfo };
+  delete_all_local_data: { args: Record<string, never>; ret: null };
+  local_data_summary: { args: Record<string, never>; ret: LocalDataSummary };
+  report_problem: { args: { kind: ReportKind; messageId: Id | null }; ret: null };
   list_conversations: { args: Record<string, never>; ret: Conversation[] };
   create_conversation: { args: Record<string, never>; ret: Conversation };
   rename_conversation: { args: { conversationId: Id; title: string }; ret: null };
@@ -41,6 +48,9 @@ interface Commands {
   respond_approval: { args: { requestId: Id; decision: ApprovalDecision }; ret: null };
   list_unknown_outcomes: { args: { conversationId: Id | null }; ret: UnknownOutcome[] };
   resolve_unknown_outcome: { args: { key: string; happened: boolean }; ret: null };
+  watch_local_models: { args: { onEvent: Channel<LocalModelEvent> }; ret: LocalModelRow[] };
+  download_model: { args: { modelId: string }; ret: null };
+  pause_download: { args: { modelId: string }; ret: null };
 }
 
 export type CommandName = keyof Commands;
@@ -57,6 +67,14 @@ function channel<T>(onEvent: (ev: T) => void): Channel<T> {
 
 export const api = {
   appInfo: () => call("app_info", {}),
+  /** Deletes chats, settings, tool history, models, keychain entries and window storage. */
+  deleteAllLocalData: () => call("delete_all_local_data", {}),
+  localDataSummary: () => call("local_data_summary", {}),
+  /**
+   * Opens the prefilled issue form in the browser. For an answer, pass its message id: the
+   * backend reads the model from the database. No chat content is sent.
+   */
+  reportProblem: (kind: ReportKind, messageId: Id | null = null) => call("report_problem", { kind, messageId }),
   listConversations: () => call("list_conversations", {}),
   createConversation: () => call("create_conversation", {}),
   renameConversation: (conversationId: Id, title: string) =>
@@ -84,6 +102,10 @@ export const api = {
     call("list_unknown_outcomes", { conversationId }),
   resolveUnknownOutcome: (key: string, happened: boolean) =>
     call("resolve_unknown_outcome", { key, happened }),
+  watchLocalModels: (onEvent: (ev: LocalModelEvent) => void) =>
+    call("watch_local_models", { onEvent: channel(onEvent) }),
+  downloadModel: (modelId: string) => call("download_model", { modelId }),
+  pauseDownload: (modelId: string) => call("pause_download", { modelId }),
 };
 
 export type Api = typeof api;

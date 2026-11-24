@@ -19,6 +19,8 @@ use std::sync::{Arc, Mutex};
 pub struct ModelRegistry {
     fixed: HashMap<String, Arc<dyn ChatModel>>,
     providers: Mutex<Providers>,
+    /// Catalogue models on this device (llama.cpp); `None` in tests that don't need them.
+    pub local: Option<Arc<crate::local::LocalModels>>,
 }
 
 /// Cached adapters plus a generation per provider: a key change bumps it, so an adapter
@@ -66,6 +68,11 @@ impl ModelRegistry {
     ) -> Result<Arc<dyn ChatModel>, CoreError> {
         if let Some(m) = self.fixed.get(&model.to_string()) {
             return Ok(Arc::clone(m));
+        }
+        if let (Some(local), ModelRef::Local { model_id }) = (&self.local, model) {
+            // Called on a blocking thread (chat turns run in spawn_blocking): loading the
+            // weights can take seconds.
+            return tauri::async_runtime::block_on(local.chat_model(model_id));
         }
         let ModelRef::Byok { provider_id, .. } = model else {
             return Err(unavailable(
@@ -143,6 +150,24 @@ impl ModelRegistry {
                 readiness: Readiness::Ready,
             })
             .collect();
+        if let Some(local) = &self.local {
+            for e in local.entries() {
+                out.push(SourceEntry {
+                    model: ModelRef::Local {
+                        model_id: e.id.clone(),
+                    },
+                    capabilities: e.capabilities.clone(),
+                    // A model too big for this machine is never picked automatically.
+                    readiness: if !local.is_ready(&e.id) {
+                        Readiness::Missing
+                    } else if local.wont_fit(&e.id) {
+                        Readiness::Disabled
+                    } else {
+                        Readiness::Ready
+                    },
+                });
+            }
+        }
         for p in PROVIDERS {
             let ready = keys.has(p.id).unwrap_or(false);
             for m in p.suggested_models {
@@ -239,20 +264,13 @@ pub struct ProviderInfo {
 }
 
 #[derive(Clone, Debug, Serialize)]
-pub struct LocalModelPlaceholder {
-    pub model_id: String,
-    pub label: String,
-    pub size: String,
-    pub note: String,
-}
-
-#[derive(Clone, Debug, Serialize)]
 pub struct ModelCatalog {
     pub slots: Vec<SlotInfo>,
     pub models: Vec<ModelOption>,
     pub providers: Vec<ProviderInfo>,
-    /// Placeholder list until `dn-models` provides the real catalogue and downloads.
-    pub local_models: Vec<LocalModelPlaceholder>,
+    /// Catalogue models: download state and fit per row (live updates via
+    /// `watch_local_models`).
+    pub local_models: Vec<crate::local::LocalModelRow>,
     pub key_store: String,
     pub settings: Settings,
     /// The model chat uses now (the user's choice, or the one picked automatically when no
@@ -271,6 +289,19 @@ pub fn catalog(registry: &ModelRegistry, keys: &Keys, settings: &Settings) -> Mo
             available: true,
             note: None,
         });
+    }
+    if let Some(local) = &registry.local {
+        for e in local.ready() {
+            let fits = !local.wont_fit(&e.id);
+            models.push(ModelOption {
+                model_ref: format!("local:{}", e.id),
+                label: format!("{} · {}", e.name, e.quant),
+                source: ModelSource::Local,
+                capabilities: e.capabilities.clone(),
+                available: fits,
+                note: (!fits).then(|| "Won't fit in this computer's memory".into()),
+            });
+        }
     }
     let providers: Vec<ProviderInfo> = PROVIDERS
         .iter()
@@ -295,19 +326,11 @@ pub fn catalog(registry: &ModelRegistry, keys: &Keys, settings: &Settings) -> Mo
             });
         }
     }
-    let local_models = [
-        ("qwen3-8b-q4_k_m", "Qwen3 8B · Q4_K_M", "5.0 GB"),
-        ("llama-3.2-3b-q4_k_m", "Llama 3.2 3B · Q4_K_M", "2.0 GB"),
-        ("nomic-embed-text-v1.5", "Nomic Embed v1.5", "0.3 GB"),
-    ]
-    .into_iter()
-    .map(|(id, label, size)| LocalModelPlaceholder {
-        model_id: id.into(),
-        label: label.into(),
-        size: size.into(),
-        note: "Downloads and local inference arrive with dn-models / dn-inference.".into(),
-    })
-    .collect();
+    let local_models = registry
+        .local
+        .as_ref()
+        .map(|l| l.rows())
+        .unwrap_or_default();
     ModelCatalog {
         slots: SLOTS.to_vec(),
         models,

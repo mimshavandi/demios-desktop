@@ -12,6 +12,8 @@ import {
   type Id,
   type McpServerStatus,
   type ModelCatalog,
+  type ReportKind,
+  type Settings,
   type UnknownOutcome,
 } from "../ipc/types";
 import { chatModel, chatModelReady, describeModel } from "../models";
@@ -81,6 +83,33 @@ function Shell({ api }: { api: Api }) {
   const devFake = info?.dev_fake_model ?? false;
   const ready = chatModelReady(catalog, devFake);
   const activeConversation = conversations.find((c) => c.id === chat.conversationId);
+  // First-run AI notice (T-STORE-09): shown until dismissed; the dismissal is a setting, so
+  // "Delete all local data" brings it back.
+  const showAiNotice = catalog !== null && catalog.settings.ai_notice_seen !== true;
+  const report = useCallback(
+    async (kind: ReportKind, messageId: Id | null) => {
+      try {
+        await api.reportProblem(kind, messageId);
+        toast({ tone: "info", title: "Opened the report form in your browser" });
+      } catch (e) {
+        toast({ tone: "error", title: errorMessage(e) });
+      }
+    },
+    [api, toast],
+  );
+
+  const dismissAiNotice = useCallback(async () => {
+    const hide = (settings: Settings) =>
+      setCatalog((c) => (c === null ? c : { ...c, settings: { ...settings, ai_notice_seen: true } }));
+    try {
+      // Start from the stored settings, not this render's copy (another screen may have saved).
+      const current = await api.getSettings();
+      hide(await api.updateSettings({ ...current, ai_notice_seen: true }));
+    } catch {
+      // Hide it for this session anyway; it comes back next start if saving failed.
+      setCatalog((c) => (c === null ? c : { ...c, settings: { ...c.settings, ai_notice_seen: true } }));
+    }
+  }, [api]);
 
   const refreshConversations = useCallback(async () => {
     try {
@@ -453,6 +482,7 @@ function Shell({ api }: { api: Api }) {
             loading={loadingMessages}
             ready={ready}
             catalog={catalog}
+            title={activeConversation?.title ?? "New chat"}
             model={model}
             error={error}
             composerRef={composerRef}
@@ -464,6 +494,9 @@ function Shell({ api }: { api: Api }) {
             onDecide={decide}
             unknowns={unknowns}
             onResolveUnknown={resolveUnknown}
+            onReportAnswer={(m) => void report("answer", m)}
+            aiNotice={showAiNotice}
+            onDismissAiNotice={() => void dismissAiNotice()}
           />
         ) : (
           <SettingsView

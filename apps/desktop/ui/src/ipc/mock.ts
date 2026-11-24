@@ -11,6 +11,8 @@ import type {
   ModelCatalog,
   Settings,
   StoredMessage,
+  LocalModelEvent,
+  LocalModelRow,
   ToolEvent,
   UnknownOutcome,
 } from "./types";
@@ -26,6 +28,65 @@ export function createMockApi(): Api {
   const convs: Conversation[] = [];
   const msgs = new Map<string, StoredMessage[]>();
   const keys = new Set<string>();
+  let localSink: ((e: LocalModelEvent) => void) | null = null;
+  const fit = (status: LocalModelRow["fit"]["status"], reason: string, estimated = true) => ({
+    status,
+    estimated,
+    reason,
+    suggested_quant: null,
+  });
+  const localRows: LocalModelRow[] = [
+    {
+      id: "qwen2.5-0.5b-instruct-q4_k_m",
+      model_ref: "local:qwen2.5-0.5b-instruct-q4_k_m",
+      name: "Qwen2.5 0.5B Instruct",
+      repo: "Qwen/Qwen2.5-0.5B-Instruct-GGUF",
+      quant: "Q4_K_M",
+      size: 491_400_032,
+      params_b: 0.5,
+      capabilities: ["chat"],
+      license: "apache-2.0",
+      license_warning: false,
+      card_url: "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF",
+      notes: "Tiny; smoke tests and very old machines.",
+      state: { state: "ready" },
+      fit: fit("ready", "Fits this computer with room to spare.", false),
+    },
+    {
+      id: "llama-3.2-3b-instruct-q4_k_m",
+      model_ref: "local:llama-3.2-3b-instruct-q4_k_m",
+      name: "Llama 3.2 3B Instruct",
+      repo: "bartowski/Llama-3.2-3B-Instruct-GGUF",
+      quant: "Q4_K_M",
+      size: 2_019_377_696,
+      params_b: 3.2,
+      capabilities: ["chat"],
+      license: "llama3.2",
+      license_warning: false,
+      card_url: "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF",
+      notes: "Good default for 8 GB machines.",
+      state: { state: "not_downloaded" },
+      fit: fit("ready", "Fits this computer with room to spare."),
+    },
+    {
+      id: "example-70b-nc",
+      model_ref: "local:example-70b-nc",
+      name: "Example 70B (research licence)",
+      repo: "example/Example-70B-GGUF",
+      quant: "Q4_K_M",
+      size: 42_500_000_000,
+      params_b: 70,
+      capabilities: ["chat"],
+      license: "cc-by-nc-4.0",
+      license_warning: true,
+      card_url: "https://huggingface.co/example/Example-70B-GGUF",
+      notes: "",
+      state: { state: "failed", message: "Not enough disk space: needs 42.5 GB, 12.0 GB free. Free up space, then retry.", done: 0, total: 42_500_000_000 },
+      fit: fit("memory_blocked", "Won't fit in this computer's memory."),
+    },
+  ];
+  const timersDl = new Map<string, number>();
+  const emitRow = (r: LocalModelRow) => localSink?.({ type: "changed", row: { ...r } });
   const deleted = new Set<string>();
   const removedKeys = new Set<string>();
   let settings: Settings = { slots: {}, telemetry_enabled: false };
@@ -72,10 +133,7 @@ export function createMockApi(): Api {
       { id: "openai", name: "OpenAI", has_key: keys.has("openai") },
       { id: "gemini", name: "Google Gemini", has_key: keys.has("gemini") },
     ],
-    local_models: [
-      { model_id: "qwen3-8b-q4_k_m", label: "Qwen3 8B · Q4_K_M", size: "5.0 GB", note: "Downloads and local inference arrive with dn-models / dn-inference." },
-      { model_id: "llama-3.2-3b-q4_k_m", label: "Llama 3.2 3B · Q4_K_M", size: "2.0 GB", note: "Downloads and local inference arrive with dn-models / dn-inference." },
-    ],
+    local_models: localRows.map((r) => ({ ...r })),
     key_store: "session only (browser mock)",
     settings,
     chat_model: settings.slots["chat"] ?? "local:dev-fake",
@@ -149,7 +207,33 @@ export function createMockApi(): Api {
   };
 
   return {
-    appInfo: async () => ({ version: "0.1.0 (browser mock)", dev_fake_model: true, data_dir: null }),
+    appInfo: async () => ({ version: "0.1.0 (browser mock)", dev_fake_model: true, data_dir: null, models_dir: null }),
+    reportProblem: async (kind, messageId) => {
+      console.info("mock: would open the report form", kind, messageId);
+      return null;
+    },
+    localDataSummary: async () => ({
+      conversations: convs.filter((c) => !deleted.has(c.id)).length,
+      data_dir: null,
+      models_dir: null,
+      models_bytes: localRows
+        .filter((r) => r.state.state === "ready")
+        .reduce((n, r) => n + r.size, 0),
+      keychain: [...keys].map((p) => `${p === "anthropic" ? "Anthropic" : p === "openai" ? "OpenAI" : "Google Gemini"} key`),
+    }),
+    deleteAllLocalData: async () => {
+      convs.length = 0;
+      msgs.clear();
+      deleted.clear();
+      keys.clear();
+      removedKeys.clear();
+      settings = { slots: {}, telemetry_enabled: false };
+      for (const r of localRows) {
+        r.state = { state: "not_downloaded" };
+        emitRow(r);
+      }
+      return null;
+    },
     listConversations: async () =>
       convs.filter((c) => !deleted.has(c.id)).sort((x, y) => y.updated_at - x.updated_at),
     createConversation: async () => {
@@ -232,6 +316,45 @@ export function createMockApi(): Api {
     resolveUnknownOutcome: async (key) => {
       const i = unknown.findIndex((u) => u.key === key);
       if (i >= 0) unknown.splice(i, 1);
+      return null;
+    },
+    watchLocalModels: async (onEvent) => {
+      localSink = onEvent;
+      return localRows.map((r) => ({ ...r }));
+    },
+    downloadModel: async (id) => {
+      const r = localRows.find((x) => x.id === id);
+      if (r === undefined) throw { code: "invalid_input", message: "Unknown model." };
+      let done = r.state.state === "paused" ? r.state.done : 0;
+      const total = r.size;
+      const tick = () => {
+        done = Math.min(total, done + total / 40);
+        if (done >= total) {
+          r.state = { state: "verifying", total };
+          emitRow(r);
+          timersDl.set(id, window.setTimeout(() => {
+            r.state = { state: "ready" };
+            r.fit = { ...r.fit, estimated: false };
+            emitRow(r);
+          }, 600));
+          return;
+        }
+        r.state = { state: "downloading", done, total, bytes_per_sec: total / 8 };
+        emitRow(r);
+        timersDl.set(id, window.setTimeout(tick, 200));
+      };
+      r.state = { state: "queued", resuming: done > 0 };
+      emitRow(r);
+      timersDl.set(id, window.setTimeout(tick, 200));
+      return null;
+    },
+    pauseDownload: async (id) => {
+      const r = localRows.find((x) => x.id === id);
+      window.clearTimeout(timersDl.get(id));
+      if (r !== undefined && r.state.state === "downloading") {
+        r.state = { state: "paused", done: r.state.done, total: r.state.total };
+        emitRow(r);
+      }
       return null;
     },
     restoreProviderKey: async (p) => {

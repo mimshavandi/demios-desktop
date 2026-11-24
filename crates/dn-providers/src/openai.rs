@@ -1,6 +1,6 @@
 //! OpenAI Chat Completions, used for OpenAI itself and every OpenAI-compatible server.
 
-use crate::adapter::{Inner, ModelInfo, ProviderAdapter, ProviderKind, text_of};
+use crate::adapter::{Inner, ModelInfo, ProviderAdapter, ProviderKind, ServerFamily, text_of};
 use crate::http::{self, Call, OptionalParam, bad_response, stream_error};
 use crate::policy::is_reasoning_model;
 use crate::util::{BoxFuture, Emit, event_stream};
@@ -25,6 +25,15 @@ const OPTIONAL: &[OptionalParam] = &[
     },
     OptionalParam::new("max_completion_tokens"),
     OptionalParam::new("stream_options"),
+    // Thinking switches for local servers; a model/server that can't think rejects them.
+    OptionalParam {
+        aliases: &["thinking", "enable_thinking"],
+        ..OptionalParam::new("chat_template_kwargs")
+    },
+    OptionalParam {
+        aliases: &["thinking"],
+        ..OptionalParam::new("think")
+    },
     // Never dropped silently: the schema moves into the system prompt instead.
     OptionalParam {
         aliases: &["json_schema"],
@@ -101,6 +110,28 @@ pub(crate) fn body(inner: &Inner, model: &str, req: &ChatRequest) -> Value {
             json!({"type": "json_schema", "json_schema": {"name": "response", "schema": schema}}),
         );
     }
+    // Local servers: each family has its own switch, driven by the same policy. These go
+    // with every request (on or off), so the server's default never decides.
+    let family = if official {
+        ServerFamily::Unknown
+    } else {
+        inner.cfg.server_family
+    };
+    match family {
+        ServerFamily::LlamaCpp | ServerFamily::Vllm => {
+            let on = inner.cfg.reasoning.thinking(req);
+            o.insert(
+                "chat_template_kwargs".into(),
+                json!({"enable_thinking": on}),
+            );
+            return b;
+        }
+        ServerFamily::Ollama => {
+            o.insert("think".into(), json!(inner.cfg.reasoning.thinking(req)));
+            return b;
+        }
+        ServerFamily::LmStudio | ServerFamily::Unknown => {}
+    }
     if reasoning {
         let on = inner.cfg.reasoning.thinking(req);
         let effort = match (on, official) {
@@ -161,6 +192,7 @@ pub(crate) async fn run(inner: Arc<Inner>, req: ChatRequest, tx: Emit) {
             body: Some(body(&inner, &model, &req)),
             optional: OPTIONAL.to_vec(),
             secret: inner.key(),
+            first_byte: inner.cfg.first_byte_timeout,
         })
         .await?;
         let mut calls: BTreeMap<u64, PartialCall> = BTreeMap::new();
@@ -168,7 +200,7 @@ pub(crate) async fn run(inner: Arc<Inner>, req: ChatRequest, tx: Emit) {
         // `[DONE]` or a `finish_reason` ends a complete stream; EOF before either is a cut-off.
         let mut terminal = false;
         let mut usage = Usage::default();
-        let mut sse = http::SseReader::new(&id, resp);
+        let mut sse = http::SseReader::new(&id, resp, &inner.cfg);
         while let Some(ev) = sse.next().await? {
             if ev.data.trim() == "[DONE]" {
                 terminal = true;
@@ -284,6 +316,7 @@ impl ProviderAdapter for OpenAi {
                 body: None,
                 optional: vec![],
                 secret: self.0.key(),
+                first_byte: self.0.cfg.first_byte_timeout,
             })
             .await?;
             let v = http::json(id, resp).await?;

@@ -2,6 +2,9 @@
 // for it; only the ones granted in `capabilities/default.json` are callable (ADR-0009).
 const COMMANDS: &[&str] = &[
     "app_info",
+    "delete_all_local_data",
+    "local_data_summary",
+    "report_problem",
     "list_conversations",
     "create_conversation",
     "rename_conversation",
@@ -21,6 +24,9 @@ const COMMANDS: &[&str] = &[
     "respond_approval",
     "list_unknown_outcomes",
     "resolve_unknown_outcome",
+    "watch_local_models",
+    "download_model",
+    "pause_download",
 ];
 
 fn main() {

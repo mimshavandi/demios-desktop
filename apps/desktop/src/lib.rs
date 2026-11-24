@@ -11,10 +11,12 @@ pub mod commands;
 pub mod error;
 #[cfg(any(fake_model, test))]
 pub mod fake;
+pub mod local;
 pub mod models;
 pub mod secrets;
 pub mod settings;
 pub mod state;
+pub mod support;
 
 use std::path::PathBuf;
 
@@ -58,6 +60,13 @@ fn navigation_guard<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(navigation_guard())
+        // Used from Rust only (`commands::report_problem`): no link-click handler is injected
+        // into the webview, and none of its JS commands are granted (see capabilities).
+        .plugin(
+            tauri_plugin_opener::Builder::new()
+                .open_js_links_on_click(false)
+                .build(),
+        )
         .setup(|app| {
             use tauri::Manager;
             let dir = data_dir().ok_or("no home directory to keep app data in")?;
@@ -76,6 +85,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::app_info,
+            commands::delete_all_local_data,
+            commands::local_data_summary,
+            commands::report_problem,
             commands::list_conversations,
             commands::create_conversation,
             commands::rename_conversation,
@@ -95,6 +107,9 @@ pub fn run() {
             commands::respond_approval,
             commands::list_unknown_outcomes,
             commands::resolve_unknown_outcome,
+            commands::watch_local_models,
+            commands::download_model,
+            commands::pause_download,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Demios Desktop")
@@ -103,6 +118,13 @@ pub fn run() {
             // process trees) explicitly, with a bound so a stuck server can't hang quit.
             if let tauri::RunEvent::Exit = event {
                 use tauri::Manager;
+                // Downloads stop; their partial files resume next time.
+                if let Some(local) = app
+                    .try_state::<std::sync::Arc<state::AppState>>()
+                    .and_then(|s| s.models.local.clone())
+                {
+                    local.pause_all();
+                }
                 let executor = app
                     .try_state::<std::sync::Arc<state::AppState>>()
                     .and_then(|s| s.executor.clone());
@@ -146,5 +168,29 @@ mod tests {
             allowed_navigation(&"http://localhost:1420/".parse().unwrap()),
             cfg!(debug_assertions)
         );
+    }
+
+    /// The webview gets only the app's own commands: no plugin permission at all, in
+    /// particular none of the opener's (it is used from Rust only).
+    #[test]
+    fn capabilities_grant_no_plugin_permissions() {
+        let caps: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
+        let perms = caps["permissions"].as_array().unwrap();
+        assert!(!perms.is_empty());
+        for p in perms {
+            let id = p
+                .as_str()
+                .or_else(|| p["identifier"].as_str())
+                .unwrap_or_default();
+            assert!(
+                !id.starts_with("opener:"),
+                "opener permission granted: {id}"
+            );
+            assert!(
+                id.starts_with("allow-") || id.starts_with("core:window:allow-start-dragging"),
+                "unexpected permission: {id}"
+            );
+        }
     }
 }
