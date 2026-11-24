@@ -6,6 +6,7 @@
 //! No llama.cpp dependency: the fit estimator works from the GGUF header alone, so it runs
 //! in CI and in the UI before a model is ever loaded.
 
+pub mod cache;
 pub mod catalog;
 pub mod download;
 pub mod fit;
