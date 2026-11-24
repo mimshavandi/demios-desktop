@@ -36,6 +36,15 @@
 //!   - dense models offload `g = ⌊(0.8G − O) / ((W + KV) / n_layer)⌋` layers to the GPU
 //!     and run the rest on the CPU (a layer's KV cache lives where the layer runs).
 //!
+//! ## Where the numbers come from
+//!
+//! RAM comes from `sysinfo`. `sysinfo` cannot report VRAM reliably, so the GPU side is
+//! either **detected** (the device list llama.cpp reports in `dn-inference`, which `dn fit`
+//! uses) or **user-provided** (`dn fit --vram-gb`, and later a setting in the UI). On Apple
+//! Silicon, the unified-memory budget is used: the Metal working-set limit when llama.cpp
+//! reports it, otherwise the RAM fractions above. If no GPU is detected and none is
+//! given, the machine counts as CPU only.
+//!
 //! # Status
 //!
 //! With `r = need / budget` (on a split, the larger of the GPU and CPU ratios):
