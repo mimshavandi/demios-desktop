@@ -18,6 +18,7 @@ Demios Desktop is an open-source app for chatting with AI models.
 
 - **Run models on your computer.** Download a model from the built-in list, or GGUF models from Hugging Face, and chat with them through llama.cpp. The app shows whether it fits in your computer's memory and its licence before you download it.
 - **Or bring your own key.** Add an API key for Anthropic, OpenAI or Google Gemini and chat with their models under your own account and their terms.
+- **See what the model makes.** Web pages, small apps, diagrams and documents open next to the chat, run sealed off from your computer, and keep every version (macOS and Linux).
 - **Give models tools.** Add tool servers (MCP) that run on your computer or online. Tools that change something show exactly what they will do and wait for your OK, and a program on your computer starts only after you allow it.
 - **Your data stays with you.** There is no Demios account and no Demios server. Chats and settings stay on your computer, keys stay in your system keychain, and the app collects no usage data. Delete all local data removes everything the app stored, in one step.
 
@@ -30,7 +31,7 @@ Productivity
 ## Not in the listing yet
 
 These wait until they ship in the build being listed:
-- artifacts (T-ART-06).
+- artifacts on Windows: drop the "(macOS and Linux)" line from a Microsoft Store listing until artifacts work there (#75).
 
 ## Bundle fields
 
