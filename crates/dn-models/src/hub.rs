@@ -972,15 +972,33 @@ impl HubClient {
 
 /// Write via a temporary file, fsync, then rename, so a crash never leaves a torn manifest.
 async fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    write_atomic_chunks(path, [Ok(data)]).await
+}
+
+/// [`write_atomic`] over chunks; a failing chunk (or any I/O error) removes the temporary
+/// file and leaves `path` exactly as it was. Chunked so tests can fail it mid-write.
+async fn write_atomic_chunks<'a>(
+    path: &Path,
+    chunks: impl IntoIterator<Item = std::io::Result<&'a [u8]>>,
+) -> std::io::Result<()> {
     use tokio::io::AsyncWriteExt;
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".tmp");
     let tmp = PathBuf::from(tmp);
-    let mut f = tokio::fs::File::create(&tmp).await?;
-    f.write_all(data).await?;
-    f.sync_all().await?;
-    drop(f);
-    tokio::fs::rename(&tmp, path).await
+    let r = async {
+        let mut f = tokio::fs::File::create(&tmp).await?;
+        for c in chunks {
+            f.write_all(c?).await?;
+        }
+        f.sync_all().await?;
+        drop(f);
+        tokio::fs::rename(&tmp, path).await
+    }
+    .await;
+    if r.is_err() {
+        let _ = tokio::fs::remove_file(&tmp).await;
+    }
+    r
 }
 
 fn encode_rev(rev: &str) -> String {
@@ -1824,6 +1842,65 @@ mod tests {
             c.gguf_header("o/n", SHA, &f("big.gguf", big, None)).await,
             Err(HubError::RangeUnsupported)
         ));
+    }
+
+    #[tokio::test]
+    async fn hub_json_body_capped_at_16_mib() {
+        // A 17 MiB array, once with Content-Length and once streamed without it.
+        let big = format!("[{}\"x\"]", "\"x\",".repeat((17 << 20) / 4));
+        let mut routes = HashMap::new();
+        routes.insert("/api/models/o/n/revision/main".into(), Reply::json(&big));
+        routes.insert(
+            "/api/models/o/m/revision/main".into(),
+            Reply::json(&big).without_length(),
+        );
+        let s = serve(routes).await;
+        let c = client(&s.url, None);
+        for repo in ["o/n", "o/m"] {
+            match c.repo(repo, None).await {
+                Err(HubError::Parse(m)) => assert!(m.contains("too large"), "{repo}: {m}"),
+                other => panic!("{repo}: expected the size cap, got {other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn manifest_write_is_atomic() {
+        let dir = std::env::temp_dir().join(format!("dn-atomic-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("m.gguf.source.json");
+        std::fs::write(&p, b"{\"old\":true}").unwrap();
+        // The write fails after its first chunk: the old manifest must survive intact and
+        // no temporary file may be left behind.
+        let r = write_atomic_chunks(
+            &p,
+            [
+                Ok(&b"{\"new\":"[..]),
+                Err(std::io::Error::other("disk full")),
+            ],
+        )
+        .await;
+        assert!(r.is_err());
+        assert_eq!(std::fs::read(&p).unwrap(), b"{\"old\":true}");
+        assert_eq!(
+            std::fs::read_dir(&dir).unwrap().count(),
+            1,
+            "tmp file left behind"
+        );
+        write_atomic(&p, b"{\"new\":true}").await.unwrap();
+        assert_eq!(std::fs::read(&p).unwrap(), b"{\"new\":true}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn empty_range_makes_no_request() {
+        let s = serve(HashMap::new()).await;
+        let c = client(&s.url, None);
+        let url = c.file_url("o/n", SHA, "m.gguf").unwrap();
+        assert!(c.fetch_range(&url, 5, 5).await.unwrap().is_empty());
+        assert!(c.fetch_range(&url, 9, 3).await.unwrap().is_empty());
+        assert!(s.requests.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
