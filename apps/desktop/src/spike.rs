@@ -195,7 +195,8 @@ pub fn autorun(app: &tauri::AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_secs(4)).await;
-        if let Err(e) = spike_open_child(app.clone()).await {
+        let no_child = std::env::var("DEMIOS_SPIKE_AUTORUN").as_deref() == Ok("nochild");
+        if !no_child && let Err(e) = spike_open_child(app.clone()).await {
             eprintln!("spike: could not open the child webview: {e}");
         }
         // WindowChild check: the main webview must follow the window when it is resized.
