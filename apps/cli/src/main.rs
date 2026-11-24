@@ -503,6 +503,7 @@ fn license_line(l: &LicenseInfo, card: &str) -> String {
         Some(LicenseWarning::Missing) => "  ⚠ no licence in the model card".into(),
         Some(LicenseWarning::NonCommercial) => "  ⚠ non-commercial / research licence".into(),
         Some(LicenseWarning::Custom) => "  ⚠ custom licence: read the model card".into(),
+        Some(LicenseWarning::UsePolicy) => "  (acceptable-use policy applies: see the card)".into(),
     };
     format!("licence: {id}{warn}\nmodel card: {card}")
 }

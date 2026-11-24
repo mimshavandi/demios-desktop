@@ -12,7 +12,10 @@
 //!
 //! Configuration: `HF_ENDPOINT` selects a mirror ([`HubConfig::from_env`]). Gated repos use
 //! the user's own token, stored in the OS keychain as `provider/huggingface`
-//! ([`HF_TOKEN_SECRET`]); it is sent only to the Hub endpoint and never logged.
+//! ([`HF_TOKEN_SECRET`]). It is sent only to the official Hub (`https://huggingface.co`):
+//! a mirror never sees it unless the user opts in ([`HubConfig::send_token_to_endpoint`],
+//! env `DN_HF_SEND_TOKEN_TO_ENDPOINT=1`). It is dropped on redirects to other hosts and
+//! never logged.
 //! HTTPS only, except a loopback endpoint (tests, local mirrors).
 //!
 //! No Demios server and no telemetry: every request goes straight to the Hub.
@@ -136,6 +139,9 @@ pub struct HubConfig {
     /// Hub base URL; `None` = [`DEFAULT_ENDPOINT`].
     pub endpoint: Option<String>,
     pub token: Option<Secret>,
+    /// Also send `token` to a non-default `endpoint` (a mirror the user trusts with it).
+    /// Off by default: the token is for huggingface.co.
+    pub send_token_to_endpoint: bool,
 }
 
 impl std::fmt::Debug for HubConfig {
@@ -143,16 +149,20 @@ impl std::fmt::Debug for HubConfig {
         f.debug_struct("HubConfig")
             .field("endpoint", &self.endpoint)
             .field("token", &self.token.as_ref().map(|_| "<redacted>"))
+            .field("send_token_to_endpoint", &self.send_token_to_endpoint)
             .finish()
     }
 }
 
 impl HubConfig {
-    /// Endpoint from `HF_ENDPOINT`, no token.
+    /// Endpoint from `HF_ENDPOINT`, no token; `DN_HF_SEND_TOKEN_TO_ENDPOINT=1` opts in to
+    /// sending the token to that endpoint.
     pub fn from_env() -> Self {
         Self {
             endpoint: std::env::var("HF_ENDPOINT").ok().filter(|s| !s.is_empty()),
             token: None,
+            send_token_to_endpoint: std::env::var("DN_HF_SEND_TOKEN_TO_ENDPOINT")
+                .is_ok_and(|v| v == "1"),
         }
     }
 
@@ -231,6 +241,9 @@ pub enum LicenseWarning {
     NonCommercial,
     /// `other` or a model-specific licence: read the card.
     Custom,
+    /// Commercial use allowed under an acceptable-use policy (Llama, Gemma): allowed per
+    /// D-020, but worth a note next to the licence.
+    UsePolicy,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -246,6 +259,13 @@ pub struct LicenseInfo {
 
 impl LicenseInfo {
     pub fn classify(id: Option<&str>, name: Option<&str>, link: Option<&str>) -> Self {
+        let (id, name) = (id.map(sanitize_display), name.map(sanitize_display));
+        let (id, name) = (id.as_deref(), name.as_deref());
+        // Only an http(s) URL is kept as the licence link.
+        let link = link
+            .map(sanitize_display)
+            .filter(|l| l.starts_with("https://") || l.starts_with("http://"));
+        let link = link.as_deref();
         let id = id
             .map(|s| s.trim().to_ascii_lowercase())
             .filter(|s| !s.is_empty());
@@ -255,6 +275,7 @@ impl LicenseInfo {
             (_, Some(l)) if is_non_commercial(l) => Some(LicenseWarning::NonCommercial),
             (Some(i), _) if is_non_commercial(i) => Some(LicenseWarning::NonCommercial),
             (Some(i), _) if i == "other" || i == "unknown" => Some(LicenseWarning::Custom),
+            (Some(i), _) if has_use_policy(i) => Some(LicenseWarning::UsePolicy),
             (Some(i), _) if is_open(i) => None,
             _ => Some(LicenseWarning::Custom),
         };
@@ -265,6 +286,10 @@ impl LicenseInfo {
             warning,
         }
     }
+}
+
+fn has_use_policy(l: &str) -> bool {
+    l.starts_with("llama") || l == "gemma"
 }
 
 fn is_non_commercial(l: &str) -> bool {
@@ -410,18 +435,54 @@ pub fn validate_repo_id(id: &str) -> Result<()> {
     }
 }
 
-/// Relative path inside a repo: `/`-separated, no empty / `.` / `..` segments, no `\` or `:`.
+/// Relative path inside a repo, safe as a local path on every OS: `/`-separated segments,
+/// none empty, `.`, `..`, ending in `.` or space, a Windows device name (`CON`, `NUL`,
+/// `COM1`, `LPT1.txt`, ...), or containing `\`, `:`, `*?"<>|` or control characters.
 pub fn validate_repo_path(path: &str) -> Result<()> {
     let ok = !path.is_empty()
-        && !path.contains(['\\', ':', '\0'])
-        && path
-            .split('/')
-            .all(|s| !s.is_empty() && s != "." && s != "..");
+        && path.len() <= 1024
+        && !path
+            .chars()
+            .any(|c| c.is_control() || matches!(c, '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|'))
+        && path.split('/').all(segment_ok);
     if ok {
         Ok(())
     } else {
         Err(HubError::InvalidPath(path.into()))
     }
+}
+
+fn segment_ok(s: &str) -> bool {
+    if s.is_empty() || s == "." || s == ".." || s.ends_with(['.', ' ']) || s.len() > 255 {
+        return false;
+    }
+    let stem = s
+        .split('.')
+        .next()
+        .unwrap_or(s)
+        .trim_end()
+        .to_ascii_uppercase();
+    let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || ((stem.starts_with("COM") || stem.starts_with("LPT"))
+            && stem.len() == 4
+            && stem.as_bytes()[3].is_ascii_digit()
+            && stem.as_bytes()[3] != b'0');
+    !reserved
+}
+
+/// A full 40-hex commit SHA (what `repo()` resolves revisions to).
+fn validate_commit(sha: &str) -> Result<()> {
+    if sha.len() == 40 && sha.chars().all(|c| c.is_ascii_hexdigit()) {
+        Ok(())
+    } else {
+        Err(HubError::NotFound(format!("`{sha}` is not a commit SHA")))
+    }
+}
+
+/// Text from a model card or search result, safe to print: control characters removed,
+/// length capped.
+pub fn sanitize_display(s: &str) -> String {
+    s.chars().filter(|c| !c.is_control()).take(200).collect()
 }
 
 fn validate_revision(rev: &str) -> Result<()> {
@@ -460,6 +521,10 @@ impl HubClient {
         }
         endpoint.set_query(None);
         endpoint.set_fragment(None);
+        let official = endpoint.scheme() == "https"
+            && endpoint.host_str() == Some("huggingface.co")
+            && endpoint.port().is_none();
+        let token = cfg.token.filter(|_| official || cfg.send_token_to_endpoint);
         let http = reqwest::Client::builder()
             .https_only(!loopback)
             .connect_timeout(Duration::from_secs(15))
@@ -470,7 +535,7 @@ impl HubClient {
         Ok(Self {
             http,
             endpoint,
-            token: cfg.token,
+            token,
         })
     }
 
@@ -529,13 +594,25 @@ impl HubClient {
     }
 
     async fn json(&self, url: reqwest::Url, repo: Option<&str>) -> Result<(Value, Option<String>)> {
-        let resp = self.get(url, repo).await?;
+        /// API responses are small; a bigger body is refused, not buffered.
+        const MAX_JSON: usize = 16 << 20;
+        let mut resp = self.get(url, repo).await?;
         let next = next_link(&resp);
-        let text = resp
-            .text()
+        if resp.content_length().is_some_and(|n| n > MAX_JSON as u64) {
+            return Err(HubError::Parse("response too large".into()));
+        }
+        let mut body = Vec::new();
+        while let Some(c) = resp
+            .chunk()
             .await
-            .map_err(|e| HubError::Http(e.without_url().to_string()))?;
-        let v = serde_json::from_str(&text).map_err(|e| HubError::Parse(e.to_string()))?;
+            .map_err(|e| HubError::Http(e.without_url().to_string()))?
+        {
+            if body.len() + c.len() > MAX_JSON {
+                return Err(HubError::Parse("response too large".into()));
+            }
+            body.extend_from_slice(&c);
+        }
+        let v = serde_json::from_slice(&body).map_err(|e| HubError::Parse(e.to_string()))?;
         Ok((v, next))
     }
 
@@ -612,7 +689,7 @@ impl HubClient {
     /// Every file of `repo` at commit `sha` (follows the tree API's pages).
     pub async fn files(&self, repo: &str, sha: &str) -> Result<Vec<RepoFile>> {
         validate_repo_id(repo)?;
-        validate_revision(sha)?;
+        validate_commit(sha)?;
         let mut u = self.url(&format!("/api/models/{repo}/tree/{sha}"));
         u.query_pairs_mut().append_pair("recursive", "true");
         let mut out = vec![];
@@ -649,6 +726,10 @@ impl HubClient {
                     .as_u64()
                     .or_else(|| e["size"].as_u64())
                     .unwrap_or(0);
+                // Unsized entries can't be verified or range-read.
+                if size == 0 {
+                    continue;
+                }
                 out.push(RepoFile {
                     path: path.into(),
                     size,
@@ -672,7 +753,7 @@ impl HubClient {
     /// `{endpoint}/{repo}/resolve/{sha}/{path}`.
     pub fn file_url(&self, repo: &str, sha: &str, path: &str) -> Result<String> {
         validate_repo_id(repo)?;
-        validate_revision(sha)?;
+        validate_commit(sha)?;
         validate_repo_path(path)?;
         Ok(self
             .url(&format!("/{repo}/resolve/{sha}/{path}"))
@@ -760,9 +841,22 @@ impl HubClient {
         };
         let json =
             serde_json::to_vec_pretty(&manifest).map_err(|e| HubError::Parse(e.to_string()))?;
-        tokio::fs::write(SourceManifest::path_for(&first), json).await?;
+        write_atomic(&SourceManifest::path_for(&first), &json).await?;
         Ok(first)
     }
+}
+
+/// Write via a temporary file, fsync, then rename, so a crash never leaves a torn manifest.
+async fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    use tokio::io::AsyncWriteExt;
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
+    let mut f = tokio::fs::File::create(&tmp).await?;
+    f.write_all(data).await?;
+    f.sync_all().await?;
+    drop(f);
+    tokio::fs::rename(&tmp, path).await
 }
 
 fn encode_rev(rev: &str) -> String {
@@ -846,7 +940,9 @@ fn next_link(resp: &reqwest::Response) -> Option<String> {
 /// Incomplete split sets are dropped. Sorted: models first, then by size.
 pub fn gguf_variants(files: &[RepoFile]) -> Vec<GgufVariant> {
     use std::collections::BTreeMap;
-    let mut groups: BTreeMap<String, Vec<(u32, u32, &RepoFile)>> = BTreeMap::new();
+    // Keyed by (base, part count) so `m.gguf` and `m-0000k-of-0000n.gguf` stay apart.
+    type Parts<'a> = Vec<(u32, u32, &'a RepoFile)>;
+    let mut groups: BTreeMap<(String, u32), Parts<'_>> = BTreeMap::new();
     for f in files {
         let lower = f.path.to_ascii_lowercase();
         if !lower.ends_with(".gguf") {
@@ -857,10 +953,10 @@ pub fn gguf_variants(files: &[RepoFile]) -> Vec<GgufVariant> {
             Some((b, i, n)) => (b.to_string(), i, n),
             None => (stem.to_string(), 1, 1),
         };
-        groups.entry(base).or_default().push((idx, of, f));
+        groups.entry((base, of)).or_default().push((idx, of, f));
     }
     let mut out = vec![];
-    for (base, mut parts) in groups {
+    for ((base, _), mut parts) in groups {
         parts.sort_by_key(|(i, _, _)| *i);
         let of = parts[0].1;
         let complete = parts.len() as u32 == of
@@ -1029,6 +1125,19 @@ mod tests {
     }
 
     #[test]
+    fn split_set_and_same_named_single_file_stay_apart() {
+        let h = Some("a".repeat(64));
+        let files = vec![
+            f("m.gguf", 5, h.as_deref()),
+            f("m-00001-of-00002.gguf", 10, h.as_deref()),
+            f("m-00002-of-00002.gguf", 10, h.as_deref()),
+        ];
+        let v = gguf_variants(&files);
+        assert_eq!(v.len(), 2);
+        assert_eq!((v[0].files.len(), v[1].files.len()), (1, 2));
+    }
+
+    #[test]
     fn repo_ids_and_paths_validated() {
         assert!(validate_repo_id("Qwen/Qwen3-8B-GGUF").is_ok());
         for bad in ["Qwen", "a/b/c", "../x", "a/..", "a/b c", "a/b?x", ""] {
@@ -1047,7 +1156,9 @@ mod tests {
         let c =
             |id: Option<&str>, name: Option<&str>| LicenseInfo::classify(id, name, None).warning;
         assert_eq!(c(Some("apache-2.0"), None), None);
-        assert_eq!(c(Some("llama3.1"), None), None);
+        assert_eq!(c(Some("llama3.1"), None), Some(LicenseWarning::UsePolicy));
+        assert_eq!(c(Some("gemma"), None), Some(LicenseWarning::UsePolicy));
+        assert_eq!(c(Some("mit"), None), None);
         assert_eq!(c(None, None), Some(LicenseWarning::Missing));
         assert_eq!(
             c(Some("cc-by-nc-4.0"), None),
@@ -1072,7 +1183,7 @@ mod tests {
     fn endpoint_must_be_https_unless_loopback() {
         let cfg = |e: &str| HubConfig {
             endpoint: Some(e.into()),
-            token: None,
+            ..Default::default()
         };
         assert!(HubClient::new(cfg("https://hf-mirror.com")).is_ok());
         assert!(HubClient::new(cfg("http://127.0.0.1:8080")).is_ok());
@@ -1093,9 +1204,11 @@ mod tests {
     }
 
     fn client(url: &str, token: Option<&str>) -> HubClient {
+        // Loopback test servers stand in for huggingface.co: opt in to sending the token.
         HubClient::new(HubConfig {
             endpoint: Some(url.into()),
             token: token.map(Secret::new),
+            send_token_to_endpoint: true,
         })
         .unwrap()
     }
@@ -1213,6 +1326,83 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mirror_gets_no_token_without_opt_in() {
+        let mut routes = HashMap::new();
+        routes.insert(
+            "/api/models/o/n/revision/main".into(),
+            Reply::json(&revision_json("false")),
+        );
+        let s = serve(routes).await;
+        let c = HubClient::new(HubConfig {
+            endpoint: Some(s.url.clone()),
+            token: Some(Secret::new("hf_tok")),
+            send_token_to_endpoint: false,
+        })
+        .unwrap();
+        c.repo("o/n", None).await.unwrap();
+        let reqs = s.requests.lock().unwrap();
+        assert!(!reqs[0].contains("authorization"), "{}", reqs[0]);
+        // The official endpoint keeps it (checked without a request).
+        let official = HubClient::new(HubConfig::default().with_token(Secret::new("t"))).unwrap();
+        assert!(official.token.is_some());
+    }
+
+    #[tokio::test]
+    async fn token_dropped_on_redirect_to_another_port() {
+        let mut b = HashMap::new();
+        b.insert(
+            "/api/models/o/n/revision/main".into(),
+            Reply::json(&revision_json("false")),
+        );
+        let target = serve(b).await;
+        let mut a = HashMap::new();
+        a.insert(
+            "/api/models/o/n/revision/main".into(),
+            Reply::status(302).header(
+                "location",
+                &format!("{}/api/models/o/n/revision/main", target.url),
+            ),
+        );
+        let hub = serve(a).await;
+        let info = client(&hub.url, Some("hf_tok"))
+            .repo("o/n", None)
+            .await
+            .unwrap();
+        assert_eq!(info.sha, SHA);
+        assert!(hub.requests.lock().unwrap()[0].contains("authorization: bearer hf_tok"));
+        let at_target = target.requests.lock().unwrap();
+        assert_eq!(at_target.len(), 1);
+        assert!(!at_target[0].contains("authorization"), "{}", at_target[0]);
+    }
+
+    #[test]
+    fn unsafe_paths_and_commits_rejected() {
+        for bad in [
+            "CON",
+            "nul.gguf",
+            "a/COM1.gguf",
+            "lpt9",
+            "m.gguf.",
+            "m.gguf ",
+            "a\u{7}b.gguf",
+            "a*b.gguf",
+            "a?.gguf",
+            "a|b",
+        ] {
+            assert!(validate_repo_path(bad).is_err(), "{bad:?}");
+        }
+        for ok in ["COM10.gguf", "console.gguf", "Q8_0/m-00001-of-00002.gguf"] {
+            assert!(validate_repo_path(ok).is_ok(), "{ok}");
+        }
+        let c = client("http://127.0.0.1:9", None);
+        assert!(c.file_url("o/n", "main", "m.gguf").is_err());
+        assert!(c.file_url("o/n", SHA, "m.gguf").is_ok());
+        assert_eq!(sanitize_display("ok\u{1b}[31mred"), "ok[31mred");
+        let l = LicenseInfo::classify(Some("mit"), None, Some("javascript:alert(1)"));
+        assert_eq!(l.link, None);
+    }
+
+    #[tokio::test]
     async fn token_sent_to_hub_only() {
         let mut routes = HashMap::new();
         routes.insert(
@@ -1242,6 +1432,7 @@ mod tests {
             r#"[{{"type":"file","path":"m-Q4_K_M.gguf","size":134,"oid":"x",
                  "lfs":{{"oid":"{sha}","size":{},"pointerSize":134}}}},
                 {{"type":"file","path":"README.md","size":10,"oid":"y"}},
+                {{"type":"file","path":"empty.gguf","size":0,"oid":"e"}},
                 {{"type":"directory","path":"sub"}},
                 {{"type":"file","path":"../evil.gguf","size":1,"oid":"z"}}]"#,
             data.len()
