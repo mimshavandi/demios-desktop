@@ -82,6 +82,16 @@ const purifyConfig = {
   ALLOWED_URI_REGEXP: /^(?:https?|mailto):/i,
 };
 
+// Only our own highlighting classes survive; model output cannot borrow app styles.
+const CLASS_OK = /^(?:hljs(?:-[\w-]+)?|language-[\w-]+|code|code-lang)$/;
+DOMPurify.addHook("uponSanitizeAttribute", (_node, data) => {
+  if (data.attrName === "class") {
+    const kept = data.attrValue.split(/\s+/).filter((c) => CLASS_OK.test(c));
+    if (kept.length === 0) data.keepAttr = false;
+    else data.attrValue = kept.join(" ");
+  }
+});
+
 export function renderMarkdown(src: string): string {
   const html = marked.parse(src, { async: false });
   return DOMPurify.sanitize(html, purifyConfig);

@@ -154,7 +154,7 @@ export function ChatView(p: Props) {
           <span id="composer-hint" className="composer-hint">
             Enter to send · Shift+Enter for a new line
           </span>
-          {streaming ? (
+          {streaming || sending ? (
             <IconButton label="Stop answer" shortcut={`${mod}.`} className="composer-stop" onClick={p.onStop}>
               <Square {...ICON} aria-hidden="true" />
             </IconButton>

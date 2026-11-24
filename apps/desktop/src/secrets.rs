@@ -17,6 +17,8 @@ pub enum KeyStoreError {
 pub trait KeyStore: Send + Sync {
     fn set(&self, account: &str, secret: &str) -> Result<(), KeyStoreError>;
     fn has(&self, account: &str) -> Result<bool, KeyStoreError>;
+    /// Backend use only (provider calls, Undo after removal); never sent to the UI.
+    fn get(&self, account: &str) -> Result<Option<String>, KeyStoreError>;
     fn delete(&self, account: &str) -> Result<(), KeyStoreError>;
     /// Short human description shown in settings, e.g. "session only (dev)".
     fn describe(&self) -> &'static str;
@@ -41,6 +43,10 @@ impl KeyStore for MemoryKeyStore {
 
     fn has(&self, account: &str) -> Result<bool, KeyStoreError> {
         Ok(self.lock()?.contains_key(account))
+    }
+
+    fn get(&self, account: &str) -> Result<Option<String>, KeyStoreError> {
+        Ok(self.lock()?.get(account).cloned())
     }
 
     fn delete(&self, account: &str) -> Result<(), KeyStoreError> {

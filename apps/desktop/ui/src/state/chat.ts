@@ -1,6 +1,7 @@
 // Message list state for the open conversation. Pure, so the streaming rules are unit
 // tested without a webview. Channel events can arrive before the `send_message` reply
-// that announces the assistant message; those are buffered in `pending`.
+// that announces the assistant message; while a send is in flight those are buffered in
+// `pending`. Events for messages of other (closed) conversations are dropped.
 
 import type { ChatEvent, Id, StoredMessage, TurnStarted } from "../ipc/types";
 
@@ -9,11 +10,14 @@ export interface ChatState {
   messages: StoredMessage[];
   /** Assistant message currently streaming, if any. */
   streamingId: Id | null;
+  /** A send or regenerate is in flight; its events may arrive before the reply. */
+  awaiting: boolean;
   pending: Record<Id, ChatEvent[]>;
 }
 
 export type ChatAction =
   | { kind: "open"; conversationId: Id | null; messages: StoredMessage[] }
+  | { kind: "sending" }
   | { kind: "turn_started"; conversationId: Id; turn: TurnStarted }
   | { kind: "event"; event: ChatEvent }
   | { kind: "turn_failed" };
@@ -22,6 +26,7 @@ export const initialChat: ChatState = {
   conversationId: null,
   messages: [],
   streamingId: null,
+  awaiting: false,
   pending: {},
 };
 
@@ -29,7 +34,10 @@ function applyEvent(m: StoredMessage, ev: ChatEvent): StoredMessage {
   switch (ev.type) {
     case "text_delta": {
       const first = m.content[0];
-      const text = (first?.type === "text" ? first.text : "") + ev.text;
+      const have = first?.type === "text" ? first.text : "";
+      // Already have this chunk (the message was loaded mid-stream): skip it.
+      if (have.length >= ev.offset + ev.text.length) return m;
+      const text = have.slice(0, ev.offset) + ev.text;
       return { ...m, content: [{ type: "text", text }, ...m.content.slice(1)] };
     }
     case "reasoning_delta":
@@ -57,11 +65,14 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         conversationId: action.conversationId,
         messages: action.messages,
         streamingId: streaming?.id ?? null,
+        awaiting: false,
         pending: {},
       };
     }
+    case "sending":
+      return { ...state, awaiting: true };
     case "turn_started": {
-      if (action.conversationId !== state.conversationId) return state;
+      if (action.conversationId !== state.conversationId) return state.awaiting ? { ...state, awaiting: false } : state;
       const { user_message, assistant_message } = action.turn;
       // Regenerate replaces everything after the last user message.
       let base = state.messages;
@@ -79,6 +90,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         ...state,
         messages: [...base, assistant],
         streamingId: buffered.some(isTerminal) ? null : assistant.id,
+        awaiting: false,
         pending,
       };
     }
@@ -86,6 +98,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       const ev = action.event;
       const idx = state.messages.findIndex((m) => m.id === ev.message_id);
       if (idx === -1) {
+        if (!state.awaiting) return state;
         const list = state.pending[ev.message_id] ?? [];
         return { ...state, pending: { ...state.pending, [ev.message_id]: [...list, ev] } };
       }
@@ -98,7 +111,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       return { ...state, messages, streamingId };
     }
     case "turn_failed":
-      return { ...state, streamingId: null };
+      return { ...state, streamingId: null, awaiting: false, pending: {} };
   }
 }
 

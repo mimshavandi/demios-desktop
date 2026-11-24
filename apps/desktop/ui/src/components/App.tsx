@@ -57,7 +57,6 @@ function Shell({ api }: { api: Api }) {
   const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [listState, setListState] = useState<ListState>({ kind: "loading" });
-  const [hidden, setHidden] = useState<Set<Id>>(new Set());
   const [view, setView] = useState<View>({ kind: "chat" });
   const [chat, dispatch] = useReducer(chatReducer, initialChat);
   const [loadingMessages, setLoadingMessages] = useState(false);
@@ -131,11 +130,16 @@ function Shell({ api }: { api: Api }) {
   const onEvent = useCallback(
     (event: ChatEvent) => {
       dispatch({ kind: "event", event });
-      if (event.type === "done") {
-        setAnnounce(event.finish_reason === "cancelled" ? "Answer stopped" : "Answer complete");
-        void refreshConversations();
-      } else if (event.type === "error") {
-        setAnnounce("Answer failed");
+      if (event.type === "done" || event.type === "error") {
+        const msg =
+          event.type === "error"
+            ? "Answer failed"
+            : event.finish_reason === "cancelled"
+              ? "Answer stopped"
+              : "Answer complete";
+        // Clear first so the same words are announced again for the next answer.
+        setAnnounce("");
+        window.setTimeout(() => setAnnounce(msg), 50);
         void refreshConversations();
       }
     },
@@ -150,12 +154,14 @@ function Shell({ api }: { api: Api }) {
   const send = useCallback(
     async (text: string): Promise<boolean> => {
       setError(null);
+      dispatch({ kind: "sending" });
       try {
         let id = chat.conversationId;
         if (id === null) {
           const c = await api.createConversation();
           id = c.id;
           dispatch({ kind: "open", conversationId: id, messages: [] });
+          dispatch({ kind: "sending" });
         }
         const turn = await api.sendMessage(id, text, onEvent);
         dispatch({ kind: "turn_started", conversationId: id, turn });
@@ -174,51 +180,51 @@ function Shell({ api }: { api: Api }) {
     const id = chat.conversationId;
     if (id === null) return;
     setError(null);
+    dispatch({ kind: "sending" });
     try {
       const turn = await api.regenerate(id, onEvent);
       dispatch({ kind: "turn_started", conversationId: id, turn });
     } catch (e) {
+      dispatch({ kind: "turn_failed" });
       setError(errorMessage(e));
     }
   }, [api, chat.conversationId, onEvent]);
 
+  // Stop by conversation, so ⌘. also works between Send and the reply that names the
+  // assistant message.
   const stop = useCallback(async () => {
-    if (chat.conversationId !== null && chat.streamingId !== null) {
-      await api.stopGeneration(chat.conversationId);
-    }
-  }, [api, chat.conversationId, chat.streamingId]);
+    if (chat.conversationId !== null) await api.stopGeneration(chat.conversationId);
+  }, [api, chat.conversationId]);
 
-  // Delete acts at once and offers Undo for 10 s; the row is removed for real afterwards.
+  // Delete acts at once (soft delete in the store) and offers Undo for 10 s; the store
+  // purges deleted chats on the next start.
   const remove = useCallback(
-    (c: Conversation) => {
-      setHidden((h) => new Set(h).add(c.id));
-      if (c.id === chat.conversationId) {
-        void api.stopGeneration(c.id);
-        const next = conversations.find((x) => x.id !== c.id && !hidden.has(x.id));
-        void open(next?.id ?? null);
+    async (c: Conversation) => {
+      try {
+        await api.deleteConversation(c.id);
+      } catch (e) {
+        toast({ tone: "error", title: `Couldn't delete the chat. ${errorMessage(e)}` });
+        return;
       }
+      const list = await api.listConversations().catch(() => conversations.filter((x) => x.id !== c.id));
+      setConversations(list);
+      if (c.id === chat.conversationId) void open(list[0]?.id ?? null);
       toast({
         tone: "info",
         title: `Deleted “${c.title}”`,
         duration: 10_000,
         action: {
           label: "Undo",
-          onAction: () =>
-            setHidden((h) => {
-              const n = new Set(h);
-              n.delete(c.id);
-              return n;
-            }),
-        },
-        onExpire: () => {
-          void api
-            .deleteConversation(c.id)
-            .then(refreshConversations)
-            .catch((e: unknown) => toast({ tone: "error", title: `Couldn't delete the chat. ${errorMessage(e)}` }));
+          onAction: () => {
+            void api
+              .restoreConversation(c.id)
+              .then(refreshConversations)
+              .catch((e: unknown) => toast({ tone: "error", title: `Couldn't restore the chat. ${errorMessage(e)}` }));
+          },
         },
       });
     },
-    [api, chat.conversationId, conversations, hidden, open, refreshConversations, toast],
+    [api, chat.conversationId, conversations, open, refreshConversations, toast],
   );
 
   const copyLastAnswer = useCallback(() => {
@@ -254,7 +260,7 @@ function Shell({ api }: { api: Api }) {
         newChat();
       } else if (k === ",") {
         e.preventDefault();
-        setView({ kind: "settings", section: "models" });
+        setView({ kind: "settings", section: "general" });
       } else if (k === ".") {
         e.preventDefault();
         void stop();
@@ -271,7 +277,6 @@ function Shell({ api }: { api: Api }) {
   }, [copyLastAnswer, newChat, stop, toggleSidebar]);
 
   const goSettings = (section: SettingsSection) => setView({ kind: "settings", section });
-  const visible = conversations.filter((c) => !hidden.has(c.id));
   const model = chatModel(catalog, devFake);
   const title =
     view.kind === "settings" ? "Settings" : (activeConversation?.title ?? "New chat");
@@ -305,13 +310,13 @@ function Shell({ api }: { api: Api }) {
       </header>
       {sidebarOpen && (
         <Sidebar
-          conversations={visible}
+          conversations={conversations}
           state={listState}
           activeId={view.kind === "chat" ? chat.conversationId : null}
           settings={view.kind === "settings" ? view.section : null}
           onNew={newChat}
           onOpen={(id) => void open(id)}
-          onDelete={remove}
+          onDelete={(c) => void remove(c)}
           onRetry={() => void refreshConversations()}
           onSettings={goSettings}
         />

@@ -20,7 +20,7 @@ impl ModelRegistry {
     pub fn with_builtin() -> Self {
         #[allow(unused_mut)]
         let mut r = Self::default();
-        #[cfg(feature = "dev-fake-model")]
+        #[cfg(fake_model)]
         r.register(
             crate::fake::FAKE_MODEL_REF.parse().expect("valid ref"),
             Arc::new(crate::fake::FakeChatModel::default()),
@@ -205,7 +205,7 @@ mod tests {
         assert!(c.providers.iter().any(|p| p.id == "anthropic" && p.has_key));
     }
 
-    #[cfg(feature = "dev-fake-model")]
+    #[cfg(fake_model)]
     #[test]
     fn builtin_has_fake() {
         let reg = ModelRegistry::with_builtin();

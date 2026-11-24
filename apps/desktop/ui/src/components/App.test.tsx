@@ -9,6 +9,7 @@ afterEach(cleanup);
 /** In-memory stand-in for the Rust commands. */
 function fakeApi() {
   const convs: Conversation[] = [];
+  const trash: Conversation[] = [];
   const msgs = new Map<string, StoredMessage[]>();
   let settings: Settings = { slots: {}, telemetry_enabled: false };
   let n = 0;
@@ -49,7 +50,15 @@ function fakeApi() {
     },
     renameConversation: async () => null,
     deleteConversation: async (cid) => {
-      convs.splice(convs.findIndex((c) => c.id === cid), 1);
+      const i = convs.findIndex((c) => c.id === cid);
+      const [c] = convs.splice(i, 1);
+      if (c) trash.push(c);
+      return null;
+    },
+    restoreConversation: async (cid) => {
+      const i = trash.findIndex((c) => c.id === cid);
+      const [c] = trash.splice(i, 1);
+      if (c) convs.unshift(c);
       return null;
     },
     listMessages: async (cid) => [...(msgs.get(cid) ?? [])],
@@ -74,6 +83,7 @@ function fakeApi() {
     listModels: async () => catalog(),
     setProviderKey: async () => catalog(),
     deleteProviderKey: async () => catalog(),
+    restoreProviderKey: async () => catalog(),
   };
   return { api, emit: (ev: ChatEvent) => listener?.(ev), msgs };
 }
@@ -93,7 +103,7 @@ describe("App", () => {
     expect(await screen.findByRole("button", { name: "Stop answer" })).toBeTruthy();
     const assistantId = "id-3";
     act(() => {
-      emit({ type: "text_delta", message_id: assistantId, text: "Hi **there**" });
+      emit({ type: "text_delta", message_id: assistantId, offset: 0, text: "Hi **there**" });
     });
     expect((await screen.findByText("there")).tagName).toBe("STRONG");
     act(() => {
@@ -118,21 +128,30 @@ describe("App", () => {
     expect(box.value).toBe("keep me");
   });
 
-  it("deletes a chat with undo", async () => {
+  it("deletes a chat at once and restores it with undo", async () => {
     const { api } = fakeApi();
     await api.createConversation();
-    let deleted = 0;
-    api.deleteConversation = async () => {
-      deleted++;
-      return null;
+    let deletes = 0;
+    let restores = 0;
+    const del = api.deleteConversation;
+    const res = api.restoreConversation;
+    api.deleteConversation = async (id) => {
+      deletes++;
+      return del(id);
+    };
+    api.restoreConversation = async (id) => {
+      restores++;
+      return res(id);
     };
     render(<App api={api} />);
     fireEvent.click(await screen.findByRole("button", { name: "Delete “New chat”" }));
     expect(await screen.findByText("Deleted “New chat”")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "New chat" })).toBeNull();
+    expect(deletes).toBe(1);
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Delete “New chat”" })).toBeNull());
     fireEvent.click(screen.getByRole("button", { name: "Undo" }));
     expect(await screen.findByRole("button", { name: "Delete “New chat”" })).toBeTruthy();
-    expect(deleted).toBe(0);
+    expect(restores).toBe(1);
+    expect(deletes).toBe(1);
   });
 
   it("shows models and settings with telemetry off", async () => {
@@ -148,6 +167,7 @@ describe("App", () => {
     expect(key.getAttribute("aria-invalid")).toBe("true");
 
     fireEvent.click(screen.getByRole("tab", { name: "General" }));
+    expect(screen.getByRole("tabpanel").getAttribute("aria-labelledby")).toBe("tab-general");
     const telemetry = await screen.findByRole("switch", { name: "Share anonymous usage statistics" });
     expect(telemetry.getAttribute("aria-checked")).toBe("false");
     fireEvent.click(telemetry);

@@ -16,6 +16,8 @@ export function createMockApi(): Api {
   const convs: Conversation[] = [];
   const msgs = new Map<string, StoredMessage[]>();
   const keys = new Set<string>();
+  const deleted = new Set<string>();
+  const removedKeys = new Set<string>();
   let settings: Settings = { slots: {}, telemetry_enabled: false };
   const timers = new Map<string, number>();
   const id = () => crypto.randomUUID();
@@ -82,9 +84,10 @@ export function createMockApi(): Api {
         return;
       }
       const w = words[i++] ?? "";
+      const offset = text.length;
       text += w;
       a.content = [{ type: "text", text }];
-      onEvent({ type: "text_delta", message_id: a.id, text: w });
+      onEvent({ type: "text_delta", message_id: a.id, offset, text: w });
       timers.set(cid, window.setTimeout(tick, 18));
     };
     timers.set(cid, window.setTimeout(tick, 120));
@@ -99,7 +102,8 @@ export function createMockApi(): Api {
 
   return {
     appInfo: async () => ({ version: "0.1.0 (browser mock)", dev_fake_model: true, data_dir: null }),
-    listConversations: async () => [...convs].sort((x, y) => y.updated_at - x.updated_at),
+    listConversations: async () =>
+      convs.filter((c) => !deleted.has(c.id)).sort((x, y) => y.updated_at - x.updated_at),
     createConversation: async () => {
       const c = { id: id(), title: "New chat", model: null, created_at: now(), updated_at: now() };
       convs.push(c);
@@ -108,8 +112,11 @@ export function createMockApi(): Api {
     },
     renameConversation: async () => null,
     deleteConversation: async (cid) => {
-      const i = convs.findIndex((c) => c.id === cid);
-      if (i >= 0) convs.splice(i, 1);
+      deleted.add(cid);
+      return null;
+    },
+    restoreConversation: async (cid) => {
+      deleted.delete(cid);
       return null;
     },
     listMessages: async (cid) => structuredClone(msgs.get(cid) ?? []),
@@ -157,6 +164,12 @@ export function createMockApi(): Api {
     },
     deleteProviderKey: async (p) => {
       keys.delete(p);
+      removedKeys.add(p);
+      return catalog();
+    },
+    restoreProviderKey: async (p) => {
+      if (!removedKeys.delete(p)) throw { code: "expired", message: "The key can no longer be restored. Paste it again." };
+      keys.add(p);
       return catalog();
     },
   };

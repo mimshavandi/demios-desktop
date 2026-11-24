@@ -5,11 +5,12 @@ Rust side in `src/` (typed IPC commands, chat streaming, settings), UI in `ui/` 
 ```sh
 cd apps/desktop
 npm ci
-npm run tauri dev          # dev server + app window
+npm run dev:app            # dev server + app window, with the dev fake model
+npm run tauri dev          # same, without a model (shows "Connect a model")
 npm run typecheck && npm test
 npx tauri build --debug --bundles app   # macOS .app in target/debug/bundle/macos
 ```
 
 - `DEMIOS_DATA_DIR=/tmp/demios-profile` runs against a throwaway database.
-- Cargo feature `dev-fake-model` (default on) registers `local:dev-fake` (T-SHELL-03), a canned streaming model, so the app answers before real backends land. Drop it from `default` once `dn-inference` / `dn-providers` are wired into `src/models.rs`.
+- Cargo feature `dev-fake-model` (off by default) registers `local:dev-fake` (T-SHELL-03), a canned streaming model, so the app answers before real backends land. `build.rs` only enables it in debug builds (`cfg(fake_model)`), so a release build never contains it.
 - IPC: every command is listed in `build.rs` and granted in `capabilities/default.json`; the webview gets no plugins. The TS signatures are in `ui/src/ipc/commands.ts`; `dn-core` types come from `crates/dn-core/bindings` (ts-rs).

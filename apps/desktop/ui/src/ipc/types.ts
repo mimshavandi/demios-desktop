@@ -45,7 +45,7 @@ export interface StoredMessage {
 // ---- app ----
 
 export type ChatEvent =
-  | { type: "text_delta"; message_id: Id; text: string }
+  | { type: "text_delta"; message_id: Id; /** UTF-16 length before this chunk. */ offset: number; text: string }
   | { type: "reasoning_delta"; message_id: Id; text: string }
   | { type: "done"; message_id: Id; finish_reason: FinishReason; usage: Usage }
   | { type: "error"; message_id: Id; message: string; recovery: RecoveryAction[] };

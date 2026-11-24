@@ -1,6 +1,9 @@
 //! Typed IPC commands. Each one is listed in `build.rs` and granted explicitly in
 //! `capabilities/default.json`; nothing else is callable from the webview.
 //! The TypeScript side mirrors these signatures in `ui/src/ipc/commands.ts`.
+//!
+//! SQLite and the key store are blocking, so every command that touches them runs on a
+//! blocking thread ([`blocking`]) instead of a tokio worker.
 
 use crate::chat::{self, ChatEvent, TurnStarted};
 use crate::error::{IpcError, IpcResult};
@@ -17,6 +20,19 @@ use tauri::ipc::Channel;
 
 type AppStateRef<'a> = State<'a, Arc<AppState>>;
 
+async fn blocking<T: Send + 'static>(
+    state: &AppStateRef<'_>,
+    f: impl FnOnce(&Arc<AppState>) -> IpcResult<T> + Send + 'static,
+) -> IpcResult<T> {
+    let st = Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || f(&st))
+        .await
+        .map_err(|e| {
+            eprintln!("blocking task failed: {e}");
+            IpcError::new("internal", "Something went wrong. Try again.")
+        })?
+}
+
 #[derive(Debug, Serialize)]
 pub struct AppInfo {
     pub version: &'static str,
@@ -28,19 +44,19 @@ pub struct AppInfo {
 pub async fn app_info() -> IpcResult<AppInfo> {
     Ok(AppInfo {
         version: env!("CARGO_PKG_VERSION"),
-        dev_fake_model: cfg!(feature = "dev-fake-model"),
+        dev_fake_model: cfg!(fake_model),
         data_dir: crate::data_dir().map(|p| p.display().to_string()),
     })
 }
 
 #[tauri::command]
 pub async fn list_conversations(state: AppStateRef<'_>) -> IpcResult<Vec<Conversation>> {
-    Ok(store::list_conversations(&*state.db()?)?)
+    blocking(&state, |s| Ok(store::list_conversations(&*s.db()?)?)).await
 }
 
 #[tauri::command]
 pub async fn create_conversation(state: AppStateRef<'_>) -> IpcResult<Conversation> {
-    state.create_conversation()
+    blocking(&state, |s| s.create_conversation()).await
 }
 
 #[tauri::command]
@@ -49,21 +65,36 @@ pub async fn rename_conversation(
     conversation_id: Id,
     title: String,
 ) -> IpcResult<()> {
-    let title = title.trim();
+    let title = title.trim().to_string();
     if title.is_empty() || title.chars().count() > 200 {
         return Err(IpcError::invalid("Title must be 1–200 characters."));
     }
-    Ok(store::rename_conversation(
-        &*state.db()?,
-        conversation_id,
-        title,
-    )?)
+    blocking(&state, move |s| {
+        Ok(store::rename_conversation(
+            &*s.db()?,
+            conversation_id,
+            &title,
+        )?)
+    })
+    .await
 }
 
+/// Soft delete: the chat can be restored until the next start (design-system §5 Undo).
 #[tauri::command]
 pub async fn delete_conversation(state: AppStateRef<'_>, conversation_id: Id) -> IpcResult<()> {
     chat::stop(&state, conversation_id);
-    Ok(store::delete_conversation(&*state.db()?, conversation_id)?)
+    blocking(&state, move |s| {
+        Ok(store::delete_conversation(&*s.db()?, conversation_id)?)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn restore_conversation(state: AppStateRef<'_>, conversation_id: Id) -> IpcResult<()> {
+    blocking(&state, move |s| {
+        Ok(store::restore_conversation(&*s.db()?, conversation_id)?)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -71,7 +102,7 @@ pub async fn list_messages(
     state: AppStateRef<'_>,
     conversation_id: Id,
 ) -> IpcResult<Vec<StoredMessage>> {
-    Ok(store::list_messages(&*state.db()?, conversation_id)?)
+    blocking(&state, move |s| s.list_messages(conversation_id)).await
 }
 
 fn channel_sink(ch: Channel<ChatEvent>) -> impl chat::EventSink {
@@ -91,7 +122,8 @@ pub async fn send_message(
     if text.len() > 200_000 {
         return Err(IpcError::invalid("Message is too long."));
     }
-    chat::send(&state, conversation_id, text, channel_sink(on_event))
+    let sink = channel_sink(on_event);
+    blocking(&state, move |s| chat::send(s, conversation_id, text, sink)).await
 }
 
 #[tauri::command]
@@ -100,7 +132,8 @@ pub async fn regenerate(
     conversation_id: Id,
     on_event: Channel<ChatEvent>,
 ) -> IpcResult<TurnStarted> {
-    chat::regenerate(&state, conversation_id, channel_sink(on_event))
+    let sink = channel_sink(on_event);
+    blocking(&state, move |s| chat::regenerate(s, conversation_id, sink)).await
 }
 
 #[tauri::command]
@@ -110,23 +143,32 @@ pub async fn stop_generation(state: AppStateRef<'_>, conversation_id: Id) -> Ipc
 
 #[tauri::command]
 pub async fn get_settings(state: AppStateRef<'_>) -> IpcResult<Settings> {
-    state.settings()
+    blocking(&state, |s| s.settings()).await
 }
 
 #[tauri::command]
 pub async fn update_settings(state: AppStateRef<'_>, settings: Settings) -> IpcResult<Settings> {
-    state.save_settings(&settings)?;
-    state.settings()
+    blocking(&state, move |s| {
+        s.save_settings(&settings)?;
+        s.settings()
+    })
+    .await
+}
+
+fn catalog(s: &AppState) -> IpcResult<ModelCatalog> {
+    let settings = s.settings()?;
+    Ok(models::catalog(&s.models, s.keys.as_ref(), &settings))
 }
 
 #[tauri::command]
 pub async fn list_models(state: AppStateRef<'_>) -> IpcResult<ModelCatalog> {
-    let settings = state.settings()?;
-    Ok(models::catalog(
-        &state.models,
-        state.keys.as_ref(),
-        &settings,
-    ))
+    blocking(&state, |s| catalog(s)).await
+}
+
+fn known_provider(provider_id: &str) -> IpcResult<()> {
+    models::provider(provider_id)
+        .map(|_| ())
+        .ok_or_else(|| IpcError::invalid("Unknown provider."))
 }
 
 #[tauri::command]
@@ -135,32 +177,71 @@ pub async fn set_provider_key(
     provider_id: String,
     api_key: String,
 ) -> IpcResult<ModelCatalog> {
-    if models::provider(&provider_id).is_none() {
-        return Err(IpcError::invalid("Unknown provider."));
-    }
-    let key = api_key.trim();
+    known_provider(&provider_id)?;
+    let key = api_key.trim().to_string();
     if key.is_empty() || key.len() > 4096 || key.chars().any(char::is_whitespace) {
         return Err(IpcError::invalid(
             "Paste the key as one line without spaces.",
         ));
     }
-    state.keys.set(&provider_account(&provider_id), key)?;
-    list_models(state).await
+    blocking(&state, move |s| {
+        s.keys.set(&provider_account(&provider_id), &key)?;
+        catalog(s)
+    })
+    .await
 }
 
+/// Removes the key from the key store at once. It is held in memory for
+/// [`crate::state::KEY_UNDO_WINDOW`] so [`restore_provider_key`] can undo it.
 #[tauri::command]
 pub async fn delete_provider_key(
     state: AppStateRef<'_>,
     provider_id: String,
 ) -> IpcResult<ModelCatalog> {
-    if models::provider(&provider_id).is_none() {
-        return Err(IpcError::invalid("Unknown provider."));
-    }
-    state.keys.delete(&provider_account(&provider_id))?;
-    // A slot pointing at this provider would now fail; clear it rather than fall back.
-    let mut settings = state.settings()?;
-    let prefix = format!("byok:{provider_id}:");
-    settings.slots.retain(|_, m| !m.starts_with(&prefix));
-    state.save_settings(&settings)?;
-    list_models(state).await
+    known_provider(&provider_id)?;
+    blocking(&state, move |s| {
+        let account = provider_account(&provider_id);
+        let secret = s.keys.get(&account)?;
+        s.keys.delete(&account)?;
+        // A slot pointing at this provider would now fail; clear it rather than fall back.
+        let mut settings = s.settings()?;
+        let prefix = format!("byok:{provider_id}:");
+        let cleared: Vec<(String, String)> = settings
+            .slots
+            .iter()
+            .filter(|(_, m)| m.starts_with(&prefix))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        settings.slots.retain(|_, m| !m.starts_with(&prefix));
+        s.save_settings(&settings)?;
+        if let Some(secret) = secret {
+            s.remember_removed_key(&provider_id, secret, cleared);
+        }
+        catalog(s)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn restore_provider_key(
+    state: AppStateRef<'_>,
+    provider_id: String,
+) -> IpcResult<ModelCatalog> {
+    known_provider(&provider_id)?;
+    blocking(&state, move |s| {
+        let (secret, slots) = s.take_removed_key(&provider_id).ok_or_else(|| {
+            IpcError::new(
+                "expired",
+                "The key can no longer be restored. Paste it again.",
+            )
+        })?;
+        s.keys.set(&provider_account(&provider_id), &secret)?;
+        let mut settings = s.settings()?;
+        for (slot, model) in slots {
+            settings.slots.entry(slot).or_insert(model);
+        }
+        s.save_settings(&settings)?;
+        catalog(s)
+    })
+    .await
 }

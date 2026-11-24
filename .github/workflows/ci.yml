@@ -37,6 +37,9 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+      # The shell without the dev fake model (what release builds ship) and with it.
+      - run: cargo test -p demios-desktop --no-default-features
+      - run: cargo test -p demios-desktop --features dev-fake-model
   design-tokens:
     runs-on: ubuntu-latest
     steps:

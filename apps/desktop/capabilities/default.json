@@ -20,6 +20,8 @@
     "allow-list-models",
     "allow-set-provider-key",
     "allow-delete-provider-key",
+    "allow-restore-conversation",
+    "allow-restore-provider-key",
     "core:window:allow-start-dragging"
   ]
 }

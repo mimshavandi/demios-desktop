@@ -172,7 +172,7 @@ mod tests {
         let runs: i64 = main
             .query_row("SELECT COUNT(*) FROM store_migrations", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(runs, 2);
+        assert_eq!(runs, crate::migrations().len() as i64 + 1);
         // A reader on one connection does not block a writer on the other.
         let tx = main.unchecked_transaction().unwrap();
         let _: i64 = tx

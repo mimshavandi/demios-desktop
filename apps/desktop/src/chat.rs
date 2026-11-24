@@ -20,6 +20,9 @@ use tokio::sync::oneshot;
 pub enum ChatEvent {
     TextDelta {
         message_id: Id,
+        /// Length of the answer before this chunk, in UTF-16 code units (JS string
+        /// length). Lets the UI drop chunks it already got from `list_messages`.
+        offset: u32,
         text: String,
     },
     ReasoningDelta {
@@ -77,17 +80,17 @@ fn resolve_model(state: &AppState) -> Result<ModelRef, IpcError> {
     if let Some(m) = settings.slot("chat") {
         return Ok(m);
     }
-    #[cfg(feature = "dev-fake-model")]
+    #[cfg(fake_model)]
     {
         Ok(crate::fake::FAKE_MODEL_REF.parse().expect("valid ref"))
     }
-    #[cfg(not(feature = "dev-fake-model"))]
+    #[cfg(not(fake_model))]
     {
         Err(model_source_required())
     }
 }
 
-#[cfg_attr(feature = "dev-fake-model", allow(dead_code))]
+#[cfg_attr(fake_model, allow(dead_code))]
 fn model_source_required() -> IpcError {
     let e = CoreError::ModelSourceRequired {
         capability: Capability::Chat,
@@ -115,7 +118,9 @@ fn model_source_required() -> IpcError {
     }
 }
 
-/// Sends `text` as a new user message and streams the reply.
+/// Sends `text` as a new user message and streams the reply. Blocking (SQLite): call it
+/// from a blocking thread. The generation slot is reserved before anything is written, so
+/// a busy chat gets no orphan user message.
 pub fn send(
     state: &Arc<AppState>,
     conversation_id: Id,
@@ -131,7 +136,8 @@ pub fn send(
         .models
         .get(&model)
         .ok_or_else(model_unavailable(&model))?;
-    let (user, assistant, title) = {
+    let reservation = state.reserve(conversation_id)?;
+    let (user, assistant, title, history) = {
         let db = state.db()?;
         let conv = store::get_conversation(&db, conversation_id)?;
         let title = (conv.title == DEFAULT_TITLE).then(|| title_from(&text));
@@ -145,9 +151,18 @@ pub fn send(
             conversation_id,
             NewMessage::assistant_placeholder(Some(model.to_string())),
         )?;
-        (user, assistant, title)
+        let history = history(&db, conversation_id, assistant.id)?;
+        (user, assistant, title, history)
     };
-    start(state, conversation_id, model, backend, &assistant, sink)?;
+    start(
+        state,
+        reservation,
+        model,
+        backend,
+        &assistant,
+        history,
+        sink,
+    );
     Ok(TurnStarted {
         user_message: Some(user),
         assistant_message: assistant,
@@ -155,7 +170,8 @@ pub fn send(
     })
 }
 
-/// Drops the last assistant message and answers the last user message again.
+/// Drops the answer after the last user message and answers it again. Refused while an
+/// answer is streaming, so the live answer is never truncated.
 pub fn regenerate(
     state: &Arc<AppState>,
     conversation_id: Id,
@@ -166,7 +182,8 @@ pub fn regenerate(
         .models
         .get(&model)
         .ok_or_else(model_unavailable(&model))?;
-    let assistant = {
+    let reservation = state.reserve(conversation_id)?;
+    let (assistant, history) = {
         let db = state.db()?;
         let msgs = store::list_messages(&db, conversation_id)?;
         let last_user = msgs
@@ -177,13 +194,23 @@ pub fn regenerate(
             store::truncate_from(&db, conversation_id, after.id)?;
         }
         store::set_conversation_model(&db, conversation_id, &model.to_string())?;
-        store::add_message(
+        let assistant = store::add_message(
             &db,
             conversation_id,
             NewMessage::assistant_placeholder(Some(model.to_string())),
-        )?
+        )?;
+        let history = history(&db, conversation_id, assistant.id)?;
+        (assistant, history)
     };
-    start(state, conversation_id, model, backend, &assistant, sink)?;
+    start(
+        state,
+        reservation,
+        model,
+        backend,
+        &assistant,
+        history,
+        sink,
+    );
     Ok(TurnStarted {
         user_message: None,
         assistant_message: assistant,
@@ -193,10 +220,7 @@ pub fn regenerate(
 
 /// Stops the running answer in `conversation_id`, if any. Returns whether one was running.
 pub fn stop(state: &AppState, conversation_id: Id) -> bool {
-    state
-        .take_generation(conversation_id)
-        .map(|tx| tx.send(()).is_ok())
-        .unwrap_or(false)
+    state.stop(conversation_id)
 }
 
 fn model_unavailable(model: &ModelRef) -> impl FnOnce() -> IpcError + '_ {
@@ -212,24 +236,29 @@ fn model_unavailable(model: &ModelRef) -> impl FnOnce() -> IpcError + '_ {
     }
 }
 
+fn history(
+    db: &dn_store::Connection,
+    conversation_id: Id,
+    exclude: Id,
+) -> IpcResult<Vec<dn_core::chat::ChatMessage>> {
+    Ok(store::list_messages(db, conversation_id)?
+        .into_iter()
+        .filter(|m| m.id != exclude)
+        // Failed or empty turns are not context the model should see.
+        .filter(|m| m.status == MessageStatus::Complete || !m.content.is_empty())
+        .map(|m| m.to_chat_message())
+        .collect())
+}
+
 fn start(
     state: &Arc<AppState>,
-    conversation_id: Id,
+    reservation: crate::state::Reservation,
     model: ModelRef,
     backend: Arc<dyn dn_core::chat::ChatModel>,
     assistant: &StoredMessage,
+    history: Vec<dn_core::chat::ChatMessage>,
     sink: impl EventSink,
-) -> IpcResult<()> {
-    let history: Vec<_> = {
-        let db = state.db()?;
-        store::list_messages(&db, conversation_id)?
-            .into_iter()
-            .filter(|m| m.id != assistant.id)
-            // Failed or empty turns are not context the model should see.
-            .filter(|m| m.status == MessageStatus::Complete || !m.content.is_empty())
-            .map(|m| m.to_chat_message())
-            .collect()
-    };
+) {
     let req = ChatRequest {
         model,
         messages: history,
@@ -240,30 +269,28 @@ fn start(
         reasoning: Reasoning::Auto,
         caller: "chat.reply".into(),
     };
-    let (tx, rx) = oneshot::channel();
-    if !state.begin_generation(conversation_id, tx) {
-        // The placeholder was written; mark it so it does not linger as "streaming".
-        let db = state.db()?;
-        store::finish_message(&db, assistant.id, cancelled_outcome(String::new()))?;
-        return Err(IpcError::new(
-            "busy",
-            "An answer is already streaming in this chat.",
-        ));
-    }
+    let conversation_id = reservation.conversation_id;
+    let (token, rx) = reservation.into_parts();
     let state = Arc::clone(state);
     let message_id = assistant.id;
     tauri::async_runtime::spawn(async move {
         let stream = backend.chat(req);
-        let outcome = drive(stream, rx, message_id, &sink).await;
-        state.end_generation(conversation_id);
-        let write = state
-            .db()
-            .and_then(|db| store::finish_message(&db, message_id, outcome).map_err(Into::into));
-        if let Err(e) = write {
-            eprintln!("could not store message {message_id}: {e}");
+        let outcome = drive(stream, rx, message_id, &state, &sink).await;
+        let st = Arc::clone(&state);
+        // SQLite is blocking: keep it off the async workers.
+        let write = tauri::async_runtime::spawn_blocking(move || {
+            st.db()
+                .and_then(|db| store::finish_message(&db, message_id, outcome).map_err(Into::into))
+        })
+        .await;
+        state.end_live(message_id);
+        state.release(conversation_id, token);
+        match write {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => eprintln!("could not store message {message_id}: {e}"),
+            Err(e) => eprintln!("could not store message {message_id}: {e}"),
         }
     });
-    Ok(())
 }
 
 fn cancelled_outcome(text: String) -> MessageOutcome {
@@ -289,6 +316,7 @@ async fn drive(
     mut stream: dn_core::chat::EventStream,
     mut cancel: oneshot::Receiver<()>,
     message_id: Id,
+    state: &AppState,
     sink: &impl EventSink,
 ) -> MessageOutcome {
     let mut text = String::new();
@@ -308,7 +336,8 @@ async fn drive(
             ev = std::future::poll_fn(|cx| stream.as_mut().poll_next(cx)) => match ev {
                 Some(Ok(StreamEvent::TextDelta { text: t })) => {
                     text.push_str(&t);
-                    sink.send(ChatEvent::TextDelta { message_id, text: t });
+                    let offset = state.append_live(message_id, &t);
+                    sink.send(ChatEvent::TextDelta { message_id, offset, text: t });
                 }
                 Some(Ok(StreamEvent::ReasoningDelta { text: t })) => {
                     sink.send(ChatEvent::ReasoningDelta { message_id, text: t });
@@ -401,16 +430,28 @@ mod tests {
         (events, move |ev| e2.lock().unwrap().push(ev))
     }
 
+    /// Waits until no message in the conversation is still streaming (stored outcome).
     async fn wait_idle(state: &AppState, conv: Id) {
-        for _ in 0..500 {
-            if !state.is_generating(conv) {
-                // Let the spawned task finish its DB write.
-                tokio::time::sleep(Duration::from_millis(5)).await;
+        for _ in 0..600 {
+            let streaming = {
+                let db = state.db().unwrap();
+                store::list_messages(&db, conv)
+                    .unwrap()
+                    .iter()
+                    .any(|m| m.status == MessageStatus::Streaming)
+            };
+            if !streaming {
                 return;
             }
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
         panic!("generation did not finish");
+    }
+
+    fn count(state: &AppState, conv: Id) -> usize {
+        store::list_messages(&state.db().unwrap(), conv)
+            .unwrap()
+            .len()
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -500,6 +541,99 @@ mod tests {
         assert_eq!(err.code, "model_unavailable");
         let db = st.db().unwrap();
         assert!(store::list_messages(&db, conv.id).unwrap().is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn busy_send_writes_nothing() {
+        let st = state(20);
+        let conv = st.create_conversation().unwrap();
+        let (_e, s1) = sink();
+        send(&st, conv.id, "first".into(), s1).unwrap();
+        let (_e, s2) = sink();
+        let err = send(&st, conv.id, "second".into(), s2).unwrap_err();
+        assert_eq!(err.code, "busy");
+        assert_eq!(count(&st, conv.id), 2, "no orphan user message");
+        assert!(stop(&st, conv.id));
+        wait_idle(&st, conv.id).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn regenerate_while_streaming_is_refused() {
+        let st = state(20);
+        let conv = st.create_conversation().unwrap();
+        let (_e, s1) = sink();
+        let first = send(&st, conv.id, "q".into(), s1).unwrap();
+        let (_e, s2) = sink();
+        assert_eq!(regenerate(&st, conv.id, s2).unwrap_err().code, "busy");
+        let msgs = store::list_messages(&st.db().unwrap(), conv.id).unwrap();
+        assert_eq!(msgs[1].id, first.assistant_message.id, "live answer kept");
+        stop(&st, conv.id);
+        wait_idle(&st, conv.id).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stop_then_resend_keeps_the_new_answer_stoppable() {
+        let st = state(20);
+        let conv = st.create_conversation().unwrap();
+        let (_e, s1) = sink();
+        let first = send(&st, conv.id, "one".into(), s1).unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(stop(&st, conv.id));
+        let (_e, s2) = sink();
+        let second = send(&st, conv.id, "two".into(), s2).unwrap();
+        // Let the stopped run finish and release; it must not free the new run's slot.
+        for _ in 0..200 {
+            let m = store::list_messages(&st.db().unwrap(), conv.id).unwrap();
+            if m.iter()
+                .any(|m| m.id == first.assistant_message.id && m.status == MessageStatus::Cancelled)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(st.is_generating(conv.id), "second answer still registered");
+        assert!(stop(&st, conv.id), "second answer can be stopped");
+        wait_idle(&st, conv.id).await;
+        let msgs = store::list_messages(&st.db().unwrap(), conv.id).unwrap();
+        assert_eq!(msgs.len(), 4);
+        assert!(msgs.iter().any(|m| m.id == second.assistant_message.id));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn reopening_mid_stream_shows_text_so_far() {
+        let st = state(15);
+        let conv = st.create_conversation().unwrap();
+        let (events, s1) = sink();
+        let started = send(&st, conv.id, "hello".into(), s1).unwrap();
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        let msgs = st.list_messages(conv.id).unwrap();
+        let live = &msgs[1];
+        assert_eq!(live.id, started.assistant_message.id);
+        assert_eq!(live.status, MessageStatus::Streaming);
+        assert!(!live.text().is_empty());
+        stop(&st, conv.id);
+        wait_idle(&st, conv.id).await;
+        // Offsets are running UTF-16 lengths, so the UI can skip what it already has.
+        let mut expected = 0u32;
+        for e in events.lock().unwrap().iter() {
+            if let ChatEvent::TextDelta { offset, text, .. } = e {
+                assert_eq!(*offset, expected);
+                expected += text.encode_utf16().count() as u32;
+            }
+        }
+        assert!(expected > 0);
+    }
+
+    #[cfg(not(fake_model))]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn no_model_is_model_source_required() {
+        let st = Arc::new(AppState::in_memory().unwrap());
+        let conv = st.create_conversation().unwrap();
+        let (_e, s) = sink();
+        let err = send(&st, conv.id, "hi".into(), s).unwrap_err();
+        assert_eq!(err.code, "model_source_required");
+        assert_eq!(count(&st, conv.id), 0);
     }
 
     #[test]

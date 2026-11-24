@@ -28,6 +28,14 @@ describe("renderMarkdown", () => {
     expect(html).toContain("&lt;script&gt;");
   });
 
+  it("keeps only highlighting classes", () => {
+    const html = renderMarkdown('```rust\nfn x() {}\n```');
+    expect(html).toContain('class="hljs language-rust"');
+    // Model-written HTML is escaped, so it cannot carry app classes either.
+    const sneaky = renderMarkdown('<span class="dn-btn hljs-keyword">x</span>');
+    expect(sneaky).not.toMatch(/<span class=/);
+  });
+
   it("keeps https links", () => {
     expect(renderMarkdown("[site](https://example.com)")).toContain('href="https://example.com"');
   });

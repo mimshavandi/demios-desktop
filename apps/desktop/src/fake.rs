@@ -1,5 +1,6 @@
 //! T-SHELL-03: a deterministic [`ChatModel`] so the shell is usable before
-//! `dn-inference` / `dn-providers` merge. Compiled only with the `dev-fake-model` feature.
+//! `dn-inference` / `dn-providers` merge. Registered only under `cfg(fake_model)` (feature `dev-fake-model` + debug build, see
+//! build.rs); always compiled for tests.
 
 use dn_core::chat::{
     ChatModel, ChatRequest, ContentPart, EventStream, FinishReason, Role, StreamEvent, Usage,

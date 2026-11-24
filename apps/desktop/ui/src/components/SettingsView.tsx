@@ -1,5 +1,5 @@
 import { Cpu, KeyRound } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Api } from "../ipc/commands";
 import {
   errorMessage,
@@ -28,6 +28,12 @@ type Load = { kind: "loading" } | { kind: "error"; message: string } | { kind: "
 export function SettingsView({ api, info, section, onSection, onCatalog }: Props) {
   const toast = useToast();
   const [load, setLoad] = useState<Load>({ kind: "loading" });
+  const headingRef = useRef<HTMLHeadingElement>(null);
+
+  // ⌘, and the sidebar land on the same page; focus its heading (design-system §7).
+  useEffect(() => {
+    headingRef.current?.focus();
+  }, [section]);
 
   const set = useCallback(
     (catalog: ModelCatalog) => {
@@ -63,7 +69,9 @@ export function SettingsView({ api, info, section, onSection, onCatalog }: Props
   return (
     <section className="settings" aria-labelledby="settings-h">
       <div className="settings-column">
-        <h1 id="settings-h">Settings</h1>
+        <h1 id="settings-h" ref={headingRef} tabIndex={-1}>
+          Settings
+        </h1>
         <div
           className="tabs"
           role="tablist"
@@ -81,6 +89,8 @@ export function SettingsView({ api, info, section, onSection, onCatalog }: Props
               key={s}
               type="button"
               role="tab"
+              id={`tab-${s}`}
+              aria-controls={`panel-${s}`}
               aria-selected={section === s}
               tabIndex={section === s ? 0 : -1}
               data-section={s}
@@ -92,6 +102,7 @@ export function SettingsView({ api, info, section, onSection, onCatalog }: Props
           ))}
         </div>
 
+        <div role="tabpanel" id={`panel-${section}`} aria-labelledby={`tab-${section}`} className="tabpanel">
         {load.kind === "loading" && (
           <div className="card" aria-busy="true" aria-label="Loading settings">
             <Skeleton width="30%" />
@@ -127,6 +138,7 @@ export function SettingsView({ api, info, section, onSection, onCatalog }: Props
             onSave={(next, what) => void save(load.catalog, next, what)}
           />
         )}
+        </div>
       </div>
     </section>
   );
@@ -305,7 +317,23 @@ function ProviderRow({
     setBusy("remove");
     try {
       onCatalog(await api.deleteProviderKey(provider.id));
-      toast({ tone: "info", title: `${provider.name} key removed` });
+      toast({
+        tone: "info",
+        title: `${provider.name} key removed`,
+        duration: 10_000,
+        action: {
+          label: "Undo",
+          onAction: () => {
+            void api
+              .restoreProviderKey(provider.id)
+              .then((c) => {
+                onCatalog(c);
+                toast({ tone: "success", title: `${provider.name} key restored` });
+              })
+              .catch((e: unknown) => toast({ tone: "error", title: errorMessage(e) }));
+          },
+        },
+      });
     } catch (e) {
       toast({ tone: "error", title: `Couldn't remove the key. ${errorMessage(e)}` });
     } finally {

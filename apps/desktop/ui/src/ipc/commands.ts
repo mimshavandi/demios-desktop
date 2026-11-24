@@ -19,6 +19,7 @@ interface Commands {
   create_conversation: { args: Record<string, never>; ret: Conversation };
   rename_conversation: { args: { conversationId: Id; title: string }; ret: null };
   delete_conversation: { args: { conversationId: Id }; ret: null };
+  restore_conversation: { args: { conversationId: Id }; ret: null };
   list_messages: { args: { conversationId: Id }; ret: StoredMessage[] };
   send_message: {
     args: { conversationId: Id; text: string; onEvent: Channel<ChatEvent> };
@@ -31,6 +32,7 @@ interface Commands {
   list_models: { args: Record<string, never>; ret: ModelCatalog };
   set_provider_key: { args: { providerId: string; apiKey: string }; ret: ModelCatalog };
   delete_provider_key: { args: { providerId: string }; ret: ModelCatalog };
+  restore_provider_key: { args: { providerId: string }; ret: ModelCatalog };
 }
 
 export type CommandName = keyof Commands;
@@ -52,6 +54,7 @@ export const api = {
   renameConversation: (conversationId: Id, title: string) =>
     call("rename_conversation", { conversationId, title }),
   deleteConversation: (conversationId: Id) => call("delete_conversation", { conversationId }),
+  restoreConversation: (conversationId: Id) => call("restore_conversation", { conversationId }),
   listMessages: (conversationId: Id) => call("list_messages", { conversationId }),
   sendMessage: (conversationId: Id, text: string, onEvent: (ev: ChatEvent) => void) =>
     call("send_message", { conversationId, text, onEvent: channel(onEvent) }),
@@ -64,6 +67,7 @@ export const api = {
   setProviderKey: (providerId: string, apiKey: string) =>
     call("set_provider_key", { providerId, apiKey }),
   deleteProviderKey: (providerId: string) => call("delete_provider_key", { providerId }),
+  restoreProviderKey: (providerId: string) => call("restore_provider_key", { providerId }),
 };
 
 export type Api = typeof api;

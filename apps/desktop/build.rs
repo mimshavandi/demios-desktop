@@ -6,6 +6,7 @@ const COMMANDS: &[&str] = &[
     "create_conversation",
     "rename_conversation",
     "delete_conversation",
+    "restore_conversation",
     "list_messages",
     "send_message",
     "regenerate",
@@ -15,9 +16,17 @@ const COMMANDS: &[&str] = &[
     "list_models",
     "set_provider_key",
     "delete_provider_key",
+    "restore_provider_key",
 ];
 
 fn main() {
+    // The dev fake model (T-SHELL-03) exists only with the feature *and* in debug builds.
+    println!("cargo::rustc-check-cfg=cfg(fake_model)");
+    if std::env::var_os("CARGO_FEATURE_DEV_FAKE_MODEL").is_some()
+        && std::env::var_os("CARGO_CFG_DEBUG_ASSERTIONS").is_some()
+    {
+        println!("cargo::rustc-cfg=fake_model");
+    }
     tauri_build::try_build(
         tauri_build::Attributes::new()
             .app_manifest(tauri_build::AppManifest::new().commands(COMMANDS)),

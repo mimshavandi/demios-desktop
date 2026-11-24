@@ -3,7 +3,7 @@
 
 import * as RToast from "@radix-ui/react-toast";
 import { X } from "lucide-react";
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from "react";
 import { ICON } from "./primitives";
 
 export interface ToastSpec {
@@ -31,24 +31,36 @@ const MAX = 3;
 
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Live[]>([]);
+  // Mirror of `toasts` so callbacks run outside state updaters (StrictMode runs
+  // updaters twice; an onExpire in there would fire twice).
+  const live = useRef<Live[]>([]);
+  const nextId = useRef(1);
 
-  const close = useCallback((id: number) => {
-    setToasts((list) => {
-      const t = list.find((x) => x.id === id);
-      if (t !== undefined && !t.acted) t.onExpire?.();
-      return list.filter((x) => x.id !== id);
-    });
+  const commit = useCallback((next: Live[]) => {
+    live.current = next;
+    setToasts(next);
   }, []);
 
-  const push = useCallback((spec: ToastSpec) => {
-    setToasts((list) => {
-      const next = [...list, { ...spec, id: Date.now() + Math.random(), acted: false }];
-      // Overflowing toasts expire now (their pending action, e.g. a delete, goes through).
+  const close = useCallback(
+    (id: number) => {
+      const t = live.current.find((x) => x.id === id);
+      if (t === undefined) return;
+      commit(live.current.filter((x) => x.id !== id));
+      if (!t.acted) t.onExpire?.();
+    },
+    [commit],
+  );
+
+  const push = useCallback(
+    (spec: ToastSpec) => {
+      const next = [...live.current, { ...spec, id: nextId.current++, acted: false }];
+      // Overflowing toasts expire now (their pending action, if any, goes through).
       const drop = next.slice(0, Math.max(0, next.length - MAX));
-      for (const t of drop) t.onExpire?.();
-      return next.slice(-MAX);
-    });
-  }, []);
+      commit(next.slice(-MAX));
+      for (const t of drop) if (!t.acted) t.onExpire?.();
+    },
+    [commit],
+  );
 
   const value = useMemo(() => push, [push]);
 
