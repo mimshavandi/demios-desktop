@@ -14,6 +14,7 @@ vulkan = ["dn-inference/vulkan"]
 dn-core.workspace = true
 dn-inference = { workspace = true, features = ["llamacpp"] }
 dn-models.workspace = true
+dn-secrets.workspace = true
 clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true

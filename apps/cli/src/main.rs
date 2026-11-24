@@ -11,6 +11,10 @@ use dn_inference::{
     MoeOffload, OpenAiCompatBackend, next_event,
 };
 use dn_models::fit::{GIB, KvType, MemoryKind};
+use dn_models::hub::{
+    GgufVariant, HubClient, HubConfig, LicenseInfo, LicenseWarning, PullProgress, SearchQuery,
+    SearchSort, VariantKind, gguf_variants,
+};
 use dn_models::{Catalog, Gguf, Machine, ModelFootprint};
 use std::io::Write;
 use std::path::PathBuf;
@@ -50,13 +54,50 @@ enum ModelsCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Download a catalogue model (resumable, SHA-256 verified).
+    /// Search Hugging Face for GGUF repos (HF_ENDPOINT selects a mirror).
+    Search {
+        text: String,
+        #[arg(long, value_enum, default_value_t = SortArg::Downloads)]
+        sort: SortArg,
+        #[arg(long, default_value_t = 20)]
+        limit: u32,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List a Hugging Face repo's GGUF quantisations at a pinned commit, with its licence.
+    Files {
+        /// `owner/name`.
+        repo: String,
+        #[arg(long)]
+        revision: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Download a catalogue model, or a Hugging Face repo's quant (`owner/name --quant Q4_K_M`).
+    /// Resumable; every file is checked against its SHA-256.
     Pull {
+        /// Catalogue id or Hugging Face `owner/name`.
         id: String,
+        /// Quantisation (Hugging Face only), e.g. Q4_K_M.
+        #[arg(long)]
+        quant: Option<String>,
+        /// Exact variant name from `dn models files` (Hugging Face only).
+        #[arg(long, conflicts_with = "quant")]
+        variant: Option<String>,
+        #[arg(long)]
+        revision: Option<String>,
         /// Target directory (default: $DN_MODELS_DIR or the platform data dir).
         #[arg(long)]
         dir: Option<PathBuf>,
     },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum SortArg {
+    Downloads,
+    Likes,
+    Trending,
+    Updated,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -591,9 +632,214 @@ fn status_label(s: FitStatus) -> &'static str {
     }
 }
 
+/// Hub client from `HF_ENDPOINT`, with `HF_TOKEN` or the keychain token if present.
+async fn hub_client() -> Result<HubClient, String> {
+    let mut cfg = HubConfig::from_env();
+    match std::env::var("HF_TOKEN").ok().filter(|t| !t.is_empty()) {
+        Some(t) => cfg = cfg.with_token(t.into()),
+        None => {
+            let store =
+                dn_secrets::AsyncSecrets::new(Arc::new(dn_secrets::KeyringStore::default()));
+            cfg = cfg.with_token_from(&store).await;
+        }
+    }
+    HubClient::new(cfg).map_err(|e| e.to_string())
+}
+
+fn license_line(l: &LicenseInfo, card: &str) -> String {
+    let id = l.name.as_deref().or(l.id.as_deref()).unwrap_or("none");
+    let warn = match l.warning {
+        None => String::new(),
+        Some(LicenseWarning::Missing) => "  ⚠ no licence in the model card".into(),
+        Some(LicenseWarning::NonCommercial) => "  ⚠ non-commercial / research licence".into(),
+        Some(LicenseWarning::Custom) => "  ⚠ custom licence: read the model card".into(),
+        Some(LicenseWarning::UsePolicy) => "  (acceptable-use policy applies: see the card)".into(),
+    };
+    format!("licence: {id}{warn}\nmodel card: {card}")
+}
+
+fn progress_printer() -> impl FnMut(u64, u64) + Send {
+    let mut last = std::time::Instant::now();
+    move |done: u64, total: u64| {
+        if last.elapsed().as_millis() > 500 || done == total {
+            last = std::time::Instant::now();
+            eprint!(
+                "\r  {:>6.1}%  {:.0}/{:.0} MB",
+                done as f64 * 100.0 / total.max(1) as f64,
+                done as f64 / 1e6,
+                total as f64 / 1e6
+            );
+        }
+    }
+}
+
+async fn hub_pull(
+    repo: &str,
+    quant: Option<String>,
+    variant: Option<String>,
+    revision: Option<String>,
+    dir: PathBuf,
+) -> Result<(), String> {
+    let hub = hub_client().await?;
+    let info = hub
+        .repo(repo, revision.as_deref())
+        .await
+        .map_err(|e| e.to_string())?;
+    let files = hub
+        .files(repo, &info.sha)
+        .await
+        .map_err(|e| e.to_string())?;
+    let variants = gguf_variants(&files);
+    let pick = |v: &&GgufVariant| match (&quant, &variant) {
+        (_, Some(n)) => &v.name == n,
+        (Some(q), _) => {
+            v.kind == VariantKind::Model
+                && v.quant
+                    .as_deref()
+                    .is_some_and(|x| x.eq_ignore_ascii_case(q))
+        }
+        _ => false,
+    };
+    let matches: Vec<&GgufVariant> = variants.iter().filter(pick).collect();
+    let v = match matches.as_slice() {
+        [v] => *v,
+        [] => {
+            return Err(format!(
+                "pick one with --quant or --variant; available: {}",
+                variants
+                    .iter()
+                    .map(|v| v.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        _ => {
+            return Err(format!(
+                "--quant matches several variants, use --variant: {}",
+                matches
+                    .iter()
+                    .map(|v| v.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+    };
+    eprintln!(
+        "pulling {repo}@{} {} ({:.2} GB, {} file(s)) → {}\n{}",
+        &info.sha[..12],
+        v.name,
+        v.total_size as f64 / 1e9,
+        v.files.len(),
+        dir.display(),
+        license_line(&info.license, &info.card_url)
+    );
+    let mut print = progress_printer();
+    let p = hub
+        .pull(&info, v, &dir, &mut |pr: PullProgress| {
+            print(pr.done_bytes, pr.total_bytes)
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+    eprintln!("\nverified sha256 of {} file(s)", v.files.len());
+    println!("{}", p.display());
+    Ok(())
+}
+
 async fn models_cmd(cmd: ModelsCmd) -> Result<(), String> {
     let cat = Catalog::builtin();
     match cmd {
+        ModelsCmd::Search {
+            text,
+            sort,
+            limit,
+            json,
+        } => {
+            let hub = hub_client().await?;
+            let page = hub
+                .search(&SearchQuery {
+                    text,
+                    sort: match sort {
+                        SortArg::Downloads => SearchSort::Downloads,
+                        SortArg::Likes => SearchSort::Likes,
+                        SortArg::Trending => SearchSort::Trending,
+                        SortArg::Updated => SearchSort::Updated,
+                    },
+                    limit: Some(limit),
+                })
+                .await
+                .map_err(|e| e.to_string())?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&page).map_err(|e| e.to_string())?
+                );
+                return Ok(());
+            }
+            println!(
+                "{:<56} {:>10} {:>6} {:<14}",
+                "repo", "downloads", "likes", "license"
+            );
+            for r in &page.items {
+                println!(
+                    "{:<56} {:>10} {:>6} {:<14}{}",
+                    r.id,
+                    r.downloads,
+                    r.likes,
+                    r.license.as_deref().unwrap_or("-"),
+                    if r.gated { " gated" } else { "" }
+                );
+            }
+            Ok(())
+        }
+        ModelsCmd::Files {
+            repo,
+            revision,
+            json,
+        } => {
+            let hub = hub_client().await?;
+            let info = hub
+                .repo(&repo, revision.as_deref())
+                .await
+                .map_err(|e| e.to_string())?;
+            let variants = gguf_variants(
+                &hub.files(&repo, &info.sha)
+                    .await
+                    .map_err(|e| e.to_string())?,
+            );
+            if json {
+                let v = serde_json::json!({"repo": info, "variants": variants});
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?
+                );
+                return Ok(());
+            }
+            println!(
+                "{repo} @ {}{}",
+                info.sha,
+                if info.gated { " (gated)" } else { "" }
+            );
+            println!("{}\n", license_line(&info.license, &info.card_url));
+            println!(
+                "{:<56} {:<10} {:>9} {:>5}",
+                "variant", "quant", "size", "parts"
+            );
+            for v in &variants {
+                println!(
+                    "{:<56} {:<10} {:>9} {:>5}{}",
+                    v.name,
+                    v.quant.as_deref().unwrap_or("-"),
+                    format!("{:.2} GB", v.total_size as f64 / 1e9),
+                    v.files.len(),
+                    if v.kind == VariantKind::Projector {
+                        " (vision projector)"
+                    } else {
+                        ""
+                    }
+                );
+            }
+            Ok(())
+        }
         ModelsCmd::List { json } => {
             let dir = dn_models::download::default_models_dir();
             if json {
@@ -622,11 +868,25 @@ async fn models_cmd(cmd: ModelsCmd) -> Result<(), String> {
             println!("\nmodels dir: {}", dir.display());
             Ok(())
         }
-        ModelsCmd::Pull { id, dir } => {
+        ModelsCmd::Pull {
+            id,
+            quant,
+            variant,
+            revision,
+            dir,
+        } => {
+            let dir = dir.unwrap_or_else(dn_models::download::default_models_dir);
+            if id.contains('/') {
+                return hub_pull(&id, quant, variant, revision, dir).await;
+            }
+            if quant.is_some() || variant.is_some() || revision.is_some() {
+                return Err(
+                    "--quant/--variant/--revision apply to Hugging Face repos (owner/name)".into(),
+                );
+            }
             let e = cat
                 .get(&id)
                 .ok_or_else(|| format!("unknown model `{id}` (see `dn models list`)"))?;
-            let dir = dir.unwrap_or_else(dn_models::download::default_models_dir);
             eprintln!(
                 "pulling {} ({:.2} GB, licence {}) → {}",
                 e.id,
@@ -635,18 +895,7 @@ async fn models_cmd(cmd: ModelsCmd) -> Result<(), String> {
                 dir.display()
             );
             let client = dn_models::download::client().map_err(|e| e.to_string())?;
-            let mut last = std::time::Instant::now();
-            let mut progress = |done: u64, total: u64| {
-                if last.elapsed().as_millis() > 500 || done == total {
-                    last = std::time::Instant::now();
-                    eprint!(
-                        "\r  {:>6.1}%  {:.0}/{:.0} MB",
-                        done as f64 * 100.0 / total.max(1) as f64,
-                        done as f64 / 1e6,
-                        total as f64 / 1e6
-                    );
-                }
-            };
+            let mut progress = progress_printer();
             let p = dn_models::download::pull(&client, e, &dir, &mut progress)
                 .await
                 .map_err(|e| e.to_string())?;
