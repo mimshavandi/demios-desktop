@@ -12,6 +12,7 @@ pub mod error;
 #[cfg(any(fake_model, test))]
 pub mod fake;
 pub mod hub;
+pub mod links;
 pub mod local;
 pub mod mcp;
 pub mod models;
@@ -69,9 +70,12 @@ impl mcp::LaunchApprover for NativeLaunchApprover {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>> {
         use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
         let (tx, rx) = tokio::sync::oneshot::channel();
-        self.0
-            .dialog()
-            .message(request.dialog_text())
+        use tauri::Manager;
+        let mut dialog = self.0.dialog().message(request.dialog_text());
+        if let Some(w) = self.0.get_webview_window("main") {
+            dialog = dialog.parent(&w);
+        }
+        dialog
             .title("Start a tool server?")
             .kind(MessageDialogKind::Warning)
             .buttons(MessageDialogButtons::OkCancelCustom(
@@ -124,6 +128,7 @@ pub fn run() {
             commands::delete_all_local_data,
             commands::local_data_summary,
             commands::report_problem,
+            commands::open_link,
             commands::list_mcp_servers,
             commands::save_mcp_server,
             commands::remove_mcp_server,

@@ -10,6 +10,7 @@
     "allow-delete-all-local-data",
     "allow-local-data-summary",
     "allow-report-problem",
+    "allow-open-link",
     "allow-list-mcp-servers",
     "allow-save-mcp-server",
     "allow-remove-mcp-server",

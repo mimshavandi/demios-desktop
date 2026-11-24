@@ -98,6 +98,13 @@ function Shell({ api }: { api: Api }) {
     [api, toast],
   );
 
+  const openLink = useCallback(
+    (href: string) => {
+      api.openLink(href).catch((e: unknown) => toast({ tone: "error", title: errorMessage(e) }));
+    },
+    [api, toast],
+  );
+
   const dismissAiNotice = useCallback(async () => {
     const hide = (settings: Settings) =>
       setCatalog((c) => (c === null ? c : { ...c, settings: { ...settings, ai_notice_seen: true } }));
@@ -497,6 +504,7 @@ function Shell({ api }: { api: Api }) {
             unknowns={unknowns}
             onResolveUnknown={resolveUnknown}
             onReportAnswer={(m) => void report("answer", m)}
+            onOpenLink={openLink}
             aiNotice={showAiNotice}
             onDismissAiNotice={() => void dismissAiNotice()}
           />
