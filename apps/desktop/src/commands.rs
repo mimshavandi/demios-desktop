@@ -351,3 +351,39 @@ pub async fn resolve_unknown_outcome(
     })
     .await
 }
+
+// ---- artifacts (T-ART-06)
+
+#[tauri::command]
+pub async fn list_artifacts(
+    state: AppStateRef<'_>,
+    conversation_id: Id,
+) -> IpcResult<Vec<dn_artifacts::ArtifactSummary>> {
+    blocking(&state, move |s| crate::artifacts::list(s, conversation_id)).await
+}
+
+#[tauri::command]
+pub async fn get_artifact(
+    state: AppStateRef<'_>,
+    conversation_id: Id,
+    artifact_id: Id,
+) -> IpcResult<crate::artifacts::ArtifactView> {
+    blocking(&state, move |s| {
+        crate::artifacts::get(s, conversation_id, artifact_id)
+    })
+    .await
+}
+
+/// "Restore this version": appends a new version (by the user) with `to_version`'s content.
+#[tauri::command]
+pub async fn rollback_artifact(
+    state: AppStateRef<'_>,
+    conversation_id: Id,
+    artifact_id: Id,
+    to_version: u32,
+) -> IpcResult<crate::artifacts::ArtifactView> {
+    blocking(&state, move |s| {
+        crate::artifacts::rollback(s, conversation_id, artifact_id, to_version)
+    })
+    .await
+}

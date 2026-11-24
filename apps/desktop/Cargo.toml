@@ -37,6 +37,7 @@ dn-secrets.workspace = true
 dn-agent.workspace = true
 dn-providers = { path = "../../crates/dn-providers", version = "0.1.0" }
 dn-tools = { path = "../../crates/dn-tools", version = "0.1.0" }
+dn-artifacts = { path = "../../crates/dn-artifacts", version = "0.1.0" }
 futures-core.workspace = true
 rusqlite.workspace = true
 serde.workspace = true

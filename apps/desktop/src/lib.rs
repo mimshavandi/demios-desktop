@@ -6,6 +6,7 @@
 compile_error!("the dev fake model must never be in a release build");
 
 pub mod agent;
+pub mod artifacts;
 pub mod chat;
 pub mod commands;
 pub mod error;
@@ -58,6 +59,10 @@ fn navigation_guard<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(navigation_guard())
+        // The artifact frame origin (T-ART-06): serves only the sandbox frame shell.
+        .register_uri_scheme_protocol(artifacts::SCHEME, |_ctx, request| {
+            artifacts::frame_response(&request)
+        })
         .setup(|app| {
             use tauri::Manager;
             let dir = data_dir().ok_or("no home directory to keep app data in")?;
@@ -95,6 +100,9 @@ pub fn run() {
             commands::respond_approval,
             commands::list_unknown_outcomes,
             commands::resolve_unknown_outcome,
+            commands::list_artifacts,
+            commands::get_artifact,
+            commands::rollback_artifact,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Demios Desktop")

@@ -26,6 +26,9 @@
     "allow-respond-approval",
     "allow-list-unknown-outcomes",
     "allow-resolve-unknown-outcome",
+    "allow-list-artifacts",
+    "allow-get-artifact",
+    "allow-rollback-artifact",
     "core:window:allow-start-dragging"
   ]
 }

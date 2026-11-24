@@ -120,6 +120,17 @@ export class ArtifactFrame {
       }
       return;
     }
+    if (d && d.channel === CHANNEL && d.type === "shell-refused") {
+      // The shell found host objects it couldn't remove (see runtime/boot.ts) and won't run
+      // artifact code. Nothing is sent to it; the view shows why.
+      const p = this.pending;
+      this.pending = null;
+      if (p) {
+        p.resolve();
+        this.opts.onIssue?.({ kind: "render", message: "This artifact can't be shown safely in this window." });
+      }
+      return;
+    }
     const msg = parseFrameMessage(e.data, this.nonce);
     if (!msg) return;
     switch (msg.type) {

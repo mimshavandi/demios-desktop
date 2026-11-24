@@ -21,6 +21,7 @@ pub fn migration_sets() -> Vec<MigrationSet> {
     vec![
         MigrationSet::new("app", settings::migrations()),
         MigrationSet::new("tool_ledger", dn_tools::migrations()),
+        MigrationSet::new("artifact", dn_artifacts::migrations()),
     ]
 }
 

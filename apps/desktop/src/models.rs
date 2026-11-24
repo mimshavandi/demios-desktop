@@ -18,6 +18,9 @@ use std::sync::{Arc, Mutex};
 #[derive(Default)]
 pub struct ModelRegistry {
     fixed: HashMap<String, Arc<dyn ChatModel>>,
+    /// Fixed models that can't make tool calls: they get artifacts through the fenced
+    /// `<artifact>` format instead of the `artifact_*` tools (ADR-0004).
+    no_tools: std::collections::HashSet<String>,
     providers: Mutex<Providers>,
 }
 
@@ -42,9 +45,28 @@ impl ModelRegistry {
         r
     }
 
-    /// Registers a fixed backend (dev fake, tests).
+    /// Registers a fixed backend that supports tool calls (dev fake, tests).
     pub fn register(&mut self, model: ModelRef, backend: Arc<dyn ChatModel>) {
+        self.no_tools.remove(&model.to_string());
         self.fixed.insert(model.to_string(), backend);
+    }
+
+    /// Registers a fixed backend that can't make tool calls.
+    pub fn register_without_tools(&mut self, model: ModelRef, backend: Arc<dyn ChatModel>) {
+        self.no_tools.insert(model.to_string());
+        self.fixed.insert(model.to_string(), backend);
+    }
+
+    /// Whether `model` can make tool calls. Decides how the model gets artifacts: the
+    /// `artifact_*` tools when true, the fenced `<artifact>` format otherwise (never both).
+    /// BYOK providers all support tool calling (`dn_providers` reports `tools` for every chat
+    /// model); a model this registry doesn't know is treated as tool-less.
+    pub fn supports_tools(&self, model: &ModelRef) -> bool {
+        let key = model.to_string();
+        if self.fixed.contains_key(&key) {
+            return !self.no_tools.contains(&key);
+        }
+        matches!(model, ModelRef::Byok { .. })
     }
 
     pub fn contains_fixed(&self, model: &str) -> bool {

@@ -5,12 +5,15 @@
   "license": "Apache-2.0",
   "type": "module",
   "scripts": {
+    "predev": "node scripts/sandbox.mjs",
     "dev": "vite",
+    "prebuild": "node scripts/sandbox.mjs",
     "build": "tsc --noEmit -p . && vite build",
     "typecheck": "tsc --noEmit -p .",
     "test": "vitest run",
     "tauri": "tauri",
-    "dev:app": "tauri dev --features dev-fake-model"
+    "dev:app": "tauri dev --features dev-fake-model",
+    "sandbox": "node scripts/sandbox.mjs --force"
   },
   "dependencies": {
     "@radix-ui/react-select": "^2.4.1",

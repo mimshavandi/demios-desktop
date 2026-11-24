@@ -1,8 +1,9 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Api } from "../ipc/commands";
 import type {
   ApprovalPrompt,
+  ArtifactDetail,
   ChatEvent,
   Conversation,
   ModelCatalog,
@@ -15,6 +16,27 @@ import { App } from "./App";
 
 afterEach(cleanup);
 
+// The real renderer needs a webview (constructable stylesheets, sandboxed frames); record
+// what the pane hands it instead. Its own behaviour is tested in ui/artifact-sandbox.
+const shown = vi.hoisted(() => ({ artifacts: [] as { id: string; versions: unknown[] }[], madeBy: [] as (string | null)[] }));
+vi.mock("@dn-artifacts", () => ({
+  ArtifactView: class {
+    constructor(
+      private el: HTMLElement,
+      private opts: { madeBy?: (v: { author: string; model?: string | null }) => string | null },
+    ) {
+      this.el.append(Object.assign(document.createElement("div"), { textContent: "sandbox view" }));
+    }
+    setArtifact(a: { id: string; versions: { author: string; model?: string | null }[] }) {
+      shown.artifacts.push(a);
+      const last = a.versions[a.versions.length - 1];
+      shown.madeBy.push(last ? (this.opts.madeBy?.(last) ?? null) : null);
+      return Promise.resolve();
+    }
+    destroy() {}
+  },
+}));
+
 /** In-memory stand-in for the Rust commands. */
 function fakeApi() {
   const convs: Conversation[] = [];
@@ -24,6 +46,7 @@ function fakeApi() {
   const resolved: [string, boolean][] = [];
   const unknowns: UnknownOutcome[] = [];
   const msgs = new Map<string, StoredMessage[]>();
+  const artifacts: ArtifactDetail[] = [];
   let settings: Settings = { slots: {}, telemetry_enabled: false };
   let n = 0;
   let listener: ((ev: ChatEvent) => void) | null = null;
@@ -106,6 +129,22 @@ function fakeApi() {
       responses.push([requestId, decision]);
       return null;
     },
+    listArtifacts: async (cid) =>
+      artifacts
+        .filter((a) => a.conversation_id === cid)
+        .map((a) => ({ id: a.id, conversation_id: cid, artifact_type: a.artifact_type, title: a.title, latest_n: a.versions.length, created_at: "", updated_at: "" })),
+    getArtifact: async (_cid, aid) => {
+      const a = artifacts.find((x) => x.id === aid);
+      if (!a) throw { code: "not_found", message: "gone" };
+      return structuredClone(a);
+    },
+    rollbackArtifact: async (_cid, aid, to) => {
+      const a = artifacts.find((x) => x.id === aid);
+      const src = a?.versions.find((v) => v.n === to);
+      if (!a || !src) throw { code: "not_found", message: "gone" };
+      a.versions.push({ ...src, n: a.versions.length + 1, parent_n: to, author: "user", model: null, message_id: null });
+      return structuredClone(a);
+    },
     listUnknownOutcomes: async () => [...unknowns],
     resolveUnknownOutcome: async (key, happened) => {
       resolved.push([key, happened]);
@@ -121,10 +160,44 @@ function fakeApi() {
     responses,
     resolved,
     unknowns,
+    artifacts,
   };
 }
 
 describe("App", () => {
+  it("shows a card for an artifact the answer made and opens it in the pane", async () => {
+    const { api, emit, artifacts } = fakeApi();
+    render(<App api={api} />);
+    const box = await screen.findByLabelText("Message");
+    fireEvent.change(box, { target: { value: "Make an HTML artifact" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(await screen.findByRole("button", { name: "Stop answer" })).toBeTruthy();
+    const conv = "id-1";
+    const assistantId = "id-3";
+    artifacts.push({
+      id: "art-1",
+      conversation_id: conv,
+      artifact_type: { kind: "html" },
+      title: "Fake artifact",
+      versions: [
+        { n: 1, content: "<h1>Version one</h1>", author: "model", parent_n: null, message_id: assistantId, created_at: "2026-11-24T10:00:00Z", model: "local:dev-fake" },
+      ],
+    });
+    act(() => {
+      emit({ type: "artifact_changed", message_id: assistantId, conversation_id: conv, artifact_id: "art-1", title: "Fake artifact", version: 1 });
+      emit({ type: "text_delta", message_id: assistantId, offset: 0, text: "Made it." });
+      emit({ type: "done", message_id: assistantId, finish_reason: "stop", usage: { input_tokens: 1, output_tokens: 2 } });
+    });
+    const card = await screen.findByTestId("artifact-card");
+    expect(card.textContent).toContain("Fake artifact");
+    expect(card.textContent).toContain("HTML · v1");
+    // The pane opened on it and named the model that made it.
+    await waitFor(() => expect(shown.artifacts.at(-1)?.id).toBe("art-1"));
+    expect(shown.madeBy.at(-1)).toBe("Dev fake");
+    fireEvent.click(screen.getByRole("button", { name: "Open Fake artifact" }));
+    expect(screen.getByTestId("artifact-host").hidden).toBe(false);
+  });
+
   it("sends a message and renders the streamed answer as markdown", async () => {
     const { api, emit } = fakeApi();
     render(<App api={api} />);

@@ -1,5 +1,5 @@
 import { PanelLeft, PanelRight } from "lucide-react";
-import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { api as realApi, type Api } from "../ipc/commands";
 import {
   errorMessage,
@@ -7,6 +7,8 @@ import {
   type AppInfo,
   type ApprovalDecision,
   type ApprovalPrompt,
+  type ArtifactDetail,
+  type ArtifactSummary,
   type ChatEvent,
   type Conversation,
   type Id,
@@ -14,11 +16,11 @@ import {
   type ModelCatalog,
   type UnknownOutcome,
 } from "../ipc/types";
-import { chatModel, chatModelReady, describeModel } from "../models";
-import { isMac, mod } from "../platform";
+import { chatModel, chatModelReady, describeModel, modelName } from "../models";
+import { artifactFrameUrl, isMac, mod } from "../platform";
 import { chatReducer, initialChat } from "../state/chat";
 import { ArtifactPane } from "./ArtifactPane";
-import { ChatView } from "./ChatView";
+import { ChatView, type ArtifactCardInfo } from "./ChatView";
 import { ModelBadge } from "./ModelBadge";
 import { Badge, Button, ICON, IconButton, InlineMessage, TooltipProvider } from "./primitives";
 import { SettingsView, type SettingsSection } from "./SettingsView";
@@ -72,6 +74,9 @@ function Shell({ api }: { api: Api }) {
   const [approvals, setApprovals] = useState<ApprovalPrompt[]>([]);
   const [unknowns, setUnknowns] = useState<UnknownOutcome[]>([]);
   const [servers, setServers] = useState<McpServerStatus[]>([]);
+  const [artifacts, setArtifacts] = useState<ArtifactSummary[]>([]);
+  const [artifactDetails, setArtifactDetails] = useState<Record<Id, ArtifactDetail>>({});
+  const [openArtifact, setOpenArtifact] = useState<Id | null>(null);
   const openIdRef = useRef<Id | null>(null);
   const announceRef = useRef<((msg: string) => void) | null>(null);
   const shownApprovals = useRef<Set<Id>>(new Set());
@@ -116,11 +121,63 @@ function Shell({ api }: { api: Api }) {
     [api],
   );
 
+  // Artifacts of the open chat, with every version (cards need to know which message made
+  // which version). `focus` opens that artifact and the pane (it was just created or changed).
+  const refreshArtifacts = useCallback(
+    async (id: Id | null, focus?: Id) => {
+      if (id === null) {
+        setArtifacts([]);
+        setArtifactDetails({});
+        setOpenArtifact(null);
+        return;
+      }
+      try {
+        const list = await api.listArtifacts(id);
+        const details = await Promise.all(list.map((a) => api.getArtifact(id, a.id)));
+        if (openIdRef.current !== id) return;
+        setArtifacts(list);
+        setArtifactDetails(Object.fromEntries(details.map((d) => [d.id, d])));
+        setOpenArtifact((cur) =>
+          focus !== undefined
+            ? focus
+            : cur !== null && list.some((a) => a.id === cur)
+              ? cur
+              : (list.at(-1)?.id ?? null),
+        );
+        if (focus !== undefined) {
+          setArtifactsOpen(true);
+          writePref("dn.artifacts", true);
+        }
+      } catch (e) {
+        toast({ tone: "error", title: errorMessage(e) });
+      }
+    },
+    [api, toast],
+  );
+
+  const artifactCards = useMemo(() => {
+    const cards: Record<Id, ArtifactCardInfo[]> = {};
+    for (const a of Object.values(artifactDetails)) {
+      // The newest version each message made of this artifact.
+      const byMessage = new Map<Id, number>();
+      for (const v of a.versions) {
+        if (v.message_id !== null) byMessage.set(v.message_id, Math.max(v.n, byMessage.get(v.message_id) ?? 0));
+      }
+      for (const [mid, n] of byMessage) {
+        (cards[mid] ??= []).push({ id: a.id, title: a.title, type: a.artifact_type, version: n });
+      }
+    }
+    return cards;
+  }, [artifactDetails]);
+
   const open = useCallback(
     async (id: Id | null) => {
       setView({ kind: "chat" });
       setError(null);
       void refreshUnknowns(id);
+      openIdRef.current = id;
+      setOpenArtifact(null);
+      void refreshArtifacts(id);
       if (id === null) {
         dispatch({ kind: "open", conversationId: null, messages: [] });
       } else {
@@ -135,7 +192,7 @@ function Shell({ api }: { api: Api }) {
       }
       composerRef.current?.focus();
     },
-    [api, refreshUnknowns],
+    [api, refreshUnknowns, refreshArtifacts],
   );
 
   // Tool events arrive on their own channel: approval cards show in their conversation,
@@ -199,6 +256,13 @@ function Shell({ api }: { api: Api }) {
 
   const onEvent = useCallback(
     (event: ChatEvent) => {
+      if (event.type === "artifact_changed") {
+        if (event.conversation_id === openIdRef.current) {
+          void refreshArtifacts(event.conversation_id, event.artifact_id);
+          announceRef.current?.(`Artifact ${event.title}, version ${event.version}`);
+        }
+        return;
+      }
       dispatch({ kind: "event", event });
       if (event.type === "done" || event.type === "error") {
         const msg =
@@ -226,7 +290,7 @@ function Shell({ api }: { api: Api }) {
         }
       }
     },
-    [api, refreshConversations, refreshUnknowns],
+    [api, refreshConversations, refreshUnknowns, refreshArtifacts],
   );
 
   const decide = useCallback(
@@ -350,6 +414,30 @@ function Shell({ api }: { api: Api }) {
     });
   }, []);
 
+  const frameUrl = useMemo(() => artifactFrameUrl(), []);
+
+  const openArtifactById = useCallback((aid: Id) => {
+    setOpenArtifact(aid);
+    setArtifactsOpen(true);
+    writePref("dn.artifacts", true);
+  }, []);
+
+  const restoreArtifact = useCallback(
+    async (aid: Id, n: number) => {
+      const id = openIdRef.current;
+      if (id === null) return;
+      try {
+        const d = await api.rollbackArtifact(id, aid, n);
+        setArtifactDetails((all) => ({ ...all, [d.id]: d }));
+        setArtifacts((list) => list.map((a) => (a.id === d.id ? { ...a, latest_n: d.versions.length } : a)));
+        toast({ tone: "success", title: `Restored v${n} as v${d.versions.at(-1)?.n ?? ""}` });
+      } catch (e) {
+        toast({ tone: "error", title: errorMessage(e) });
+      }
+    },
+    [api, toast],
+  );
+
   const toggleArtifacts = useCallback(() => {
     setArtifactsOpen((v) => {
       writePref("dn.artifacts", !v);
@@ -465,6 +553,8 @@ function Shell({ api }: { api: Api }) {
             onDecide={decide}
             unknowns={unknowns}
             onResolveUnknown={resolveUnknown}
+            artifactCards={artifactCards}
+            onOpenArtifact={openArtifactById}
           />
         ) : (
           <SettingsView
@@ -477,7 +567,18 @@ function Shell({ api }: { api: Api }) {
           />
         )}
       </main>
-      {artifactsOpen && <ArtifactPane />}
+      {artifactsOpen && (
+        <ArtifactPane
+          artifacts={artifacts}
+          detail={openArtifact === null ? null : (artifactDetails[openArtifact] ?? null)}
+          frameUrl={frameUrl}
+          onOpen={openArtifactById}
+          onRestore={(aid, n) => void restoreArtifact(aid, n)}
+          onFix={(prompt) => void send(prompt)}
+          modelName={(ref) => modelName(ref, catalog)}
+          onClose={toggleArtifacts}
+        />
+      )}
       <div className="dn-visually-hidden" role="status" aria-live="polite">
         {announce}
       </div>

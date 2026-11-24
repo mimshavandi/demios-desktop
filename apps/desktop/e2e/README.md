@@ -15,6 +15,18 @@ WebDriver (WebKitWebDriver on Linux, msedgedriver on Windows).
 3. axe-core on the chat screen: no `serious` or `critical` violations.
 4. Quit and relaunch on the **same data dir**. Assert one conversation, both user messages, and both answers with their final status.
 
+## Scenario (`specs/artifacts.e2e.mjs`, T-ART-06)
+1. "Make an HTML artifact" → the dev fake model calls `artifact_create`. Assert the answer has an artifact card (title, `v1`) and the pane renders v1 in the sandboxed frame. The version label reads `v1 · model` and the pane says "Made by …".
+2. "Please update the artifact" → `artifact_update` (exact match). Assert the frame shows v2.
+3. Go back to v1 and press **Restore this version**. Assert `v3 — restored from v1 · you` and v1's content.
+4. **In-app escape cases** (threat model S6). Run as artifact code inside the frame, judged from outside it:
+   - the frame is on `artifact://localhost/frame/` with `sandbox="allow-scripts"` and origin `null`;
+   - no `__TAURI_INTERNALS__` or `ipc` in the frame;
+   - no access to the parent's DOM or IPC;
+   - `fetch` to the network, `ipc://` and `tauri://` is blocked, and a local spy server gets no request (fetch or image);
+   - a raw `webkit.messageHandlers.ipc` message with a guessed key creates no conversation;
+   - `RTCPeerConnection` is absent.
+
 The app is a **debug** build with `--features dev-fake-model,custom-protocol`: the canned streaming model plus the UI embedded from `dist/`. `DEMIOS_DATA_DIR` points at a temp dir for the run, and `DEMIOS_FAKE_DELAY_MS=80` slows the stream so Stop lands mid-answer. Selectors are `data-testid` only.
 
 ## Run locally (Linux or Windows)
@@ -81,6 +93,16 @@ macOS has no WebDriver for WKWebView, so run this before every release, on a sig
 - [ ] Settings → Models: save a provider key → macOS asks for keychain access the first time; "Key saved". Remove key → Undo restores it.
 - [ ] ⌘N, ⌘,, ⌘\, ⌘⇧C work; Tab reaches every control with a visible focus ring; VoiceOver announces "Answer complete" once per answer.
 - [ ] Light and dark appearance (System Settings) both follow the design tokens.
-- [ ] **WKWebView sub-frame IPC** (from the artifact review, W-artifacts): with an artifact open in its sandboxed frame, run `window.__TAURI_INTERNALS__?.invoke?.("list_conversations")` in the frame's Web Inspector console. It must be `undefined` or fail. wry's IPC handler must ignore sub-frames, and init scripts are main-frame only.
-- [ ] WebRTC is not exposed to artifact frames (`typeof RTCPeerConnection` in the frame console is `"undefined"`, or connections fail).
+- [ ] **Artifacts:** "Make an HTML artifact" opens the pane with v1. "Please update the artifact" shows v2. Restoring v1 makes v3. Light and dark both read correctly.
+- [ ] **WKWebView sub-frame IPC** (artifact review, S1): open an artifact, choose the artifact frame in Web Inspector, and run the checks below in its console.
+  - `typeof window.__TAURI_INTERNALS__` is `"undefined"`.
+  - `window.webkit.messageHandlers.ipc.postMessage(JSON.stringify({cmd:"create_conversation",callback:1,error:2,payload:{},options:{},__TAURI_INVOKE_KEY__:"guess"}))` creates **no** chat. The app log shows `__TAURI_INVOKE_KEY__ expected … but received guess`.
+  - wry's WKWebView handler does **not** filter sub-frames, and it reports the frame's URL (`artifact://localhost/frame/`), which Tauri counts as a local origin. The invoke key, injected only into the main frame, is what stops this.
+- [ ] WebRTC is not exposed to artifact frames: in the frame console, `typeof RTCPeerConnection` is `"undefined"`. WKWebView can't turn WebRTC off without a private API, so the in-frame bridge is the control there.
+- [ ] Network stays off: in the frame console, `fetch("https://example.com")` is blocked by CSP. **Allow network for this artifact** asks a second time before it turns on.
+
+## Windows: manual artifact checks (until `e2e-windows` runs)
+WebView2 runs the app's init scripts in **sub-frames too**. Tauri's IPC object, which holds the invoke key, therefore starts out inside the artifact frame. The frame shell deletes it before artifact code runs, or refuses to render if it can't (`ui/artifact-sandbox/src/runtime/boot.ts`).
+- [ ] In DevTools, choose the artifact frame (`http://artifact.localhost/frame/`): `typeof window.__TAURI_INTERNALS__` and `typeof window.chrome?.webview` are `"undefined"`.
+- [ ] `edge://webrtc-internals` shows no peer connection after `new RTCPeerConnection()` in the frame. The window runs with `--force-webrtc-ip-handling-policy=disable_non_proxied_udp` (`tauri.windows.conf.json`).
 - [ ] Links in answers don't navigate the window (the navigation guard logs "blocked navigation").
