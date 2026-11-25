@@ -1081,6 +1081,16 @@ impl<B: InferenceBackend> LocalModels<B> {
             developer_message: format!("unknown catalogue id {id}"),
             recovery: vec![],
         })?;
+        if !e.capabilities.contains(&Capability::Chat) {
+            return Err(CoreError::ModelUnavailable {
+                user_message: format!("{} can't chat. Choose a chat model.", e.name),
+                developer_message: format!("{id}: not a chat model ({:?})", e.capabilities),
+                recovery: vec![RecoveryAction::ChooseModelForSlot {
+                    agent_id: crate::agent::AGENT_ID.into(),
+                    slot_id: "primary".into(),
+                }],
+            });
+        }
         if !self.is_ready(id) {
             return Err(CoreError::ModelUnavailable {
                 user_message: format!(
@@ -1709,6 +1719,40 @@ mod tests {
         drop(in_reply);
         settle().await;
         assert_eq!(*lock(&rec.0), ["load a", "load b", "unload a"]);
+    }
+
+    #[test]
+    fn an_embedding_model_is_never_loaded_for_chat() {
+        let dir = Dir(std::env::temp_dir().join(format!("dn-local-emb-{}", dn_core::Id::new())));
+        std::fs::create_dir_all(&dir.0).unwrap();
+        let mut emb = entry("emb", 5, "aa");
+        emb.capabilities = vec![Capability::Embedding];
+        std::fs::write(dir.0.join("emb.gguf"), b"12345").unwrap();
+        std::fs::write(dir.0.join("emb.gguf.sha256"), "aa").unwrap();
+        let lm = LocalModels::new(
+            dir.0.clone(),
+            Catalog {
+                version: 1,
+                models: vec![emb],
+            },
+            Machine::cpu_only(16 << 30),
+        );
+        assert!(lm.is_ready("emb"));
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let err = rt.block_on(lm.chat_model("emb")).err().expect("refused");
+        assert!(
+            matches!(err, CoreError::ModelUnavailable { ref user_message, .. } if user_message.contains("can't chat"))
+        );
+        // The resolver never picks it for chat, even as the only ready local model.
+        let mut reg = crate::models::ModelRegistry::default();
+        reg.local = Some(Arc::new(lm));
+        let keys = crate::secrets::Keys::memory();
+        let src = reg.sources(&keys);
+        let s = src
+            .iter()
+            .find(|s| s.model.to_string() == "local:emb")
+            .unwrap();
+        assert_eq!(s.capabilities, [Capability::Embedding]);
     }
 
     #[test]
