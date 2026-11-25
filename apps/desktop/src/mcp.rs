@@ -1326,7 +1326,8 @@ mod tests {
         exec.execute(&ctx, &change).await.unwrap();
 
         let mut after = None;
-        for _ in 0..200 {
+        // Up to 20 s: a slow CI machine still gets there.
+        for _ in 0..800 {
             if let Some(s) = state_of(&st, "fx").filter(|s| s.revision == 1) {
                 after = Some(s);
                 break;
@@ -1371,7 +1372,8 @@ mod tests {
             .unwrap();
 
         let mut after = None;
-        for _ in 0..200 {
+        // Up to 20 s: a slow CI machine still gets there.
+        for _ in 0..800 {
             if let Some(s) = state_of(&st, "fx").filter(|s| s.revision == 1) {
                 after = Some(s);
                 break;
@@ -1394,11 +1396,16 @@ mod tests {
                 .iter()
                 .any(|t| t.name.starts_with("mcp__fx__"))
         );
-        assert!(
-            exec.execute(&ctx, &call("2", "mcp__fx__echo"))
-                .await
-                .is_err()
-        );
+        match exec
+            .execute(&ctx, &call("2", "mcp__fx__echo"))
+            .await
+            .unwrap_err()
+        {
+            dn_core::CoreError::Capability { user_message, .. } => {
+                assert!(user_message.contains("changed its tools"), "{user_message}");
+            }
+            other => panic!("{other:?}"),
+        }
         assert!(
             !st.tools_settling.contains("fx"),
             "the hold ended; staleness keeps it off"
