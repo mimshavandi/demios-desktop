@@ -84,6 +84,10 @@ When you search for a model or download one, the app connects directly to Huggin
 
 Some models need your Hugging Face token. If you save one, it is kept in your system keychain and sent only to Hugging Face. If you set a mirror with `HF_ENDPOINT`, the app and the `dn` tool use it instead, and the token goes to the mirror only if you opt in.
 
+### Updates (copies downloaded from GitHub)
+
+A copy of the app downloaded from GitHub can update itself. It checks for a new version only when you select **Check for updates** in **Settings → General → About**. The app then asks GitHub (`github.com`, which sends it on to `release-assets.githubusercontent.com`) for a small file that names the newest version. The address is the same for everyone and carries nothing about you or your copy. GitHub sees your IP address and standard request headers. If a newer version exists, the app shows its release notes, and downloads it from GitHub only after you select **Install and restart**. Nothing else is sent. Copies from the Microsoft Store or Flathub are updated by their store and never contact GitHub for updates. [GitHub privacy statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement).
+
 ### Tool servers (MCP)
 
 Tool servers let the model use tools. You add them in **Settings → Models → Tool servers**. There are two kinds:
@@ -140,6 +144,7 @@ DigiNote Inc., at the address in [Who we are](#who-we-are). Email: mahdi@demios.
 | Using tool servers | Tool arguments, which can contain chat text | **No.** Your computer sends it straight to the server you added. | None needed: we don't process it. |
 | Reporting a problem on GitHub | What you write, the app version and your operating system | Only as a public GitHub issue, which we read as the project's maintainers. | Our legitimate interest in fixing problems in the app (Art. 6(1)(f) GDPR). |
 | Emailing us | Your email address, what you write | **Yes.** | Answering you, and taking steps you ask for before a contract (Art. 6(1)(b)); otherwise our legitimate interest in answering questions about the app (Art. 6(1)(f)). |
+| Checking for and installing updates (copies downloaded from GitHub) | Your IP address and standard request headers | **No.** Your computer asks GitHub directly, only when you select **Check for updates** or **Install and restart**. | None needed: we don't process it. |
 | Visiting demios.io | Your IP address, the page requested, time, browser details | Our hosting provider receives them in its server logs. [Whether we can see these logs: to be confirmed by the owner] | Our legitimate interest in delivering the website securely (Art. 6(1)(f)). |
 
 The website demios.io sets no cookies and uses no analytics or tracking. [To be confirmed by the owner for the published site.]
@@ -163,7 +168,7 @@ You don't have to give us any personal data. The app works without contacting us
 
 - **Services you choose in the app** (AI providers, Hugging Face, tool servers) receive data directly from your computer, only when you set them up or start an action. They are not our processors. They act on their own responsibility, under your agreement with them.
 - **GitHub** (GitHub, Inc., USA) hosts the project's repository and issues, and hosts the website demios.io on GitHub Pages. For the website, GitHub processes visitors' IP addresses and request details in its server logs. [Whether GitHub is a processor or a separate controller for this, and the agreement in place: to be confirmed by the owner]
-- **GitHub (release downloads):** GitHub, Inc. serves the app's installers from `github.com` and `release-assets.githubusercontent.com`, and processes downloaders' IP addresses and request details. [Whether GitHub is a processor or a separate controller for this, and the agreement in place: to be confirmed by the owner]
+- **GitHub (release downloads):** GitHub, Inc. serves the app's installers and updates from `github.com` and `release-assets.githubusercontent.com`, and processes downloaders' IP addresses and request details. [Whether GitHub is a processor or a separate controller for this, and the agreement in place: to be confirmed by the owner]
 - **Our email provider** stores the emails you send us. [Email provider: to be confirmed by the owner]
 
 ### Transfers outside the EU
@@ -196,7 +201,7 @@ Website: [www.ldi.nrw.de](https://www.ldi.nrw.de)
 
 ## Changes to this policy
 
-If the app starts sending any data to us (for example an update check or optional crash reports), we will update this policy **before** that version is released and describe the change in the release notes. Anything like that will be opt-in unless this policy says otherwise. The latest version is always at https://demios.io/privacy, and earlier versions are in the project's public repository.
+If the app starts sending any data to us (for example optional crash reports), we will update this policy **before** that version is released and describe the change in the release notes. Anything like that will be opt-in unless this policy says otherwise. The latest version is always at https://demios.io/privacy, and earlier versions are in the project's public repository.
 
 ## Contact
 
