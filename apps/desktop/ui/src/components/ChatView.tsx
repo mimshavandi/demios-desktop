@@ -7,6 +7,7 @@ import {
   type ArtifactType,
   type Id,
   type ModelCatalog,
+  type SkillInfo,
   type StoredMessage,
   type UnknownOutcome,
 } from "../ipc/types";
@@ -18,7 +19,7 @@ import { canRegenerate, type ChatState, type LiveToolCall } from "../state/chat"
 import { ArtifactCard } from "./ArtifactPane";
 import { Markdown } from "./Markdown";
 import { ModelBadge } from "./ModelBadge";
-import { Button, ICON, IconButton, InlineMessage, Skeleton } from "./primitives";
+import { Button, ICON, IconButton, InlineMessage, Select, Skeleton } from "./primitives";
 import { ApprovalCard, ToolCallCard, UnknownOutcomeCard } from "./ToolCards";
 import { useToast } from "./toast";
 
@@ -57,6 +58,11 @@ interface Props {
   onReportAnswer?: (messageId: Id) => void;
   /** A link in an answer was clicked. */
   onOpenLink?: (href: string) => void;
+  /** Chat skills the user can pick (T-SKL-01); the picker hides when there are none. */
+  skills?: SkillInfo[];
+  /** The skill this chat uses, or `null`. */
+  skill?: string | null;
+  onSkill?: (name: string | null) => void;
 }
 
 /** One artifact a message created or changed: its latest version from that message. */
@@ -255,6 +261,9 @@ export function ChatView(p: Props) {
           onKeyDown={onKeyDown}
         />
         <div className="composer-bar">
+          {p.skills !== undefined && p.skills.length > 0 && p.onSkill !== undefined && (
+            <SkillPicker skills={p.skills} value={p.skill ?? null} onChange={p.onSkill} />
+          )}
           <span id="composer-hint" className="composer-hint">
             Enter to send · Shift+Enter for a new line
           </span>
@@ -290,6 +299,45 @@ export function ChatView(p: Props) {
         {AI_DISCLOSURE}
       </p>
     </section>
+  );
+}
+
+/** Picks the chat's skill: a labelled select, so Tab and the arrow keys work. */
+function SkillPicker({
+  skills,
+  value,
+  onChange,
+}: {
+  skills: SkillInfo[];
+  value: string | null;
+  onChange: (name: string | null) => void;
+}) {
+  const chosen = skills.find((s) => s.name === value);
+  return (
+    <div className="composer-skill" data-testid="skill-picker">
+      <label htmlFor="composer-skill" className="dn-visually-hidden">
+        Skill
+      </label>
+      <Select
+        id="composer-skill"
+        value={chosen?.name ?? ""}
+        placeholder="No skill"
+        emptyText="No skills"
+        aria-describedby="composer-skill-d"
+        groups={[
+          {
+            label: "Skills",
+            options: skills.map((s) => ({ value: s.name, label: s.label, hint: s.description })),
+          },
+        ]}
+        onValueChange={(v) => onChange(v === "" ? null : v)}
+      />
+      <span id="composer-skill-d" className="dn-visually-hidden">
+        {chosen === undefined
+          ? "Skills change how the assistant works in this chat. They never skip a tool approval."
+          : `${chosen.description} Applies from the next answer. It never skips a tool approval.`}
+      </span>
+    </div>
   );
 }
 

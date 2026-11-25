@@ -573,7 +573,7 @@ impl<B: InferenceBackend> LocalModels<B> {
 
     /// Replaces the external models (Hub downloads, cache files): each is ready, with an
     /// exact fit from its GGUF header when it can be read. Blocking (header reads).
-    pub fn set_externals(&self, list: Vec<External>) {
+    pub fn set_externals(&self, mut list: Vec<External>) {
         let new_ids: std::collections::HashSet<String> =
             list.iter().map(|x| x.entry.id.clone()).collect();
         let gone: Vec<String> = lock(&self.externals)
@@ -585,17 +585,31 @@ impl<B: InferenceBackend> LocalModels<B> {
             lock(&self.state).remove(id);
             lock(&self.fits).remove(id);
         }
-        for x in &list {
+        for x in &mut list {
             lock(&self.state).insert(x.entry.id.clone(), DownloadState::Ready);
-            let fit = Gguf::open(&x.path)
-                .ok()
+            let g = Gguf::open(&x.path).ok();
+            let mut fit = g
+                .as_ref()
                 .map(|g| {
                     fit_view(
-                        &dn_models::fit(&ModelFootprint::from_gguf(&g), &self.machine),
+                        &dn_models::fit(&ModelFootprint::from_gguf(g), &self.machine),
                         false,
                     )
                 })
                 .unwrap_or_else(|| self.estimated_fit(&x.entry));
+            // Every local chat model renders with its own template (T-INF-23): one without
+            // a template is never offered for chat.
+            if let Some(g) = &g {
+                if dn_models::template::is_embedding(g) {
+                    x.entry.capabilities = vec![Capability::Embedding];
+                } else if dn_models::template::source(g, &x.path).is_none() {
+                    x.entry.capabilities = vec![];
+                    fit.reason = format!(
+                        "{}, so it can't be used for chat.",
+                        dn_models::template::NO_TEMPLATE_MESSAGE
+                    );
+                }
+            }
             lock(&self.fits).insert(x.entry.id.clone(), fit);
         }
         *lock(&self.externals) = list;
@@ -1081,6 +1095,16 @@ impl<B: InferenceBackend> LocalModels<B> {
             developer_message: format!("unknown catalogue id {id}"),
             recovery: vec![],
         })?;
+        if !e.capabilities.contains(&Capability::Chat) {
+            return Err(CoreError::ModelUnavailable {
+                user_message: format!("{} can't chat. Choose a chat model.", e.name),
+                developer_message: format!("{id}: not a chat model ({:?})", e.capabilities),
+                recovery: vec![RecoveryAction::ChooseModelForSlot {
+                    agent_id: crate::agent::AGENT_ID.into(),
+                    slot_id: "primary".into(),
+                }],
+            });
+        }
         if !self.is_ready(id) {
             return Err(CoreError::ModelUnavailable {
                 user_message: format!(
@@ -1712,6 +1736,40 @@ mod tests {
     }
 
     #[test]
+    fn an_embedding_model_is_never_loaded_for_chat() {
+        let dir = Dir(std::env::temp_dir().join(format!("dn-local-emb-{}", dn_core::Id::new())));
+        std::fs::create_dir_all(&dir.0).unwrap();
+        let mut emb = entry("emb", 5, "aa");
+        emb.capabilities = vec![Capability::Embedding];
+        std::fs::write(dir.0.join("emb.gguf"), b"12345").unwrap();
+        std::fs::write(dir.0.join("emb.gguf.sha256"), "aa").unwrap();
+        let lm = LocalModels::new(
+            dir.0.clone(),
+            Catalog {
+                version: 1,
+                models: vec![emb],
+            },
+            Machine::cpu_only(16 << 30),
+        );
+        assert!(lm.is_ready("emb"));
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let err = rt.block_on(lm.chat_model("emb")).err().expect("refused");
+        assert!(
+            matches!(err, CoreError::ModelUnavailable { ref user_message, .. } if user_message.contains("can't chat"))
+        );
+        // The resolver never picks it for chat, even as the only ready local model.
+        let mut reg = crate::models::ModelRegistry::default();
+        reg.local = Some(Arc::new(lm));
+        let keys = crate::secrets::Keys::memory();
+        let src = reg.sources(&keys);
+        let s = src
+            .iter()
+            .find(|s| s.model.to_string() == "local:emb")
+            .unwrap();
+        assert_eq!(s.capabilities, [Capability::Embedding]);
+    }
+
+    #[test]
     fn a_model_that_wont_fit_is_not_offered_or_loaded() {
         let dir = Dir(std::env::temp_dir().join(format!("dn-local-fit-{}", dn_core::Id::new())));
         std::fs::create_dir_all(&dir.0).unwrap();
@@ -1787,6 +1845,7 @@ mod tests {
             license: dn_models::hub::LicenseInfo::classify(Some("apache-2.0"), None, None),
             card_url: format!("https://huggingface.co/{repo}"),
             downloaded_at: 0,
+            chat_template: None,
         };
         std::fs::write(
             dn_models::hub::SourceManifest::path_for(&path),
@@ -1839,6 +1898,63 @@ mod tests {
         lm.delete_all().await.unwrap();
         assert!(lm.rows().iter().all(|r| r.origin != ModelOrigin::Hub));
         assert!(lm.chat_model(&row.id).await.is_err());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_download_without_a_chat_template_is_not_a_chat_model() {
+        use dn_models::gguf::write::{V, gguf};
+        let tiny = |extra: Vec<(&'static str, V<'static>)>| {
+            let mut kv = vec![("general.architecture", V::Str("llama"))];
+            kv.extend(extra);
+            gguf(&kv, &[("blk.0.attn_q.weight", &[8, 8], 0, 64)])
+        };
+        let (d, _rec, lm) = two_ready_models();
+        fake_hub_download(&d.0, "org/NoTpl-GGUF", "NoTpl-Q4_K_M.gguf", &tiny(vec![]));
+        fake_hub_download(
+            &d.0,
+            "org/Tpl-GGUF",
+            "Tpl-Q4_K_M.gguf",
+            &tiny(vec![("tokenizer.chat_template", V::Str("{{ messages }}"))]),
+        );
+        let side = fake_hub_download(&d.0, "org/Side-GGUF", "Side-Q4_K_M.gguf", &tiny(vec![]));
+        std::fs::write(dn_models::template::sidecar_path(&side), "{{ messages }}").unwrap();
+        fake_hub_download(
+            &d.0,
+            "org/Emb-GGUF",
+            "Emb-Q8_0.gguf",
+            &tiny(vec![("llama.pooling_type", V::U32(1))]),
+        );
+        lm.refresh_externals();
+        let row = |id: &str| lm.rows().into_iter().find(|r| r.id == id).unwrap();
+        let none = row("hf/org/NoTpl-GGUF/NoTpl-Q4_K_M");
+        assert!(none.capabilities.is_empty());
+        assert!(
+            none.fit.reason.contains("no chat template"),
+            "{}",
+            none.fit.reason
+        );
+        let err = lm.chat_model(&none.id).await.err().expect("refused");
+        assert!(matches!(err, CoreError::ModelUnavailable { .. }));
+        assert_eq!(
+            row("hf/org/Tpl-GGUF/Tpl-Q4_K_M").capabilities,
+            [Capability::Chat]
+        );
+        assert_eq!(
+            row("hf/org/Side-GGUF/Side-Q4_K_M").capabilities,
+            [Capability::Chat]
+        );
+        assert_eq!(
+            row("hf/org/Emb-GGUF/Emb-Q8_0").capabilities,
+            [Capability::Embedding]
+        );
+    }
+
+    #[test]
+    fn template_file_names_agree() {
+        assert_eq!(
+            dn_models::template::SUFFIX,
+            dn_inference::llamacpp::CHAT_TEMPLATE_SUFFIX
+        );
     }
 
     #[test]

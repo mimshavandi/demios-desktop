@@ -36,11 +36,13 @@ These wait until they ship in the build being listed: nothing at the moment.
 
 | Field | Value | Who decides |
 |---|---|---|
-| `copyright` | Copyright © 2026 DigiNote Inc. Licensed under the Apache License 2.0. | Set (owner) |
+| `copyright` | Copyright © 2026 DigiNote, Inc. Licensed under the Apache License 2.0. | Set (owner) |
 | `category` | Productivity | Set |
 | `homepage` | https://github.com/mimshavandi/demios-desktop | Placeholder until the owner supplies a product URL |
-| `publisher` | DigiNote Inc. | Set (owner). Must match the Partner Center publisher for MSIX |
+| `publisher` | DigiNote, Inc. | Set (owner). Must match the Partner Center publisher for MSIX |
 | Support contact | mahdi@demios.io | Set (owner). Listing field only; not in `tauri.conf.json` |
+| Privacy policy URL | https://demios.io/privacy | Set (owner). Listing field only; live once published |
+| Accessibility statement URL | https://demios.io/accessibility | Set (owner). Listing field only; live once published |
 
 ## Still to do (T-STORE-12)
 

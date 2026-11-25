@@ -6,12 +6,14 @@
 use crate::agent::model_error;
 use crate::artifacts::{ArtifactMode, ArtifactTools, FencedRun, RunTools};
 use crate::error::{IpcError, IpcResult};
+use crate::skills::Skill;
 use crate::state::AppState;
-use dn_agent::{AgentEvent, CancelToken, LoopConfig, RunOutcome, StopReason};
+use dn_agent::{AgentEvent, CancelToken, LoopConfig, RunOutcome, StopReason, ToolExecutor};
 use dn_core::chat::{ChatMessage, ChatModel, ContentPart, FinishReason, Role, Usage};
 use dn_core::model::ModelRef;
 use dn_core::{CoreError, Id, RecoveryAction};
 use dn_store::chat::{self as store, MessageOutcome, MessageStatus, NewMessage, StoredMessage};
+use dn_tools::CapabilityResolver;
 use serde::Serialize;
 use std::sync::Arc;
 
@@ -172,7 +174,7 @@ pub fn send(
     let reservation = state.reserve(conversation_id)?;
     let (model, backend) = model_for_turn(state)?;
     let mode = ArtifactMode::for_model(state, &model);
-    let (user, assistant, title, history) = {
+    let (user, assistant, title, history, skill) = {
         let db = state.db()?;
         let conv = store::get_conversation(&db, conversation_id)?;
         let title = (conv.title == DEFAULT_TITLE).then(|| title_from(&text));
@@ -186,8 +188,16 @@ pub fn send(
             conversation_id,
             NewMessage::assistant_placeholder(Some(model.to_string())),
         )?;
-        let history = history(state, &db, conversation_id, assistant.id, mode)?;
-        (user, assistant, title, history)
+        let skill = turn_skill(state, &db, conversation_id)?;
+        let history = history(
+            state,
+            &db,
+            conversation_id,
+            assistant.id,
+            mode,
+            skill.as_deref(),
+        )?;
+        (user, assistant, title, history, skill)
     };
     start(
         state,
@@ -197,6 +207,7 @@ pub fn send(
         mode,
         &assistant,
         history,
+        skill,
         sink,
     );
     Ok(TurnStarted {
@@ -218,7 +229,7 @@ pub fn regenerate(
     let reservation = state.reserve(conversation_id)?;
     let (model, backend) = model_for_turn(state)?;
     let mode = ArtifactMode::for_model(state, &model);
-    let (assistant, history) = {
+    let (assistant, history, skill) = {
         let db = state.db()?;
         let msgs = store::list_messages(&db, conversation_id)?;
         let last_user = msgs
@@ -234,8 +245,16 @@ pub fn regenerate(
             conversation_id,
             NewMessage::assistant_placeholder(Some(model.to_string())),
         )?;
-        let history = history(state, &db, conversation_id, assistant.id, mode)?;
-        (assistant, history)
+        let skill = turn_skill(state, &db, conversation_id)?;
+        let history = history(
+            state,
+            &db,
+            conversation_id,
+            assistant.id,
+            mode,
+            skill.as_deref(),
+        )?;
+        (assistant, history, skill)
     };
     start(
         state,
@@ -245,6 +264,7 @@ pub fn regenerate(
         mode,
         &assistant,
         history,
+        skill,
         sink,
     );
     Ok(TurnStarted {
@@ -259,23 +279,56 @@ pub fn stop(state: &AppState, conversation_id: Id) -> bool {
     state.stop(conversation_id)
 }
 
+/// The chat's skill (T-SKL-01), if one is chosen and still in the library.
+fn turn_skill(
+    state: &AppState,
+    db: &dn_store::Connection,
+    conversation_id: Id,
+) -> IpcResult<Option<Arc<Skill>>> {
+    Ok(crate::skills::chat_skill(db, conversation_id)?.and_then(|n| state.skills.get(&n)))
+}
+
+/// Whether this turn may make artifacts: the agent manifest allows it and so does the
+/// chat's skill, if any.
+fn artifacts_allowed(state: &AppState, skill: Option<&Skill>) -> bool {
+    state.agent.manifest.allows_tool("artifact.create")
+        && skill.is_none_or(|s| s.allows("artifact.create"))
+}
+
+/// Model-facing tool name → capability id: artifact tools by name, MCP tools through the
+/// executor (read live). Without an executor (tests) the name is the id.
+fn tool_resolver(state: &AppState) -> CapabilityResolver {
+    let mcp = state.executor.as_ref().map(|e| e.capability_resolver());
+    Arc::new(move |name: &str| {
+        crate::artifacts::capability_id(name).or_else(|| match &mcp {
+            Some(resolve) => resolve(name),
+            None => Some(name.to_owned()),
+        })
+    })
+}
+
 /// System prompt + stored conversation, minus the new placeholder and failed empty turns.
-/// Models without tool calling get the fenced artifact format in the system prompt.
+/// Models without tool calling get the fenced artifact format in the system prompt; the
+/// chat's skill adds its instructions.
 fn history(
     state: &AppState,
     db: &dn_store::Connection,
     conversation_id: Id,
     exclude: Id,
     mode: ArtifactMode,
+    skill: Option<&Skill>,
 ) -> IpcResult<Vec<ChatMessage>> {
     let mut out = vec![];
-    let fenced = (mode == ArtifactMode::Fenced
-        && state.agent.manifest.allows_tool("artifact.create"))
-    .then_some(dn_artifacts::protocol::FENCED_INSTRUCTIONS);
-    let system: Vec<&str> = state
+    let fenced = (mode == ArtifactMode::Fenced && artifacts_allowed(state, skill))
+        .then(|| dn_artifacts::protocol::FENCED_INSTRUCTIONS.to_owned());
+    let project = crate::projects::instructions_for(db, conversation_id)?;
+    let system: Vec<String> = state
         .agent
         .system_prompt()
+        .map(str::to_owned)
         .into_iter()
+        .chain(project)
+        .chain(skill.map(Skill::system_text))
         .chain(fenced)
         .collect();
     if !system.is_empty() {
@@ -300,6 +353,7 @@ fn start(
     mode: ArtifactMode,
     assistant: &StoredMessage,
     history: Vec<ChatMessage>,
+    skill: Option<Arc<Skill>>,
     sink: impl EventSink,
 ) {
     let conversation_id = reservation.conversation_id;
@@ -312,7 +366,7 @@ fn start(
     let sink: Arc<dyn EventSink> = Arc::new(sink);
     // Exactly one artifact protocol per run (ADR-0004): tools for tool-capable models, the
     // fenced parser for the rest.
-    let tools = RunTools {
+    let tools: Arc<dyn ToolExecutor> = Arc::new(RunTools {
         base: Arc::clone(&state.tools),
         artifacts: (mode == ArtifactMode::Tools).then(|| ArtifactTools {
             state: Arc::clone(&state),
@@ -320,20 +374,24 @@ fn start(
             message_id,
             sink: Arc::clone(&sink),
         }),
-    };
-    let fenced = (mode == ArtifactMode::Fenced
-        && state.agent.manifest.allows_tool("artifact.create"))
-    .then(|| {
-        FencedRun::start(
-            Arc::clone(&state),
-            conversation_id,
-            message_id,
-            Arc::clone(&sink),
-        )
     });
+    // The chat's skill only narrows: approvals are decided behind this, by the executor.
+    let tools = match &skill {
+        Some(s) => crate::skills::narrow(tools, s, tool_resolver(&state)),
+        None => tools,
+    };
+    let fenced = (mode == ArtifactMode::Fenced && artifacts_allowed(&state, skill.as_deref()))
+        .then(|| {
+            FencedRun::start(
+                Arc::clone(&state),
+                conversation_id,
+                message_id,
+                Arc::clone(&sink),
+            )
+        });
     tauri::async_runtime::spawn(async move {
         let (result, failed_calls) = run(
-            &*backend, &tools, fenced, &cfg, history, &cancel, &state, message_id, &*sink,
+            &*backend, &*tools, fenced, &cfg, history, &cancel, &state, message_id, &*sink,
         )
         .await;
         let st = Arc::clone(&state);
@@ -375,7 +433,7 @@ fn start(
 #[allow(clippy::too_many_arguments)]
 async fn run(
     model: &dyn ChatModel,
-    tools: &RunTools,
+    tools: &dyn ToolExecutor,
     mut fenced: Option<FencedRun>,
     cfg: &LoopConfig,
     history: Vec<ChatMessage>,
@@ -1248,6 +1306,27 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn project_instructions_are_sent_with_each_chat_of_the_project() {
+        let rec = Arc::new(Recorder::default());
+        let st = artifact_state("local:scripted", rec.clone(), true);
+        let (inside, outside) = {
+            let db = st.db().unwrap();
+            let p = dn_store::project::create_project(&db, "Thesis").unwrap();
+            dn_store::project::update_project(&db, p.id, "Thesis", "Answer in British English.")
+                .unwrap();
+            (
+                store::create_conversation_in(&db, "New chat", Some(p.id)).unwrap(),
+                store::create_conversation(&db, "New chat").unwrap(),
+            )
+        };
+        turn(&st, inside.id, "hi").await;
+        turn(&st, outside.id, "hi").await;
+        let reqs = rec.requests.lock().unwrap();
+        assert!(system_text(&reqs[0]).contains("Answer in British English."));
+        assert!(!system_text(&reqs[1]).contains("British"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn tool_capable_models_never_get_the_fenced_parser() {
         let rec = Arc::new(Recorder::default());
         let st = artifact_state("local:scripted", rec.clone(), true);
@@ -1299,6 +1378,84 @@ mod tests {
             "{evs:?}"
         );
         assert!(crate::artifacts::list(&st, conv.id).unwrap().is_empty());
+    }
+
+    /// A tool-capable model in a chat with the skill `notes`, which allows only `calc`.
+    fn skill_state(rec: Arc<Recorder>, tools: bool, allowed: &[&str]) -> (Arc<AppState>, Id) {
+        let mut models = crate::models::ModelRegistry::default();
+        if tools {
+            models.register("local:scripted".parse().unwrap(), rec);
+        } else {
+            models.register_without_tools("local:scripted".parse().unwrap(), rec);
+        }
+        let mut s = AppState::in_memory().unwrap();
+        s.models = models;
+        s.agent = crate::agent::Agent::load(crate::agent::skills_dir(None).as_deref());
+        s.tools = Arc::new(Calc(false));
+        s.skills = crate::skills::Library::from_skills(vec![dn_agent::ChatSkill {
+            name: "notes".into(),
+            description: "Notes".into(),
+            allowed_tools: allowed.iter().map(|t| t.to_string()).collect(),
+            license: None,
+            instructions: "Answer in bullet points.".into(),
+        }]);
+        let st = Arc::new(s);
+        let mut settings = crate::settings::Settings::default();
+        settings
+            .slots
+            .insert("chat".into(), "local:scripted".into());
+        st.save_settings(&settings).unwrap();
+        let conv = st.create_conversation().unwrap();
+        crate::skills::set_chat_skill(&st.db().unwrap(), conv.id, Some("notes")).unwrap();
+        (st, conv.id)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_chat_skill_adds_its_instructions_and_narrows_the_tools() {
+        let rec = Arc::new(Recorder {
+            call_tool: true,
+            ..Default::default()
+        });
+        let (st, conv) = skill_state(rec.clone(), true, &["calc"]);
+        turn(&st, conv, "make a page").await;
+        let reqs = rec.requests.lock().unwrap();
+        let names: Vec<&str> = reqs[0].tools.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, ["calc"], "artifact tools are outside the skill");
+        assert!(system_text(&reqs[0]).contains("Answer in bullet points."));
+        // The model's call to a tool outside the skill was refused, not run.
+        assert!(crate::artifacts::list(&st, conv).unwrap().is_empty());
+        let msgs = store::list_messages(&st.db().unwrap(), conv).unwrap();
+        let tool = msgs
+            .iter()
+            .find(|m| m.role == Role::Tool)
+            .expect("tool row");
+        assert!(tool.text().contains("isn't available"), "{}", tool.text());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_skill_without_artifacts_drops_the_fenced_format_too() {
+        let rec = Arc::new(Recorder::default());
+        let (st, conv) = skill_state(rec.clone(), false, &[]);
+        turn(&st, conv, "make a page").await;
+        let reqs = rec.requests.lock().unwrap();
+        assert!(reqs[0].tools.is_empty());
+        assert!(!system_text(&reqs[0]).contains(dn_artifacts::protocol::FENCED_INSTRUCTIONS));
+        assert!(crate::artifacts::list(&st, conv).unwrap().is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn without_a_skill_nothing_changes() {
+        let rec = Arc::new(Recorder::default());
+        let (st, conv) = skill_state(rec.clone(), true, &["calc"]);
+        crate::skills::set_chat_skill(&st.db().unwrap(), conv, None).unwrap();
+        turn(&st, conv, "hi").await;
+        let reqs = rec.requests.lock().unwrap();
+        let names: Vec<&str> = reqs[0].tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(
+            names.contains(&"calc") && names.contains(&"artifact_create"),
+            "{names:?}"
+        );
+        assert!(!system_text(&reqs[0]).contains("bullet points"));
     }
 
     #[tokio::test(flavor = "multi_thread")]

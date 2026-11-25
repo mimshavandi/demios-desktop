@@ -550,7 +550,9 @@ pub fn fit(model: &ModelFootprint, machine: &Machine) -> FitReport {
     let rec = best(model, machine);
     let mut notes = vec![];
     let mut suggested_quant = None;
-    let ready_at_min = rec.status == FitStatus::Ready && rec.n_ctx >= MIN_GOOD_CTX;
+    // A model trained on a shorter context counts as ready at its full training context.
+    let ready_at_min =
+        rec.status == FitStatus::Ready && rec.n_ctx >= MIN_GOOD_CTX.min(model.n_ctx_train);
     if !ready_at_min {
         let current = model.quant.as_deref().and_then(bpw).unwrap_or(f64::MAX);
         suggested_quant = QUANT_LADDER

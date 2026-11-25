@@ -21,7 +21,7 @@ use tauri::ipc::Channel;
 
 type AppStateRef<'a> = State<'a, Arc<AppState>>;
 
-async fn blocking<T: Send + 'static>(
+pub(crate) async fn blocking<T: Send + 'static>(
     state: &AppStateRef<'_>,
     f: impl FnOnce(&Arc<AppState>) -> IpcResult<T> + Send + 'static,
 ) -> IpcResult<T> {
@@ -107,6 +107,7 @@ pub async fn report_problem(
 #[derive(Debug, Serialize)]
 pub struct LocalDataSummary {
     pub conversations: usize,
+    pub projects: usize,
     /// Artifacts in the database (all versions go with them).
     pub artifacts: u64,
     pub data_dir: Option<String>,
@@ -119,9 +120,10 @@ pub struct LocalDataSummary {
 #[tauri::command]
 pub async fn local_data_summary(state: AppStateRef<'_>) -> IpcResult<LocalDataSummary> {
     blocking(&state, |s| {
-        let (conversations, artifacts) = {
+        let (conversations, projects, artifacts) = {
             let db = s.db()?;
             let n = store::list_conversations(&db)?.len();
+            let p = dn_store::project::list_projects(&db)?.len();
             let a = dn_artifacts::ArtifactStore::new(&db)
                 .counts()
                 .map(|(a, _)| a)
@@ -129,11 +131,12 @@ pub async fn local_data_summary(state: AppStateRef<'_>) -> IpcResult<LocalDataSu
                     eprintln!("could not count artifacts: {e}");
                     IpcError::new("storage", "Could not read local data.")
                 })?;
-            (n, a)
+            (n, p, a)
         };
         let local = s.models.local.as_ref();
         Ok(LocalDataSummary {
             conversations,
+            projects,
             artifacts,
             data_dir: crate::data_dir().map(|p| p.display().to_string()),
             models_dir: local.map(|l| l.dir().display().to_string()),
@@ -176,8 +179,11 @@ pub async fn list_conversations(state: AppStateRef<'_>) -> IpcResult<Vec<Convers
 }
 
 #[tauri::command]
-pub async fn create_conversation(state: AppStateRef<'_>) -> IpcResult<Conversation> {
-    blocking(&state, |s| s.create_conversation()).await
+pub async fn create_conversation(
+    state: AppStateRef<'_>,
+    project_id: Option<Id>,
+) -> IpcResult<Conversation> {
+    blocking(&state, move |s| s.create_conversation_in(project_id)).await
 }
 
 #[tauri::command]
@@ -195,6 +201,46 @@ pub async fn rename_conversation(
             &*s.db()?,
             conversation_id,
             &title,
+        )?)
+    })
+    .await
+}
+
+/// The chat skills in the library (T-SKL-01), for the composer's picker.
+#[tauri::command]
+pub async fn list_skills(state: AppStateRef<'_>) -> IpcResult<Vec<crate::skills::SkillInfo>> {
+    Ok(state.skills.list())
+}
+
+/// The skill a chat uses, or `null`. A saved skill that is no longer in the library reads
+/// as `null`.
+#[tauri::command]
+pub async fn get_chat_skill(
+    state: AppStateRef<'_>,
+    conversation_id: Id,
+) -> IpcResult<Option<String>> {
+    blocking(&state, move |s| {
+        let name = crate::skills::chat_skill(&*s.db()?, conversation_id)?;
+        Ok(name.filter(|n| s.skills.get(n).is_some()))
+    })
+    .await
+}
+
+/// Picks the skill for a chat (`null` = none). It applies from the next answer on.
+#[tauri::command]
+pub async fn set_chat_skill(
+    state: AppStateRef<'_>,
+    conversation_id: Id,
+    skill: Option<String>,
+) -> IpcResult<()> {
+    crate::skills::check_choice(&state.skills, skill.as_deref())?;
+    blocking(&state, move |s| {
+        let db = s.db()?;
+        store::get_conversation(&db, conversation_id)?;
+        Ok(crate::skills::set_chat_skill(
+            &db,
+            conversation_id,
+            skill.as_deref(),
         )?)
     })
     .await

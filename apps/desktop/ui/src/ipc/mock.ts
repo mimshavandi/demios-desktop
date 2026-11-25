@@ -9,6 +9,7 @@ import type {
   ArtifactDetail,
   ChatEvent,
   Conversation,
+  SkillInfo,
   ModelCatalog,
   Settings,
   StoredMessage,
@@ -24,6 +25,8 @@ import type {
   McpValueInput,
   HubRepoView,
   HubSearchPage,
+  Project,
+  ProjectFile,
 } from "./types";
 
 const REPLY = (q: string, turn: number) =>
@@ -35,7 +38,29 @@ const REPLY = (q: string, turn: number) =>
 
 export function createMockApi(): Api {
   const convs: Conversation[] = [];
+  const projects: (Project & { deleted_at: number | null })[] = [];
+  const projectFiles: (ProjectFile & { deleted: boolean })[] = [];
+  const liveProject = (pid: string) => {
+    const p = projects.find((x) => x.id === pid && x.deleted_at === null);
+    if (p === undefined) throw { code: "not_found", message: "This project was deleted." };
+    return p;
+  };
   const msgs = new Map<string, StoredMessage[]>();
+  const chatSkills = new Map<string, string>();
+  const skills: SkillInfo[] = [
+    {
+      name: "proofread",
+      label: "Proofread",
+      description: "Fixes spelling, grammar and punctuation without changing the meaning or tone.",
+      allowed_tools: [],
+    },
+    {
+      name: "explain-code",
+      label: "Explain code",
+      description: "Explains what a piece of code does, step by step.",
+      allowed_tools: ["artifact.*"],
+    },
+  ];
   const keys = new Set<string>();
   let localSink: ((e: LocalModelEvent) => void) | null = null;
   const fit = (status: LocalModelRow["fit"]["status"], reason: string, estimated = true) => ({
@@ -401,6 +426,7 @@ export function createMockApi(): Api {
     },
     localDataSummary: async () => ({
       conversations: convs.filter((c) => !deleted.has(c.id)).length,
+      projects: projects.filter((p) => p.deleted_at === null).length,
       artifacts: artifacts.length,
       data_dir: null,
       models_dir: null,
@@ -411,6 +437,8 @@ export function createMockApi(): Api {
     }),
     deleteAllLocalData: async () => {
       convs.length = 0;
+      projects.length = 0;
+      projectFiles.length = 0;
       msgs.clear();
       deleted.clear();
       keys.clear();
@@ -424,13 +452,92 @@ export function createMockApi(): Api {
     },
     listConversations: async () =>
       convs.filter((c) => !deleted.has(c.id)).sort((x, y) => y.updated_at - x.updated_at),
-    createConversation: async () => {
-      const c = { id: id(), title: "New chat", model: null, created_at: now(), updated_at: now() };
+    createConversation: async (projectId = null) => {
+      if (projectId !== null) liveProject(projectId);
+      const c = { id: id(), title: "New chat", model: null, project_id: projectId, created_at: now(), updated_at: now() };
       convs.push(c);
       msgs.set(c.id, []);
       return c;
     },
     renameConversation: async () => null,
+    listProjects: async () =>
+      projects
+        .filter((p) => p.deleted_at === null)
+        .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }))
+        .map(({ deleted_at: _d, ...p }) => ({
+          ...p,
+          chats: convs.filter((c) => c.project_id === p.id && !deleted.has(c.id)).length,
+          files: projectFiles.filter((f) => f.project_id === p.id && !f.deleted).length,
+        })),
+    createProject: async (name) => {
+      const p = { id: id(), name: name.trim(), instructions: "", created_at: now(), updated_at: now(), deleted_at: null };
+      if (p.name === "") throw { code: "invalid_input", message: "Project name must be 1–100 characters." };
+      projects.push(p);
+      const { deleted_at: _d, ...out } = p;
+      return out;
+    },
+    updateProject: async (pid, name, instructions) => {
+      const p = liveProject(pid);
+      if (name.trim() === "") throw { code: "invalid_input", message: "Project name must be 1–100 characters." };
+      p.name = name.trim();
+      p.instructions = instructions.trim();
+      p.updated_at = now();
+      const { deleted_at: _d, ...out } = p;
+      return out;
+    },
+    deleteProject: async (pid) => {
+      const p = liveProject(pid);
+      p.deleted_at = now();
+      const chats = convs.filter((c) => c.project_id === pid && !deleted.has(c.id));
+      for (const c of chats) deleted.add(c.id);
+      return chats.length;
+    },
+    restoreProject: async (pid) => {
+      const p = projects.find((x) => x.id === pid);
+      if (p !== undefined) p.deleted_at = null;
+      for (const c of convs) if (c.project_id === pid) deleted.delete(c.id);
+      return null;
+    },
+    listProjectFiles: async (pid) => {
+      liveProject(pid);
+      return projectFiles.filter((f) => f.project_id === pid && !f.deleted).map(({ deleted: _d, ...f }) => f);
+    },
+    addProjectFiles: async (pid) => {
+      liveProject(pid);
+      await new Promise((r) => setTimeout(r, 400));
+      const picked = [
+        { name: "Literature review.md", size: 18_432 },
+        { name: "Interview notes.pdf", size: 2_304_000 },
+      ];
+      const added = picked.map((x) => {
+        const f = {
+          id: id(),
+          project_id: pid,
+          name: x.name,
+          media_type: x.name.endsWith(".pdf") ? "application/pdf" : "text/markdown",
+          size: x.size,
+          sha256: "0".repeat(64),
+          source_path: `/Users/you/Documents/${x.name}`,
+          created_at: now(),
+          updated_at: now(),
+          deleted: false,
+        };
+        projectFiles.push(f);
+        const { deleted: _d, ...out } = f;
+        return out;
+      });
+      return { cancelled: false, added, skipped: [{ name: "Recording.mov", reason: "It's larger than 50 MB." }] };
+    },
+    removeProjectFile: async (pid, fid) => {
+      const f = projectFiles.find((x) => x.id === fid && x.project_id === pid);
+      if (f !== undefined) f.deleted = true;
+      return null;
+    },
+    restoreProjectFile: async (pid, fid) => {
+      const f = projectFiles.find((x) => x.id === fid && x.project_id === pid);
+      if (f !== undefined) f.deleted = false;
+      return null;
+    },
     deleteConversation: async (cid) => {
       deleted.add(cid);
       return null;
@@ -440,6 +547,14 @@ export function createMockApi(): Api {
       return null;
     },
     listMessages: async (cid) => structuredClone(msgs.get(cid) ?? []),
+    listSkills: async () => structuredClone(skills),
+    getChatSkill: async (cid) => chatSkills.get(cid) ?? null,
+    setChatSkill: async (cid, skill) => {
+      if (skill === null) chatSkills.delete(cid);
+      else if (skills.some((s) => s.name === skill)) chatSkills.set(cid, skill);
+      else throw { code: "invalid_input", message: `There is no skill called "${skill}".`, recovery: [] };
+      return null;
+    },
     sendMessage: async (cid, text, onEvent) => {
       const c = convs.find((x) => x.id === cid);
       const title = c !== undefined && c.title === "New chat" ? text.slice(0, 48) : null;
