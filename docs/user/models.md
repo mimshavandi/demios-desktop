@@ -34,19 +34,19 @@ Models are stored in a folder shared with the `dn` command-line tool. **Settings
 
 ## Add a model from Hugging Face
 
-Beyond the catalogue, you can add GGUF models from Hugging Face that run on this computer. A model needs a published checksum to be downloaded, and some need your Hugging Face token (see below). In the **On this device** card, select **Add from Hugging Face**.
+Beyond the catalogue, you can add GGUF models from Hugging Face that run on this computer. A model needs a published checksum to be downloaded, and some need your Hugging Face token (see below). On **Settings → Models → On this device**, select **Add a model**. A window opens over Settings (it fills the window when the app is narrow). **Esc** or the close button closes it, and your search stays for next time.
 
 1. **Search.** Type a name, such as "qwen 1.5b instruct", and select **Search**. Sort by most downloaded, most liked, trending or recently updated, and select **Show more** for more results. Searching contacts Hugging Face; your chats are never sent there.
 2. **Pick a model.** While the app reads the model's files, it says "Checking model…". Nothing is downloaded yet. Then you see:
    - **Its licence and model card.** A note tells you when the licence is missing, doesn't allow commercial use, is the model's own, or comes with an acceptable-use policy. Read it on the model card before downloading.
    - **Its versions**, each a different size and quality (quantisation), with whether it fits this computer's memory. "(estimate)" means the fit was worked out from another version of the same model. "Fit unknown" means its details couldn't be read.
-3. **Download.** Select **Download** next to a version. You see the progress and can **Pause** and **Resume**, or **Retry** if it failed. The file is checked against the checksum Hugging Face publishes. A version without a published checksum can't be downloaded. When it's done, the version shows **Downloaded** and the model can answer.
+3. **Download.** Select **Download** next to a version. The window closes, and the download shows in the **On this device** list with its progress. There you can **Pause** and **Resume**, or **Retry** if it failed. It keeps going if you leave Settings. The file is checked against the checksum Hugging Face publishes. A version without a published checksum can't be downloaded. When it's done, a message says so and the model can answer.
 
-Select **Done** to go back to the list. Models you add this way show "From Hugging Face" on their row.
+Models you add this way show "From Hugging Face" on their row.
 
 ### Links that add a model
 
-A web page or a message can contain a `demios://models/add` link that points at a model on Hugging Face. Opening it brings Demios to the front on **Settings → Models → On this device**, with a note that a link asked to add this model. You see the same details as above: the licence, the model card and whether each version fits. The version the link chose is listed first and marked **Chosen by the link**.
+A web page or a message can contain a `demios://models/add` link that points at a model on Hugging Face. Opening it brings Demios to the front on **Settings → Models → On this device** and opens the **Add a model** window on that model, with a note that a link asked to add this model. You see the same details as above: the licence, the model card and whether each version fits. The version the link chose is listed first and marked **Chosen by the link**.
 
 Nothing downloads until you select **Download**. Select **Not now** to close it. While one link's model is open, other links are ignored.
 
