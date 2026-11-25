@@ -26,18 +26,26 @@ Each of these is a way around the app's rules unless the API is designed against
 
 This ADR decides the shape of the API. It doesn't implement it.
 
+Every rule below says whether it is **enforced by the host** or is a **review rule** for first-party add-ons. It never claims enforcement it can't deliver.
+
 ## Decision
 
 ### 1. Isolation: in-process Rust crates, linked at build time, behind host services
 - **An add-on is a Rust crate** that depends on `dn-plugin-api` (and nothing else from the app).
 - **It is linked statically** into a separate build target, an add-on build, by a small registry list in that build's `main`.
 - **No dynamic loading.** There is no `dlopen`: Rust has no stable ABI, and loading a library needs `unsafe`, which ADR-0009 forbids.
-- **The open-source build links no add-ons** and contains no add-on code paths.
-- **The add-on never gets the app's internals.** That rules out a `rusqlite::Connection` to other crates' tables, the `dn_tools::Executor`, the keychain or the webview. It gets a **`Host` handle** of narrow, permission-checked services (§4).
+- **The open-source build links no add-ons and contains no add-on code.** It does contain the generic hooks: the `Plugin` capability source, the in-process handler path in the executor and an empty registry. These stay unused there, and Settings › Add-ons doesn't appear.
+- **The add-on never gets the app's internals.** That rules out a database connection, the `dn_tools::Executor`, the keychain or the webview. It gets a **`Host` handle** of narrow, permission-checked services (§4).
 - **The API is shaped as declarations plus messages.** Every argument and result that crosses the boundary is a plain, serialisable value. So a later move to WASM (option B) changes how the boundary is called, not what it says.
-- **Add-on crates must `#![forbid(unsafe_code)]`.** The add-on build's CI checks it, and checks `cargo deny` for the add-on's dependencies, like the app's own.
 
-**Be honest about trust:** in-process means the add-on runs with the app's privileges. Its isolation is the API, code review and signed builds of a first-party, reviewed add-on, not a sandbox. That is why this path is for first-party add-ons only. **Third-party tools keep using MCP** (ADR-0006), which runs out of process and is covered by approvals. A third-party plugin system would need a real sandbox, which needs its own ADR (§8).
+**Be honest about trust:** in-process means the add-on runs with the app's privileges. Rust can't stop it from using `std::net`, `std::process` or `std::fs` itself. Its isolation is the `Host` API, code review and signed builds of a first-party, reviewed add-on, **not a sandbox**.
+
+The add-on build's CI backs review with checks. They are **backstops, not guarantees**:
+- `#![forbid(unsafe_code)]`;
+- a `cargo deny` ban list of network, process and FFI crates, **including transitive dependencies**;
+- a gate that fails on any use of `std::net`, `std::process` or `std::fs` in add-on crates.
+
+That is why this path is for first-party add-ons only. **Third-party tools keep using MCP** (ADR-0006), which runs out of process and is covered by approvals. A third-party plugin system needs a real sandbox, which needs its own ADR (§8).
 
 ### 2. What an add-on may register
 At start-up the host calls `Plugin::register(&mut Registrar)` once. Everything an add-on contributes is declared there. Nothing is added later behind the host's back.
@@ -46,68 +54,108 @@ At start-up the host calls `Plugin::register(&mut Registrar)` once. Everything a
 pub trait Plugin: Send + Sync + 'static {
     fn manifest(&self) -> &PluginManifest;          // id, version, api version, name, permissions
     fn register(&self, r: &mut Registrar) -> Result<(), PluginError>;
-    fn migrations(&self) -> &'static [&'static str]; // its own tables only (§5)
+    fn migrations(&self) -> &'static [&'static str]; // run against its own database file (§5)
     fn forget_conversation(&self, h: &Host, id: Id) -> Result<(), PluginError>;
     fn delete_all(&self, h: &Host) -> Result<(), PluginError>;
 }
 ```
 
-- **Tools** are `CapabilitySpec`s with a new source, `CapabilitySource::Plugin { plugin_id }`, and ids under `plugin.<plugin_id>.<name>`. A handler runs the call.
+- **Tools** are `CapabilitySpec`s with a new source, `CapabilitySource::Plugin { plugin_id }`, and ids `plugin.<plugin_id>.<name>`. A handler runs the call.
   - They go through **the same `dn_tools` path as MCP tools**: preflight, risk tier, the approval gate, the side-effect ledger with idempotency, the per-tool choices in Settings, and skill narrowing (`dn_tools::Narrowed`).
-  - The add-on **declares** a risk. The host uses the **higher** of the declared risk and its own floor for the kind of action, so a plugin can't declare a write as `read`.
-  - Approval comes from the risk tier and the user's choice, never from the plugin. There is no "auto-approve" field.
   - This adds a variant to a `dn-core` type, which is a contract change. This ADR is its reference.
+  - **The risk floor is computed from the add-on's permissions**, because the host can't see what an opaque handler does. A plugin tool's tier is at least:
+    - `external_write` if the add-on holds `network` or `tools.call` of any write tool;
+    - `low_write` if it can write memory, settings, files or its database;
+    - otherwise the tier it declares.
+
+    The add-on can only declare a **higher** tier than its floor.
+  - **A handler is limited to its declared tier** (enforced by the host). The `Host` handed to a `read`-tier handler is read-only: `http()` GET only, no memory, settings, file or database writes, and `tools()` limited to the `read` tier.
+  - Approval comes from the tier and the user's choice, never from the plugin. There is no "auto-approve" field.
 - **Skills** are chat skills in the `SKILL.md` format (#117/#133), registered as values, with the same parser and the same rule that `allowed-tools` only narrows. A plugin skill can't take a built-in skill's name. Its source shows as the add-on's name.
 - **Background jobs (heartbeat)** are declared with an id, a name, a schedule (an interval, or a local time of day) and a handler.
   - **They run only while the app runs.** They are scheduled by the host. There is no OS daemon, no launch agent, and no running after quit.
   - **They are off by default.** The user turns each one on in the add-on's settings and sees its last run, next run and last error. One switch pauses all background jobs.
   - The host honours the user's quiet hours and skips a missed run rather than catching up a burst.
-  - **Jobs can't do what needs a person.** A job's tool calls go through the same approvals, and there is nobody to ask. So a call that would ask is **held** in a visible queue that waits for the user, never run, and never auto-approved. Jobs run reads, and tools the user explicitly set to run without asking.
+  - **Jobs can't do what needs a person.**
+    - A job's tool calls go through approvals as usual, but `auto` applies **only to tools the user explicitly set to "run without asking" for this add-on**. The `read`-tier default doesn't count.
+    - Every other call is **held**. It goes into a persisted queue that waits for the user, shows the add-on, the job and the exact arguments, and is never auto-approved. It doesn't time out into a silent denial; it stays held until the user answers or dismisses it.
+    - "Delete all" clears the queue.
+    - A job's `http()` calls whose arguments come from model output are held the same way.
   - A job gets a cancel token and a time budget. When either ends, the job is stopped.
   - A job reports to the user only through the host's notification service (§4), which follows the OS's notification permission.
 - **Settings panels** are **declarative**: a JSON-Schema form with titles, help text and the design system's controls, rendered by the host UI.
   - An add-on ships **no HTML or JS** into the app's webview. That keeps the webview capability model (#85, ADR-0012) intact.
-  - Values are stored by the host under `plugin.<id>.*`. Secret fields go to the keychain through `dn-secrets`, under ids the host prefixes with the add-on's id, so "Delete all" finds them (T-STORE-11).
+  - Every string an add-on supplies is shown as plain text, never as markup. That covers titles, help text, notification text, approval text and memory items.
+  - Values are stored by the host in the add-on's own settings namespace. Secret fields go to the keychain through `dn-secrets`, under ids the host owns for that add-on (§5), so "Delete all" finds them (T-STORE-11).
 - **Not registrable:** model backends or providers (those are `dn-core::chat::ChatModel` work in the app), webview commands, raw database or file-system access, or network access beyond what §4 grants.
 
 ### 3. Manifest and permissions
-`PluginManifest` names the add-on (`id`: lowercase, dotted, unique), its version, the `dn-plugin-api` major it was built for, and the **permissions** it asks for:
+`PluginManifest` names the add-on, its version, the `dn-plugin-api` major it was built for, and the **permissions** it asks for.
+
+**Ids.** An id is dot-separated segments, each `[a-z][a-z0-9]*` (no `_` or `-`).
+- **The host keeps a registry** of which add-on owns each tool, table file, settings key, secret id and directory, and checks ownership against it, **not by string prefix**.
+- Two add-ons whose ids are equal, or where one is a prefix segment of the other (`foo` and `foo.bar`), are refused at load with a clear error.
 
 | Permission | Grants | Scope |
 |---|---|---|
 | `chats.read` | read conversations and messages through `Host::chats()` | all chats, or the chats of chosen projects |
 | `memory` | the add-on's own memory store (§5) | its own data only |
 | `knowledge.search` | search the local index (`dn-knowledge`) | the projects the user chose |
+| `tools.call` | call tools that aren't its own, through `Host::tools()` | the capability ids or prefixes listed in the manifest, shown in the consent screen; calls are still approved per the user's choices |
 | `notify` | OS notifications | — |
-| `network` | outbound HTTPS, through the host client | listed hosts only |
+| `network` | outbound HTTPS, through the host client | listed hosts only; the consent text says data sent there isn't covered by "Delete all" |
 | `jobs` | register background jobs | each job still off until the user turns it on |
 
+- **Without `tools.call`,** an add-on can call only its own `plugin.<id>.*` tools.
 - **The user consents per permission**, on the add-on's first start and again when a new version asks for more, in plain words naming what each one reads or does.
 - Each permission can be revoked in Settings. A revoked permission makes its host calls fail with a clear error. They never return empty data.
-- **The host checks the permission on every call,** not only once at registration.
+- **The host checks the permission on every call** (enforced), not only once at registration.
 
 ### 4. Host services
-`Host` is the only way an add-on reaches anything. Every method is permission-checked, and its results are copies:
-- **`chats()`**: list and read messages in the consented scope. Returned text is tagged as **untrusted user or model content**. When an add-on puts it into a prompt, it must use the same quoted, cited block as `dn_knowledge::context_block`. The API offers a helper, and the conformance kit (§7) checks it.
+`Host` is the only way an add-on reaches anything. Every method is permission-checked (enforced), and its results are copies.
+
+**Untrusted content.** Every result that carries content is typed as `Untrusted<T>`:
+- chat messages;
+- tool outputs;
+- memory items;
+- knowledge hits;
+- `chat_model()` output built from any of them;
+- `http()` responses.
+
+`chat_model()` takes untrusted values **only** through the quoted, cited block helper, the same format as `dn_knowledge::context_block`. The types enforce that it can't be passed in as instructions. Whether an add-on's own logic treats untrusted text with care is a **review rule**.
+
+- **`chats()`**: list and read messages in the consented scope.
 - **`memory()`**: see §5.
-- **`knowledge()`**: search in the consented projects. It returns `Hit`s and context blocks.
+- **`knowledge()`**: search in the consented projects.
 - **`chat_model(slot)`**: run a prompt on the model the user chose for that slot, through the app's `ChatModel` path.
   - It goes through model resolution as usual, with the same "no silent fallback to another model" rule.
   - The add-on never sees provider keys.
-- **`tools()`**: call registered tools (its own, MCP or built-in) **as a request through the executor**, with the same approvals. An add-on can't call a tool around the approval gate.
-- **`notify()`**, **`settings()`**, **`secrets()`** (its own prefixed ids only), and **`http()`** (listed hosts only, through the app's client, honouring the user's proxy settings). In-process code could open its own sockets, so for first-party add-ons "network only through `http()`" is a review rule, which the add-on build's CI backs with a check that no HTTP client or socket crate is a direct dependency.
-- **`files()`**: a directory under `<data dir>/plugins/<id>/` that the host owns and deletes.
+- **`tools()`**: request a tool call **through the executor**, so the approval gate always runs; an add-on can't call around it. For every add-on call **the host builds the call context** (enforced):
+  - **Grants:** its approval scope is `plugin:<id>:<run>`, which **never shares** "allow for this chat" grants with a chat.
+  - **Narrowing:** a call made inside a plugin tool handler **inherits the caller's narrowing** (the chat skill's `Narrowed` allowlist and the handler's tier limit) and can only narrow it further.
+  - **Prompts:** every approval prompt from an add-on call **names the add-on** (and the job, if any), so it never looks like the model's own request. That adds a requester field to `ApprovalPrompt`.
+- **`notify()`**, **`settings()`** and **`secrets()`** (its own ids only).
+- **`http()`**: listed hosts only, through the app's client, honouring the user's proxy settings. Using `http()` rather than its own sockets is a review rule, backed by the CI checks in §1.
+- **`files()`**: a directory under `<data dir>/plugins/<id>/` that the host owns and deletes. Writing only there is a review rule, backed by the same checks.
 
 ### 5. Storage, memory and "Delete all"
-- **Tables.** An add-on's tables follow the persistence rule (CLAUDE.md): its own `migrations()`, every table prefixed `plugin_<id>_`, run by `dn-store` in its own migration set. Its handlers get a connection limited to its own tables through `Host`. They never get a handle to other tables.
+- **Each add-on gets its own SQLite database file**, `<data dir>/plugins/<id>/plugin.sqlite3` (enforced).
+  - Its `migrations()` and every handler query run only against that file, through a connection the host opens.
+  - **`ATTACH` and other schemas are refused** by a rusqlite authorizer, so neither a migration nor a query can reach the app database, other add-ons' files or the app's tables. That includes triggers on another schema.
+  - A handler's write rights follow its tier (§2).
 - **Memory is the add-on's own data.** The host gives a small store of items (text, source chat ids, created/updated), so the UI can show the user **what the add-on remembers**, with delete per item and delete all.
-  - An add-on that keeps memory elsewhere (its own tables) must still expose those items through the same listing. The conformance kit checks that both agree.
+  - An add-on that also keeps derived data in its own database must expose it through the same listing. That is a review rule; the conformance kit (§7) checks that the two agree in its scenarios.
 - **Delete all local data never skips an add-on.** The host:
-  1. calls `delete_all` on every add-on;
-  2. **then** drops every `plugin_*` table and the `plugins/` directory itself, and deletes the add-on's prefixed keychain ids, whether or not the add-on's own step succeeded;
-  3. lists any failure in the "couldn't delete" report, as it does for the app's own data.
-- **Deleting a chat** calls `forget_conversation` when the chat is purged. The add-on must drop everything derived from it, including memory items whose only source was that chat. Missing or failing purges are reported.
-- **No copies outside the host's places.** An in-process crate could technically write elsewhere, so this is a review rule for first-party add-ons, and the conformance kit checks that after `delete_all` nothing of the add-on is left in the data dir.
+  1. **first** pauses the scheduler, cancels running jobs and handlers, and revokes every `Host` handle, so nothing writes during or after the deletion;
+  2. calls `delete_all` on every add-on;
+  3. **then** deletes every add-on's database file and `plugins/` directory itself, its settings namespace, its keychain ids from the ownership registry, and the held-approvals queue, whether or not the add-on's own step succeeded;
+  4. lists any failure in the "couldn't delete" report, as it does for the app's own data.
+- **When a chat is purged:**
+  - The host itself deletes memory items whose only source is that chat (enforced).
+  - It then calls `forget_conversation` on each add-on, which must drop everything else derived from it.
+  - If an add-on isn't loaded (version mismatch, failed `register`, disabled, licence ended), its purges are **queued** in the app database. The add-on can't be used again until they have run.
+  - A failing purge is reported and retried before the add-on's next use.
+- **Copies elsewhere.** Data sent to a listed host through `http()` is outside the app and can't be deleted by it. The `network` consent says so. Keeping no other copies is a review rule (§1).
 
 ### 6. Licence keys: offline, signed, consented
 - **The key is a signed licence file:** licensee, add-on ids, expiry and an issue id, signed with Ed25519. The add-on build carries the **public** key and verifies the file **locally**.
@@ -116,19 +164,27 @@ pub trait Plugin: Send + Sync + 'static {
 - **An online check is optional and consented.** Refreshing, moving to another computer or revoking a key happens only when the user asks, from Settings. It sends the issue id and nothing about their data or usage. It is off by default and documented.
 - **When a licence expires or is invalid,** the add-on's features stop with a clear message naming the reason, such as "Your licence ended on …". Other options were rejected:
   - **No silent degrading.**
-  - **The user's data is never locked:** the add-on's memory stays viewable and deletable, and "Delete all" always works.
+  - **The user's data is never locked:** the add-on's memory stays viewable and deletable, purges still run (§5), and "Delete all" always works.
   - **Nothing in the open-source build changes.**
 - **Licence logic lives in the add-on build**, not in `dn-plugin-api`. The API only defines `LicenceStatus`, which the host shows in Settings. Signature verification needs a dependency (for example `ed25519-dalek`), which is decided and recorded where it is used.
 
 ### 7. Versioning and stability
 - **Major versions.** `dn-plugin-api` has its own semver and an `API_MAJOR` constant. A manifest names the major it was built for.
   - **A mismatch is refused with a clear error**: "This add-on needs Demios … ; update Demios or the add-on."
-  - There is no compatibility shim and no partial load.
+  - There is no compatibility shim and no partial load. Queued purges still run (§5).
 - **Minor versions** only add. Public structs and enums are `#[non_exhaustive]`, and new capabilities come as new methods with default implementations.
   - Removing or changing anything is a major version and needs an ADR.
   - A deprecated item keeps working for at least one minor version and warns in the add-on build.
 - **Dependencies.** `dn-plugin-api` depends only on `dn-core` and `serde`/`serde_json`, and re-exports the types it uses, so add-ons don't pin other app crates.
-- **Conformance kit.** A `testing` feature ships a host fake that runs an add-on through: registration, a permission revoked mid-run, `forget_conversation`, `delete_all` with leftovers checked, held approvals for jobs, and the untrusted-text helper.
+- **Conformance kit.** A `testing` feature ships a host fake that runs an add-on through:
+  - registration;
+  - a permission revoked mid-run;
+  - `forget_conversation`, and a queued purge;
+  - `delete_all`, with leftovers checked;
+  - held approvals for jobs;
+  - the tier limits of a handler's `Host`.
+
+  It shows the add-on behaves in those scenarios. It **can't prove** behaviour outside them, which stays a review rule.
 - **Failure handling.** An add-on that panics or errors in `register` is **not loaded**. Settings shows why. A handler that panics fails that call with a clear error, and the host disables that add-on until restart. There is no silent retry loop.
 
 ### 8. Third-party plugins: not yet
@@ -140,27 +196,46 @@ This ADR only keeps that path open (§1). It doesn't build it. Until then, third
 
 | Option | Isolation | Fit for heartbeat, settings and memory | Effort | New dependencies | Notes |
 |---|---|---|---|---|---|
-| **A. In-process Rust crate, static, behind host services (chosen, first-party)** | API, review and signed build; no sandbox | Full | Low | None | Matches ADR-0001's separate build target and git-tag dependency |
+| **A. In-process Rust crate, static, behind host services (chosen, first-party)** | API (permissions, scoped call contexts, own database file), review and signed build; no sandbox | Full | Low–medium | None in the API crate | Matches ADR-0001's separate build target and git-tag dependency |
 | B. WASM component (wasmtime, WIT) | Real sandbox: memory, CPU, no ambient I/O | Full, with a WIT host API | High: async host calls, component tooling, debugging | wasmtime (large) | The way for **third-party** plugins later; same API shape |
 | C. Separate process over IPC or MCP | OS process boundary | Tools only through MCP today; jobs, settings and memory need a new protocol | Medium–high | Process management already exists (dn-tools stdio) | MCP covers third-party tools already |
 | D. Dynamic library (`dlopen`) | None | Full | Medium | libloading | Rejected: needs `unsafe`, no stable Rust ABI, one compiler per build |
 
 ## Trade-offs
 - **A trusts the add-on's code** as much as the app's own. That's acceptable only because add-ons are first-party, reviewed, built and signed with the app. The decision depends on that, and §8 keeps third parties out of it.
+  - What A **does** enforce is everything that goes through `Host`:
+    - permissions;
+    - scoped call contexts and inherited narrowing;
+    - handler tier limits;
+    - the add-on's own database file with `ATTACH` refused;
+    - ownership checks;
+    - deletion.
+  - What it can't enforce (raw std I/O) is listed as review rules with CI backstops.
 - **Declarative settings panels** limit what an add-on can show. That's deliberate: custom UI in the main webview would bypass the capability model. A richer panel would be a new host component, added through an API minor version.
 - **Background jobs that hold, rather than ask,** make unattended work less capable. That's the point: an approval needs a person.
+- **A risk floor from permissions** makes some plugin tools ask more often than their author would like. A tool that only reads its own data can avoid that by being registered by an add-on without `network`, or by asking for narrower permissions.
 - **An offline licence** can't be revoked instantly. Expiry dates bound that, and users get privacy and offline use in exchange.
 
 ## Consequences
-- `dn-core` gains `CapabilitySource::Plugin { plugin_id }`. dn-tools learns to run in-process handlers alongside MCP clients, through the same executor path.
-- The app gains a plugin registry, a job scheduler with a visible held-approvals queue, a declarative settings-panel renderer, Settings › Add-ons (permissions, jobs, memory, licence status), and the "Delete all" and purge hooks.
-- The open-source build is unchanged in behaviour. It registers no add-ons, and Settings › Add-ons doesn't appear.
+- **`dn-core`** gains:
+  - `CapabilitySource::Plugin { plugin_id }`;
+  - a requester field on approval prompts.
+- **dn-tools** learns to run in-process handlers alongside MCP clients, through the same executor path, and accepts host-built call contexts with their own approval scope.
+- **The app** gains:
+  - a plugin registry with an ownership table;
+  - a job scheduler with a persisted held-approvals queue;
+  - a declarative settings-panel renderer;
+  - Settings › Add-ons (permissions, jobs, memory, licence status);
+  - per-add-on database files;
+  - queued purges and the "Delete all" sequence above.
+- **The open-source build** is unchanged in behaviour. It registers no add-ons, and Settings › Add-ons doesn't appear.
 
 ## Action items (to be filed as issues)
-1. `dn-plugin-api`: the traits and types above, plus the conformance kit (`testing` feature).
-2. `dn-core` `CapabilitySource::Plugin`, and in-process tool handlers in the dn-tools executor (same approvals and ledger).
-3. App: plugin registry, permissions and consent UI, Settings › Add-ons.
-4. App: background job scheduler, quiet hours, held-approvals queue, pause-all.
-5. App: declarative settings-panel renderer.
-6. Storage: per-add-on migration sets, scoped connection, "Delete all" and purge hooks, and a leftover check.
-7. Threat model for add-ons (extends ADR-0009): the in-process trust boundary, jobs, network allow-list.
+1. `dn-plugin-api`: the traits and types above, `Untrusted<T>`, and the conformance kit (`testing` feature).
+2. `dn-core` `CapabilitySource::Plugin` and the approval requester field. In-process tool handlers in the dn-tools executor, with host-built call contexts (own scope, inherited narrowing, tier limits).
+3. App: plugin registry and ownership table, permissions and consent UI, Settings › Add-ons.
+4. App: background job scheduler, quiet hours, a persisted held-approvals queue, pause-all.
+5. App: declarative settings-panel renderer (plain text only).
+6. Storage: per-add-on database files with an authorizer, queued purges, the "Delete all" sequence, and a leftover check.
+7. Add-on build CI: a `cargo deny` ban list (transitive) and a gate on `std::net`, `std::process` and `std::fs`.
+8. Threat model for add-ons (extends ADR-0009): the in-process trust boundary, jobs, network allow-list, prompt injection through untrusted results.
