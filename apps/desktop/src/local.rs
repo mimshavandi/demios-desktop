@@ -1069,7 +1069,13 @@ impl<B: InferenceBackend> LocalModels<B> {
             out.push(p);
         }
         out.extend(extra);
-        out.retain(|p| p.starts_with(&self.dir));
+        // `starts_with` compares components without resolving `..`, so refuse those too.
+        out.retain(|p| {
+            p.starts_with(&self.dir)
+                && !p
+                    .components()
+                    .any(|c| matches!(c, std::path::Component::ParentDir))
+        });
         out
     }
 
