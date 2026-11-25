@@ -18,6 +18,7 @@ Only changes people using the app or the `dn` command-line tool can notice are l
 
 ### Changed
 
+- When something fails to load or save, the app now says so, with **Retry** where that helps, instead of quietly carrying on: the chat list, your models, models on this device, a saved Hugging Face token, the AI notice and demios:// links. If its assistant instructions can't load, chats don't start and a message says why ([#164](https://github.com/mimshavandi/demios-desktop/pull/164)).
 - Models on this device now write their prompts with their own chat template, from the model file or from its Hugging Face repository. A model without a chat template can't be used for chat: its row says so, and choosing it gives "This model has no chat template, so it can't be used for chat. Pick another model." ([#150](https://github.com/mimshavandi/demios-desktop/pull/150)).
 
 ## [0.1.0-preview.454e01b] - 2026-11-25
@@ -66,7 +67,6 @@ Preview build, not signed: installers for macOS, Windows and Linux on the [GitHu
 
 ### Changed
 
-- When something fails to load or save, the app now says so, with **Retry** where that helps, instead of quietly carrying on: the chat list, your models, models on this device, a saved Hugging Face token, the AI notice and demios:// links. If its assistant instructions can't load, chats don't start and a message says why ([#164](https://github.com/mimshavandi/demios-desktop/pull/164)).
 - An answer from a provider or server that stops sending now ends with a message you can retry: after 5 minutes with no first response, or 60 seconds of silence once the answer has started ([#44](https://github.com/mimshavandi/demios-desktop/pull/44)).
 - Larger models that don't fully fit on the graphics chip can now run with part of the model in regular memory. The fit check picks this for mixture-of-experts models such as Qwen3 30B-A3B, says replies will be a little slower, and the app loads the model that way. `dn fit` shows the chosen preset ([#129](https://github.com/mimshavandi/demios-desktop/pull/129)).
 
