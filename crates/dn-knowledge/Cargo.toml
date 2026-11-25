@@ -10,6 +10,7 @@ description = "Local knowledge index over project files: BM25 (SQLite FTS5) plus
 [dependencies]
 rusqlite.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 

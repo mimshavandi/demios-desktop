@@ -118,7 +118,7 @@ pub const SLOTS: &[SlotInfo] = &[
     SlotInfo {
         slot_id: "embed",
         label: "Embeddings",
-        description: "Knowledge search (arrives with dn-knowledge).",
+        description: "Knowledge search in projects. Without one, it searches by keywords only.",
         capability: Capability::Embedding,
         shown: true,
     },
@@ -135,6 +135,12 @@ pub struct Settings {
     /// The user dismissed the first-run AI notice (T-STORE-09). "Delete all local data"
     /// clears it, so the notice shows again.
     pub ai_notice_seen: bool,
+    /// Check for updates once when Demios starts (#95). Off by default; only self-updating
+    /// direct downloads ever act on it.
+    pub check_updates_at_launch: bool,
+    /// The one-time "Check for updates when Demios starts?" question was answered (either
+    /// way), so it isn't asked again.
+    pub launch_check_offered: bool,
     /// MCP servers the tool runtime connects to at startup (secret *ids* only).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub mcp_servers: Vec<dn_tools::McpServerConfig>,
@@ -273,6 +279,8 @@ mod tests {
         let s = load(&c).unwrap();
         assert!(!s.telemetry_enabled);
         assert!(!s.ai_notice_seen);
+        assert!(!s.check_updates_at_launch, "the launch check is opt-in");
+        assert!(!s.launch_check_offered);
         assert!(s.slots.is_empty());
     }
 

@@ -8,9 +8,21 @@ Only changes people using the app or the `dn` command-line tool can notice are l
 
 ### Added
 
+#### Desktop app
+
+- In a project's chats, answers use passages from the project's text files, found by search. Each answer lists its sources (file and lines). Without the search model, search is by keywords and the sources say so ([#167](https://github.com/mimshavandi/demios-desktop/pull/167)).
+- **Turn on better search?** The first time a project has files, Demios offers the 84 MB search model to find passages by meaning too, and it's also in **Settings → Models → Project search**. Keyword search works while it downloads ([#179](https://github.com/mimshavandi/demios-desktop/pull/179)).
+- Write your own skills: add a folder with a `SKILL.md` to the skills folder (**Settings → General → Skills → Open skills folder**), then **Reload**. Files with mistakes are listed with the problem. Your own skills follow the same rules as the built-in ones ([#137](https://github.com/mimshavandi/demios-desktop/pull/137)).
+- Projects: group chats with standing instructions that are sent with each chat in the project, and add files, which Demios copies into its data folder. Deleting a project, or a file in it, can be undone for 10 seconds ([#135](https://github.com/mimshavandi/demios-desktop/pull/135)).
+- **Check for updates when Demios starts**, off by default: after your first check for updates, Demios asks once whether to turn it on. When it's on, a new version shows a notice; nothing downloads until you install it ([#139](https://github.com/mimshavandi/demios-desktop/pull/139)).
+
 #### `dn` command-line tool
 
 - `dn bench --quality` runs a short set of prompts with answers it can check, to catch a broken chat template or quantisation. `dn bench` also measures time to first token and speed through the chat path, can benchmark an OpenAI-compatible server with `--endpoint`, and `dn bench-report <folder>` turns saved reports into a table. Reports record a model's file name, never its full path ([#138](https://github.com/mimshavandi/demios-desktop/pull/138)).
+
+### Changed
+
+- Models on this device now write their prompts with their own chat template, from the model file or from its Hugging Face repository. A model without a chat template can't be used for chat: its row says so, and choosing it gives "This model has no chat template, so it can't be used for chat. Pick another model." ([#150](https://github.com/mimshavandi/demios-desktop/pull/150)).
 
 ## [0.1.0-preview.454e01b] - 2026-11-25
 
@@ -23,7 +35,6 @@ Preview build, not signed: installers for macOS, Windows and Linux on the [GitHu
 - Chat with a model, with answers streamed as they are written, Markdown formatting and highlighted code blocks ([#14](https://github.com/mimshavandi/demios-desktop/pull/14)).
 - Stop an answer with ⌘. (Ctrl+. on Windows and Linux), retry the last answer, and copy any answer. ⌘⇧C copies the last answer ([#14](https://github.com/mimshavandi/demios-desktop/pull/14)).
 - Chats are kept on your computer between launches. Deleting a chat can be undone for 10 seconds ([#1](https://github.com/mimshavandi/demios-desktop/pull/1), [#14](https://github.com/mimshavandi/demios-desktop/pull/14)).
-- Projects: group chats with standing instructions that are sent with each chat in the project, and add files, which Demios copies into its data folder. Deleting a project, or a file in it, can be undone for 10 seconds ([#135](https://github.com/mimshavandi/demios-desktop/pull/135)).
 - Keyboard shortcuts: ⌘N for a new chat, ⌘, for Settings, ⌘\ to show or hide the sidebar. On Windows and Linux, use Ctrl instead of ⌘ ([#14](https://github.com/mimshavandi/demios-desktop/pull/14)).
 - Light and dark appearance that follows your system setting ([#3](https://github.com/mimshavandi/demios-desktop/pull/3), [#14](https://github.com/mimshavandi/demios-desktop/pull/14)).
 - Use your own API key for Anthropic, OpenAI or Google Gemini. The key is stored in your system keychain, and removing it can be undone ([#4](https://github.com/mimshavandi/demios-desktop/pull/4), [#8](https://github.com/mimshavandi/demios-desktop/pull/8), [#14](https://github.com/mimshavandi/demios-desktop/pull/14)).

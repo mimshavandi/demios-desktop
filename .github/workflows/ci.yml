@@ -87,6 +87,8 @@ jobs:
       # a ratchet against ui/design-tokens/lint-baseline.json.
       - run: node --test ui/design-tokens/scripts/lint-ui.test.mjs
       - run: node ui/design-tokens/scripts/lint-ui.mjs
+      # Release scripts (T-REL-02): signing checks and the updater manifest.
+      - run: node --test "scripts/release/*.test.mjs"
   ui:
     runs-on: ubuntu-latest
     defaults:
