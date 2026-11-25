@@ -17,7 +17,7 @@ const OPEN: &str = "<<<SOURCE";
 const CLOSE: &str = "SOURCE>>>";
 
 /// What a citation label points at: shown by the app next to the answer.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Citation {
     /// `S1`, `S2`, … as used in the prompt.
     pub label: String,

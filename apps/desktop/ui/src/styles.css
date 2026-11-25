@@ -278,6 +278,13 @@ kbd { font-family: var(--dn-font-sans); font-size: var(--dn-text-xs); color: var
 }
 .msg-assistant { display: grid; gap: var(--dn-space-2); }
 .msg-body { overflow-wrap: anywhere; }
+/* Sources under an answer in a project chat (Sources.tsx, #116). */
+.sources { margin-top: var(--dn-space-2); font-size: var(--dn-text-sm); line-height: var(--dn-leading-sm); color: var(--dn-color-text-muted); }
+.sources-loading { font-style: italic; }
+.sources-list { margin: 0; padding-left: 0; list-style: none; display: grid; gap: var(--dn-space-1); }
+.sources-label { font-family: var(--dn-font-mono); color: var(--dn-color-text); }
+.sources-file { color: var(--dn-color-text); font-weight: var(--dn-weight-medium); overflow-wrap: anywhere; }
+.sources-empty, .sources-mode { margin: var(--dn-space-1) 0 0; }
 .thinking { color: var(--dn-color-text-subtle); font-size: var(--dn-text-sm); }
 .caret {
   display: inline-block; width: var(--dn-space-2); height: var(--dn-space-4);

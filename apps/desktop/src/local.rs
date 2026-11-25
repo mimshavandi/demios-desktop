@@ -221,6 +221,9 @@ pub struct LocalModels<B: InferenceBackend = LlamaCppBackend> {
     owns_dir: bool,
     /// The one local model the app holds (others may live on briefly in running replies).
     loaded: tokio::sync::Mutex<Option<(String, Arc<Resident<B>>)>>,
+    /// The embedding model for knowledge search (#116), in its own slot so it never evicts
+    /// the chat model.
+    embedding: tokio::sync::Mutex<Option<(String, Arc<LoadedModel<B>>)>>,
     /// Hub downloads and Hugging Face cache models (see [`Self::refresh_externals`]).
     externals: Mutex<Vec<External>>,
     /// The user's Hugging Face cache, read for models to reuse; `None` = don't look (tests).
@@ -537,6 +540,7 @@ impl<B: InferenceBackend> LocalModels<B> {
             backend,
             owns_dir: false,
             loaded: tokio::sync::Mutex::new(None),
+            embedding: tokio::sync::Mutex::new(None),
             externals: Mutex::new(Vec::new()),
             hf_cache: None,
         };
@@ -1063,6 +1067,12 @@ impl<B: InferenceBackend> LocalModels<B> {
                 Err(in_use) => drop(in_use),
             }
         }
+        if let Some((_, m)) = self.embedding.lock().await.take()
+            && let Ok(idle) = Arc::try_unwrap(m)
+            && let Err(e) = idle.unload().await
+        {
+            eprintln!("could not unload the embedding model: {e}");
+        }
         let ignore_missing = |r: std::io::Result<()>| match r {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
             _ => Ok(()),
@@ -1166,6 +1176,83 @@ impl<B: InferenceBackend> LocalModels<B> {
         let m = Arc::new(Resident::new(m));
         *loaded = Some((id.to_string(), Arc::clone(&m)));
         let m: Arc<dyn ChatModel> = m;
+        Ok(m)
+    }
+
+    /// The embedding model `local:<id>` for knowledge search (#116): loaded on first use and
+    /// kept in its own slot, so it never evicts the chat model. Same refusals as
+    /// [`Self::chat_model`]: not an embedding model, not downloaded, or won't fit.
+    pub async fn embedding_model(&self, id: &str) -> Result<Arc<LoadedModel<B>>, CoreError> {
+        let unavailable = |user: String, dev: String| CoreError::ModelUnavailable {
+            user_message: user,
+            developer_message: dev,
+            recovery: vec![RecoveryAction::ChooseModelForSlot {
+                agent_id: crate::agent::AGENT_ID.into(),
+                slot_id: "embed".into(),
+            }],
+        };
+        let e = self.find(id).ok_or_else(|| {
+            unavailable(
+                format!("`local:{id}` isn't a model this app knows."),
+                format!("unknown catalogue id {id}"),
+            )
+        })?;
+        if !e.capabilities.contains(&Capability::Embedding) {
+            return Err(unavailable(
+                format!(
+                    "{} isn't an embedding model. Choose one for Embeddings.",
+                    e.name
+                ),
+                format!("{id}: not an embedding model ({:?})", e.capabilities),
+            ));
+        }
+        if !self.is_ready(id) {
+            return Err(unavailable(
+                format!(
+                    "{} isn't downloaded yet. Download it in Settings → Models.",
+                    e.name
+                ),
+                format!("{id} not downloaded"),
+            ));
+        }
+        if self.wont_fit(id) {
+            return Err(unavailable(
+                format!("{} won't fit in this computer's memory.", e.name),
+                format!("{id}: fit MemoryBlocked"),
+            ));
+        }
+        let mut slot = self.embedding.lock().await;
+        if let Some((cur, m)) = slot.as_ref()
+            && cur == id
+        {
+            return Ok(Arc::clone(m));
+        }
+        if let Some((_, old)) = slot.take()
+            && let Ok(idle) = Arc::try_unwrap(old)
+            && let Err(err) = idle.unload().await
+        {
+            eprintln!("could not unload the embedding model: {err}");
+        }
+        // nomic-embed-text v1.5's training context; longer chunks are cut at the batch size
+        // anyway. A small embedding model needs no GPU/CPU split (`load_options`).
+        let opts = LoadOptions {
+            n_ctx: Some(2048),
+            ..Default::default()
+        };
+        let m = LoadedModel::load(
+            Arc::clone(&self.backend),
+            &ModelSpec::gguf(self.path(&e)),
+            &opts,
+        )
+        .await
+        .map_err(|err| {
+            unavailable(
+                format!("{} couldn't be loaded.", e.name),
+                format!("load {id}: {err}"),
+            )
+        })?;
+        let m = Arc::new(m);
+        *slot = Some((id.to_string(), Arc::clone(&m)));
         Ok(m)
     }
 }
@@ -1666,6 +1753,52 @@ mod tests {
             Arc::clone(&rec),
         );
         (dir, rec, lm)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_embedding_model_has_its_own_slot_and_never_unloads_the_chat_model() {
+        let dir = Dir(std::env::temp_dir().join(format!("dn-local-embed-{}", dn_core::Id::new())));
+        std::fs::create_dir_all(&dir.0).unwrap();
+        for id in ["a", "e", "f"] {
+            std::fs::write(dir.0.join(format!("{id}.gguf")), b"12345").unwrap();
+            std::fs::write(dir.0.join(format!("{id}.gguf.sha256")), "aa").unwrap();
+        }
+        let embedding = |id: &str| {
+            let mut x = entry(id, 5, "aa");
+            x.capabilities = vec![Capability::Embedding];
+            x
+        };
+        let rec = Arc::new(Recorder::default());
+        let lm = LocalModels::with_parts(
+            dir.0.clone(),
+            Catalog {
+                version: 1,
+                models: vec![entry("a", 5, "aa"), embedding("e"), embedding("f")],
+            },
+            Machine::cpu_only(16 << 30),
+            pull_fetch(),
+            Arc::clone(&rec),
+        );
+        let chat = lm.chat_model("a").await.unwrap();
+        let emb = lm.embedding_model("e").await.unwrap();
+        // Loaded once, then reused; the chat model stays loaded.
+        let again = lm.embedding_model("e").await.unwrap();
+        assert!(Arc::ptr_eq(&emb, &again));
+        assert_eq!(*lock(&rec.0), ["load a", "load e"]);
+        // Switching embedding models unloads the idle old one, still not the chat model.
+        drop((emb, again));
+        drop(lm.embedding_model("f").await.unwrap());
+        assert_eq!(*lock(&rec.0), ["load a", "load e", "unload e", "load f"]);
+        // A chat model isn't an embedding model (and the other way round).
+        let Err(err) = lm.embedding_model("a").await else {
+            panic!("a chat model loaded as an embedding model");
+        };
+        assert!(
+            format!("{err:?}").contains("isn't an embedding model"),
+            "{err:?}"
+        );
+        assert!(lm.chat_model("e").await.is_err());
+        drop(chat);
     }
 
     #[tokio::test(flavor = "multi_thread")]

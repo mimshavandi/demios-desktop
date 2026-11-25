@@ -63,6 +63,8 @@ const COMMANDS: &[&str] = &[
     "pause_download",
     "check_for_update",
     "install_update",
+    // Knowledge search (knowledge.rs, #116): what an answer was given.
+    "message_sources",
     // Windows artifact webview (artifact_child.rs, ADR-0012); main webview only.
     "artifact_child_open",
     "artifact_child_render",
