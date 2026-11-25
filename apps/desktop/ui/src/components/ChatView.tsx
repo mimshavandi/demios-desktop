@@ -14,7 +14,6 @@ import {
 import { AI_DISCLOSURE, AI_FIRST_RUN_NOTICE } from "../ai";
 import { describeModel } from "../models";
 import { mod } from "../platform";
-import { withoutArtifactBlocks } from "../fenced";
 import { canRegenerate, type ChatState, type LiveToolCall } from "../state/chat";
 import { ArtifactCard } from "./ArtifactPane";
 import { Markdown } from "./Markdown";
@@ -385,9 +384,7 @@ function Message({
       : live;
   // Artifact tool calls that worked are shown as artifact cards instead of tool cards.
   const shownCalls = calls.filter((c) => !(c.name.startsWith("artifact_") && c.status === "done"));
-  const usedArtifactTools = calls.some((c) => c.name.startsWith("artifact_"));
-  // A tool-less model's saved `<artifact>` blocks are shown as cards, not as raw text.
-  const text = artifacts.length > 0 && !usedArtifactTools ? withoutArtifactBlocks(raw) : raw;
+  const text = raw;
   if (m.role === "user") {
     return (
       <article className="msg msg-user" aria-label="You" data-testid="message-user">

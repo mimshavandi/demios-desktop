@@ -1,8 +1,7 @@
 //! Model-facing protocol (ADR-0004): the three artifact tools, turning tool calls into
-//! [`ArtifactOp`]s, tool results, and applying fenced-fallback blocks.
+//! [`ArtifactOp`]s and tool results.
 
 use crate::error::{ArtifactError, Result};
-use crate::fenced::FencedArtifact;
 use crate::store::{Applied, ArtifactStore, OpContext, check_content, check_title};
 use dn_core::Id;
 use dn_core::artifact::{ArtifactOp, ArtifactType};
@@ -82,21 +81,6 @@ pub fn tool_specs() -> Vec<ToolSpec> {
         },
     ]
 }
-
-/// System-prompt text for models **without tool calling** (parsed by [`crate::fenced`]). Models
-/// that support tools get [`tool_specs`] instead, and their text is not run through the fenced
-/// parser, so an echoed `<artifact>` tag in their prose or in tool output can't create anything.
-pub const FENCED_INSTRUCTIONS: &str = "\
-To create an artifact (a self-contained web page, React component, SVG, Mermaid diagram, \
-Markdown document or code file shown next to the chat), write it as:
-<artifact id=\"short-id\" type=\"html|react|svg|mermaid|markdown|code\" title=\"Title\" language=\"(code only)\">
-...full content...
-</artifact>
-Start the opening tag on its own line, outside any ``` code block. The content must not contain \
-the text </artifact>. To change an artifact, write the block again with the same id, the same \
-type and the complete new content. \
-HTML and React run without network access: inline all CSS and JS. React artifacts are one JSX \
-file that `export default`s a component and may import only `react` and `react-dom`.";
 
 pub fn is_artifact_tool(name: &str) -> bool {
     matches!(name, TOOL_CREATE | TOOL_UPDATE | TOOL_REWRITE)
@@ -209,62 +193,9 @@ pub fn tool_result(result: &Result<Applied>) -> Value {
     }
 }
 
-/// Apply a fenced block from [`FenceEvent::Close`](crate::fenced::FenceEvent::Close). A block
-/// whose `id` names an artifact of this conversation (its UUID, or an alias from an earlier
-/// block) rewrites it, and its type must match; otherwise a new artifact is created and the
-/// `id` is remembered as its alias. Unterminated blocks are refused, never saved.
-pub fn apply_fenced(
-    store: &ArtifactStore<'_>,
-    conversation_id: Id,
-    block: &FencedArtifact,
-    ctx: &OpContext,
-) -> Result<Applied> {
-    if !block.complete {
-        return Err(ArtifactError::Unterminated);
-    }
-    let h = &block.header;
-    if let Some(key) = h.id.as_deref() {
-        let existing = match uuid::Uuid::parse_str(key).map(Id) {
-            Ok(id) if store.exists_in(id, conversation_id)? => Some(id),
-            _ => store.find_by_alias(conversation_id, key)?,
-        };
-        if let Some(id) = existing {
-            let current = store.get(id)?.artifact_type;
-            if current != h.artifact_type {
-                return Err(ArtifactError::TypeMismatch {
-                    id,
-                    existing: type_name(&current),
-                    requested: type_name(&h.artifact_type),
-                });
-            }
-            return store.rewrite(conversation_id, id, &block.content, ctx);
-        }
-    }
-    store.create(
-        conversation_id,
-        &h.artifact_type,
-        &h.title,
-        &block.content,
-        h.id.as_deref(),
-        ctx,
-    )
-}
-
-fn type_name(t: &ArtifactType) -> String {
-    match t {
-        ArtifactType::Html => "html".into(),
-        ArtifactType::React => "react".into(),
-        ArtifactType::Svg => "svg".into(),
-        ArtifactType::Mermaid => "mermaid".into(),
-        ArtifactType::Markdown => "markdown".into(),
-        ArtifactType::Code { language } => format!("code ({language})"),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fenced::{FenceEvent, FencedParser};
     use crate::store::tests::db;
 
     fn call(name: &str, args: Value) -> ToolCall {
@@ -365,90 +296,6 @@ mod tests {
             op_from_tool_call(&call("web_search", json!({}))).unwrap_err(),
             ArtifactError::UnknownTool(_)
         ));
-    }
-
-    #[test]
-    fn fenced_blocks_create_then_rewrite_by_alias() {
-        let conn = db();
-        let store = ArtifactStore::new(&conn);
-        let conv = Id::new();
-        let ctx = OpContext::model(None);
-        let mut parser = FencedParser::new();
-        let mut blocks = Vec::new();
-        for chunk in [
-            "First:\n<artifact id=\"page\" type=\"html\" title=\"Page\">\n<p>1</p>\n</arti",
-            "fact>\nThen:\n<artifact id=\"page\" type=\"html\" title=\"Page\">\n<p>2</p>\n</artifact>",
-        ] {
-            for ev in parser.push(chunk) {
-                if let FenceEvent::Close(b) = ev {
-                    blocks.push(b);
-                }
-            }
-        }
-        let a = apply_fenced(&store, conv, &blocks[0], &ctx).unwrap();
-        let b = apply_fenced(&store, conv, &blocks[1], &ctx).unwrap();
-        assert_eq!(a.artifact_id, b.artifact_id);
-        assert_eq!(b.version.n, 2);
-        assert_eq!(b.version.content, "<p>2</p>");
-        // Using the real id works too.
-        let mut by_uuid = blocks[1].clone();
-        by_uuid.header.id = Some(a.artifact_id.to_string());
-        by_uuid.content = "<p>3</p>".into();
-        assert_eq!(
-            apply_fenced(&store, conv, &by_uuid, &ctx)
-                .unwrap()
-                .version
-                .n,
-            3
-        );
-        // Same alias in another conversation is a different artifact.
-        let other = apply_fenced(&store, Id::new(), &blocks[0], &ctx).unwrap();
-        assert_ne!(other.artifact_id, a.artifact_id);
-    }
-
-    fn block(id: &str, ty: ArtifactType, content: &str, complete: bool) -> FencedArtifact {
-        FencedArtifact {
-            header: crate::fenced::FenceHeader {
-                id: Some(id.into()),
-                artifact_type: ty,
-                title: "T".into(),
-            },
-            content: content.into(),
-            complete,
-        }
-    }
-
-    #[test]
-    fn fenced_type_change_and_unterminated_blocks_are_refused() {
-        let conn = db();
-        let store = ArtifactStore::new(&conn);
-        let conv = Id::new();
-        let ctx = OpContext::model(None);
-        apply_fenced(
-            &store,
-            conv,
-            &block("p", ArtifactType::Html, "<p>1</p>", true),
-            &ctx,
-        )
-        .unwrap();
-        let err = apply_fenced(
-            &store,
-            conv,
-            &block("p", ArtifactType::Svg, "<svg/>", true),
-            &ctx,
-        )
-        .unwrap_err();
-        assert!(matches!(err, ArtifactError::TypeMismatch { .. }), "{err:?}");
-        assert!(err.to_string().contains("not svg"));
-        let err = apply_fenced(
-            &store,
-            conv,
-            &block("q", ArtifactType::Html, "<p>", false),
-            &ctx,
-        )
-        .unwrap_err();
-        assert!(matches!(err, ArtifactError::Unterminated));
-        assert_eq!(store.list(conv).unwrap().len(), 1);
     }
 
     #[test]
