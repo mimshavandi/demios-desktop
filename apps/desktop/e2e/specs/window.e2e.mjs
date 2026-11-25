@@ -15,7 +15,9 @@ describe("main window under `unstable`", () => {
     await browser.setWindowSize(1400, 900);
     await browser.pause(800);
     const [w2, h2] = await size();
-    console.log(`main webview: at 1100x760 -> ${w1}x${h1}, at 1400x900 -> ${w2}x${h2}`);
+    console.log(
+      `main webview: at 1100x760 -> ${w1}x${h1}, at 1400x900 -> ${w2}x${h2} (window rect now ${JSON.stringify(await browser.getWindowRect())}, ${await browser.execute(() => document.visibilityState)})`,
+    );
     // Grows by (nearly) the same amount as the window: it fills the client area.
     expect(Math.abs(w2 - w1 - 300)).toBeLessThanOrEqual(4);
     expect(Math.abs(h2 - h1 - 140)).toBeLessThanOrEqual(4);

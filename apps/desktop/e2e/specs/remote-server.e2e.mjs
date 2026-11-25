@@ -113,10 +113,28 @@ describe("OpenAI-compatible server", () => {
       if ((await textOf(b)).trim() === "Models") models = b;
     }
     if (models === undefined) throw new Error("no Models button in the sidebar");
+    // Settings › Models shows its cards once the model catalog loads (`list_models`): time it,
+    // so a slow catalog (for example the system keychain answering slowly) shows in the log.
+    const catalogMs = await browser.executeAsync((done) => {
+      const t0 = performance.now();
+      window.__TAURI_INTERNALS__
+        .invoke("list_models")
+        .then(() => done(Math.round(performance.now() - t0)))
+        .catch((e) => done(`failed after ${Math.round(performance.now() - t0)} ms: ${JSON.stringify(e)}`));
+    });
+    console.log(`list_models: ${catalogMs}${typeof catalogMs === "number" ? " ms" : ""}`);
     await models.click();
     // The form opens from "Add model server" (an empty state while there are no servers).
     const open = await byTestId("add-model-server");
-    await open.waitForExist({ timeout: 30_000, timeoutMsg: "Settings › Models has no Add model server button" });
+    try {
+      await open.waitForExist({ timeout: 30_000 });
+    } catch {
+      // Say what Settings › Models shows instead (still loading, an error, another page).
+      const shown = await browser.execute(() =>
+        (document.querySelector("main") ?? document.body).innerText.replace(/\s+/g, " ").slice(0, 600),
+      );
+      throw new Error(`Settings › Models has no Add model server button. On screen: ${shown}`);
+    }
     await open.scrollIntoView();
     await open.click();
     const url = await byTestId("server-url");
