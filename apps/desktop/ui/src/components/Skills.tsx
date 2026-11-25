@@ -62,7 +62,7 @@ export function SkillsCard({ api, onChanged }: { api: Api; onChanged?: () => voi
       <h2 id="skills-h">Skills</h2>
       <p className="dn-help">
         A skill changes how the assistant works in a chat. Pick one in the message box. A skill can only limit which
-        tools are used; tools still ask for your OK as set under Models.
+        tools are used; tools still ask for your OK as set under Tools.
       </p>
       {error !== null && <InlineMessage tone="error">{error}</InlineMessage>}
       {overview === null && error === null && <Skeleton />}
