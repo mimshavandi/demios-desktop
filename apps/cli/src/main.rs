@@ -2,6 +2,8 @@
 //! (T-INF-01..06).
 
 mod bench;
+mod quality;
+mod report;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use dn_core::chat::{ChatMessage, ChatRequest, Role, StreamEvent};
@@ -38,8 +40,11 @@ enum Cmd {
     Run(RunArgs),
     /// Estimate whether a GGUF fits this machine and recommend settings.
     Fit(FitArgs),
-    /// Measure prompt / generation tokens per second and peak memory; writes a JSON report.
+    /// Measure tokens per second, peak memory and (--quality) a small quality set, in-process
+    /// or against an OpenAI-compatible server; writes a JSON report.
     Bench(bench::BenchArgs),
+    /// Turn `dn bench` JSON reports into a markdown table.
+    BenchReport(report::ReportArgs),
     /// The curated model catalogue.
     Models {
         #[command(subcommand)]
@@ -1161,6 +1166,7 @@ async fn main() -> ExitCode {
         Cmd::Run(a) => run(a).await,
         Cmd::Fit(a) => fit_cmd(a).await,
         Cmd::Bench(a) => bench::run(a).await,
+        Cmd::BenchReport(a) => report::run(a),
         Cmd::Models { cmd } => models_cmd(cmd).await,
     };
     match r {
@@ -1272,8 +1278,8 @@ mod tests {
 
     #[test]
     fn bench_context_sized_to_the_run() {
-        assert_eq!(bench::bench_ctx(None, 512, 128), 512 + 128 + 16);
+        assert_eq!(bench::bench_ctx(None, 512, 128), 512 + 128 + 128 + 64);
         assert_eq!(bench::bench_ctx(Some(4096), 512, 128), 4096);
-        assert_eq!(bench::bench_ctx(Some(100), 512, 128), 512 + 128 + 16);
+        assert_eq!(bench::bench_ctx(Some(100), 512, 128), 512 + 128 + 128 + 64);
     }
 }
