@@ -27,6 +27,7 @@ import { chatModel, chatModelReady, describeModel, modelName } from "../models";
 import { artifactFrameUrl, isMac, mod } from "../platform";
 import { chatReducer, initialChat } from "../state/chat";
 import { ArtifactPane } from "./ArtifactPane";
+import { configureSources } from "./Sources";
 import { ChatView, type ArtifactCardInfo } from "./ChatView";
 import { ModelBadge } from "./ModelBadge";
 import { NewProjectView, ProjectView, type ProjectDraft } from "./ProjectView";
@@ -41,6 +42,7 @@ type View =
   | { kind: "project"; id: Id | "new" };
 
 export function App({ api = realApi }: { api?: Api }) {
+  configureSources(api.messageSources);
   return (
     <TooltipProvider>
       <ToastProvider>

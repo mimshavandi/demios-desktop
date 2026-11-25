@@ -138,6 +138,7 @@ function fakeApi() {
     artifactChildBounds: async () => null,
     artifactChildFocus: async () => null,
     artifactChildClose: async () => null,
+    messageSources: async () => null,
     appInfo: async () => ({ version: "0.1.0", dev_fake_model: true, data_dir: "/tmp", models_dir: "/tmp/models", updates: "off" }),
     checkForUpdate: async () => ({ status: "up_to_date", current: "0.1.0" }) as const,
     installUpdate: async () => null,

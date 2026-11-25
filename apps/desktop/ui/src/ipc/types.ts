@@ -539,6 +539,25 @@ export interface McpServerToolsView {
 // ---- artifacts (apps/desktop/src/artifacts.rs, dn-artifacts)
 
 /** `dn_artifacts::ArtifactSummary`. */
+/** How a project search ranked (knowledge.rs): both ways, or keywords only (no embedding model). */
+export type SearchMode = "hybrid" | "keyword";
+
+/** One excerpt an answer was given: where it is in the project's files. */
+export interface Citation {
+  label: string;
+  chunk_id: number;
+  file_id: string;
+  display_path: string;
+  start_line: number;
+  end_line: number;
+}
+
+/** What an answer in a project chat was given (`message_sources`). */
+export interface MessageSources {
+  mode: SearchMode;
+  citations: Citation[];
+}
+
 export interface ArtifactSummary {
   id: Id;
   conversation_id: Id;

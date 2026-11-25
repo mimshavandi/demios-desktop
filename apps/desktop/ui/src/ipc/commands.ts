@@ -3,6 +3,7 @@
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
+  MessageSources,
   AppInfo,
   ApprovalDecision,
   ArtifactDetail,
@@ -120,6 +121,8 @@ interface Commands {
   artifact_child_bounds: { args: { bounds: ChildBounds | null }; ret: null };
   artifact_child_focus: { args: Record<string, never>; ret: null };
   artifact_child_close: { args: Record<string, never>; ret: null };
+  // Knowledge search (knowledge.rs, #116).
+  message_sources: { args: { messageId: Id }; ret: MessageSources | null };
 }
 
 /** Where the artifact webview goes, in this webview's CSS pixels. */
@@ -155,6 +158,8 @@ export const api = {
   artifactChildBounds: (bounds: ChildBounds | null) => call("artifact_child_bounds", { bounds }),
   artifactChildFocus: () => call("artifact_child_focus", {}),
   artifactChildClose: () => call("artifact_child_close", {}),
+  /** What an answer in a project chat was given from the project's files (null: not a project chat). */
+  messageSources: (messageId: Id) => call("message_sources", { messageId }),
   appInfo: () => call("app_info", {}),
   /** Asks GitHub Releases for a newer version; downloads nothing. */
   checkForUpdate: () => call("check_for_update", {}),

@@ -386,6 +386,7 @@ export function createMockApi(): Api {
     artifactChildBounds: async () => null,
     artifactChildFocus: async () => null,
     artifactChildClose: async () => null,
+    messageSources: async () => null,
     appInfo: async () => ({
       version: "0.1.0 (browser mock)",
       dev_fake_model: true,

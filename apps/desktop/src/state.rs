@@ -1457,7 +1457,40 @@ mod tests {
                 "1 tool-server secret or sign-in"
             ]
         );
+        {
+            let db = st.db().unwrap();
+            dn_knowledge::Index::new(&db)
+                .sync_source(
+                    "project",
+                    &[dn_knowledge::SourceFile {
+                        file_id: "f".into(),
+                        display_path: "notes.md".into(),
+                        content: b"private project notes".to_vec(),
+                    }],
+                    None,
+                )
+                .unwrap();
+            dn_knowledge::record_sources(
+                &db,
+                "m",
+                &c.id.to_string(),
+                &dn_knowledge::Sources {
+                    mode: dn_knowledge::SearchMode::Keyword,
+                    citations: vec![],
+                },
+            )
+            .unwrap();
+        }
         assert!(st.wipe_local_data().is_empty());
+        {
+            let db = st.db().unwrap();
+            assert_eq!(
+                dn_knowledge::Index::new(&db).counts().unwrap(),
+                dn_knowledge::Counts::default(),
+                "the knowledge index is deleted too"
+            );
+            assert!(dn_knowledge::sources_for(&db, "m").unwrap().is_none());
+        }
         assert!(st.keychain_entries().is_empty());
         assert!(
             store::list_conversations(&st.db().unwrap())
