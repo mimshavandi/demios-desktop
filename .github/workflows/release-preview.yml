@@ -449,6 +449,9 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Only notes.md is needed; don't leave the write token in .git/config.
+          persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
           name: ${{ needs.meta.outputs.prefix }}-${{ needs.meta.outputs.short }}
