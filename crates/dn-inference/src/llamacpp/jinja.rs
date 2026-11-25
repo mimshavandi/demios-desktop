@@ -7,7 +7,7 @@
 //! - Each render has a fuel budget and a recursion limit, so a hostile template can't hang
 //!   the app or exhaust its memory, and the output size is capped.
 //! - `raise_exception` (used by real templates to reject unsupported chats) becomes
-//!   [`TemplateError::Raised`]; any error makes the caller fall back to the built-in matcher.
+//!   [`TemplateError::Raised`]; any template error fails the chat with a clear message.
 //! - `strftime_now` reads only the system clock.
 //! - Message text is passed as data, never compiled. The caller renders placeholders in
 //!   place of the content and tokenizes only the template's own text with special-token
@@ -85,7 +85,7 @@ impl ChatTemplate {
         env.set_syntax(syntax);
         env.set_fuel(Some(FUEL));
         env.set_recursion_limit(RECURSION);
-        env.set_unknown_method_callback(minijinja_contrib::pycompat::unknown_method_callback);
+        env.set_unknown_method_callback(py_methods);
         env.add_function("raise_exception", |msg: String| -> Result<String, Error> {
             Err(Error::new(
                 ErrorKind::InvalidOperation,
@@ -118,6 +118,25 @@ impl ChatTemplate {
         }
         Ok(out)
     }
+}
+
+/// Python string, list and dict methods through minijinja-contrib's `pycompat`, except
+/// `str.format`: it pads to any width or precision the template asks for before minijinja
+/// charges fuel, so `'{:>1000000000000000}'.format('')` would abort the process on the
+/// allocation. No chat template we ship or tested uses it (they use `~` and `|format`).
+fn py_methods(
+    state: &mut minijinja::State,
+    value: &minijinja::Value,
+    method: &str,
+    args: &[minijinja::Value],
+) -> Result<minijinja::Value, Error> {
+    if method == "format" && value.kind() == minijinja::value::ValueKind::String {
+        return Err(Error::new(
+            ErrorKind::UnknownMethod,
+            "str.format is not available in chat templates",
+        ));
+    }
+    minijinja_contrib::pycompat::unknown_method_callback(state, value, method, args)
 }
 
 /// `strftime_now(fmt)` from Hugging Face templates (Llama 3.x writes today's date into the
@@ -313,6 +332,20 @@ mod tests {
             let r = ChatTemplate::new(src, "", "").and_then(|t| t.render(&[turn("user", "a")]));
             assert!(r.is_err(), "{src} rendered");
         }
+    }
+
+    #[test]
+    fn huge_str_format_padding_is_refused() {
+        for src in [
+            "{{ '{:>1000000000000000}'.format('') }}",
+            "{{ '{:.1000000000000000f}'.format(1.0) }}",
+        ] {
+            let t = ChatTemplate::new(src, "", "").unwrap();
+            assert!(t.render(&[turn("user", "a")]).is_err(), "{src}");
+        }
+        // The other Python string methods still work.
+        let t = ChatTemplate::new("{{ ' Hi '.strip().upper() }}", "", "").unwrap();
+        assert_eq!(t.render(&[turn("user", "a")]).unwrap(), "HI");
     }
 
     #[test]
