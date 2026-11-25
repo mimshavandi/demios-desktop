@@ -16,6 +16,7 @@ import { describeModel } from "../models";
 import { mod } from "../platform";
 import { canRegenerate, type ChatState, type LiveToolCall } from "../state/chat";
 import { ArtifactCard } from "./ArtifactPane";
+import { Sources } from "./Sources";
 import { Markdown } from "./Markdown";
 import { ModelBadge } from "./ModelBadge";
 import { Button, ICON, IconButton, InlineMessage, Select, Skeleton } from "./primitives";
@@ -413,6 +414,7 @@ function Message({
           </div>
         )
       )}
+      <Sources messageId={m.id} />
       {artifacts.map((a) => (
         <ArtifactCard key={a.id} title={a.title} type={a.type} version={a.version} onOpen={() => onOpenArtifact(a.id)} />
       ))}

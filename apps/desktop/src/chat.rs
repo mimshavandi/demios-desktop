@@ -289,19 +289,28 @@ fn history(
 ) -> IpcResult<Vec<ChatMessage>> {
     let mut out = vec![];
     let project = crate::projects::instructions_for(db, conversation_id)?;
+    let messages = store::list_messages(db, conversation_id)?;
+    let question = messages
+        .iter()
+        .rev()
+        .find(|m| m.role == Role::User)
+        .map(|m| m.text())
+        .unwrap_or_default();
+    let knowledge = crate::knowledge::context_for(state, db, conversation_id, exclude, &question)?;
     let system: Vec<String> = state
         .agent
         .system_prompt()
         .map(str::to_owned)
         .into_iter()
         .chain(project)
+        .chain(knowledge)
         .chain(skill.map(Skill::system_text))
         .collect();
     if !system.is_empty() {
         out.push(ChatMessage::text(Role::System, system.join("\n\n")));
     }
     out.extend(
-        store::list_messages(db, conversation_id)?
+        messages
             .into_iter()
             .filter(|m| m.id != exclude)
             .filter(|m| m.status == MessageStatus::Complete || !m.content.is_empty())
