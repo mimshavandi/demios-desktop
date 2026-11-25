@@ -1,0 +1,113 @@
+# Flatpak manifest for Demios Desktop (T-STORE-06). How to build it and what a Flathub
+# submission still needs: README.md next to this file.
+#
+# Flathub builds with no network, so every cargo crate and npm package comes from the
+# generated source lists in generated/ (run ./generate-sources.sh first; they are not
+# committed). Local and CI builds use this checkout as the source; the Flathub copy of this
+# manifest pins a git tag and commit instead (see README.md).
+id: io.demios.app
+runtime: org.gnome.Platform
+# GNOME 49 ships WebKitGTK 4.1 and libsoup 3, which Tauri 2 needs on Linux. Its base is
+# freedesktop 25.08, so the SDK extensions below use branch 25.08.
+runtime-version: '49'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+  - org.freedesktop.Sdk.Extension.node22
+  # libclang for llama.cpp's bindgen step (llama-cpp-sys-2).
+  - org.freedesktop.Sdk.Extension.llvm20
+command: demios-desktop
+
+finish-args:
+  # AI provider APIs (keys the user adds), Hugging Face model downloads, remote (HTTP) MCP
+  # servers, and the 127.0.0.1 loopback redirect for MCP OAuth sign-in.
+  - --share=network
+  # X11 shared memory, needed by fallback-x11.
+  - --share=ipc
+  # The window: WebKitGTK on Wayland, X11 only where Wayland is not available.
+  - --socket=wayland
+  - --socket=fallback-x11
+  # GPU acceleration for WebKitGTK rendering.
+  - --device=dri
+  # Provider keys, the Hugging Face token and MCP secrets go in the user's keyring through the
+  # Secret Service D-Bus API (keyring crate, async-secret-service). It has no Secret-portal
+  # backend yet, so it talks to org.freedesktop.secrets directly.
+  - --talk-name=org.freedesktop.secrets
+  # Where the bundled skills (the agent's prompts) are installed below.
+  - --env=DEMIOS_SKILLS_DIR=/app/share/demios-desktop/skills
+  # Not requested, on purpose:
+  # - no --filesystem: chats, settings and models live in ~/.var/app/io.demios.app/; links
+  #   open through the OpenURI portal and confirm dialogs are plain GTK windows, so neither
+  #   needs a permission.
+  # - no --talk-name=org.freedesktop.Flatpak: the Flatpak build does not start MCP servers on
+  #   the host (the `flatpak` feature below turns local servers off and says why in the app).
+  # - the single-instance D-Bus name sits under the app id, which a Flatpak app may own
+  #   without a permission.
+
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/node22/bin:/usr/lib/sdk/llvm20/bin
+  env:
+    CARGO_HOME: /run/build/demios-desktop/cargo
+    CARGO_NET_OFFLINE: 'true'
+    LIBCLANG_PATH: /usr/lib/sdk/llvm20/lib
+
+modules:
+  # cargo-about generates the Open-source licences list (Settings › General › About). It is
+  # a build tool only: installed into the build sandbox and deleted from the final app.
+  - name: cargo-about
+    buildsystem: simple
+    cleanup:
+      - '*'
+    build-options:
+      env:
+        CARGO_HOME: /run/build/cargo-about/cargo
+    build-commands:
+      - cargo --offline install --locked --path . --root /app --features cli
+    sources:
+      - generated/cargo-about.json
+      - generated/cargo-about-sources.json
+
+  - name: demios-desktop
+    buildsystem: simple
+    build-options:
+      env:
+        # Offline npm from the generated cache (flatpak-node-generator layout).
+        npm_config_cache: /run/build/demios-desktop/flatpak-node/npm-cache
+        npm_config_offline: 'true'
+        XDG_CACHE_HOME: /run/build/demios-desktop/flatpak-node/cache
+        # The licences list is required in this build: fail instead of shipping without it.
+        DEMIOS_REQUIRE_LICENSES: '1'
+    build-commands:
+      - cd ui/artifact-sandbox && npm ci --offline --no-audit --no-fund
+      - cd apps/desktop && npm ci --offline --no-audit --no-fund
+      # prebuild builds the artifact sandbox; build writes the licences list and the UI.
+      - cd apps/desktop && PATH="/app/bin:$PATH" npm run build
+      - cargo build --release --locked --offline -p demios-desktop --features custom-protocol,flatpak
+      - install -Dm755 target/release/demios-desktop /app/bin/demios-desktop
+      - install -Dm644 apps/desktop/icons/32x32.png /app/share/icons/hicolor/32x32/apps/io.demios.app.png
+      - install -Dm644 apps/desktop/icons/128x128.png /app/share/icons/hicolor/128x128/apps/io.demios.app.png
+      - install -Dm644 apps/desktop/icons/128x128@2x.png /app/share/icons/hicolor/256x256/apps/io.demios.app.png
+      - install -Dm644 apps/desktop/icons/icon.png /app/share/icons/hicolor/512x512/apps/io.demios.app.png
+      - install -Dm644 packaging/flatpak/io.demios.app.desktop /app/share/applications/io.demios.app.desktop
+      - install -Dm644 packaging/flatpak/io.demios.app.metainfo.xml /app/share/metainfo/io.demios.app.metainfo.xml
+      # Skills the app reads at run time (tauri.conf.json bundle.resources).
+      - mkdir -p /app/share/demios-desktop && cp -r skills /app/share/demios-desktop/skills
+    sources:
+      - type: dir
+        path: ../..
+        skip:
+          - .git
+          - .claude
+          - target
+          - apps/desktop/node_modules
+          - apps/desktop/dist
+          - apps/desktop/e2e/node_modules
+          - ui/artifact-sandbox/node_modules
+          - ui/artifact-sandbox/dist
+          - packaging/flatpak/generated
+          - packaging/flatpak/.flatpak-builder
+          - packaging/flatpak/build-dir
+          - packaging/flatpak/repo
+      - generated/cargo-sources.json
+      - generated/node-sources-app.json
+      - generated/node-sources-sandbox.json
