@@ -28,6 +28,7 @@ Or run it without installing: `cargo run -p dn -- <command>`.
 | `dn bench <model>` | Measure speed and peak memory, and write a JSON report. `--quality` also runs 14 short prompts with checkable answers |
 | `dn bench default --endpoint <url>` | The same against an OpenAI-compatible server, such as mistral.rs or llama-server. `--server-pid` measures the server's memory |
 | `dn bench-report <folder>` | Turn `dn bench` reports into a table |
+| `dn bench-embed <model>` | Measure an embedding model on English and German questions (recall, speed, memory) |
 
 `<model>` is a catalogue id or a path to a GGUF file.
 

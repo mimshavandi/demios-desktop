@@ -244,6 +244,8 @@ mod tests {
     fn set_is_consistent() {
         let set: Set = serde_json::from_str(SET).unwrap();
         let ids: std::collections::HashSet<_> = set.docs.iter().map(|d| d.id.as_str()).collect();
+        // Near-miss documents are never the answer.
+        assert!(set.queries.iter().all(|q| !q.doc.starts_with('x')));
         assert_eq!(ids.len(), set.docs.len(), "unique doc ids");
         assert!(set.queries.iter().all(|q| ids.contains(q.doc.as_str())));
         for lang in ["en", "de", "de-en", "en-de"] {
