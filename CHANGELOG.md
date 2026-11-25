@@ -50,6 +50,7 @@ Nothing has been released yet. This section lists what is on `main` now.
 
 ### Changed
 
+- When something fails to load or save, the app now says so, with **Retry** where that helps, instead of quietly carrying on: the chat list, your models, models on this device, a saved Hugging Face token, the AI notice and demios:// links. If its assistant instructions can't load, chats don't start and a message says why ([#164](https://github.com/mimshavandi/demios-desktop/pull/164)).
 - An answer from a provider or server that stops sending now ends with a message you can retry: after 5 minutes with no first response, or 60 seconds of silence once the answer has started ([#44](https://github.com/mimshavandi/demios-desktop/pull/44)).
 
 ### Security
