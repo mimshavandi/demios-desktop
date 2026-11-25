@@ -419,10 +419,14 @@ jobs:
           chmod +x "out/$PREFIX-linux-x86_64.AppImage"
           for f in out/*; do echo "- $(basename "$f") (Vulkan build): $(du -k "$f" | cut -f1) KiB"; done >> "$GITHUB_STEP_SUMMARY"
           # The AppImage carries the pinned loader; deb and rpm depend on the system one.
-          want=$(sed -n 's/.*sha256 \([0-9a-f]\{64\}\).*/\1/p' target/vulkan-loader/SOURCE.txt)
+          # linuxdeploy strips bundled libraries and rewrites their rpath, so compare the code
+          # (.text), which neither touches, with the loader built from the pinned release.
           (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/out/$PREFIX-linux-x86_64.AppImage" --appimage-extract usr/lib/libvulkan.so.1 > /dev/null)
-          got=$(sha256sum "$RUNNER_TEMP/squashfs-root/usr/lib/libvulkan.so.1" | cut -d' ' -f1)
-          [ "$got" = "$want" ] || { echo "::error::AppImage libvulkan.so.1 is $got, built $want"; exit 1; }
+          text() { objcopy -O binary --only-section=.text "$1" "$RUNNER_TEMP/text.bin" && sha256sum "$RUNNER_TEMP/text.bin" | cut -d' ' -f1; }
+          want=$(text target/vulkan-loader/libvulkan.so.1)
+          got=$(text "$RUNNER_TEMP/squashfs-root/usr/lib/libvulkan.so.1")
+          [ "$got" = "$want" ] || { echo "::error::AppImage libvulkan.so.1 code is $got, built loader's $want"; exit 1; }
+          echo "- AppImage bundles the pinned Vulkan loader (.text sha256 $got)" >> "$GITHUB_STEP_SUMMARY"
           dpkg-deb -f "out/$PREFIX-linux-amd64.deb" Depends | grep -q libvulkan1 || { echo "::error::deb does not depend on libvulkan1"; exit 1; }
           echo "bin=target/release/demios-desktop" >> "$GITHUB_OUTPUT"
       - *guard
