@@ -139,8 +139,12 @@ jobs:
           let pid = Int(CommandLine.arguments[1])!
           let list = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as! [[String: Any]]
           let mine = list.filter { ($0[kCGWindowOwnerPID as String] as? Int) == pid && ($0[kCGWindowLayer as String] as? Int) == 0 }
-          for w in mine { print("window", w[kCGWindowBounds as String] ?? "") }
-          exit(mine.isEmpty ? 1 : 0)
+          let sizes = mine.compactMap { w -> String? in
+            guard let b = w[kCGWindowBounds as String] as? [String: Any], let wd = b["Width"] as? Int, let h = b["Height"] as? Int, wd >= 400 else { return nil }
+            return "\(wd)x\(h)"
+          }
+          print("window(s) " + sizes.joined(separator: ", "))
+          exit(sizes.isEmpty ? 1 : 0)
           EOF
           swiftc -O windows.swift -o windows
           install_app() {
@@ -266,6 +270,7 @@ jobs:
           $setup = (Resolve-Path "out/$env:PREFIX-windows-x64-setup.exe").Path
           $msi = (Resolve-Path "out/$env:PREFIX-windows-x64.msi").Path
 
+          trap { $log + "FAILED: $_" | Set-Content out/smoke-windows.txt; break }
           # NSIS, per-user, silent.
           Start-Process -Wait -FilePath $setup -ArgumentList '/S'
           $exe = Find-Exe (Join-Path $env:LOCALAPPDATA 'Demios Desktop')
@@ -288,8 +293,16 @@ jobs:
           # MSI, per-machine, quiet.
           $p = Start-Process -Wait -PassThru -FilePath msiexec.exe -ArgumentList '/i', "`"$msi`"", '/qn', '/l*v', 'msi-install.log'
           if ($p.ExitCode -ne 0) { Get-Content msi-install.log -Tail 40; throw "msiexec exited $($p.ExitCode)" }
-          $exe = Find-Exe (Join-Path $env:ProgramFiles 'Demios Desktop')
-          if (-not $exe) { throw 'MSI install: demios-desktop.exe not found' }
+          $entries = Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |
+            Where-Object { $_.DisplayName -like 'Demios*' }
+          $roots = @($entries | ForEach-Object { $_.InstallLocation } | Where-Object { $_ }) +
+            @((Join-Path $env:ProgramFiles 'Demios Desktop'), (Join-Path ${env:ProgramFiles(x86)} 'Demios Desktop'), (Join-Path $env:LOCALAPPDATA 'Programs\Demios Desktop'))
+          $exe = $roots | Where-Object { Test-Path $_ } | ForEach-Object { Find-Exe $_ } | Select-Object -First 1
+          if (-not $exe) {
+            $entries | Format-List DisplayName, InstallLocation, UninstallString | Out-String | Write-Host
+            Select-String -Path msi-install.log -Pattern 'demios-desktop.exe|INSTALLDIR|APPLICATIONFOLDER' | Select-Object -First 20 | Out-String | Write-Host
+            throw 'MSI install: demios-desktop.exe not found'
+          }
           $log += "msi: installed to $exe"
           Launch $exe 'msi'
           $log += "msi: local data still present=$(Test-Path (Join-Path $data 'reinstall-check.txt'))"
