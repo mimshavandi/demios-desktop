@@ -9,6 +9,7 @@ import type {
   ApprovalPrompt,
   ArtifactDetail,
   ChatEvent,
+  AnswerSkill,
   Conversation,
   SkillInfo,
   ModelCatalog,
@@ -48,6 +49,7 @@ export function createMockApi(): Api {
   };
   const msgs = new Map<string, StoredMessage[]>();
   const chatSkills = new Map<string, string>();
+  const answerSkills: AnswerSkill[] = [];
   const skills: SkillInfo[] = [
     {
       name: "proofread",
@@ -154,8 +156,8 @@ export function createMockApi(): Api {
     },
   ];
   const mcpStatus = new Map<string, McpServerStatus>([
-    ["files", { server_id: "files", name: "Project files", state: "connected", message: null, tools: 4, review: 1 }],
-    ["tracker", { server_id: "tracker", name: "Issue tracker", state: "needs_auth", message: "Sign in to use this server's tools.", tools: 0, review: 0 }],
+    ["files", { server_id: "files", name: "Project files", state: "connected", message: null, tools: 4, review: 1, revision: 0 }],
+    ["tracker", { server_id: "tracker", name: "Issue tracker", state: "needs_auth", message: "Sign in to use this server's tools.", tools: 0, review: 0, revision: 0 }],
   ]);
   // Tools of "files" (T-SHELL-11). `search` changed since it was reviewed, and its new
   // description tries markup and an instruction: the screen shows it as plain text.
@@ -208,7 +210,7 @@ export function createMockApi(): Api {
       state,
       message: state === "needs_auth" ? "Sign in to use this server's tools." : state === "signing_in" ? "Finish signing in in your browser." : null,
       tools: state === "connected" ? 3 : 0,
-      review: state === "connected" ? mcpTools.filter((t) => t.flag !== null).length : 0,
+      review: state === "connected" ? mcpTools.filter((t) => t.flag !== null).length : 0, revision: 0,
     };
     mcpStatus.set(s.id, status);
     approvalSink?.({ type: "mcp_server", status });
@@ -272,6 +274,12 @@ export function createMockApi(): Api {
     settings,
     chat_model: settings.slots["chat"] ?? "local:dev-fake",
     chat_model_tools: true,
+    compute: {
+      mode: "shared_gpu",
+      name: "Apple M3",
+      backend: "Metal",
+      description: "Local models run on the built-in graphics (Apple M3), which share this computer's memory.",
+    },
   });
 
   const stream = (cid: string, a: StoredMessage, q: string, onEvent: (e: ChatEvent) => void) => {
@@ -433,6 +441,7 @@ export function createMockApi(): Api {
         date: "2027-01-15T10:00:00Z",
       };
     },
+    launchUpdateCheck: async () => null,
     installUpdate: async (version, onProgress) => {
       const total = 40 * 1024 * 1024;
       for (let done = 0; done <= total; done += total / 8) {
@@ -576,9 +585,11 @@ export function createMockApi(): Api {
     listMessages: async (cid) => structuredClone(msgs.get(cid) ?? []),
     listSkills: async () => structuredClone(skills),
     getChatSkill: async (cid) => chatSkills.get(cid) ?? null,
+    listAnswerSkills: async (cid) =>
+      structuredClone(answerSkills.filter((a) => msgs.get(cid)?.some((m) => m.id === a.message_id))),
     skillsOverview: async () => ({
       skills: structuredClone(skills),
-      problems: [{ file: "my-skill/SKILL.md", message: "name: `My Skill` must be lowercase letters, digits and single hyphens" }],
+      problems: [{ file: "my-skill/SKILL.md", message: "name: `My Skill` must be lowercase letters, digits and single hyphens", source: "user" }],
       folder: "~/.local/share/demios/skills",
     }),
     reloadSkills: async () => ({ skills: structuredClone(skills), problems: [], folder: "~/.local/share/demios/skills" }),
@@ -603,7 +614,9 @@ export function createMockApi(): Api {
       else if (/html artifact|update the artifact/i.test(text)) artifactTurn(cid, a, text, onEvent);
       else stops.set(cid, stream(cid, a, text, onEvent));
       // IPC serialises; hand out copies so the UI never shares objects with the mock.
-      return structuredClone({ user_message: u, assistant_message: a, title });
+      const skill = skills.find((s) => s.name === chatSkills.get(cid)) ?? null;
+      if (skill !== null) answerSkills.push({ message_id: a.id, name: skill.name, label: skill.label });
+      return structuredClone({ user_message: u, assistant_message: a, title, skill: skill?.label ?? null });
     },
     regenerate: async (cid, onEvent) => {
       const list = msgs.get(cid) ?? [];
@@ -612,7 +625,7 @@ export function createMockApi(): Api {
       const a = message(cid, "assistant", "", "streaming");
       list.push(a);
       stops.set(cid, stream(cid, a, list[lastUser] ? (list[lastUser].content[0] as { text: string }).text : "", onEvent));
-      return structuredClone({ user_message: null, assistant_message: a, title: null });
+      return structuredClone({ user_message: null, assistant_message: a, title: null, skill: null });
     },
     stopGeneration: async (cid) => {
       const s = stops.get(cid);

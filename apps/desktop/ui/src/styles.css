@@ -337,6 +337,7 @@ pre.code .code-copy { position: absolute; top: var(--dn-space-1); right: var(--d
 .composer textarea::placeholder { color: var(--dn-color-text-subtle); }
 .composer-bar { display: flex; align-items: center; gap: var(--dn-space-2); }
 .composer-disclosure { margin: 0 auto var(--dn-space-3); width: calc(100% - var(--dn-space-12)); max-width: var(--dn-chat-max-width); text-align: center; font-size: var(--dn-text-xs); line-height: var(--dn-leading-xs); color: var(--dn-color-text-subtle); }
+.composer-skill-missing { font-size: var(--dn-text-xs); line-height: var(--dn-leading-xs); color: var(--dn-color-warning); }
 .composer-hint { flex: 1; font-size: var(--dn-text-xs); line-height: var(--dn-leading-xs); color: var(--dn-color-text-subtle); }
 .composer-send { background: var(--dn-color-accent); color: var(--dn-color-text-on-accent); }
 .composer-send:hover { background: var(--dn-color-accent-hover); color: var(--dn-color-text-on-accent); }
@@ -575,6 +576,7 @@ pre.code .code-copy { position: absolute; top: var(--dn-space-1); right: var(--d
   .caret, .dn-skeleton, .dn-spin, .dn-toast, .dn-dialog, .dn-dialog-overlay { animation: none !important; }
 }
 
+.update-offer-actions { display: flex; gap: var(--dn-space-2); flex-wrap: wrap; }
 /* ---------- projects (T-PRJ-01) ---------- */
 .project-head { display: flex; align-items: center; justify-content: space-between; gap: var(--dn-space-3); }
 .project-title { min-width: 0; overflow-wrap: anywhere; }

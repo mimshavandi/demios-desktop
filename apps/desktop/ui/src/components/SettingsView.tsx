@@ -11,6 +11,7 @@ import {
   type ProviderInfo,
   type Settings,
   type SlotInfo,
+  type UpdateCheck,
 } from "../ipc/types";
 import { Badge, Button, ICON, InlineMessage, Select, Skeleton, TextField, type SelectGroup } from "./primitives";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -40,11 +41,26 @@ interface Props {
   /** A demios:// link waiting for confirmation (T-INF-12). */
   addLink?: AddModelLink | null;
   onAddLinkClosed?: () => void;
+  /** A newer version the launch check found (#95), shown in About › Updates. */
+  launchUpdate?: UpdateCheck | null;
+  /** Bring About › Updates into view (opened from the launch notice). */
+  revealUpdates?: boolean;
 }
 
 type Load = { kind: "loading" } | { kind: "error"; message: string } | { kind: "ready"; catalog: ModelCatalog };
 
-export function SettingsView({ api, info, section, onSection, onCatalog, servers, addLink = null, onAddLinkClosed }: Props) {
+export function SettingsView({
+  api,
+  info,
+  section,
+  onSection,
+  onCatalog,
+  servers,
+  addLink = null,
+  onAddLinkClosed,
+  launchUpdate = null,
+  revealUpdates = false,
+}: Props) {
   const toast = useToast();
   const [load, setLoad] = useState<Load>({ kind: "loading" });
   const headingRef = useRef<HTMLHeadingElement>(null);
@@ -154,7 +170,9 @@ export function SettingsView({ api, info, section, onSection, onCatalog, servers
             {...(onAddLinkClosed !== undefined ? { onAddLinkClosed } : {})}
           />
         )}
-        {section === "general" && <GeneralPage api={api} info={info} />}
+        {section === "general" && (
+          <GeneralPage api={api} info={info} launchUpdate={launchUpdate} revealUpdates={revealUpdates} />
+        )}
         </div>
       </div>
     </section>
@@ -182,12 +200,16 @@ function ModelsPage({
 }) {
   const s = catalog.settings;
   // A download finished: pickers and the composer should see the new model.
+  const toast = useToast();
   const refreshCatalog = useCallback(() => {
     void api
       .listModels()
       .then(onCatalog)
-      .catch(() => {});
-  }, [api, onCatalog]);
+      // Say so: the pickers would otherwise miss the model that just finished (#141).
+      .catch((e: unknown) =>
+        toast({ tone: "error", title: `Couldn't refresh the model list. ${errorMessage(e)}` }),
+      );
+  }, [api, onCatalog, toast]);
   return (
     <>
       <section className="card" aria-labelledby="slots-h">
@@ -229,6 +251,7 @@ function ModelsPage({
       <LocalModelsCard
         api={api}
         initial={catalog.local_models}
+        compute={catalog.compute}
         onReady={refreshCatalog}
         link={addLink}
         {...(onAddLinkClosed !== undefined ? { onLinkClosed: onAddLinkClosed } : {})}
@@ -416,7 +439,17 @@ function ProviderRow({
   );
 }
 
-function GeneralPage({ api, info }: { api: Api; info: AppInfo | null }) {
+function GeneralPage({
+  api,
+  info,
+  launchUpdate,
+  revealUpdates,
+}: {
+  api: Api;
+  info: AppInfo | null;
+  launchUpdate: UpdateCheck | null;
+  revealUpdates: boolean;
+}) {
   const toast = useToast();
   const [confirming, setConfirming] = useState(false);
   const [summary, setSummary] = useState<LocalDataSummary | null>(null);
@@ -512,7 +545,8 @@ function GeneralPage({ api, info }: { api: Api; info: AppInfo | null }) {
             <li>
               <span className="row-title">GitHub, for updates</span>
               <span className="dn-help">
-                Only when you select Check for updates, and the download after you confirm an update. Nothing else is sent.
+                When you select Check for updates, once when Demios starts if you turned that on, and the download after
+                you confirm an update. Nothing else is sent.
               </span>
             </li>
           )}
@@ -556,7 +590,9 @@ function GeneralPage({ api, info }: { api: Api; info: AppInfo | null }) {
             {info?.models_dir != null && <span className="dn-help">Downloaded models are stored in {info.models_dir}</span>}
           </div>
         </div>
-        {info !== null && <Updates api={api} mode={info.updates} />}
+        {info !== null && (
+          <Updates api={api} mode={info.updates} initial={launchUpdate} reveal={revealUpdates} />
+        )}
         <div className="row">
           <div className="row-main">
             <span className="row-title">Report a problem</span>

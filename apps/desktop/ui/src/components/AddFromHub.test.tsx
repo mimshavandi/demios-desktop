@@ -162,6 +162,18 @@ describe("AddFromHub", () => {
 });
 
 describe("AddFromHub, review fixes", () => {
+  it("says it couldn't check the token instead of claiming there is none (#141)", async () => {
+    const f = fake(repoView({ gated: true }));
+    f.api.hfTokenStatus = async () => {
+      throw { code: "key_store", message: "Couldn't use your system keychain. Try again." };
+    };
+    ui(<AddFromHub api={f.api} onClose={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+    fireEvent.click(await screen.findByRole("button", { name: /org\/Tiny-GGUF/ }));
+    expect(await screen.findByText(/Couldn't check for a saved Hugging Face token/)).toBeTruthy();
+  });
+
   const open = async (f: ReturnType<typeof fake>) => {
     ui(<AddFromHub api={f.api} onClose={() => {}} />);
     fireEvent.click(screen.getByRole("button", { name: "Search" }));
@@ -257,5 +269,47 @@ describe("LocalModelsCard with Hub and cache models", () => {
     expect(screen.getByText(row.location!)).toBeTruthy();
     act(() => sink?.({ type: "removed", id: row.id }));
     await waitFor(() => expect(screen.queryByText(/From your Hugging Face cache/)).toBeNull());
+  });
+});
+
+describe("LocalModelsCard says where local models run", () => {
+  const api = { watchLocalModels: async () => [] } as unknown as Api;
+
+  it("labels the processor mode as a notice", async () => {
+    ui(
+      <LocalModelsCard
+        api={api}
+        initial={[]}
+        onReady={() => {}}
+        compute={{
+          mode: "cpu",
+          reason: "no_gpu",
+          description: "Local models run on the processor: no graphics chip Demios can use was found, so replies are slower.",
+        }}
+      />,
+    );
+    const el = await screen.findByTestId("local-compute");
+    expect(el.dataset["mode"]).toBe("cpu");
+    expect(within(el).getByRole("status").textContent).toContain("run on the processor");
+  });
+
+  it("names the graphics card when there is one", async () => {
+    ui(
+      <LocalModelsCard
+        api={api}
+        initial={[]}
+        onReady={() => {}}
+        compute={{
+          mode: "gpu",
+          name: "NVIDIA GeForce RTX 3060",
+          backend: "Vulkan",
+          vram: 12 * 2 ** 30,
+          description: "Local models run on the graphics card: NVIDIA GeForce RTX 3060 (12 GB).",
+        }}
+      />,
+    );
+    const el = await screen.findByTestId("local-compute");
+    expect(el.dataset["mode"]).toBe("gpu");
+    expect(el.textContent).toContain("RTX 3060 (12 GB)");
   });
 });

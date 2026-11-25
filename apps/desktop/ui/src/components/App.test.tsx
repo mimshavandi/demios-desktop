@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Api } from "../ipc/commands";
 import type {
@@ -16,6 +16,8 @@ import type {
   LocalModelRow,
   ToolEvent,
   UnknownOutcome,
+  UpdateCheck,
+  UpdateMode,
 } from "../ipc/types";
 import { App } from "./App";
 
@@ -54,6 +56,7 @@ Element.prototype.scrollIntoView ??= () => {};
 
 /** In-memory stand-in for the Rust commands. */
 function fakeApi() {
+  const launch = { result: null as UpdateCheck | null, mode: "off" as UpdateMode };
   const convs: Conversation[] = [];
   const trash: Conversation[] = [];
   const projects: Project[] = [];
@@ -75,6 +78,7 @@ function fakeApi() {
   const downloads: string[] = [];
   const pauses: string[] = [];
   const chatSkills = new Map<string, string | null>();
+  const answerSkills: { message_id: string; name: string; label: string }[] = [];
   const localRows: LocalModelRow[] = [
     {
       id: "m1",
@@ -128,6 +132,7 @@ function fakeApi() {
     settings,
     chat_model: null,
     chat_model_tools: true,
+    compute: null,
   });
   const api: Api = {
     // The Windows artifact webview has no browser equivalent.
@@ -141,9 +146,10 @@ function fakeApi() {
     messageSources: async () => null,
     knowledgeStatus: async () => ({ offer: "ask", model: null, embedding: null }),
     knowledgeOffer: async () => null,
-    appInfo: async () => ({ version: "0.1.0", dev_fake_model: true, data_dir: "/tmp", models_dir: "/tmp/models", updates: "off" }),
+    appInfo: async () => ({ version: "0.1.0", dev_fake_model: true, data_dir: "/tmp", models_dir: "/tmp/models", updates: launch.mode }),
     checkForUpdate: async () => ({ status: "up_to_date", current: "0.1.0" }) as const,
     installUpdate: async () => null,
+    launchUpdateCheck: async () => launch.result,
     hubSearch: async () => ({ items: [], next: null }),
     hubRepo: async () => {
       throw { code: "model_unavailable", message: "not in this test" };
@@ -285,6 +291,7 @@ function fakeApi() {
       { name: "explain-code", label: "Explain code", description: "Explains code.", allowed_tools: [], source: "builtin" },
     ],
     getChatSkill: async (cid) => chatSkills.get(cid) ?? null,
+    listAnswerSkills: async (cid) => answerSkills.filter((a) => msgs.get(cid)?.some((x) => x.id === a.message_id)),
     skillsOverview: async () => ({ skills: [], problems: [], folder: "/tmp/skills" }),
     reloadSkills: async () => ({ skills: [], problems: [], folder: "/tmp/skills" }),
     openSkillsFolder: async () => null,
@@ -299,7 +306,8 @@ function fakeApi() {
       msgs.get(cid)?.push(u, a);
       const c = convs.find((x) => x.id === cid);
       if (c) c.title = text;
-      return { user_message: u, assistant_message: a, title: text };
+      const sk = chatSkills.get(cid);
+      return { user_message: u, assistant_message: a, title: text, skill: sk === "proofread" ? "Proofread" : null };
     },
     regenerate: async () => {
       throw { code: "invalid_input", message: "Nothing to regenerate." };
@@ -359,6 +367,7 @@ function fakeApi() {
   };
   return {
     api,
+    launch,
     project,
     projects,
     files,
@@ -378,6 +387,7 @@ function fakeApi() {
     reports,
     links,
     chatSkills,
+    answerSkills,
   };
 }
 
@@ -470,6 +480,7 @@ describe("App", () => {
     fireEvent.change(box, { target: { value: "Check this" } });
     fireEvent.keyDown(box, { key: "Enter" });
     await waitFor(() => expect(chatSkills.get("id-1")).toBe("proofread"));
+
 
     // Switching back to no skill saves at once for an existing chat.
     fireEvent.keyDown(screen.getByRole("combobox", { name: "Skill" }), { key: "ArrowDown" });
@@ -909,6 +920,43 @@ describe("App", () => {
     await waitFor(() => expect(screen.queryByText("Did this go through?")).toBeNull());
   });
 
+  it("says when the chat's saved skill is no longer available instead of hiding it", async () => {
+    const f = fakeApi();
+    const c = await f.api.createConversation();
+    f.chatSkills.set(c.id, "removed-skill");
+    render(<App api={f.api} />);
+    expect((await screen.findByTestId("skill-missing")).textContent).toContain("“removed-skill” isn't available");
+    expect(document.getElementById("composer-skill-d")?.textContent).toContain("Choose another skill or No skill");
+  });
+
+  it("shows the skill each answer was written with, also after the chat's skill changed", async () => {
+    const f = fakeApi();
+    const c = await f.api.createConversation();
+    const base = {
+      conversation_id: c.id,
+      tool_call_id: null,
+      model: "local:dev-fake",
+      status: "complete" as const,
+      error: null,
+      tool_calls: [],
+      created_at: 1,
+      updated_at: 1,
+    };
+    f.msgs.set(c.id, [
+      { ...base, id: "u1", role: "user", content: [{ type: "text", text: "check this" }], finish_reason: null },
+      { ...base, id: "a1", role: "assistant", content: [{ type: "text", text: "Checked." }], finish_reason: "stop" },
+      { ...base, id: "u2", role: "user", content: [{ type: "text", text: "and this" }], finish_reason: null },
+      { ...base, id: "a2", role: "assistant", content: [{ type: "text", text: "Done." }], finish_reason: "stop" },
+    ]);
+    // Only the first answer used a skill; the chat has none now.
+    f.answerSkills.push({ message_id: "a1", name: "proofread", label: "Proofread" });
+    render(<App api={f.api} />);
+    const answers = await screen.findAllByTestId("message-assistant");
+    await waitFor(() => expect(within(answers[0]!).getByTestId("answer-skill").textContent).toBe("Skill: Proofread"));
+    expect(within(answers[1]!).queryByTestId("answer-skill")).toBeNull();
+    expect(screen.getByRole("combobox", { name: "Skill" }).textContent).toContain("No skill");
+  });
+
   it("renders stored tool calls as cards with their results", async () => {
     const f = fakeApi();
     const c = await f.api.createConversation();
@@ -1003,7 +1051,7 @@ describe("App", () => {
     act(() =>
       f.approve({
         type: "mcp_server",
-        status: { server_id: "fs", name: "Files", state: "failed", message: "It didn't start.", tools: 0, review: 0 },
+        status: { server_id: "fs", name: "Files", state: "failed", message: "It didn't start.", tools: 0, review: 0, revision: 0 },
       }),
     );
     expect(await screen.findByText("Files couldn't connect. It didn't start.")).toBeTruthy();
@@ -1075,6 +1123,52 @@ describe("App", () => {
     act(() => f.local({ type: "changed", row: { ...base, state: { state: "ready" } } }));
     expect(await screen.findByText("On this device", { selector: ".dn-badge" })).toBeTruthy();
     expect(await screen.findByText("Tiny Model downloaded")).toBeTruthy();
+  });
+});
+
+describe("Launch update check (#95)", () => {
+  it("shows a notice for a newer version and opens About › Updates on it", async () => {
+    const { api, launch } = fakeApi();
+    launch.mode = "self_update";
+    launch.result = { status: "available", version: "0.2.0", current: "0.1.0", notes: "Fixes", date: null };
+    let installs = 0;
+    api.installUpdate = async () => {
+      installs++;
+      return null;
+    };
+    render(<App api={api} />);
+    const notice = await screen.findByTestId("update-notice");
+    expect(notice.textContent).toContain("Demios 0.2.0 is available.");
+    fireEvent.click(screen.getByRole("button", { name: "View update" }));
+    expect(await screen.findByText(/Version 0.2.0 is available/)).toBeTruthy();
+    expect(screen.queryByTestId("update-notice")).toBeNull();
+    expect(installs).toBe(0);
+  });
+
+  it("doesn't ask at all in builds that don't update themselves", async () => {
+    const { api, launch } = fakeApi();
+    launch.result = { status: "available", version: "0.2.0", current: "0.1.0", notes: "", date: null };
+    let asked = 0;
+    api.launchUpdateCheck = async () => {
+      asked++;
+      return launch.result;
+    };
+    render(<App api={api} />);
+    await screen.findByLabelText("Message");
+    expect(asked).toBe(0);
+    expect(screen.queryByTestId("update-notice")).toBeNull();
+  });
+
+  it("stays silent when the launch check finds nothing or fails", async () => {
+    const { api, launch } = fakeApi();
+    launch.mode = "self_update";
+    api.launchUpdateCheck = async () => {
+      throw { code: "internal", message: "boom" };
+    };
+    render(<App api={api} />);
+    await screen.findByLabelText("Message");
+    expect(screen.queryByTestId("update-notice")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });
 
@@ -1238,5 +1332,91 @@ describe("Settings quick fixes (#174 review)", () => {
     fireEvent.click(screen.getByTestId("new-chat"));
     expect(await screen.findByTestId("artifact-pane")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Hide artifacts" })).toBeTruthy();
+  });
+});
+
+describe("No silent fallbacks (#141)", () => {
+  const fail = () => {
+    throw { code: "storage", message: "Could not read or write local data." };
+  };
+
+  it("says chats can't start when the assistant's instructions didn't load", async () => {
+    const { api } = fakeApi();
+    const info = api.appInfo;
+    api.appInfo = async () => ({ ...(await info()), agent_error: "the skills folder wasn't found" });
+    render(<App api={api} />);
+    const banner = await screen.findByTestId("agent-error");
+    expect(banner.textContent).toContain("chats can't start");
+    expect(banner.textContent).toContain("the skills folder wasn't found");
+    expect(within(banner).getByRole("button", { name: "Report a problem" })).toBeTruthy();
+  });
+
+  it("shows the list's error, not a guessed list, if reloading after deleting a chat fails", async () => {
+    const { api, convs } = fakeApi();
+    convs.push({ id: "c1", title: "Gone", model: null, project_id: null, created_at: 0, updated_at: 0 });
+    convs.push({ id: "c2", title: "Kept", model: null, project_id: null, created_at: 0, updated_at: 0 });
+    render(<App api={api} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Delete “Gone”" }));
+    api.listConversations = async () => fail();
+    expect(await screen.findByText(/Couldn't load chats/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Kept" })).toBeNull();
+  });
+
+  it("keeps the AI notice and says so when dismissing it can't be saved", async () => {
+    const { api } = fakeApi();
+    api.updateSettings = async () => fail();
+    render(<App api={api} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Got it" }));
+    expect(await screen.findByText(/Couldn't save that you've read the notice/)).toBeTruthy();
+    expect(screen.getByText(/Demios lets you chat with AI models you choose/)).toBeTruthy();
+  });
+
+  it("shows a model-list error with Retry instead of a stale catalog", async () => {
+    const { api } = fakeApi();
+    const list = api.listModels;
+    let broken = true;
+    api.listModels = async () => (broken ? fail() : list());
+    render(<App api={api} />);
+    const banner = await screen.findByTestId("catalog-error");
+    expect(banner.textContent).toContain("Couldn't load your models.");
+    broken = false;
+    fireEvent.click(within(banner).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(screen.queryByTestId("catalog-error")).toBeNull());
+  });
+
+  it("says so when the saved answer can't be loaded after it finishes", async () => {
+    const { api, emit } = fakeApi();
+    render(<App api={api} />);
+    const box = await screen.findByLabelText("Message");
+    fireEvent.change(box, { target: { value: "Hello" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    await screen.findByRole("button", { name: "Stop answer" });
+    api.listMessages = async () => fail();
+    act(() => {
+      emit({ type: "text_delta", message_id: "id-3", offset: 0, text: "Hi" });
+      emit({ type: "done", message_id: "id-3", finish_reason: "stop", usage: { input_tokens: 1, output_tokens: 1 } });
+    });
+    expect(await screen.findByText(/Couldn't load the saved answer/)).toBeTruthy();
+  });
+
+  it("says demios:// links can't open when watching for them fails", async () => {
+    const { api } = fakeApi();
+    api.watchAddLinks = async () => fail();
+    render(<App api={api} />);
+    expect(await screen.findByText(/demios:\/\/ links can't open in this window/)).toBeTruthy();
+  });
+
+  it("shows an error with Retry when the models on this device can't be loaded", async () => {
+    const { api } = fakeApi();
+    const watch = api.watchLocalModels;
+    let broken = true;
+    api.watchLocalModels = async (cb) => (broken ? fail() : watch(cb));
+    render(<App api={api} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Models" }));
+    expect(await screen.findByText(/Couldn't load the models on this device/)).toBeTruthy();
+    expect(screen.queryByText("No models in the catalogue.")).toBeNull();
+    broken = false;
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(screen.queryByText(/Couldn't load the models on this device/)).toBeNull());
   });
 });
