@@ -10,6 +10,9 @@ Only changes people using the app or the `dn` command-line tool can notice are l
 
 #### Desktop app
 
+- In a project's chats, answers use passages from the project's text files, found by search. Each answer lists its sources (file and lines). Without the search model, search is by keywords and the sources say so ([#167](https://github.com/mimshavandi/demios-desktop/pull/167)).
+- **Turn on better search?** The first time a project has files, Demios offers the 84 MB search model to find passages by meaning too, and it's also in **Settings → Models → Project search**. Keyword search works while it downloads ([#179](https://github.com/mimshavandi/demios-desktop/pull/179)).
+- Write your own skills: add a folder with a `SKILL.md` to the skills folder (**Settings → General → Skills → Open skills folder**), then **Reload**. Files with mistakes are listed with the problem. Your own skills follow the same rules as the built-in ones ([#137](https://github.com/mimshavandi/demios-desktop/pull/137)).
 - Projects: group chats with standing instructions that are sent with each chat in the project, and add files, which Demios copies into its data folder. Deleting a project, or a file in it, can be undone for 10 seconds ([#135](https://github.com/mimshavandi/demios-desktop/pull/135)).
 
 #### `dn` command-line tool
