@@ -276,6 +276,8 @@ pub fn run() {
             commands::watch_local_models,
             commands::download_model,
             knowledge::message_sources,
+            knowledge::knowledge_status,
+            knowledge::knowledge_offer,
             artifact_child::artifact_child_open,
             artifact_child::artifact_child_render,
             artifact_child::artifact_child_bounds,

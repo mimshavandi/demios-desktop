@@ -34,6 +34,9 @@ enum Job {
     /// Everything: projects that are gone, conversations that are gone, every live project.
     Reconcile,
     Project(Id),
+    /// Embed whatever isn't embedded by the current model yet (it was just downloaded or
+    /// changed), from the stored chunks: no file is read again.
+    EmbedAll,
 }
 
 static WORKER: OnceLock<mpsc::Sender<Job>> = OnceLock::new();
@@ -52,17 +55,16 @@ pub fn start(state: &Arc<AppState>) {
         .spawn(move || {
             while let Ok(first) = rx.recv() {
                 // Coalesce what queued up meanwhile: one reconcile covers every project.
-                let mut reconcile = matches!(first, Job::Reconcile);
+                let mut reconcile = false;
                 let mut projects = Vec::new();
-                if let Job::Project(p) = first {
-                    projects.push(p);
-                }
+                let mut take = |job: Job| match job {
+                    Job::Reconcile => reconcile = true,
+                    Job::Project(p) if !projects.contains(&p) => projects.push(p),
+                    Job::Project(_) | Job::EmbedAll => {}
+                };
+                take(first);
                 while let Ok(more) = rx.try_recv() {
-                    match more {
-                        Job::Reconcile => reconcile = true,
-                        Job::Project(p) if !projects.contains(&p) => projects.push(p),
-                        Job::Project(_) => {}
-                    }
+                    take(more);
                 }
                 let result = if reconcile {
                     reconcile_all(&st)
@@ -189,9 +191,18 @@ fn reconcile_all(state: &AppState) -> Result<(), String> {
 /// Embeds chunks that have no embedding from the current model yet, in batches, without
 /// holding the database while the model runs. Nothing to do without an embedding model.
 fn embed_pending(state: &AppState, source: Option<&str>) -> Result<(), String> {
-    let Some(emb) = embedder(state)? else {
-        return Ok(());
-    };
+    match embedder(state)? {
+        Some(emb) => embed_pending_with(state, &emb, source),
+        None => Ok(()),
+    }
+}
+
+/// [`embed_pending`] with a given model (tests use a fake one).
+fn embed_pending_with(
+    state: &AppState,
+    emb: &dyn Embedder,
+    source: Option<&str>,
+) -> Result<(), String> {
     loop {
         let batch = {
             let db = state.db().map_err(|e| e.message)?;
@@ -203,7 +214,7 @@ fn embed_pending(state: &AppState, source: Option<&str>) -> Result<(), String> {
             return Ok(());
         }
         let texts: Vec<String> = batch.iter().map(|(_, t)| t.clone()).collect();
-        let vecs = emb.embed_now(&texts, EmbedKind::Document)?;
+        let vecs = emb.embed(&texts, EmbedKind::Document)?;
         if vecs.len() != batch.len() {
             return Err("the embedding model returned the wrong number of vectors".into());
         }
@@ -357,6 +368,153 @@ pub fn context_for(
     Ok((!block.is_empty()).then_some(block))
 }
 
+// ---- the embedding-model offer (#171): never bundled, offered once when it helps.
+
+/// Key of the remembered answer in dn-knowledge's prefs (cleared by Delete all).
+const OFFER_KEY: &str = "embedding_model_offer";
+
+/// The user's answer to "Turn on better search?".
+#[derive(serde::Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Offer {
+    /// Not answered yet: the project view may ask (once).
+    Ask,
+    /// "Not now": never asked again (Settings › Models still offers it).
+    Declined,
+    Accepted,
+}
+
+fn offer(db: &Connection) -> Result<Offer, String> {
+    Ok(
+        match dn_knowledge::get_pref(db, OFFER_KEY)
+            .map_err(err)?
+            .as_deref()
+        {
+            Some("declined") => Offer::Declined,
+            Some("accepted") => Offer::Accepted,
+            _ => Offer::Ask,
+        },
+    )
+}
+
+/// The embedding model the offer is about: the Embeddings slot's local model, or the
+/// catalog default.
+fn offered_model_id(state: &AppState) -> Result<String, String> {
+    let settings = state.settings().map_err(|e| e.message)?;
+    Ok(settings
+        .slot("embed")
+        .and_then(|m| crate::local::catalogue_id(&m).map(str::to_owned))
+        .unwrap_or_else(|| DEFAULT_EMBED_MODEL.to_owned()))
+}
+
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct OfferedModel {
+    pub id: String,
+    pub name: String,
+    /// Download size in bytes (shown as "84 MB").
+    pub size: u64,
+    pub state: crate::local::DownloadState,
+}
+
+#[derive(serde::Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EmbedProgress {
+    pub done: u64,
+    pub total: u64,
+}
+
+/// What the UI needs for the offer and the progress of "improving search".
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct KnowledgeStatus {
+    pub offer: Offer,
+    /// `None`: no local models in this build (nothing to offer).
+    pub model: Option<OfferedModel>,
+    /// While the model is installed and the index isn't fully embedded by it yet.
+    pub embedding: Option<EmbedProgress>,
+}
+
+/// The offer and progress. If the model is installed and chunks still wait for it (e.g. it
+/// was just downloaded), embedding them is queued here.
+pub fn status(state: &AppState) -> Result<KnowledgeStatus, String> {
+    let offer = offer(&*state.db().map_err(|e| e.message)?)?;
+    let id = offered_model_id(state)?;
+    let model = state.models.local.as_ref().and_then(|local| {
+        local
+            .rows()
+            .into_iter()
+            .find(|r| r.id == id)
+            .map(|r| OfferedModel {
+                id: r.id,
+                name: r.name,
+                size: r.size,
+                state: r.state,
+            })
+    });
+    let ready = matches!(
+        model.as_ref().map(|m| &m.state),
+        Some(crate::local::DownloadState::Ready)
+    );
+    let embedding = if ready {
+        let (done, total) = dn_knowledge::embedding_counts(
+            &*state.db().map_err(|e| e.message)?,
+            &format!("local:{id}"),
+        )
+        .map_err(err)?;
+        (done < total).then(|| {
+            if let Some(tx) = WORKER.get() {
+                let _ = tx.send(Job::EmbedAll);
+            }
+            EmbedProgress { done, total }
+        })
+    } else {
+        None
+    };
+    Ok(KnowledgeStatus {
+        offer,
+        model,
+        embedding,
+    })
+}
+
+/// "Download" (`accept`) or "Not now". Download starts the normal verified download of the
+/// model; once it is ready, [`status`] queues embedding the existing chunks.
+pub fn answer_offer(state: &AppState, accept: bool) -> Result<(), String> {
+    dn_knowledge::set_pref(
+        &*state.db().map_err(|e| e.message)?,
+        OFFER_KEY,
+        if accept { "accepted" } else { "declined" },
+    )
+    .map_err(err)?;
+    if !accept {
+        return Ok(());
+    }
+    let local = state
+        .models
+        .local
+        .as_ref()
+        .ok_or("local models aren't available in this build")?;
+    let id = offered_model_id(state)?;
+    if !local.is_ready(&id) {
+        local.download(&id)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn knowledge_status(state: AppStateRef<'_>) -> IpcResult<KnowledgeStatus> {
+    crate::commands::blocking(&state, |s| {
+        status(s).map_err(|e| IpcError::new("knowledge", e))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn knowledge_offer(state: AppStateRef<'_>, accept: bool) -> IpcResult<()> {
+    crate::commands::blocking(&state, move |s| {
+        answer_offer(s, accept).map_err(|e| IpcError::new("knowledge", e))
+    })
+    .await
+}
+
 /// What the answer `message_id` was given (for the sources under it), or `None` when it
 /// wasn't a project chat.
 #[tauri::command]
@@ -371,6 +529,66 @@ pub async fn message_sources(state: AppStateRef<'_>, message_id: Id) -> IpcResul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A deterministic stand-in for the embedding model.
+    struct Fake(&'static str);
+    impl Embedder for Fake {
+        fn model_id(&self) -> &str {
+            self.0
+        }
+        fn dimension(&self) -> usize {
+            4
+        }
+        fn embed(&self, texts: &[String], _: EmbedKind) -> Result<Vec<Vec<f32>>, String> {
+            Ok(texts.iter().map(|_| vec![0.5; 4]).collect())
+        }
+    }
+
+    #[test]
+    fn a_model_added_later_embeds_the_stored_chunks_without_reading_files_and_a_new_model_re_embeds()
+     {
+        // No project-files folder at all: embedding can't read a file even if it tried.
+        let st = AppState::in_memory().unwrap();
+        assert!(st.project_files_root().is_none());
+        {
+            let db = st.db().unwrap();
+            Index::new(&db)
+                .sync_source(
+                    "p",
+                    &[SourceFile {
+                        file_id: "f".into(),
+                        display_path: "plan.md".into(),
+                        content: b"The launch is in May.".to_vec(),
+                    }],
+                    None,
+                )
+                .unwrap();
+        }
+        let counts = |m: &str| dn_knowledge::embedding_counts(&st.db().unwrap(), m).unwrap();
+        assert_eq!(counts("local:a"), (0, 1));
+        embed_pending_with(&st, &Fake("local:a"), None).unwrap();
+        assert_eq!(counts("local:a"), (1, 1));
+        embed_pending_with(&st, &Fake("local:b"), None).unwrap();
+        assert_eq!(
+            counts("local:b"),
+            (1, 1),
+            "another model re-embeds by model id"
+        );
+        assert_eq!(counts("local:a"), (0, 1));
+    }
+
+    #[test]
+    fn not_now_is_remembered_and_never_asked_again() {
+        let st = AppState::in_memory().unwrap();
+        assert_eq!(status(&st).unwrap().offer, Offer::Ask);
+        answer_offer(&st, false).unwrap();
+        assert_eq!(status(&st).unwrap().offer, Offer::Declined);
+        assert_eq!(
+            status(&st).unwrap().offer,
+            Offer::Declined,
+            "it stays declined"
+        );
+    }
 
     #[test]
     fn nomic_gets_its_task_prefixes_and_other_models_none() {

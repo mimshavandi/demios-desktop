@@ -54,6 +54,14 @@ CREATE TABLE knowledge_sources (
 );
 CREATE INDEX knowledge_sources_by_conversation ON knowledge_sources (conversation_id);
 "#,
+        r#"
+-- Small preferences of knowledge search (e.g. the answer to the embedding-model offer).
+-- Removed by delete_all.
+CREATE TABLE knowledge_prefs (
+    key   TEXT PRIMARY KEY NOT NULL,
+    value TEXT NOT NULL
+);
+"#,
     ]
 }
 
@@ -609,6 +617,40 @@ pub fn sources_for(conn: &Connection, message_id: &str) -> Result<Option<Sources
     Ok(Some(Sources { mode, citations }))
 }
 
+/// How many chunks are embedded by `model_id`, out of all chunks (progress of embedding the
+/// index after a model is added or changed).
+pub fn embedding_counts(conn: &Connection, model_id: &str) -> Result<(u64, u64)> {
+    let (done, total): (i64, i64) = conn.query_row(
+        "SELECT COALESCE(SUM(embed_model = ?1 AND embedding IS NOT NULL), 0), COUNT(*) FROM knowledge_chunks",
+        [model_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    Ok((
+        u64::try_from(done).unwrap_or(0),
+        u64::try_from(total).unwrap_or(0),
+    ))
+}
+
+/// A stored preference, if set.
+pub fn get_pref(conn: &Connection, key: &str) -> Result<Option<String>> {
+    Ok(conn
+        .query_row(
+            "SELECT value FROM knowledge_prefs WHERE key = ?1",
+            [key],
+            |r| r.get(0),
+        )
+        .optional()?)
+}
+
+/// Stores a preference (replacing an earlier value).
+pub fn set_pref(conn: &Connection, key: &str, value: &str) -> Result<()> {
+    conn.execute(
+        "INSERT INTO knowledge_prefs (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = ?2",
+        params![key, value],
+    )?;
+    Ok(())
+}
+
 /// Conversations that have recorded sources (for removing those of deleted conversations).
 pub fn conversations_with_sources(conn: &Connection) -> Result<Vec<String>> {
     let mut st = conn.prepare("SELECT DISTINCT conversation_id FROM knowledge_sources")?;
@@ -634,6 +676,7 @@ pub fn delete_all(conn: &Connection) -> Result<()> {
     tx.execute("DELETE FROM knowledge_chunks", [])?;
     tx.execute("DELETE FROM knowledge_files", [])?;
     tx.execute("DELETE FROM knowledge_sources", [])?;
+    tx.execute("DELETE FROM knowledge_prefs", [])?;
     tx.execute(
         "INSERT INTO knowledge_fts(knowledge_fts) VALUES ('rebuild')",
         [],

@@ -42,7 +42,7 @@ type View =
   | { kind: "project"; id: Id | "new" };
 
 export function App({ api = realApi }: { api?: Api }) {
-  configureSources(api.messageSources);
+  configureSources(api.messageSources, api.knowledgeStatus);
   return (
     <TooltipProvider>
       <ToastProvider>
