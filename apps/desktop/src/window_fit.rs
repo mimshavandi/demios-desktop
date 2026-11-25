@@ -124,7 +124,11 @@ pub fn place(
     deco: Decorations,
 ) -> Option<Placement> {
     let fallback = fallback.min(screens.len().checked_sub(1)?);
-    let Some(saved) = saved.filter(|s| s.w > 0.0 && s.h > 0.0) else {
+    // A saved state with a zero, negative or non-finite number is treated as none: it was
+    // written by a broken build or edited by hand, and the default fit is always safe.
+    let usable =
+        |s: &&Saved| [s.x, s.y, s.w, s.h].iter().all(|v| v.is_finite()) && s.w > 0.0 && s.h > 0.0;
+    let Some(saved) = saved.filter(usable) else {
         let s = &screens[fallback];
         return Some(Placement {
             screen: fallback,
@@ -140,9 +144,10 @@ pub fn place(
         Some(i) => {
             let s = &screens[i];
             let a = s.work_area;
+            // `as` saturates; the additions must not overflow either (clamp pulls it in).
             let frame = Rect {
-                x: a.x + (saved.x * s.scale).round() as i32,
-                y: a.y + (saved.y * s.scale).round() as i32,
+                x: a.x.saturating_add((saved.x * s.scale).round() as i32),
+                y: a.y.saturating_add((saved.y * s.scale).round() as i32),
                 w: px(saved.w, s.scale),
                 h: px(saved.h, s.scale),
             };
@@ -426,5 +431,56 @@ mod tests {
         assert_eq!(w["height"].as_f64(), Some(DEFAULT_SIZE.1));
         // Shown only after it has been fitted, so it never flashes at the wrong size.
         assert_eq!(w["visible"], false);
+    }
+
+    #[test]
+    fn a_corrupt_saved_state_never_panics_and_still_fits() {
+        let s = screen("primary", 0, 0, 1920, 1040, 1.0);
+        let one = std::slice::from_ref(&s);
+        for bad in [
+            Saved {
+                monitor: Some("primary".into()),
+                x: f64::NAN,
+                y: 0.0,
+                w: 1000.0,
+                h: 800.0,
+                maximized: false,
+            },
+            Saved {
+                monitor: Some("primary".into()),
+                x: 0.0,
+                y: 0.0,
+                w: f64::INFINITY,
+                h: 800.0,
+                maximized: false,
+            },
+            Saved {
+                monitor: Some("primary".into()),
+                x: 0.0,
+                y: 0.0,
+                w: -5.0,
+                h: 800.0,
+                maximized: false,
+            },
+        ] {
+            assert_eq!(
+                place(one, 0, Some(&bad), DECO).unwrap().frame,
+                fit_default(&s, DECO),
+                "{bad:?}"
+            );
+        }
+        // Huge but finite: saturates, then clamps into the work area.
+        let huge = Saved {
+            monitor: Some("primary".into()),
+            x: 1e300,
+            y: -1e300,
+            w: 1e300,
+            h: 1e300,
+            maximized: false,
+        };
+        let p = place(one, 0, Some(&huge), DECO).unwrap();
+        assert!(inside(p.frame, &s), "{:?}", p.frame);
+        // A fallback index past the end uses the last screen.
+        assert_eq!(place(one, 7, None, DECO).unwrap().screen, 0);
     }
 }
