@@ -30,8 +30,8 @@ export function formatEta(remaining: number, bytesPerSec: number): string | null
 }
 
 export const FIT: Record<FitStatus, { label: string; tone: "success" | "warning" | "danger" }> = {
-  ready: { label: "Ready", tone: "success" },
-  caution: { label: "Caution", tone: "warning" },
+  ready: { label: "Fits", tone: "success" },
+  caution: { label: "Tight fit", tone: "warning" },
   memory_pressure: { label: "Memory pressure", tone: "warning" },
   memory_blocked: { label: "Won't fit", tone: "danger" },
 };

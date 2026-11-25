@@ -1,4 +1,4 @@
-import { ChevronRight, LogIn, LogOut, Pencil, Plus, RotateCcw, Trash2, X } from "lucide-react";
+import { ChevronRight, LogIn, LogOut, MoreHorizontal, Pencil, Plus, RotateCcw, Trash2, X } from "lucide-react";
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import type { Api } from "../ipc/commands";
 import {
@@ -10,12 +10,13 @@ import {
   type McpValueView,
 } from "../ipc/types";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { DropdownMenu } from "./DropdownMenu";
 import { McpToolsPanel } from "./McpTools";
 import { Badge, Button, EmptyState, ICON, IconButton, InlineMessage, Skeleton, Switch, TextField } from "./primitives";
 import { useToast } from "./toast";
 
 /**
- * Settings › Models › Tool servers (T-SHELL-08, issue #49): add, edit and remove MCP servers,
+ * Settings › Tools (#174) (T-SHELL-08, issue #49): add, edit and remove MCP servers,
  * sign in and out, and per-server status. Secret values are never shown: a saved secret reads
  * "Saved"; typing a new value replaces it.
  */
@@ -126,13 +127,14 @@ export function McpServersCard({ api, live }: { api: Api; live: McpServerStatus[
           <Button
             ref={addRef}
             size="sm"
+            variant="primary"
             icon={<Plus {...ICON} aria-hidden="true" />}
             onClick={() => {
               returnFocus.current = null;
               setEditing({ server: null });
             }}
           >
-            Add server
+            Add tool server
           </Button>
         )}
       </div>
@@ -164,13 +166,14 @@ export function McpServersCard({ api, live }: { api: Api; live: McpServerStatus[
           action={
             <Button
               ref={addRef}
+              variant="primary"
               icon={<Plus {...ICON} aria-hidden="true" />}
               onClick={() => {
                 returnFocus.current = null;
                 setEditing({ server: null });
               }}
             >
-              Add server
+              Add tool server
             </Button>
           }
         >
@@ -225,54 +228,65 @@ export function McpServersCard({ api, live }: { api: Api; live: McpServerStatus[
                       Sign in
                     </Button>
                   )}
-                  {oauth !== null && signedIn && (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      loading={busy === `signout:${s.id}`}
-                      icon={<LogOut {...ICON} aria-hidden="true" />}
-                      onClick={() =>
-                        void run(`signout:${s.id}`, "Couldn't sign out.", async () => {
-                          const v = await api.signOutMcpServer(s.id);
-                          toast({ tone: "info", title: `Signed out of ${s.name}` });
-                          return v;
-                        })
-                      }
-                    >
-                      Sign out
-                    </Button>
-                  )}
-                  {st?.state === "failed" && (
-                    <IconButton
-                      size="sm"
-                      label={`Reconnect ${s.name}`}
-                      aria-busy={busy === `reconnect:${s.id}` || undefined}
-                      onClick={() => void run(`reconnect:${s.id}`, "Couldn't reconnect.", async () => (await api.reconnectMcpServer(s.id), null))}
-                    >
-                      <RotateCcw {...ICON} aria-hidden="true" />
-                    </IconButton>
-                  )}
-                  <IconButton
-                    size="sm"
-                    label={`Edit ${s.name}`}
-                    onClick={() => {
-                      returnFocus.current = `Edit ${s.name}`;
-                      setEditing({ server: s });
-                    }}
-                  >
-                    <Pencil {...ICON} aria-hidden="true" />
-                  </IconButton>
-                  <IconButton
-                    size="sm"
-                    label={`Remove ${s.name}`}
-                    onClick={(e) => {
-                      removeTrigger.current = e.currentTarget;
-                      setRemoveError(null);
-                      setRemoving(s);
-                    }}
-                  >
-                    <Trash2 {...ICON} aria-hidden="true" />
-                  </IconButton>
+                  <DropdownMenu
+                    label={`More actions for ${s.name}`}
+                    trigger={<MoreHorizontal {...ICON} aria-hidden="true" />}
+                    entries={[
+                      ...(st?.state === "failed"
+                        ? [
+                            {
+                              kind: "item" as const,
+                              label: "Reconnect",
+                              icon: <RotateCcw {...ICON} aria-hidden="true" />,
+                              failure: "Couldn't reconnect",
+                              run: () => run(`reconnect:${s.id}`, "Couldn't reconnect.", async () => (await api.reconnectMcpServer(s.id), null)),
+                            },
+                          ]
+                        : []),
+                      ...(oauth !== null && signedIn
+                        ? [
+                            {
+                              kind: "item" as const,
+                              label: "Sign out",
+                              icon: <LogOut {...ICON} aria-hidden="true" />,
+                              failure: "Couldn't sign out",
+                              run: () =>
+                                run(`signout:${s.id}`, "Couldn't sign out.", async () => {
+                                  const v = await api.signOutMcpServer(s.id);
+                                  toast({ tone: "info", title: `Signed out of ${s.name}` });
+                                  return v;
+                                }),
+                            },
+                          ]
+                        : []),
+                      {
+                        kind: "item",
+                        label: "Edit",
+                        icon: <Pencil {...ICON} aria-hidden="true" />,
+                        failure: "Couldn't open the server",
+                        run: () => {
+                          returnFocus.current = `More actions for ${s.name}`;
+                          setEditing({ server: s });
+                        },
+                      },
+                      { kind: "separator" },
+                      {
+                        kind: "item",
+                        label: "Remove",
+                        icon: <Trash2 {...ICON} aria-hidden="true" />,
+                        danger: true,
+                        failure: "Couldn't remove the server",
+                        run: () => {
+                          removeTrigger.current =
+                            cardRef.current?.querySelector<HTMLButtonElement>(
+                              `button[aria-label="${CSS.escape(`More actions for ${s.name}`)}"]`,
+                            ) ?? null;
+                          setRemoveError(null);
+                          setRemoving(s);
+                        },
+                      },
+                    ]}
+                  />
                 </div>
               </div>
               {toolsOpen && (
@@ -610,7 +624,7 @@ function ServerForm({
           Cancel
         </Button>
         <Button type="submit" variant="primary" loading={saving}>
-          {server === null ? "Add server" : "Save changes"}
+          {server === null ? "Add tool server" : "Save changes"}
         </Button>
       </div>
     </form>

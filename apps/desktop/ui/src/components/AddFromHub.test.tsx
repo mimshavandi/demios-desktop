@@ -114,7 +114,7 @@ describe("AddFromHub", () => {
     expect(screen.getByText(/Checking model…/)).toBeTruthy();
 
     const [q4, f16] = await screen.findAllByTestId("hub-variant");
-    expect(q4!.textContent).toContain("Ready");
+    expect(q4!.textContent).toContain("Fits");
     expect(q4!.textContent).not.toContain("(estimate)");
     expect(f16!.textContent).toContain("Won't fit (estimate)");
     expect(f16!.textContent).toContain("No published checksum");

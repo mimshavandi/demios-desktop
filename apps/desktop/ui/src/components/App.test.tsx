@@ -1095,7 +1095,7 @@ describe("App", () => {
     render(<App api={f.api} />);
     await openSettings("Models");
     const row = await screen.findByTestId("local-model-row");
-    expect(row.textContent).toContain("Caution (estimate)");
+    expect(row.textContent).toContain("Tight fit (estimate)");
     expect(row.textContent).toContain("Licence: cc-by-nc-4.0");
     expect(screen.getByText(/Check the licence before downloading/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Download model" }));

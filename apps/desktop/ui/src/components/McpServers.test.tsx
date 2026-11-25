@@ -56,6 +56,14 @@ function fake(initial: McpServersView) {
   return { api, calls };
 }
 
+/** Opens a server's "More actions" menu and picks an item (#174). */
+async function menuItem(server: string, item: string) {
+  const trigger = await screen.findByRole("button", { name: `More actions for ${server}` });
+  trigger.focus();
+  fireEvent.keyDown(trigger, { key: "Enter" });
+  fireEvent.click(await screen.findByRole("menuitem", { name: item }));
+}
+
 const ui = (api: Api, live: McpServerStatus[] = []) =>
   render(
     <ToastProvider>
@@ -70,7 +78,7 @@ describe("McpServersCard", () => {
     const { api, calls } = fake({ servers: [], local_servers_allowed: true });
     ui(api);
     expect(await screen.findByText("No tool servers yet")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Add server" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add tool server" }));
     expect(document.activeElement?.textContent).toBe("Add a tool server");
 
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Work Files" } });
@@ -82,7 +90,7 @@ describe("McpServersCard", () => {
     const value = screen.getByLabelText("Secret value") as HTMLInputElement;
     expect(value.type).toBe("password");
     fireEvent.change(value, { target: { value: "s3cret" } });
-    fireEvent.click(screen.getByRole("button", { name: "Add server" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add tool server" }));
 
     await waitFor(() => expect(calls[0]?.[0]).toBe("save"));
     expect(calls[0]?.[1]).toEqual({
@@ -104,7 +112,7 @@ describe("McpServersCard", () => {
   it("edits a server without resending its stored secret", async () => {
     const { api, calls } = fake({ servers: [tracker], local_servers_allowed: true });
     ui(api);
-    fireEvent.click(await screen.findByRole("button", { name: "Edit Issue tracker" }));
+    await menuItem("Issue tracker", "Edit");
     const secret = screen.getByLabelText("Secret value") as HTMLInputElement;
     expect(secret.value).toBe("");
     expect(secret.placeholder).toBe("Saved");
@@ -126,10 +134,10 @@ describe("McpServersCard", () => {
   it("shows save errors in the form", async () => {
     const { api } = fake({ servers: [], local_servers_allowed: true });
     ui(api);
-    fireEvent.click(await screen.findByRole("button", { name: "Add server" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Add tool server" }));
     fireEvent.change(screen.getByLabelText("ID"), { target: { value: "taken" } });
     fireEvent.change(screen.getByLabelText("Command"), { target: { value: "x" } });
-    fireEvent.click(screen.getByRole("button", { name: "Add server" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add tool server" }));
     expect(await screen.findByText(/already exists/)).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Add a tool server" })).toBeTruthy();
   });
@@ -155,8 +163,7 @@ describe("McpServersCard", () => {
     expect(await screen.findByText("2 tools")).toBeTruthy();
     expect(screen.getByText("Connected")).toBeTruthy();
 
-    const remove = screen.getByRole("button", { name: "Remove Issue tracker" });
-    fireEvent.click(remove);
+    await menuItem("Issue tracker", "Remove");
     const dialog = await screen.findByRole("alertdialog", { name: "Remove Issue tracker?" });
     expect(dialog.textContent).toContain("1 secret saved for it in your system keychain");
     expect(dialog.textContent).toContain("can't be undone");
@@ -164,7 +171,7 @@ describe("McpServersCard", () => {
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
     expect(after.calls.some((c) => c[0] === "remove")).toBe(false);
 
-    fireEvent.click(remove);
+    await menuItem("Issue tracker", "Remove");
     const confirm = (await screen.findByRole("button", { name: "Remove server" })) as HTMLButtonElement;
     await waitFor(() => expect(confirm.disabled).toBe(false), { timeout: 1500 });
     fireEvent.click(confirm);
@@ -175,13 +182,12 @@ describe("McpServersCard", () => {
   it("returns focus to the trigger, asks before discarding changes, and asks to retype secrets for a new address", async () => {
     const { api } = fake({ servers: [tracker], local_servers_allowed: true });
     ui(api);
-    const editBtn = await screen.findByRole("button", { name: "Edit Issue tracker" });
-    fireEvent.click(editBtn);
+    await menuItem("Issue tracker", "Edit");
     // Unchanged: Cancel closes at once and focus goes back to Edit.
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    await waitFor(() => expect(document.activeElement?.getAttribute("aria-label")).toBe("Edit Issue tracker"));
+    await waitFor(() => expect(document.activeElement?.getAttribute("aria-label")).toBe("More actions for Issue tracker"));
 
-    fireEvent.click(screen.getByRole("button", { name: "Edit Issue tracker" }));
+    await menuItem("Issue tracker", "Edit");
     fireEvent.change(screen.getByLabelText("Server address"), { target: { value: "https://new.example/mcp" } });
     expect((screen.getByLabelText("Secret value") as HTMLInputElement).placeholder).toBe("Type it again");
     expect(screen.getByText(/saved secrets aren't reused/)).toBeTruthy();
@@ -192,7 +198,7 @@ describe("McpServersCard", () => {
     expect((screen.getByLabelText("Server address") as HTMLInputElement).value).toBe("https://new.example/mcp");
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     fireEvent.click(screen.getByRole("button", { name: "Discard changes" }));
-    expect(await screen.findByRole("button", { name: "Edit Issue tracker" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "More actions for Issue tracker" })).toBeTruthy();
   });
 
   it("new arguments for a local server ask for its secrets again", async () => {
@@ -204,7 +210,7 @@ describe("McpServersCard", () => {
     };
     const { api } = fake({ servers: [local], local_servers_allowed: true });
     ui(api);
-    fireEvent.click(await screen.findByRole("button", { name: "Edit Package" }));
+    await menuItem("Package", "Edit");
     const secret = screen.getByLabelText("Secret value") as HTMLInputElement;
     expect(secret.placeholder).toBe("Saved");
     fireEvent.change(screen.getByLabelText("Arguments"), { target: { value: "pkg-b" } });
@@ -214,7 +220,7 @@ describe("McpServersCard", () => {
   it("the remove confirm lists the chat approvals that go too", async () => {
     const { api } = fake({ servers: [tracker], local_servers_allowed: true });
     ui(api);
-    fireEvent.click(await screen.findByRole("button", { name: "Remove Issue tracker" }));
+    await menuItem("Issue tracker", "Remove");
     const dialog = await screen.findByRole("alertdialog");
     expect(dialog.textContent).toContain("This stops the server");
     expect(dialog.textContent).toContain('"Allow in this chat" approvals for its tools');
@@ -223,7 +229,7 @@ describe("McpServersCard", () => {
   it("offers only remote servers where local programs can't run", async () => {
     const { api } = fake({ servers: [], local_servers_allowed: false });
     ui(api);
-    fireEvent.click(await screen.findByRole("button", { name: "Add server" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Add tool server" }));
     expect(screen.queryByLabelText(/On this computer/)).toBeNull();
     expect((screen.getByLabelText(/Remote/) as HTMLInputElement).checked).toBe(true);
     expect(screen.getByLabelText("Server address")).toBeTruthy();
