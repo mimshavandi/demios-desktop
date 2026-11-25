@@ -23,6 +23,7 @@ An open-source desktop app for chatting with AI models you choose: one running o
 - A notice on first run, and a line under the message box, say that answers come from the model you chose and can be wrong.
 - Report a problem, or a single answer, through a prefilled form on GitHub. Nothing from your chats is sent.
 - Read the licence of every package shipped with the app, searchable, in **Settings → General → About → Open-source licences**.
+- Open the privacy policy and the accessibility statement from **Settings → General → About**.
 - An answer from a provider that stops responding ends with an error you can retry, instead of waiting forever.
 - Add tool servers (MCP) in **Settings → Models → Tool servers**: a program on this computer, which starts only after you allow its exact command, or a remote HTTPS server, with sign-in in your browser. Tools that change something show their exact arguments and wait for you to allow or deny them. See each server's tools and their risk, choose per tool whether it asks, and review new or changed tools before they run without asking.
 - The `dn` command-line tool: run a model, check whether it fits, browse and download models from Hugging Face, and open `demios://` add-model links.
@@ -33,6 +34,7 @@ Not available yet:
 
 - Connecting the app to an OpenAI-compatible server (such as Ollama). The `dn` CLI can already do this.
 - Signed installers for macOS, Windows and Linux.
+- Updates in the app for copies downloaded from GitHub. **Settings → General → About → Check for updates** is built, and starts working with the first signed release. Microsoft Store and Flathub copies will be updated by their store.
 
 ## Screenshots
 
