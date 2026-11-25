@@ -62,6 +62,7 @@ const COMMANDS: &[&str] = &[
     "pause_download",
     "check_for_update",
     "install_update",
+    "launch_update_check",
     // Knowledge search (knowledge.rs, #116): what an answer was given.
     "message_sources",
     // The embedding-model offer (#171).
