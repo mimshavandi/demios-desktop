@@ -36,6 +36,23 @@
 //!   - dense models offload `g = ⌊(0.8G − O) / ((W + KV) / n_layer)⌋` layers to the GPU
 //!     and run the rest on the CPU (a layer's KV cache lives where the layer runs).
 //!
+//! ## MoE presets (T-INF-20)
+//!
+//! A mixture-of-experts model (`E > 0`) can keep its expert FFN tensors in CPU RAM while
+//! attention, shared tensors and the KV cache stay on the GPU. Only a few experts run per
+//! token, so the CPU side costs some speed but far less than offloading whole layers.
+//!
+//! - **Discrete GPU:** the `--n-cpu-moe k` split above.
+//! - **Unified memory:** the GPU and CPU share RAM, so moving experts doesn't lower the
+//!   total, but CPU-side tensors (llama.cpp repacks them into CPU buffers) don't count
+//!   against the Metal working-set limit `B`. With the same `k` formula against `B`, the
+//!   ratio becomes `max(GPU part / B, need / C)`, where `C` is the CPU-only budget above
+//!   (`RAM − reserve`). This lets a 30B-A3B model at a low quant run on a 16 GB Mac. It is
+//!   used only when it improves the status, and the recommendation prefers all on the GPU
+//!   at a smaller context over a split at a larger one with the same status.
+//!
+//! The report names the preset (`MoePreset`), so the UI can explain it.
+//!
 //! ## Where the numbers come from
 //!
 //! RAM comes from `sysinfo`. `sysinfo` cannot report VRAM reliably, so the GPU side is
@@ -320,6 +337,28 @@ pub struct Placement {
     pub moe_cpu_layers: u32,
 }
 
+impl Placement {
+    const FULL: Self = Self {
+        gpu_layers: None,
+        moe_cpu_layers: 0,
+    };
+
+    /// Part of the model runs on the CPU (slower than all on the GPU).
+    pub fn is_split(&self) -> bool {
+        *self != Self::FULL
+    }
+}
+
+/// How a mixture-of-experts model is laid out, for the UI to explain (T-INF-20).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MoePreset {
+    /// Every layer's experts stay in CPU RAM; attention and shared tensors on the GPU.
+    ExpertsInRam,
+    /// The first `moe_cpu_layers` layers' experts stay in CPU RAM; the rest is on the GPU.
+    SomeExpertsInRam,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Estimate {
     pub status: FitStatus,
@@ -343,6 +382,9 @@ pub struct FitReport {
     pub recommended: Estimate,
     /// Set when the file's own quant cannot reach `Ready` at 4096 tokens and a smaller one can.
     pub suggested_quant: Option<String>,
+    /// Set when the recommendation keeps MoE experts in CPU RAM.
+    #[serde(default)]
+    pub moe_preset: Option<MoePreset>,
     pub notes: Vec<String>,
 }
 
@@ -358,14 +400,33 @@ fn status_of(ratio: f64) -> FitStatus {
     }
 }
 
-fn worse(a: FitStatus, b: FitStatus) -> FitStatus {
-    let rank = |s| match s {
+fn rank(s: FitStatus) -> u8 {
+    match s {
         FitStatus::Ready => 0,
         FitStatus::Caution => 1,
         FitStatus::MemoryPressure => 2,
         FitStatus::MemoryBlocked => 3,
-    };
+    }
+}
+
+fn worse(a: FitStatus, b: FitStatus) -> FitStatus {
     if rank(a) >= rank(b) { a } else { b }
+}
+
+/// Layers whose experts must leave a GPU budget filled up to `g_fill` (`--n-cpu-moe k`),
+/// and the bytes that leaves on the GPU and moves to the CPU.
+fn experts_off(m: &ModelFootprint, need: u64, g_fill: u64) -> (u64, u64, Placement) {
+    let layers = m.n_layer.max(1) as u64;
+    let per = (m.expert_bytes / layers).max(1);
+    let k = need.saturating_sub(g_fill).div_ceil(per).min(layers);
+    (
+        need.saturating_sub(k * per),
+        k * per,
+        Placement {
+            gpu_layers: None,
+            moe_cpu_layers: k as u32,
+        },
+    )
 }
 
 /// Estimate one configuration.
@@ -374,15 +435,25 @@ pub fn estimate(m: &ModelFootprint, mach: &Machine, n_ctx: u32, kv: KvType) -> E
     let kvb = m.kv_bytes(n_ctx, kv);
     let o = m.overhead_bytes();
     let need = w + kvb + o;
-    let full = Placement {
-        gpu_layers: None,
-        moe_cpu_layers: 0,
-    };
+    let full = Placement::FULL;
     let (budget, ratio, status, placement) = match mach.memory {
         MemoryKind::Unified { gpu_budget } => {
             let b = mach.unified_budget(gpu_budget);
             let r = need as f64 / b as f64;
-            (b, r, status_of(r), full)
+            let all_gpu = (b, r, status_of(r), full);
+            if !m.is_moe() || status_of(r) == FitStatus::Ready {
+                all_gpu
+            } else {
+                // Experts in CPU buffers: outside the Metal limit, inside total RAM.
+                let (gpu_bytes, _, placement) = experts_off(m, need, (b as f64 * READY) as u64);
+                let r2 = (gpu_bytes as f64 / b as f64).max(need as f64 / mach.cpu_budget() as f64);
+                let s2 = worse(status_of(r2), FitStatus::Caution);
+                if rank(s2) < rank(status_of(r)) {
+                    (b, r2, s2, placement)
+                } else {
+                    all_gpu
+                }
+            }
         }
         MemoryKind::CpuOnly => {
             let b = mach.cpu_budget();
@@ -400,16 +471,7 @@ pub fn estimate(m: &ModelFootprint, mach: &Machine, n_ctx: u32, kv: KvType) -> E
                 // Fill the GPU only up to the Ready threshold, so it keeps headroom.
                 let g_fill = (g as f64 * READY) as u64;
                 let (gpu_bytes, cpu_bytes, placement) = if m.is_moe() {
-                    let per = (m.expert_bytes / layers).max(1);
-                    let k = need.saturating_sub(g_fill).div_ceil(per).min(layers);
-                    (
-                        need - k * per,
-                        k * per,
-                        Placement {
-                            gpu_layers: None,
-                            moe_cpu_layers: k as u32,
-                        },
-                    )
+                    experts_off(m, need, g_fill)
                 } else {
                     // A layer's KV cache lives with the layer (GPU or CPU).
                     let per = ((w + kvb) / layers).max(1);
@@ -466,6 +528,12 @@ fn best(m: &ModelFootprint, mach: &Machine) -> Estimate {
     all.iter()
         .filter(good_ctx)
         .find(|e| e.status == FitStatus::Ready)
+        // Among Caution configs, all on the GPU (faster) beats a bigger context with a split.
+        .or_else(|| {
+            all.iter()
+                .filter(good_ctx)
+                .find(|e| e.status == FitStatus::Caution && !e.placement.is_split())
+        })
         .or_else(|| {
             all.iter()
                 .filter(good_ctx)
@@ -482,7 +550,9 @@ pub fn fit(model: &ModelFootprint, machine: &Machine) -> FitReport {
     let rec = best(model, machine);
     let mut notes = vec![];
     let mut suggested_quant = None;
-    let ready_at_min = rec.status == FitStatus::Ready && rec.n_ctx >= MIN_GOOD_CTX;
+    // A model trained on a shorter context counts as ready at its full training context.
+    let ready_at_min =
+        rec.status == FitStatus::Ready && rec.n_ctx >= MIN_GOOD_CTX.min(model.n_ctx_train);
     if !ready_at_min {
         let current = model.quant.as_deref().and_then(bpw).unwrap_or(f64::MAX);
         suggested_quant = QUANT_LADDER
@@ -519,10 +589,17 @@ pub fn fit(model: &ModelFootprint, machine: &Machine) -> FitReport {
             model.n_layer
         ));
     }
+    let k = rec.placement.moe_cpu_layers;
+    let moe_preset = match k {
+        0 => None,
+        k if k >= model.n_layer => Some(MoePreset::ExpertsInRam),
+        _ => Some(MoePreset::SomeExpertsInRam),
+    };
     FitReport {
         status: rec.status,
         recommended: rec,
         suggested_quant,
+        moe_preset,
         notes,
     }
 }
@@ -692,6 +769,67 @@ mod tests {
         // 17.3 GiB weights in a 21.3 GiB budget: runs, without much headroom.
         assert_eq!(r32.status, FitStatus::Caution);
         assert_eq!(r32.suggested_quant.as_deref(), Some("IQ4_XS"));
+    }
+
+    #[test]
+    fn moe_experts_in_ram_on_a_16gb_mac() {
+        // Qwen3-30B-A3B at Q2_K (~10.6 GiB) is over the 10.7 GiB Metal limit with its KV
+        // cache and overhead, but fits in 16 GB once the experts live outside it.
+        let q2 = qwen30b_moe().requantized("Q2_K").unwrap();
+        let mac16 = Machine::unified(16 * GIB);
+        let all_gpu = estimate(&q2, &Machine::unified(64 * GIB), 4096, KvType::F16);
+        assert!(all_gpu.need_bytes as f64 / mac16.unified_budget(None) as f64 > CAUTION);
+        let r = fit(&q2, &mac16);
+        assert_eq!(r.status, FitStatus::Caution);
+        assert!(r.recommended.placement.moe_cpu_layers > 0);
+        assert!(r.moe_preset.is_some());
+        assert!(
+            r.notes.iter().any(|n| n.contains("CPU RAM")),
+            "{:?}",
+            r.notes
+        );
+        // Q4_K_M is still too big for 16 GB, however the experts are placed.
+        assert_eq!(fit(&qwen30b_moe(), &mac16).status, FitStatus::MemoryBlocked);
+    }
+
+    #[test]
+    fn moe_on_a_32gb_mac_prefers_all_on_gpu() {
+        // All on the GPU already reaches Caution (q8_0 KV), so the slower split isn't used
+        // just for a bigger context.
+        let r = fit(&qwen30b_moe(), &Machine::unified(32 * GIB));
+        assert_eq!(r.status, FitStatus::Caution);
+        assert!(!r.recommended.placement.is_split());
+        assert_eq!(r.moe_preset, None);
+        // At 32k f16 KV, all on the GPU is past the Metal limit; experts in RAM fit.
+        let e = estimate(
+            &qwen30b_moe(),
+            &Machine::unified(32 * GIB),
+            32768,
+            KvType::F16,
+        );
+        assert_eq!(e.status, FitStatus::Caution);
+        assert!(e.placement.moe_cpu_layers > 0);
+    }
+
+    #[test]
+    fn moe_preset_only_when_needed() {
+        let r = fit(&qwen30b_moe(), &Machine::unified(64 * GIB));
+        assert_eq!(r.status, FitStatus::Ready);
+        assert_eq!(r.moe_preset, None);
+        // Dense models never get a MoE preset.
+        let d = fit(&llama8b(), &Machine::unified(8 * GIB));
+        assert_eq!(d.moe_preset, None);
+        assert!(!d.recommended.placement.is_split());
+    }
+
+    #[test]
+    fn moe_all_experts_preset_on_small_vram() {
+        // 2 GB GPU: every layer's experts go to RAM.
+        let r = fit(&qwen30b_moe(), &Machine::discrete(32 * GIB, 2 * GIB));
+        assert_eq!(r.recommended.placement.moe_cpu_layers, 48);
+        assert_eq!(r.moe_preset, Some(MoePreset::ExpertsInRam));
+        let r8 = fit(&qwen30b_moe(), &Machine::discrete(32 * GIB, 8 * GIB));
+        assert_eq!(r8.moe_preset, Some(MoePreset::SomeExpertsInRam));
     }
 
     #[test]

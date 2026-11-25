@@ -20,6 +20,10 @@ jobs:
           curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.28.0/gitleaks_8.28.0_linux_x64.tar.gz | tar xz gitleaks
           ./gitleaks git --redact --verbose --config .gitleaks.toml .
   rust:
+    env:
+      # ggml-org/stories15M_MOE (MIT): stories15M_MOE-Q8_0.gguf.
+      MOE_MODEL_REV: b6dd737497465570b5f5e962dbc9d9454ed1e0eb
+      MOE_MODEL_SHA256: c7aa6863f9a4b3cdf19716e2c95622dcbd3bd06989324bf1ac8e60486ef8e881
     strategy:
       fail-fast: false
       matrix:
@@ -42,6 +46,27 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+      # MoE expert placement on a real model (T-INF-20): a 39 MB MoE GGUF, pinned by commit
+      # and sha256. macOS covers the Metal split, Linux the CPU-only build.
+      - name: Cache the test MoE model
+        if: runner.os != 'Windows'
+        id: moe-model-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/dn-test-models/stories15M_MOE-Q8_0.gguf
+          key: moe-model-${{ env.MOE_MODEL_SHA256 }}
+      - name: Download the test MoE model
+        if: runner.os != 'Windows' && steps.moe-model-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/dn-test-models
+          curl -sSfL -o ~/dn-test-models/stories15M_MOE-Q8_0.gguf \
+            "https://huggingface.co/ggml-org/stories15M_MOE/resolve/$MOE_MODEL_REV/stories15M_MOE-Q8_0.gguf"
+      - name: MoE offload test
+        if: runner.os != 'Windows'
+        run: |
+          echo "$MOE_MODEL_SHA256  $HOME/dn-test-models/stories15M_MOE-Q8_0.gguf" | shasum -a 256 -c -
+          DN_TEST_MOE_GGUF=$HOME/dn-test-models/stories15M_MOE-Q8_0.gguf \
+            cargo test -p dn-inference --test moe_offload -- --ignored --test-threads=1
       # The shell without the dev fake model (what release builds ship) and with it.
       - run: cargo test -p demios-desktop --no-default-features
       - run: cargo test -p demios-desktop --features dev-fake-model

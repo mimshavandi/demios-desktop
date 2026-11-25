@@ -45,6 +45,11 @@ vi.mock("@dn-artifacts", () => ({
   },
 }));
 
+// Radix Select (the skill picker) calls these on open; jsdom lacks them.
+Element.prototype.hasPointerCapture ??= () => false;
+Element.prototype.releasePointerCapture ??= () => {};
+Element.prototype.scrollIntoView ??= () => {};
+
 /** In-memory stand-in for the Rust commands. */
 function fakeApi() {
   const convs: Conversation[] = [];
@@ -56,6 +61,7 @@ function fakeApi() {
   let localSink: ((e: LocalModelEvent) => void) | null = null;
   const downloads: string[] = [];
   const pauses: string[] = [];
+  const chatSkills = new Map<string, string | null>();
   const localRows: LocalModelRow[] = [
     {
       id: "m1",
@@ -187,6 +193,15 @@ function fakeApi() {
       return null;
     },
     listMessages: async (cid) => [...(msgs.get(cid) ?? [])],
+    listSkills: async () => [
+      { name: "proofread", label: "Proofread", description: "Fixes spelling and grammar.", allowed_tools: [] },
+      { name: "explain-code", label: "Explain code", description: "Explains code.", allowed_tools: [] },
+    ],
+    getChatSkill: async (cid) => chatSkills.get(cid) ?? null,
+    setChatSkill: async (cid, skill) => {
+      chatSkills.set(cid, skill);
+      return null;
+    },
     sendMessage: async (cid, text, onEvent) => {
       listener = onEvent;
       const u = m(cid, "user", text, "complete");
@@ -267,6 +282,7 @@ function fakeApi() {
     localRows,
     reports,
     links,
+    chatSkills,
   };
 }
 
@@ -340,6 +356,30 @@ describe("App", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Hello" })).toBeTruthy());
     // The model badge says where the answer ran.
     expect(screen.getAllByText(/On this device/).length).toBeGreaterThan(0);
+  });
+
+  it("picks a skill in the composer with the keyboard and keeps it with the new chat", async () => {
+    const { api, chatSkills } = fakeApi();
+    render(<App api={api} />);
+    const picker = await screen.findByRole("combobox", { name: "Skill" });
+    expect(picker.textContent).toContain("No skill");
+    expect(picker.getAttribute("aria-describedby")).toBe("composer-skill-d");
+    picker.focus();
+    fireEvent.keyDown(picker, { key: "ArrowDown" });
+    fireEvent.click(await screen.findByRole("option", { name: /^Proofread/ }));
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Skill" }).textContent).toContain("Proofread"));
+    expect(document.getElementById("composer-skill-d")?.textContent).toContain("never skips a tool approval");
+
+    // The chat doesn't exist yet: the first message creates it with the chosen skill.
+    const box = screen.getByLabelText("Message");
+    fireEvent.change(box, { target: { value: "Check this" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    await waitFor(() => expect(chatSkills.get("id-1")).toBe("proofread"));
+
+    // Switching back to no skill saves at once for an existing chat.
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Skill" }), { key: "ArrowDown" });
+    fireEvent.click(await screen.findByRole("option", { name: "No skill" }));
+    await waitFor(() => expect(chatSkills.get("id-1")).toBeNull());
   });
 
   it("discloses AI answers: first-run notice, composer line, labelled answers", async () => {

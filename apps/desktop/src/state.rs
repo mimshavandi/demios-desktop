@@ -90,6 +90,7 @@ pub fn mcp_secret_ids(servers: &[dn_tools::McpServerConfig]) -> Vec<String> {
 pub fn migration_sets() -> Vec<MigrationSet> {
     vec![
         MigrationSet::new("app", settings::migrations()),
+        MigrationSet::new("app_skills", crate::skills::migrations()),
         MigrationSet::new("tool_ledger", dn_tools::migrations()),
         MigrationSet::new("artifact", dn_artifacts::migrations()),
     ]
@@ -170,6 +171,8 @@ pub struct AppState {
     pub models: ModelRegistry,
     pub keys: Keys,
     pub agent: Agent,
+    /// Chat skills the user can pick per chat (T-SKL-01).
+    pub skills: crate::skills::Library,
     /// What the agent loop may call (the manifest-filtered dn-tools executor in the app).
     pub tools: Arc<dyn ToolExecutor>,
     /// The dn-tools executor itself, for outcome-unknown resolution. `None` in tests.
@@ -235,6 +238,7 @@ impl AppState {
             models,
             keys,
             agent: Agent::load(None),
+            skills: Default::default(),
             tools: Arc::new(NoTools),
             executor: None,
             approvals: Mutex::new(HashMap::new()),
@@ -285,6 +289,9 @@ impl AppState {
             if let Err(e) = artifacts.delete_conversation(*id) {
                 eprintln!("could not delete the artifacts of a deleted chat: {e}");
             }
+            if let Err(e) = crate::skills::forget_chat(&conn, *id) {
+                eprintln!("could not forget the skill of a deleted chat: {e}");
+            }
         }
 
         let ledger = dn_store::open_connection(path)?;
@@ -316,6 +323,7 @@ impl AppState {
         models.local = Some(crate::local::LocalModels::open());
         let mut state = Self::new(conn, models, keys);
         state.agent = agent;
+        state.skills = crate::skills::Library::load(skills);
         state.tools = tools;
         state.executor = Some(Arc::clone(&executor));
         state.tools_settling = settling;
@@ -643,7 +651,9 @@ impl AppState {
         }
         match self.db() {
             Ok(db) => {
-                let r = store::delete_all(&db).and_then(|()| settings::delete_all(&db));
+                let r = store::delete_all(&db)
+                    .and_then(|()| settings::delete_all(&db))
+                    .and_then(|()| crate::skills::delete_all(&db));
                 let artifacts = dn_artifacts::ArtifactStore::new(&db).delete_all();
                 if let Err(e) = &artifacts {
                     eprintln!("could not delete artifacts: {e}");
