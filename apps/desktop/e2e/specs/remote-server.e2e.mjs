@@ -107,7 +107,13 @@ describe("OpenAI-compatible server", () => {
     await (await byTestId("new-chat")).waitForExist({ timeout: 60_000 });
 
     // Settings › Models › Model servers: add the mock by address.
-    await (await $(".sidebar-foot button*=Models")).click();
+    // CSS plus a text match (`.x button*=Models`) is an invalid WebDriver selector: filter by text.
+    let models;
+    for (const b of await $$(".sidebar-foot button")) {
+      if ((await textOf(b)).trim() === "Models") models = b;
+    }
+    if (models === undefined) throw new Error("no Models button in the sidebar");
+    await models.click();
     const url = await byTestId("server-url");
     await url.waitForDisplayed({ timeout: 30_000 });
     await url.setValue(mock.base);
