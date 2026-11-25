@@ -200,6 +200,46 @@ pub async fn rename_conversation(
     .await
 }
 
+/// The chat skills in the library (T-SKL-01), for the composer's picker.
+#[tauri::command]
+pub async fn list_skills(state: AppStateRef<'_>) -> IpcResult<Vec<crate::skills::SkillInfo>> {
+    Ok(state.skills.list())
+}
+
+/// The skill a chat uses, or `null`. A saved skill that is no longer in the library reads
+/// as `null`.
+#[tauri::command]
+pub async fn get_chat_skill(
+    state: AppStateRef<'_>,
+    conversation_id: Id,
+) -> IpcResult<Option<String>> {
+    blocking(&state, move |s| {
+        let name = crate::skills::chat_skill(&*s.db()?, conversation_id)?;
+        Ok(name.filter(|n| s.skills.get(n).is_some()))
+    })
+    .await
+}
+
+/// Picks the skill for a chat (`null` = none). It applies from the next answer on.
+#[tauri::command]
+pub async fn set_chat_skill(
+    state: AppStateRef<'_>,
+    conversation_id: Id,
+    skill: Option<String>,
+) -> IpcResult<()> {
+    crate::skills::check_choice(&state.skills, skill.as_deref())?;
+    blocking(&state, move |s| {
+        let db = s.db()?;
+        store::get_conversation(&db, conversation_id)?;
+        Ok(crate::skills::set_chat_skill(
+            &db,
+            conversation_id,
+            skill.as_deref(),
+        )?)
+    })
+    .await
+}
+
 /// Soft delete: the chat can be restored until the next start (design-system §5 Undo).
 #[tauri::command]
 pub async fn delete_conversation(state: AppStateRef<'_>, conversation_id: Id) -> IpcResult<()> {
