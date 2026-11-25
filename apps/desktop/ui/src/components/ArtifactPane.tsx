@@ -26,9 +26,15 @@ export interface ArtifactPaneProps {
   /** Content as rendered, with the AI-generated marker; stored versions stay unchanged. */
   mark?: (type: ArtifactType, version: ArtifactVersionView) => string;
   onClose: () => void;
-  /** How the chat model changes artifacts, for the "Ask to fix" wording. */
-  fixMode?: "tools" | "fenced";
+  /** Shown at the top of the pane, e.g. [`NO_ARTIFACT_TOOLS`] for a model without tool calling. */
+  notice?: string | null;
 }
+
+/**
+ * The chat model can't make artifacts: artifacts are made only through tool calls, and there is
+ * no text-format fallback (ADR-0004 amendment).
+ */
+export const NO_ARTIFACT_TOOLS = "This model can't make artifacts: it doesn't support tool calls.";
 
 export function typeLabel(t: ArtifactType): string {
   switch (t.kind) {
@@ -131,7 +137,6 @@ export function ArtifactPane(p: ArtifactPaneProps) {
             const model = (v as ArtifactVersionView).model;
             return model === null ? "an AI model" : latest.current.modelName(model);
           },
-          fixMode: () => latest.current.fixMode ?? "tools",
           mark: (a, v) =>
             v.author === "model"
               ? (latest.current.mark?.(a.artifact_type, v as ArtifactVersionView) ?? v.content)
@@ -193,6 +198,11 @@ export function ArtifactPane(p: ArtifactPaneProps) {
         if (e.key === "Escape") p.onClose();
       }}
     >
+      {p.notice ? (
+        <div className="artifacts-notice" data-testid="artifacts-notice">
+          <InlineMessage tone="info">{p.notice}</InlineMessage>
+        </div>
+      ) : null}
       {p.artifacts.length === 0 ? (
         <div className="dn-empty">
           <Sparkles {...ICON} aria-hidden="true" />
