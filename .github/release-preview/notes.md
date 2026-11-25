@@ -17,8 +17,7 @@ These installers are for trying the app early. Please know that:
 |---|---|
 | macOS, Apple silicon | `Demios-Desktop-{{VERSION}}-preview-macos-arm64.dmg` |
 | macOS, Intel | `Demios-Desktop-{{VERSION}}-preview-macos-x64.dmg` |
-| Windows 10/11 (x64), installer | `Demios-Desktop-{{VERSION}}-preview-windows-x64-setup.exe` |
-| Windows 10/11 (x64), MSI | `Demios-Desktop-{{VERSION}}-preview-windows-x64.msi` |
+| Windows 10/11 (x64) | `Demios-Desktop-{{VERSION}}-preview-windows-x64-setup.exe` |
 | Linux (x86_64), any distro | `Demios-Desktop-{{VERSION}}-preview-linux-x86_64.AppImage` |
 | Debian, Ubuntu (amd64) | `Demios-Desktop-{{VERSION}}-preview-linux-amd64.deb` |
 
@@ -36,7 +35,7 @@ Check a download against `SHA256SUMS.txt`:
 Or, in Terminal: `xattr -dr com.apple.quarantine "/Applications/Demios Desktop.app"`
 
 **Windows**
-1. Run the `-setup.exe` (installs for you only) or the `.msi` (installs for all users, needs an administrator).
+1. Run the `-setup.exe`. It installs for you only and doesn't need an administrator.
 2. If SmartScreen says "Windows protected your PC", click **More info › Run anyway**.
 
 The app needs Microsoft Edge WebView2, which Windows 10 and 11 already have. The installer gets it if it's missing.

@@ -1,4 +1,4 @@
-# Unsigned preview installers for macOS (arm64, x64), Windows (NSIS, MSI) and Linux
+# Unsigned preview installers for macOS (arm64, x64), Windows (NSIS) and Linux
 # (AppImage, deb). Each installer is smoke-tested on its OS. The workflow artifact holds
 # all of them plus SHA256SUMS.txt.
 #
@@ -214,7 +214,7 @@ jobs:
         working-directory: apps/desktop
       - name: tauri build (release)
         working-directory: apps/desktop
-        run: npx tauri build --ci --bundles nsis,msi
+        run: npx tauri build --ci --bundles nsis
       - name: Collect
         id: c
         shell: bash
@@ -222,14 +222,13 @@ jobs:
           set -euo pipefail
           mkdir -p out
           cp "$(ls target/release/bundle/nsis/*-setup.exe | head -n1)" "out/$PREFIX-windows-x64-setup.exe"
-          cp "$(ls target/release/bundle/msi/*.msi | head -n1)" "out/$PREFIX-windows-x64.msi"
           echo "bin=target/release/demios-desktop.exe" >> "$GITHUB_OUTPUT"
       - *guard
       # tauri-driver can't attach here: msedgedriver needs WebView2 remote debugging, which
       # only the e2e build's window config turns on (apps/desktop/e2e/README.md, T-SHELL-06),
       # and the shipped build must not have it. UI Automation reads the rendered page
       # instead: the main UI's "New chat" button must be in the WebView2 accessibility tree.
-      - name: Smoke test (silent install, UI renders, reinstall keeps data, MSI)
+      - name: Smoke test (silent install, UI renders, reinstall keeps data, uninstall)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -268,7 +267,6 @@ jobs:
             (Get-ChildItem -Path $root -Recurse -Filter demios-desktop.exe -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
           }
           $setup = (Resolve-Path "out/$env:PREFIX-windows-x64-setup.exe").Path
-          $msi = (Resolve-Path "out/$env:PREFIX-windows-x64.msi").Path
 
           trap { $log + "FAILED: $_" | Set-Content out/smoke-windows.txt; break }
           # NSIS, per-user, silent.
@@ -290,22 +288,6 @@ jobs:
           $kept = Test-Path (Join-Path $data 'reinstall-check.txt')
           $log += "nsis silent uninstall: app removed=$(-not (Test-Path $exe)), local data kept=$kept"
 
-          # MSI, per-machine, quiet.
-          $p = Start-Process -Wait -PassThru -FilePath msiexec.exe -ArgumentList '/i', "`"$msi`"", '/qn', '/l*v', 'msi-install.log'
-          if ($p.ExitCode -ne 0) { Get-Content msi-install.log -Tail 40; throw "msiexec exited $($p.ExitCode)" }
-          $entries = Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |
-            Where-Object { $_.DisplayName -like 'Demios*' }
-          $roots = @($entries | ForEach-Object { $_.InstallLocation } | Where-Object { $_ }) +
-            @((Join-Path $env:ProgramFiles 'Demios Desktop'), (Join-Path ${env:ProgramFiles(x86)} 'Demios Desktop'), (Join-Path $env:LOCALAPPDATA 'Programs\Demios Desktop'))
-          $exe = $roots | Where-Object { Test-Path $_ } | ForEach-Object { Find-Exe $_ } | Select-Object -First 1
-          if (-not $exe) {
-            $entries | Format-List DisplayName, InstallLocation, UninstallString | Out-String | Write-Host
-            Select-String -Path msi-install.log -Pattern 'demios-desktop.exe|INSTALLDIR|APPLICATIONFOLDER' | Select-Object -First 20 | Out-String | Write-Host
-            throw 'MSI install: demios-desktop.exe not found'
-          }
-          $log += "msi: installed to $exe"
-          Launch $exe 'msi'
-          $log += "msi: local data still present=$(Test-Path (Join-Path $data 'reinstall-check.txt'))"
           $log | Tee-Object -FilePath out/smoke-windows.txt
       - uses: actions/upload-artifact@v4
         if: always()

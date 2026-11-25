@@ -106,7 +106,7 @@ For testing real models before releases are signed (#51). The `preview` workflow
 ### Preview installers for all OSes (`release-preview`)
 `.github/workflows/release-preview.yml` builds unsigned release installers:
 - macOS `.dmg` for arm64 and x64, each built natively and ad-hoc signed with `codesign -s -`;
-- Windows NSIS `-setup.exe` and `.msi`;
+- Windows NSIS `-setup.exe` (no `.msi` in previews);
 - Linux AppImage and `.deb`, built on Ubuntu 22.04 for an older glibc.
 
 The `updater` feature is off. Each installer is smoke-tested on its own OS:
