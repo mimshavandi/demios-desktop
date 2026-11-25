@@ -199,12 +199,16 @@ function ModelsPage({
 }) {
   const s = catalog.settings;
   // A download finished: pickers and the composer should see the new model.
+  const toast = useToast();
   const refreshCatalog = useCallback(() => {
     void api
       .listModels()
       .then(onCatalog)
-      .catch(() => {});
-  }, [api, onCatalog]);
+      // Say so: the pickers would otherwise miss the model that just finished (#141).
+      .catch((e: unknown) =>
+        toast({ tone: "error", title: `Couldn't refresh the model list. ${errorMessage(e)}` }),
+      );
+  }, [api, onCatalog, toast]);
   return (
     <>
       <section className="card" aria-labelledby="slots-h">
