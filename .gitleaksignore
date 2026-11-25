@@ -1,0 +1,7 @@
+# Exact findings that are not secrets (ADR-0009: explain each one in its PR).
+#
+# docs/adr/0015 sentence "a key derived from the password: PBKDF2-SHA-256 ..." in commit 4f0a833
+# (PR 206). It describes an algorithm, not a key. The sentence was reworded in a later commit, but
+# the old commit stays on the PR branch (no force-push), and CI scans every fetched branch.
+# Remove this entry once that branch is merged and deleted.
+4f0a833927caeb388577be5ab95dc669cd10755d:docs/adr/0015-encrypted-sharing-and-forms.md:generic-api-key:58
