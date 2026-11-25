@@ -812,8 +812,6 @@ mod tests {
         let mut st = AppState::new(conn, crate::models::ModelRegistry::default(), keys.clone());
         // Tests run local (stdio) servers, also in a `--features flatpak` build.
         st.local_servers = true;
-        // Tests run local (stdio) servers, also in a `--features flatpak` build.
-        st.local_servers = true;
         (Arc::new(st), keys)
     }
 

@@ -31,7 +31,7 @@ git -C "$work/tools" fetch -q --depth 1 "$TOOLS_REPO" "$TOOLS_COMMIT"
 git -C "$work/tools" checkout -q FETCH_HEAD
 
 python3 -m venv "$work/venv"
-"$work/venv/bin/pip" install -q --disable-pip-version-check aiohttp tomlkit "$work/tools/node"
+"$work/venv/bin/pip" install -q --disable-pip-version-check aiohttp==3.14.5 tomlkit==0.15.3 "$work/tools/node"
 py="$work/venv/bin/python"
 
 mkdir -p "$out"
