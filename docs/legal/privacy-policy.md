@@ -95,7 +95,7 @@ Tool servers let the model use tools. You add them in **Settings → Models → 
 
 When the model calls a tool, the server receives the **arguments of that call**. These can contain parts of your conversation. The tool's answer comes back into the conversation, so it is also sent to your AI provider if you use one.
 
-Tools that change something ask for your approval first: every time, or, for tools that only change local data, once per chat if you choose. Tools a server marks as read-only run **without asking**, so their arguments are sent without a prompt. A remote server is never trusted to mark its own tools read-only, so none of its tools run without asking. Each server's own policy applies.
+Tools that change something ask for your approval first: every time, or, for tools that only change local data, once per chat if you choose. Tools a server marks as read-only run **without asking**, so their arguments are sent without a prompt. A remote server is never trusted to mark its own tools read-only, so its tools ask before running unless you choose otherwise for a tool. Letting a risky tool run without asking needs a confirmation. Each server's own policy applies.
 
 ### Artifacts
 
