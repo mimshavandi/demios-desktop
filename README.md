@@ -14,8 +14,8 @@ An open-source desktop app for chatting with AI models you choose: one running o
 - Chat with streamed answers, with Markdown and highlighted code blocks. Links in answers open in your browser after a system dialog shows the full address.
 - Artifacts: web pages, small apps, diagrams and documents the model makes open in a side pane, where they run sealed off from your files, the app and the network. Go back to earlier versions, ask the model to fix errors, and allow network access per artifact if you need it.
 - Stop an answer mid-way (Ctrl+. or ⌘.) and retry it.
-- Group chats in projects, with instructions that apply to every chat in the project and files you add to it.
-- Choose a skill for a chat, such as Summarize or Write email. A skill adds instructions and can only narrow which tools the model may use; it never skips an approval.
+- Group chats in projects, with instructions that apply to every chat in the project and files you add to it. Answers in a project use passages from its files, and each answer lists its sources.
+- Choose a skill for a chat, such as Summarize or Write email, or write your own. A skill adds instructions and can only narrow which tools the model may use; it never skips an approval.
 - Keep conversations between launches, and delete them with Undo.
 - Run models on your computer: download from a built-in catalogue of 13 open models: 11 for chat and 2 embedding models. Each row shows whether the model fits your machine ("Won't fit" when it doesn't), its licence, and download progress. Downloads can be paused, resume after an interruption, and are checked against their SHA-256.
 - Add GGUF models from Hugging Face: search, see each version's size, whether it fits and its licence before downloading, and add a Hugging Face token for gated models. GGUF models already in your Hugging Face cache are used where they are, never changed or deleted. A `demios://models/add` link opens the same check in the app; nothing downloads until you choose to.

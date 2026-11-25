@@ -12,6 +12,7 @@ import {
   type ChatEvent,
   type Conversation,
   type SkillInfo,
+  type TurnStarted,
   type Id,
   type McpServerStatus,
   type ModelCatalog,
@@ -21,6 +22,7 @@ import {
   type AddModelLink,
   type Settings,
   type UnknownOutcome,
+  type UpdateCheck,
 } from "../ipc/types";
 import { markArtifact } from "../artifactMarks";
 import { chatModel, chatModelReady, describeModel, modelName } from "../models";
@@ -78,6 +80,8 @@ function Shell({ api }: { api: Api }) {
   // choice here until its first message creates the conversation.
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [skill, setSkill] = useState<string | null>(null);
+  // Which answers of the open chat were written with a skill (message id → label).
+  const [answerSkills, setAnswerSkills] = useState<Record<Id, string>>({});
   const [listState, setListState] = useState<ListState>({ kind: "loading" });
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [projectsState, setProjectsState] = useState<ListState>({ kind: "loading" });
@@ -125,6 +129,27 @@ function Shell({ api }: { api: Api }) {
     [api, toast],
   );
 
+  // The opt-in launch check (#95): a newer version shows a notice; nothing downloads.
+  const [launchUpdate, setLaunchUpdate] = useState<UpdateCheck | null>(null);
+  const [updateNotice, setUpdateNotice] = useState(false);
+  const [revealUpdates, setRevealUpdates] = useState(false);
+  useEffect(() => {
+    if (info?.updates !== "self_update") return;
+    let alive = true;
+    void api
+      .launchUpdateCheck()
+      .then((r) => {
+        if (!alive || r?.status !== "available") return;
+        setLaunchUpdate(r);
+        setUpdateNotice(true);
+      })
+      // Silent: the next launch tries again.
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [api, info?.updates]);
+
   // The composer's draft survives a switch to Settings (a link, ⌘,) and back.
   const [draft, setDraft] = useState("");
 
@@ -145,15 +170,21 @@ function Shell({ api }: { api: Api }) {
       .then((pending) => {
         if (pending !== null) show(pending);
       })
-      .catch(() => {});
+      .catch((e: unknown) => {
+        if (alive) toast({ tone: "error", title: `demios:// links can't open in this window. ${errorMessage(e)}` });
+      });
     return () => {
       alive = false;
     };
-  }, [api]);
+  }, [api, toast]);
   const closeAddLink = useCallback(() => {
     setAddLink(null);
-    void api.addLinkDone().catch(() => {});
-  }, [api]);
+    void api
+      .addLinkDone()
+      .catch((e: unknown) =>
+        toast({ tone: "error", title: `Couldn't close the link. Restart Demios before opening another one. ${errorMessage(e)}` }),
+      );
+  }, [api, toast]);
 
   const openLink = useCallback(
     (href: string) => {
@@ -169,11 +200,11 @@ function Shell({ api }: { api: Api }) {
       // Start from the stored settings, not this render's copy (another screen may have saved).
       const current = await api.getSettings();
       hide(await api.updateSettings({ ...current, ai_notice_seen: true }));
-    } catch {
-      // Hide it for this session anyway; it comes back next start if saving failed.
-      setCatalog((c) => (c === null ? c : { ...c, settings: { ...c.settings, ai_notice_seen: true } }));
+    } catch (e) {
+      // The notice stays: hiding it would pretend the choice was saved (#141).
+      toast({ tone: "error", title: `Couldn't save that you've read the notice. ${errorMessage(e)}` });
     }
-  }, [api]);
+  }, [api, toast]);
 
   const refreshConversations = useCallback(async () => {
     try {
@@ -193,11 +224,15 @@ function Shell({ api }: { api: Api }) {
     }
   }, [api]);
 
+  // A failed load is shown above the chat with Retry, not hidden behind a stale catalog
+  // that would make the composer say no model is set up (#141).
+  const [catalogError, setCatalogError] = useState<string | null>(null);
   const refreshCatalog = useCallback(async () => {
     try {
       setCatalog(await api.listModels());
-    } catch {
-      // The settings screen shows its own error with Retry.
+      setCatalogError(null);
+    } catch (e) {
+      setCatalogError(errorMessage(e));
     }
   }, [api]);
 
@@ -283,13 +318,26 @@ function Shell({ api }: { api: Api }) {
       setOpenArtifact(null);
       void refreshArtifacts(id);
       setSkill(null);
+      setAnswerSkills({});
       if (id !== null) {
         void api
           .getChatSkill(id)
           .then((s) => {
             if (openIdRef.current === id) setSkill(s);
           })
-          .catch(() => {});
+          .catch((e: unknown) => {
+            if (openIdRef.current === id) setError(`Couldn't read this chat's skill. ${errorMessage(e)}`);
+          });
+        void api
+          .listAnswerSkills(id)
+          .then((list) => {
+            if (openIdRef.current === id) {
+              setAnswerSkills(Object.fromEntries(list.map((a) => [a.message_id, a.label])));
+            }
+          })
+          .catch((e: unknown) => {
+            if (openIdRef.current === id) setError(`Couldn't read which skills wrote these answers. ${errorMessage(e)}`);
+          });
       }
       if (id === null) {
         dispatch({ kind: "open", conversationId: null, messages: [] });
@@ -344,14 +392,14 @@ function Shell({ api }: { api: Api }) {
   }, [api, toast]);
 
   // The skill library, read again whenever the chat comes back into view (Settings ›
-  // Skills can reload it). Without a library the picker stays hidden.
+  // Skills can reload it). An empty library hides the picker; a failed read says so.
   useEffect(() => {
     if (view.kind !== "chat") return;
     let alive = true;
     api
       .listSkills()
       .then((s) => alive && setSkills(s))
-      .catch(() => {});
+      .catch((e: unknown) => alive && setError(`Couldn't load the skills. ${errorMessage(e)}`));
     return () => {
       alive = false;
     };
@@ -417,7 +465,11 @@ function Shell({ api }: { api: Api }) {
                 dispatch({ kind: "open", conversationId: id, messages });
               }
             })
-            .catch(() => {});
+            .catch((e: unknown) => {
+              if (openIdRef.current === id) {
+                setError(`Couldn't load the saved answer, so what you see may be incomplete. Open the chat again. ${errorMessage(e)}`);
+              }
+            });
           void refreshUnknowns(id);
         }
       }
@@ -455,6 +507,11 @@ function Shell({ api }: { api: Api }) {
     void open(null);
   }, [open]);
 
+  const noteAnswerSkill = useCallback((turn: TurnStarted) => {
+    const label = turn.skill;
+    if (label !== null) setAnswerSkills((m) => ({ ...m, [turn.assistant_message.id]: label }));
+  }, []);
+
   const send = useCallback(
     async (text: string): Promise<boolean> => {
       setError(null);
@@ -470,6 +527,7 @@ function Shell({ api }: { api: Api }) {
         }
         const turn = await api.sendMessage(id, text, onEvent);
         dispatch({ kind: "turn_started", conversationId: id, turn });
+        noteAnswerSkill(turn);
         void refreshConversations();
         return true;
       } catch (e) {
@@ -478,7 +536,7 @@ function Shell({ api }: { api: Api }) {
         return false;
       }
     },
-    [api, chat.conversationId, newChatProject, onEvent, refreshConversations, skill],
+    [api, chat.conversationId, newChatProject, onEvent, refreshConversations, skill, noteAnswerSkill],
   );
 
   const chooseSkill = useCallback(
@@ -505,11 +563,12 @@ function Shell({ api }: { api: Api }) {
     try {
       const turn = await api.regenerate(id, onEvent);
       dispatch({ kind: "turn_started", conversationId: id, turn });
+      noteAnswerSkill(turn);
     } catch (e) {
       dispatch({ kind: "turn_failed" });
       setError(errorMessage(e));
     }
-  }, [api, chat.conversationId, onEvent]);
+  }, [api, chat.conversationId, onEvent, noteAnswerSkill]);
 
   // Stop by conversation, so ⌘. also works between Send and the reply that names the
   // assistant message.
@@ -527,9 +586,17 @@ function Shell({ api }: { api: Api }) {
         toast({ tone: "error", title: `Couldn't delete the chat. ${errorMessage(e)}` });
         return;
       }
-      const list = await api.listConversations().catch(() => conversations.filter((x) => x.id !== c.id));
-      setConversations(list);
-      if (c.id === chat.conversationId) void open(list[0]?.id ?? null);
+      // A failed reload shows the list's error with Retry; no guessed list stands in (#141).
+      let next: Id | null = null;
+      try {
+        const list = await api.listConversations();
+        setConversations(list);
+        setListState({ kind: "ready" });
+        next = list[0]?.id ?? null;
+      } catch (e) {
+        setListState({ kind: "error", message: errorMessage(e) });
+      }
+      if (c.id === chat.conversationId) void open(next);
       toast({
         tone: "info",
         title: `Deleted “${c.title}”`,
@@ -545,7 +612,7 @@ function Shell({ api }: { api: Api }) {
         },
       });
     },
-    [api, chat.conversationId, conversations, open, refreshConversations, toast],
+    [api, chat.conversationId, open, refreshConversations, toast],
   );
 
   /** A new chat in `projectId`; like any new chat, it is created on the first message. */
@@ -754,6 +821,36 @@ function Shell({ api }: { api: Api }) {
         />
       )}
       <main className="main">
+        {info?.agent_error != null && (
+          <div className="approval-elsewhere" data-testid="agent-error">
+            <InlineMessage
+              tone="error"
+              action={
+                <Button size="sm" onClick={() => void report("problem", null)}>
+                  Report a problem
+                </Button>
+              }
+            >
+              Demios couldn't load its assistant instructions, so chats can't start. Reinstall Demios, or report a
+              problem. ({info.agent_error})
+            </InlineMessage>
+          </div>
+        )}
+        {/* Over the chat only: Settings › Models shows its own error with Retry. */}
+        {catalogError !== null && view.kind === "chat" && (
+          <div className="approval-elsewhere" data-testid="catalog-error">
+            <InlineMessage
+              tone="error"
+              action={
+                <Button size="sm" onClick={() => void refreshCatalog()}>
+                  Retry
+                </Button>
+              }
+            >
+              Couldn't load your models. {catalogError}
+            </InlineMessage>
+          </div>
+        )}
         {otherApprovals.length > 0 && (
           <div className="approval-elsewhere" role="status">
             <InlineMessage
@@ -765,6 +862,32 @@ function Shell({ api }: { api: Api }) {
               }
             >
               Another chat is waiting for your approval.
+            </InlineMessage>
+          </div>
+        )}
+        {updateNotice && launchUpdate?.status === "available" && (
+          <div className="approval-elsewhere" data-testid="update-notice">
+            <InlineMessage
+              tone="info"
+              action={
+                <span className="update-offer-actions">
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      setUpdateNotice(false);
+                      setRevealUpdates(true);
+                      setView({ kind: "settings", section: "general" });
+                    }}
+                  >
+                    View update
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => setUpdateNotice(false)}>
+                    Dismiss
+                  </Button>
+                </span>
+              }
+            >
+              Demios {launchUpdate.version} is available.
             </InlineMessage>
           </div>
         )}
@@ -796,6 +919,7 @@ function Shell({ api }: { api: Api }) {
             onDismissAiNotice={() => void dismissAiNotice()}
             skills={skills}
             skill={skill}
+            answerSkills={answerSkills}
             onSkill={(n) => void chooseSkill(n)}
           />
         ) : view.kind === "project" ? (
@@ -852,6 +976,8 @@ function Shell({ api }: { api: Api }) {
             servers={servers}
             addLink={addLink}
             onAddLinkClosed={closeAddLink}
+            launchUpdate={launchUpdate}
+            revealUpdates={revealUpdates}
           />
         )}
       </main>

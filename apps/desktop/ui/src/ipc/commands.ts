@@ -16,6 +16,7 @@ import type {
   UnknownOutcome,
   ChatEvent,
   Conversation,
+  AnswerSkill,
   SkillInfo,
   SkillsOverview,
   Id,
@@ -47,6 +48,7 @@ interface Commands {
   app_info: { args: Record<string, never>; ret: AppInfo };
   check_for_update: { args: Record<string, never>; ret: UpdateCheck };
   install_update: { args: { version: string; onProgress: Channel<UpdateProgress> }; ret: null };
+  launch_update_check: { args: Record<string, never>; ret: UpdateCheck | null };
   delete_all_local_data: { args: Record<string, never>; ret: null };
   local_data_summary: { args: Record<string, never>; ret: LocalDataSummary };
   report_problem: { args: { kind: ReportKind; messageId: Id | null }; ret: null };
@@ -89,6 +91,7 @@ interface Commands {
   delete_conversation: { args: { conversationId: Id }; ret: null };
   restore_conversation: { args: { conversationId: Id }; ret: null };
   list_skills: { args: Record<string, never>; ret: SkillInfo[] };
+  list_answer_skills: { args: { conversationId: Id }; ret: AnswerSkill[] };
   skills_overview: { args: Record<string, never>; ret: SkillsOverview };
   reload_skills: { args: Record<string, never>; ret: SkillsOverview };
   open_skills_folder: { args: Record<string, never>; ret: null };
@@ -174,6 +177,11 @@ export const api = {
   appInfo: () => call("app_info", {}),
   /** Asks GitHub Releases for a newer version; downloads nothing. */
   checkForUpdate: () => call("check_for_update", {}),
+  /**
+   * The opt-in check at launch: null unless this build updates itself, the setting is on and
+   * it hasn't run in this process yet. Failures are silent (null).
+   */
+  launchUpdateCheck: () => call("launch_update_check", {}),
   /** After the user confirmed `version`: downloads, verifies, installs and restarts. */
   installUpdate: (version: string, onProgress: (p: UpdateProgress) => void) =>
     call("install_update", { version, onProgress: channel(onProgress) }),
@@ -244,6 +252,8 @@ export const api = {
   restoreConversation: (conversationId: Id) => call("restore_conversation", { conversationId }),
   listMessages: (conversationId: Id) => call("list_messages", { conversationId }),
   listSkills: () => call("list_skills", {}),
+  /** Which answers of a chat were written with a skill, with its label then. */
+  listAnswerSkills: (conversationId: Id) => call("list_answer_skills", { conversationId }),
   skillsOverview: () => call("skills_overview", {}),
   /** Reads the skills folders again. */
   reloadSkills: () => call("reload_skills", {}),

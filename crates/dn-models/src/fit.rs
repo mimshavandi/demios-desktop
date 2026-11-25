@@ -319,6 +319,11 @@ impl Machine {
         self.total_ram.saturating_sub(reserve)
     }
 
+    /// RAM models may use on the CPU side: `RAM − max(2 GiB, 20% × RAM)`.
+    pub fn cpu_budget_bytes(&self) -> u64 {
+        self.cpu_budget()
+    }
+
     fn unified_budget(&self, reported: Option<u64>) -> u64 {
         reported.unwrap_or(if self.total_ram <= 36 * GIB {
             self.total_ram * 2 / 3
