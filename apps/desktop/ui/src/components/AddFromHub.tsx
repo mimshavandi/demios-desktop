@@ -487,6 +487,8 @@ function RepoDetail({
 function HfToken({ api, onSaved }: { api: Api; onSaved: () => void }) {
   const toast = useToast();
   const [has, setHas] = useState<boolean | null>(null);
+  // Checking the keychain failed: say so instead of claiming there's no token (#141).
+  const [statusError, setStatusError] = useState<string | null>(null);
   const [value, setValue] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -495,7 +497,7 @@ function HfToken({ api, onSaved }: { api: Api; onSaved: () => void }) {
     void api
       .hfTokenStatus()
       .then(setHas)
-      .catch(() => setHas(false));
+      .catch((e: unknown) => setStatusError(errorMessage(e)));
   }, [api]);
 
   return (
@@ -504,6 +506,9 @@ function HfToken({ api, onSaved }: { api: Api; onSaved: () => void }) {
         This model needs access: accept its terms on the model card, then add a Hugging Face token (read access is
         enough). The token is kept in your system keychain and is sent only to Hugging Face.
       </InlineMessage>
+      {statusError !== null && has === null && (
+        <InlineMessage tone="error">Couldn't check for a saved Hugging Face token. {statusError}</InlineMessage>
+      )}
       {has === true ? (
         <div className="row">
           <span className="dn-help">Hugging Face token saved.</span>

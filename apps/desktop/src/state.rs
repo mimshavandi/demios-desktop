@@ -244,7 +244,7 @@ impl AppState {
             db: Mutex::new(conn),
             models,
             keys,
-            agent: Agent::load(None),
+            agent: Agent::empty(),
             skills: Default::default(),
             tools: Arc::new(NoTools),
             executor: None,

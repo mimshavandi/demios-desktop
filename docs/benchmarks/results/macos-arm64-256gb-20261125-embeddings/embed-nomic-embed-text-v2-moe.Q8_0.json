@@ -1,0 +1,91 @@
+{
+  "schema": "dn.bench-embed.v1",
+  "unix_time": 1795613516,
+  "model": {
+    "arch": "nomic-bert-moe",
+    "file": "nomic-embed-text-v2-moe.Q8_0.gguf",
+    "file_size": 512225120,
+    "moe": true,
+    "n_layer": 12,
+    "n_params": 475288320,
+    "quant": "Q8_0"
+  },
+  "machine": {
+    "arch": "aarch64",
+    "cpu": "Apple M3 Ultra",
+    "cpu_threads": 32,
+    "devices": [
+      {
+        "backend": "MTL",
+        "description": "Apple M3 Ultra",
+        "kind": "gpu",
+        "memory_free": 239143043072,
+        "memory_total": 239143780352,
+        "name": "MTL0"
+      },
+      {
+        "backend": "CPU",
+        "description": "Apple M3 Ultra",
+        "kind": "cpu",
+        "memory_free": 274877906944,
+        "memory_total": 274877906944,
+        "name": "CPU"
+      }
+    ],
+    "gpu_offload": true,
+    "memory": {
+      "memory": {
+        "gpu_budget": 239143780352,
+        "kind": "unified"
+      },
+      "total_ram": 274877906944
+    },
+    "os": "macos"
+  },
+  "query_prefix": "search_query: ",
+  "doc_prefix": "search_document: ",
+  "dimension": 768,
+  "load_ms": 287.669375,
+  "docs_per_s": 148.94245642949085,
+  "query_ms": 5.006763888888889,
+  "peak_rss_bytes": 807665664,
+  "overall": {
+    "n": 36,
+    "recall_at_1": 0.9722222222222222,
+    "recall_at_3": 1.0,
+    "mrr": 0.9861111111111112
+  },
+  "by_lang": {
+    "de": {
+      "n": 12,
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "mrr": 1.0
+    },
+    "de-en": {
+      "n": 6,
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "mrr": 1.0
+    },
+    "en": {
+      "n": 12,
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "mrr": 1.0
+    },
+    "en-de": {
+      "n": 6,
+      "recall_at_1": 0.8333333333333334,
+      "recall_at_3": 1.0,
+      "mrr": 0.9166666666666666
+    }
+  },
+  "misses": [
+    {
+      "lang": "en-de",
+      "query": "How often do we test restoring a backup?",
+      "rank": 2
+    }
+  ]
+}
