@@ -1,6 +1,6 @@
 # Demios Desktop accessibility statement
 
-> **Pending owner approval.** The owner approves the final text before it is published at demios.io/accessibility and linked from the app and the download page.
+> **Pending owner approval.** The owner approves the final text before it is published at demios.io/accessibility and linked from the app and from demios.io.
 
 Last reviewed: set on publication · App version: 0.1.0
 
@@ -40,7 +40,7 @@ We want Demios Desktop to be usable by everyone, including people who use a keyb
 ## Known gaps
 
 - **macOS:** WKWebView has no WebDriver, so all macOS checks are manual, from a release checklist.
-- **Screen readers:** no full pass has been done yet with VoiceOver (macOS), NVDA or Narrator (Windows), or Orca (Linux). Until one has, we will not tick any store's "accessible" box.
+- **Screen readers:** no full pass has been done yet with VoiceOver (macOS), NVDA or Narrator (Windows), or Orca (Linux). We won't claim the app is accessible until a full screen-reader pass is done.
 - **Generated content:** answers and artifacts (pages, apps and diagrams the model writes) are written by the AI model you choose. We cannot guarantee that they are accessible: an artifact may lack alt text, headings, labels or enough contrast. You can ask the model to fix this.
 - **Artifacts on Windows** are shown in a separate view on top of the pane. Screen-reader and focus behaviour there hasn't been checked by hand yet. Tab moves from an artifact back into the app.
 - **Not yet checked:** high-contrast and forced-colours modes, zoom to 200%, and reduced motion.

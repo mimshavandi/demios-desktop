@@ -1,6 +1,6 @@
 # Demios Desktop privacy policy
 
-> **Pending owner approval.** The owner approves the final text before it is published at demios.io/privacy and linked from the app and the download page. Text in [square brackets] is still to be confirmed by the owner. Every statement about the app was checked against the code on `main`.
+> **Pending owner approval.** The owner approves the final text before it is published at demios.io/privacy and linked from the app and from demios.io. Text in [square brackets] is still to be confirmed by the owner. Every statement about the app was checked against the code on `main`.
 
 Last updated: set on publication
 
