@@ -30,7 +30,7 @@ jobs:
       - name: Install flatpak and org.flatpak.Builder
         run: |
           sudo apt-get update
-          sudo apt-get install -y flatpak dbus-bin
+          sudo apt-get install -y flatpak dbus-bin ostree
           # Ubuntu 24.04 blocks unprivileged user namespaces, which bubblewrap needs.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
