@@ -31,10 +31,14 @@ import type {
   HubSort,
   HubPullProgress,
   AddModelLink,
+  UpdateCheck,
+  UpdateProgress,
 } from "./types";
 
 interface Commands {
   app_info: { args: Record<string, never>; ret: AppInfo };
+  check_for_update: { args: Record<string, never>; ret: UpdateCheck };
+  install_update: { args: { version: string; onProgress: Channel<UpdateProgress> }; ret: null };
   delete_all_local_data: { args: Record<string, never>; ret: null };
   local_data_summary: { args: Record<string, never>; ret: LocalDataSummary };
   report_problem: { args: { kind: ReportKind; messageId: Id | null }; ret: null };
@@ -109,6 +113,11 @@ function channel<T>(onEvent: (ev: T) => void): Channel<T> {
 
 export const api = {
   appInfo: () => call("app_info", {}),
+  /** Asks GitHub Releases for a newer version; downloads nothing. */
+  checkForUpdate: () => call("check_for_update", {}),
+  /** After the user confirmed `version`: downloads, verifies, installs and restarts. */
+  installUpdate: (version: string, onProgress: (p: UpdateProgress) => void) =>
+    call("install_update", { version, onProgress: channel(onProgress) }),
   /** Deletes chats, settings, tool history, models, keychain entries and window storage. */
   deleteAllLocalData: () => call("delete_all_local_data", {}),
   localDataSummary: () => call("local_data_summary", {}),

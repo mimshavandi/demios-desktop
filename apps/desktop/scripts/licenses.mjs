@@ -116,6 +116,9 @@ function rustLicences() {
       "--offline",
       "--manifest-path",
       join(appDir, "Cargo.toml"),
+      // The build's cargo features (e.g. `updater` for direct downloads, T-STORE-08), so the
+      // list matches what that build contains.
+      ...(process.env.DEMIOS_FEATURES ? ["--features", process.env.DEMIOS_FEATURES] : []),
     ],
     { cwd: repoDir, encoding: "utf8", maxBuffer: 256 * 1024 * 1024, stdio: ["ignore", "pipe", "inherit"] },
   );

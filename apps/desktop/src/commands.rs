@@ -41,10 +41,12 @@ pub struct AppInfo {
     pub data_dir: Option<String>,
     /// Where downloaded models live (shared with the `dn` CLI).
     pub models_dir: Option<String>,
+    /// How this build gets updates (T-STORE-08).
+    pub updates: crate::updates::UpdateMode,
 }
 
 #[tauri::command]
-pub async fn app_info(state: AppStateRef<'_>) -> IpcResult<AppInfo> {
+pub async fn app_info(app: tauri::AppHandle, state: AppStateRef<'_>) -> IpcResult<AppInfo> {
     Ok(AppInfo {
         version: env!("CARGO_PKG_VERSION"),
         dev_fake_model: cfg!(fake_model),
@@ -54,6 +56,7 @@ pub async fn app_info(state: AppStateRef<'_>) -> IpcResult<AppInfo> {
             .local
             .as_ref()
             .map(|l| l.dir().display().to_string()),
+        updates: crate::updates::current_mode(app.config()),
     })
 }
 
