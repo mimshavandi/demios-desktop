@@ -279,7 +279,7 @@ impl ArtifactMode {
 
 /// Capability id in the agent manifest for an artifact tool name (`artifact_create` →
 /// `artifact.create`).
-fn capability_id(tool: &str) -> Option<String> {
+pub(crate) fn capability_id(tool: &str) -> Option<String> {
     tool.strip_prefix("artifact_")
         .map(|op| format!("artifact.{op}"))
 }

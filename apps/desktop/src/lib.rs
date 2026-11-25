@@ -22,6 +22,7 @@ pub mod mcp;
 pub mod models;
 pub mod secrets;
 pub mod settings;
+pub mod skills;
 pub mod state;
 pub mod support;
 pub mod tool_review;
@@ -236,6 +237,9 @@ pub fn run() {
             commands::create_conversation,
             commands::rename_conversation,
             commands::delete_conversation,
+            commands::list_skills,
+            commands::get_chat_skill,
+            commands::set_chat_skill,
             commands::restore_conversation,
             commands::list_messages,
             commands::send_message,
