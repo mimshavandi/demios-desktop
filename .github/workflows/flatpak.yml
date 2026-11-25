@@ -58,6 +58,11 @@ jobs:
             --install-deps-from=flathub --ccache \
             --mirror-screenshots-url=https://dl.flathub.org/media/ \
             --repo=repo build-dir io.demios.app.yml
+      # As Flathub does: commit the screenshots and icons --mirror-screenshots-url fetched into
+      # the repo's screenshots branch, so the repo lint sees them mirrored.
+      - name: Commit mirrored media
+        working-directory: packaging/flatpak
+        run: ostree commit --repo=repo --canonical-permissions --branch=screenshots/$(uname -m) build-dir/files/share/app-info/media
       - name: Lint build
         working-directory: packaging/flatpak
         run: flatpak run --command=flatpak-builder-lint org.flatpak.Builder repo repo
