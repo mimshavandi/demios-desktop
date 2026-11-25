@@ -317,6 +317,20 @@ export interface LocalModelRow {
   notes: string;
   state: DownloadState;
   fit: FitView;
+  /** What the model is for (T-INF-26); null when unknown. */
+  traits: ModelTraits | null;
+}
+
+/**
+ * What a model is for (T-INF-26), from its GGUF header ("header"), Hub metadata only ("hint",
+ * before the header is read) or a tool-call probe ("checked"). `label` is the plain text to
+ * show: "Chat · Tools", "Chat", "Embedding" or "Base model" (no chat template: not for chat).
+ */
+export interface ModelTraits {
+  kind: "chat" | "embedding" | "base";
+  tool_support: "supported" | "unsupported" | "unknown";
+  source: "header" | "hint" | "checked";
+  label: string;
 }
 
 export type LocalModelEvent = { type: "changed"; row: LocalModelRow } | { type: "removed"; id: string };
@@ -335,6 +349,8 @@ export interface HubRepoSummary {
   pipeline_tag: string | null;
   license: string | null;
   tags: string[];
+  /** From pipeline_tag and tags only (source "hint"); null when the Hub doesn't say. */
+  traits_hint: ModelTraits | null;
 }
 
 export interface HubSearchPage {
@@ -376,6 +392,8 @@ export interface HubRepoView {
   selected: string | null;
   /** The fit couldn't be worked out (header unreadable). */
   fit_unknown: boolean;
+  /** What the model is for, from the same header; null when it wasn't readable. */
+  traits: ModelTraits | null;
 }
 
 /** A demios://models/add link, validated by the backend (T-INF-12). */
