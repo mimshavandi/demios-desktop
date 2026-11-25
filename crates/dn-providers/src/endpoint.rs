@@ -96,6 +96,10 @@ fn is_local_ip(ip: IpAddr) -> bool {
 
 fn is_local_v4(ip: Ipv4Addr) -> bool {
     let [a, b, ..] = ip.octets();
+    // The cloud instance-metadata address is never a model server.
+    if ip == Ipv4Addr::new(169, 254, 169, 254) {
+        return false;
+    }
     ip.is_loopback()
         || ip.is_private()
         || ip.is_link_local()
@@ -162,6 +166,7 @@ mod tests {
             "http://api.example.com/v1",
             "http://8.8.8.8:11434",
             "http://100.128.0.1",
+            "http://169.254.169.254/latest",
             "http://[2001:db8::1]:11434",
             "http://localhost.example.com",
             "ftp://localhost",

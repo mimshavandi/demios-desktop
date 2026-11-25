@@ -52,8 +52,13 @@ pub async fn add_remote_server(
         models,
     };
     blocking(&state, move |s| {
-        if let Some(k) = &key {
-            s.keys.set(&server.key_id(), k)?;
+        match &key {
+            Some(k) => s.keys.set(&server.key_id(), k)?,
+            // A key left behind under this id (an earlier server whose removal couldn't
+            // delete it) must never be sent to this one.
+            None => {
+                s.keys.delete(&server.key_id())?;
+            }
         }
         let mut settings = s.settings()?;
         let key_id = server.key_id();
