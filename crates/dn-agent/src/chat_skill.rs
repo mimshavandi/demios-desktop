@@ -167,8 +167,22 @@ pub fn parse(file: &Path, text: &str, folder: Option<&str>) -> Result<ChatSkill,
     })
 }
 
+/// Largest `SKILL.md` read, in bytes (instructions are capped lower; this stops a stray
+/// huge file from being read whole).
+pub const MAX_FILE_BYTES: u64 = 64 * 1024;
+
 /// Loads one `SKILL.md`.
 pub fn load(file: &Path) -> Result<ChatSkill, ManifestError> {
+    let len = std::fs::metadata(file)
+        .map_err(|e| ManifestError::one(file, "", format!("can't read: {e}")))?
+        .len();
+    if len > MAX_FILE_BYTES {
+        return Err(ManifestError::one(
+            file,
+            "",
+            format!("the file is larger than {} KB", MAX_FILE_BYTES / 1024),
+        ));
+    }
     let text = std::fs::read_to_string(file)
         .map_err(|e| ManifestError::one(file, "", format!("can't read: {e}")))?;
     let folder = file
