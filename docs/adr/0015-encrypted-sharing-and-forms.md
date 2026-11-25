@@ -57,7 +57,7 @@ This ADR decides the design. It doesn't implement it.
 - **Expiry is required.** The user picks it when sharing (default 30 days, maximum 1 year). The host deletes the blob when it expires, and serves "This link has expired" from then on.
 - **Revoke** deletes the blob at once (signed request). The link then shows "This link was turned off by its owner".
 - **Optional password:**
-  - The content key is derived from the fragment key **and** a key derived from the password: PBKDF2-SHA-256 in WebCrypto with 600,000 iterations and a per-link salt, combined with HKDF.
+  - The content key is derived from both the fragment key **and** the password. The password goes through PBKDF2 with SHA-256 in WebCrypto (600,000 iterations, a per-link salt), and HKDF combines the two.
   - It protects against a **leaked link**, not against the host. The host can't open the blob without the fragment key anyway.
   - There's no recovery. A forgotten password means sharing again.
 - **Links update in place.** When the artifact gets a new version, the user can update the link (signed upload of a new blob, encrypted with the same key). The link stays the same.
