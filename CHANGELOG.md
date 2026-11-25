@@ -32,6 +32,8 @@ Nothing has been released yet. This section lists what is on `main` now.
 - Artifacts open on Windows too ([#98](https://github.com/mimshavandi/demios-desktop/pull/98)).
 - In the artifact pane, Esc closes the pane even when the artifact has focus, and the new chat, Settings and sidebar shortcuts work from inside an artifact ([#98](https://github.com/mimshavandi/demios-desktop/pull/98)).
 - Links in answers open in your browser after a system dialog shows the full address ([#74](https://github.com/mimshavandi/demios-desktop/pull/74)).
+- **Settings → General → About → Updates**: a copy downloaded from GitHub checks for a new version only when you select **Check for updates**, shows its release notes, and installs it after you confirm with **Install and restart**. Copies from the Microsoft Store or Flathub say that their store updates them. Builds that don't update themselves, like preview builds and builds from source, say where to get new versions ([#94](https://github.com/mimshavandi/demios-desktop/pull/94)).
+- **Settings → General → About** links to the privacy policy and the accessibility statement on demios.io. Demios asks before it opens your browser ([#97](https://github.com/mimshavandi/demios-desktop/pull/97)).
 - **Report a problem** (Settings → General) and **Report this answer** (the flag under an answer) open a prefilled form on GitHub in your browser ([#42](https://github.com/mimshavandi/demios-desktop/pull/42)).
 
 #### `dn` command-line tool
@@ -58,6 +60,7 @@ Nothing has been released yet. This section lists what is on `main` now.
 - A link in an answer opens only after you confirm it in a system dialog that shows the full address, with look-alike letters spelled out. Only http and https links can be opened ([#74](https://github.com/mimshavandi/demios-desktop/pull/74)).
 - On Windows, artifacts run in a separate view that has no access to the app's commands ([#98](https://github.com/mimshavandi/demios-desktop/pull/98)).
 - Keys pressed inside an artifact can only close the pane or run the new chat, Settings and sidebar shortcuts, at most one every half second. Stop and copy last answer aren't passed on, so an artifact can't fake them ([#98](https://github.com/mimshavandi/demios-desktop/pull/98)).
+- An update is installed only if it is signed with the app's update key and its signature matches the version you confirmed. Microsoft Store and Flathub builds can't contain the self-updater: the build fails if it's turned on ([#94](https://github.com/mimshavandi/demios-desktop/pull/94)).
 - The app's commands are available only to the app's own page, not to any other view in its window ([#85](https://github.com/mimshavandi/demios-desktop/pull/85)).
 - Problem and answer reports carry only the app version, your operating system and, for an answer, the model's name. No chat content is sent; you add what you choose in the form ([#42](https://github.com/mimshavandi/demios-desktop/pull/42)).
 

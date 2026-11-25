@@ -14,7 +14,7 @@ Docs for people who use, build or contribute to Demios Desktop. Start with the [
 | Doc | What it covers |
 |---|---|
 | [apps/desktop/README.md](../apps/desktop/README.md) | The desktop app: layout, dev commands, the test model, IPC rules |
-| [apps/desktop/e2e/README.md](../apps/desktop/e2e/README.md) | Real-app end-to-end tests and the manual macOS release checklist |
+| [apps/desktop/e2e/README.md](../apps/desktop/e2e/README.md) | Real-app end-to-end tests, the manual macOS release checklist and the unsigned macOS preview build |
 | [dependencies.md](dependencies.md) | Every direct dependency, why it is used and its licence |
 | [releasing.md](releasing.md) | How changelog entries are written and how a release turns them into release notes |
 
@@ -45,3 +45,5 @@ Docs for people who use, build or contribute to Demios Desktop. Start with the [
 |---|---|
 | [store/](store/README.md) | Store and signing readiness: the audit, its findings and the proposed fixes |
 | [store/review-notes.md](store/review-notes.md) | Draft notes for store reviewers |
+| [store/updates.md](store/updates.md) | Signed updates for direct downloads: how they work, the key setup and what a release publishes |
+| [../packaging/msix/README.md](../packaging/msix/README.md) | Building the Microsoft Store (MSIX) package |
