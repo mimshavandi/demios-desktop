@@ -1,11 +1,11 @@
 # ADR-0015: Sharing artifacts through encrypted links, and forms that collect encrypted responses
 
-**Status:** Proposed · **Date:** 2026-11-25 · **Deciders:** project owner, lead · **Extends:** [ADR-0004](0004-artifacts-runtime.md), [ADR-0009](0009-security-baseline.md), [ADR-0014](0014-demios-node.md) · **Issue:** #204 · **Threat model it builds on:** [artifact sandbox](../security/artifact-sandbox.md)
+**Status:** Proposed · **Date:** 2026-11-25 · **Deciders:** project owner, lead · **Extends:** [ADR-0004](0004-artifacts-runtime.md), [ADR-0009](0009-security-baseline.md), [ADR-0014](0014-demios-node.md), [ADR-0016](0016-demios-relay.md) · **Issue:** #204 · **Threat model it builds on:** [artifact sandbox](../security/artifact-sandbox.md)
 
 ## Context
 Artifacts (ADR-0004) live only in the app today. The owner decided that a user can **share an artifact through a link**. That includes **forms that collect responses while the owner's computer is off**.
 
-That needs something on the internet that serves the shared artifact and holds responses until the owner comes back. Demios has no server and no account, and the rest of the product is built so Demios can't read user data. This ADR keeps it that way:
+That needs something on the internet that serves the shared artifact, and something that holds responses until the owner comes back. The second is a mailbox on the **Demios Relay** (ADR-0016), the general encrypted store-and-forward service. This ADR doesn't define its own store. Demios has no server and no account, and the rest of the product is built so Demios can't read user data. This ADR keeps it that way:
 - **The share host stores ciphertext only.**
 - The key to an artifact travels **in the link**, not to the host.
 - Responses are encrypted **in the respondent's browser**, to the owner's key.
@@ -23,7 +23,9 @@ This ADR decides the design. It doesn't implement it.
 - **The share host is a static site on its own domain**, for example `share.demios.io`, separate from `demios.io` and from the app. It serves:
   - the **viewer**: static HTML, JS and CSS, the same for every link;
   - **stored ciphertext**, one blob per link;
-  - **one small write endpoint** for uploading blobs and for the response drop box (§5). It's a Rust service whose only storage is ciphertext plus per-link metadata.
+  - **one small write endpoint** for uploading and managing blobs. It's a Rust service whose only storage is ciphertext plus per-link metadata.
+
+  Form responses don't go to the share host. They go to a Relay mailbox (§5, ADR-0016).
 - **The frame shell** that runs the artifact is served from a **second origin**, on a separate registrable domain, so artifact content is never same-site with `demios.io` or the viewer. This is the share host's version of the app's separate artifact origin (threat model C2).
 - **Neither origin sets cookies or uses storage.** There's no login.
 - **What the host stores per link, in the clear:**
@@ -72,7 +74,7 @@ The viewer renders an artifact exactly as the app does: the same frame shell, br
 **Viewer page** (`share.<domain>`), sent as headers:
 ```
 Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self';
-  connect-src 'self'; frame-src https://<frame origin>/frame/; form-action 'none'; base-uri 'none';
+  connect-src 'self' https://<relay origin>; frame-src https://<frame origin>/frame/; form-action 'none'; base-uri 'none';
   object-src 'none'; frame-ancestors 'none'; require-trusted-types-for 'script';
   trusted-types share-viewer; upgrade-insecure-requests
 Referrer-Policy: no-referrer
@@ -82,7 +84,7 @@ Permissions-Policy: camera=(), microphone=(), geolocation=(), clipboard-read=(),
   payment=(), usb=(), serial=(), bluetooth=(), display-capture=()
 Strict-Transport-Security: max-age=63072000; includeSubDomains
 ```
-- `connect-src 'self'` lets the viewer fetch the blob and send form responses to its own host, and nowhere else.
+- `connect-src` lets the viewer fetch the blob from its own host and deliver form responses to the Relay (ADR-0016), and nowhere else. The artifact frame itself can still connect to nothing.
 - `frame-src` also governs the artifact frame's navigations (C4).
 
 **Frame shell** (`<frame origin>/frame/`): the app's strict policy (C3), unchanged:
@@ -115,30 +117,32 @@ X-Content-Type-Options: nosniff
   - Each response is encrypted with **HPKE in base mode** (RFC 9180: DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, AES-256-GCM): a sealed box, readable only with the owner's private key.
   - WebCrypto provides each of these building blocks. A browser without X25519 in WebCrypto gets "This browser can't send this form securely", and nothing is sent. There's no weaker fallback.
   - A response carries a random id, so the owner can drop duplicates.
-- **The drop box** is part of the share host's write endpoint (§1). It stores **only ciphertext**, in the order received.
+- **Each form link has its own open mailbox on the Relay** (ADR-0016 §4.1), addressed by the form's public key. The mailbox address is inside the encrypted bundle, next to the key. The viewer delivers each sealed response there. The Relay stores **only ciphertext**.
 - **The owner's app or Node fetches responses** whenever it's online:
-  1. It sends a signed request with the link's management key.
+  1. It sends a signed request for the form's mailbox.
   2. It decrypts the responses and stores them with the artifact, where they're listed and can be exported.
-  3. It **acknowledges** them, and the drop box **deletes** them.
+  3. It **acknowledges** them, and the Relay **deletes** them.
   - Responses that are never fetched are deleted 30 days after the link expires or is closed. The share sheet says so.
-- **What the drop box can still do:** drop, delay or replay responses. It can't read or forge them. Replays are dropped by response id. Missing responses can't be detected, and this ADR doesn't claim they can.
+- **What the Relay can still do:** drop, delay or replay responses. It can't read or forge them. Replays are dropped by response id. Missing responses can't be detected, and this ADR doesn't claim they can. What else the Relay can see (timing, sizes, network addresses) is listed in ADR-0016 §3.
 - **In the app itself,** an artifact with `submit` shows the same review panel. Sending there does nothing but show "Responses are collected only through a shared link".
 
-### 6. Self-hosted: the user's Node as share host and drop box
-- **A user with a Demios Node** (ADR-0014) can serve links from it instead of from the Demios host. The Node serves the **same viewer and frame shell, with the same headers**, from the user's own address, and keeps the drop box itself.
+### 6. Self-hosted: the user's Node as share host and Relay
+- **A user with a Demios Node** (ADR-0014) can serve links from it instead of from the Demios host. The Node serves the **same viewer and frame shell, with the same headers**, from the user's own address, and runs its own Relay (ADR-0016 §7) for the form mailboxes.
   - Responses then never leave hardware the user controls.
-  - Links point at the user's address, so `connect-src 'self'` still holds.
+  - Links point at the user's address. The viewer and the Relay are on that same origin, so `connect-src` there is `'self'`.
 - The Node must be **reachable from the internet** for respondents. That means a domain with a certificate, and a forwarded port or the user's own tunnel. The setup screen says so. It doesn't hide the requirement.
 - **The Node serves only the share paths on that public address.** The paired-device API (ADR-0014 §2) never listens on it.
 
 ### 7. Abuse controls without CAPTCHA
+The Relay's own controls apply to every form mailbox (ADR-0016 §5). A form sets its mailbox's limits tighter:
+
 | Control | Default | Notes |
 |---|---|---|
-| Responses per link | 100 (owner can set up to 10,000) | The link then shows "This form is full" |
-| Size per response | 64 KiB | Checked by the viewer and by the drop box |
-| Rate per address and link | 10 per hour | The address is used **in memory only**, as a salted hash with a salt that changes daily, and is never stored with a response |
+| Responses per link | 100 (owner can set up to 1,000, the Relay's cap for open mailboxes) | The link then shows "This form is full" |
+| Size per response | 64 KiB | Checked by the viewer and by the Relay |
+| Rate per address and link | 10 per hour | Enforced by the Relay, which uses the address **in memory only**, as a salted hash with a salt that changes daily, and never stores it with a response |
 | Expiry | Required (§3) | Unfetched responses are deleted 30 days after expiry |
-| Close | Any time, signed | "This form is closed"; responses already in the drop box can still be fetched |
+| Close | Any time, signed | "This form is closed"; responses already in the mailbox can still be fetched |
 | Total stored per link | 10 MiB of ciphertext | New responses are refused until the owner fetches |
 
 If a form fills up with junk, the owner can see it, close the link or raise the limit. That's an owner's choice, not a silent one.
@@ -155,7 +159,7 @@ If a form fills up with junk, the owner can see it, close the link or raise the 
 
 ### 9. GDPR roles
 - **The owner is the controller** for the responses their form collects, and for the artifact they share. They choose what to ask and who to share with.
-- **DigiNote, Inc., as operator of the share host,** processes the ciphertext and per-link metadata on the owner's behalf, and can't read the content. Encrypted personal data is still personal data for the party that holds the key, so this ADR doesn't claim that GDPR doesn't apply.
+- **DigiNote, Inc., as operator of the share host and the hosted Relay,** processes the ciphertext, per-link metadata and form mailboxes on the owner's behalf, and can't read the content. Encrypted personal data is still personal data for the party that holds the key, so this ADR doesn't claim that GDPR doesn't apply.
 - **The addresses used for rate limits** (§7) are the operator's own processing, for security. They're held in memory, and only as a daily salted hash.
 - **The privacy policy needs a section on sharing and forms.** It's a separate, later PR for the owner to approve, together with terms for hosted links and a data processing agreement for business users. A Node-hosted link involves no Demios processing at all. This section is not legal advice.
 
@@ -184,12 +188,13 @@ If a form fills up with junk, the owner can see it, close the link or raise the 
 | age | Needs a JS port | Fine on the owner's side, but adds a dependency in the browser |
 | Encrypt only in transit (TLS) | — | Rejected: the host could read responses |
 
-### Who runs the drop box
+### Where responses wait
 
 | Option | Works with the owner's computer off | Who holds ciphertext | Notes |
 |---|---|---|---|
-| **Demios share host (chosen default)** | Yes | Demios (ciphertext only) | Needs abuse controls and a privacy section |
-| **The user's own Node (chosen option)** | Yes, while the Node runs | The user | Needs a public address; no Demios processing |
+| **A mailbox on the Demios-hosted Relay (chosen default)** | Yes | Demios (ciphertext only) | One general service (ADR-0016) with its own abuse controls and privacy section |
+| **The Relay on the user's own Node (chosen option)** | Yes, while the Node runs | The user | Needs a public address; no Demios processing |
+| A store of its own on the share host | Yes | Demios (ciphertext only) | Rejected: a second store-and-forward service next to the Relay |
 | Peer-to-peer to the owner's app (WebRTC) | No | Nobody | Rejected: the owner's computer would have to be on |
 | A third-party form service | Yes | The service, often in the clear | Rejected: data leaves the encrypted design |
 
@@ -214,24 +219,24 @@ If a form fills up with junk, the owner can see it, close the link or raise the 
 - **The link is the key.** That makes sharing easy and keeps Demios blind. It also means a forwarded link is a shared artifact, and a link in someone's browser history stays readable until it expires or is revoked.
 - **Trust in the viewer's code** can't be removed in a normal browser. Open source, reproducible builds and published hashes make it checkable, not automatic.
 - **A shared artifact runs without the app's engine-level hardening** (R-S1). The owner sees what they share, a form can only send through the review panel, and nothing has network access. But a hostile artifact could still try side channels in some browsers.
-- **The drop box can drop responses** without being detected. Detecting that would need signed respondent identities, which forms are meant to do without.
+- **The Relay can drop responses** without being detected. Detecting that would need signed respondent identities, which forms are meant to do without.
 - **Required expiry and per-link limits** make some uses (a permanent public form) less convenient. They bound what Demios stores, and what an abuser can do with one link.
 
 ## Consequences
 - **`dn-artifacts`** gains a capability declaration on artifacts (only `submit`), form settings, and stored responses per artifact.
 - **`ui/artifact-sandbox`** gains the `submit` bridge call and the viewer page with its review panel and notice. The escape suite is extended to run against the viewer in Chromium, Firefox and WebKit.
 - **The app** gains a share sheet, Settings › Shared links (list, update, revoke, responses), response fetching, and link revocation in "Delete all".
-- **The Node** (ADR-0014) gains an optional public share server: viewer, frame shell and drop box, with the same headers.
+- **The Node** (ADR-0014) gains an optional public share server (viewer and frame shell, with the same headers), next to its own Relay (ADR-0016).
 - **New dependencies**, each to be approved by the lead and recorded in `docs/dependencies.md`: AES-GCM, HPKE and Ed25519 implementations on the Rust side, and the share endpoint's HTTP server (`axum`, pre-approved for a server use; this use still goes through the lead). The viewer uses WebCrypto only.
 - **The privacy policy** gets a sharing-and-forms section in a separate PR for the owner to approve (§9).
 
 ## Action items (to be filed as issues)
 1. Bundle format, padding buckets, the link format, and AES-GCM in the app.
-2. Share endpoint: blob upload, signed management (update, revoke), expiry, and the drop box with its limits.
+2. Share endpoint: blob upload, signed management (update, revoke) and expiry. Form mailboxes on the Relay, with the form's limits (ADR-0016).
 3. Viewer page and frame shell on two origins, with the headers above; escape suite run against both in three browser engines.
 4. `submit` capability: declaration, bridge call, review panel, HPKE sealing in the viewer, response fetch, decrypt and acknowledge in the app.
 5. Settings › Shared links, and revocation in "Delete all".
 6. Self-hosted share server on the Node.
-7. Threat model for sharing (extends the artifact-sandbox threat model): R-S1 side channels, R-S2 viewer code trust, the drop box, and abuse.
+7. Threat model for sharing (extends the artifact-sandbox threat model): R-S1 side channels, R-S2 viewer code trust, and abuse. The Relay's own threat model is in ADR-0016.
 8. Privacy-policy section and hosted-link terms, for owner approval.
 9. Reproducible viewer build, published hashes, and Subresource Integrity.
