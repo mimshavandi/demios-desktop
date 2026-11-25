@@ -679,6 +679,21 @@ pub async fn remove_local_model(state: AppStateRef<'_>, model_id: String) -> Ipc
         .map_err(crate::agent::model_error)
 }
 
+/// The one-time tool-call check for a local chat model with "unknown" tool support
+/// (T-INF-26). Sends one tiny request with one tool to the local model; the result is stored
+/// as "checked" and the row updates through `watch_local_models`.
+#[tauri::command]
+pub async fn check_model_tools(
+    state: AppStateRef<'_>,
+    model_id: String,
+) -> IpcResult<dn_models::kind::TraitsView> {
+    let local = local(&state)?;
+    local
+        .check_tools(&model_id)
+        .await
+        .map_err(crate::agent::model_error)
+}
+
 /// Cancels a catalogue download and deletes its partial file (#176).
 #[tauri::command]
 pub async fn cancel_download(state: AppStateRef<'_>, model_id: String) -> IpcResult<()> {

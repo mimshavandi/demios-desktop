@@ -237,6 +237,8 @@ pub struct LocalModels<B: InferenceBackend = LlamaCppBackend> {
     hf_cache: Option<PathBuf>,
     /// Kind and tool support read from files on disk (T-INF-26), by model id.
     traits: Mutex<HashMap<String, dn_models::kind::ModelTraits>>,
+    /// Results of the user-started tool-call check for "unknown" models (T-INF-26).
+    probes: Mutex<crate::tool_probe::Store>,
     /// Where local models run (graphics card, shared graphics or processor), for the UI;
     /// `None` when not detected (tests).
     compute: Mutex<Option<dn_models::compute::Compute>>,
@@ -544,6 +546,9 @@ impl LocalModels {
             dn_models::detect_machine(),
         );
         lm.owns_dir = std::env::var_os("DN_MODELS_DIR").is_none();
+        lm.probes = Mutex::new(crate::tool_probe::Store::open(
+            crate::data_dir().map(|d| d.join("tool-probes.json")),
+        ));
         lm.hf_cache = dn_models::cache::hf_cache_dir();
         let lm = Arc::new(lm);
         let bg = Arc::clone(&lm);
@@ -585,6 +590,7 @@ impl<B: InferenceBackend> LocalModels<B> {
             externals: Mutex::new(Vec::new()),
             hf_cache: None,
             traits: Mutex::new(HashMap::new()),
+            probes: Mutex::new(crate::tool_probe::Store::default()),
             compute: Mutex::new(None),
         };
         lm.scan();
@@ -806,6 +812,12 @@ impl<B: InferenceBackend> LocalModels<B> {
                 .get(&e.id)
                 .copied()
                 .or_else(|| ext.is_none().then(|| dn_models::kind::of_catalog(e)))
+                .map(|t| match lock(&self.probes).get(&e.id) {
+                    Some(calls) if t.tool_support == dn_models::kind::ToolSupport::Unknown => {
+                        t.checked(calls)
+                    }
+                    _ => t,
+                })
                 .map(Into::into),
             remove_blocked: self.remove_blocked(&e.id),
         }
@@ -1196,6 +1208,9 @@ impl<B: InferenceBackend> LocalModels<B> {
             }
         }
         lock(&self.traits).remove(id);
+        if let Err(err) = lock(&self.probes).remove(id) {
+            eprintln!("tool-probes.json: {err}");
+        }
         if self.is_external(id) {
             // Empty Hub folders go too; refresh_externals sends the row's removal.
             if let Some(x) = self.external(id) {
@@ -1214,6 +1229,43 @@ impl<B: InferenceBackend> LocalModels<B> {
             self.set(id, DownloadState::NotDownloaded);
         }
         Ok(())
+    }
+
+    /// The one-time tool-call check (T-INF-26) for a local chat model whose chat template
+    /// doesn't say whether it makes tool calls. Started by the user: loads the model and sends
+    /// it one tiny request with one tool ([`crate::tool_probe`]); the answer is stored as
+    /// "checked" and the row updates. Local models only; nothing goes to a provider.
+    pub async fn check_tools(&self, id: &str) -> Result<dn_models::kind::TraitsView, CoreError> {
+        use dn_models::kind::{ModelKind, ToolSupport};
+        let e = self.find(id).ok_or_else(|| CoreError::ModelUnavailable {
+            user_message: format!("`local:{id}` isn't a model this app knows."),
+            developer_message: format!("check_tools: unknown model id {id}"),
+            recovery: vec![],
+        })?;
+        let traits = self.row(&e).traits.map(|t| t.traits);
+        let Some(t) = traits.filter(|t| t.kind == ModelKind::Chat) else {
+            return Err(CoreError::ModelUnavailable {
+                user_message: format!("{} isn't a chat model, so it makes no tool calls.", e.name),
+                developer_message: format!("check_tools: {id} is not a chat model"),
+                recovery: vec![],
+            });
+        };
+        if t.tool_support == ToolSupport::Supported {
+            return Ok(t.into());
+        }
+        let model = self.chat_model(id).await?;
+        let calls = crate::tool_probe::probe(
+            &*model,
+            ModelRef::Local {
+                model_id: id.to_string(),
+            },
+        )
+        .await?;
+        if let Err(err) = lock(&self.probes).set(id, calls) {
+            eprintln!("tool-probes.json: {err}");
+        }
+        self.emit(&e);
+        Ok(t.checked(calls).into())
     }
 
     /// Cancels a catalogue download (#176): stops it and deletes the partial file, so the row
@@ -1376,6 +1428,9 @@ impl<B: InferenceBackend> LocalModels<B> {
         self.scan();
         // Traits read from deleted files go; externals that remain are read again below.
         lock(&self.traits).clear();
+        if let Err(err) = lock(&self.probes).clear() {
+            eprintln!("tool-probes.json: {err}");
+        }
         // Hub downloads went with the folder; cache models (not ours) stay listed.
         self.refresh_externals();
         for e in &self.catalog.models {
@@ -2180,6 +2235,40 @@ mod tests {
         // The emptied repo folder goes too; the row is gone.
         assert!(!p.parent().unwrap().exists());
         assert!(lm.rows().iter().all(|r| r.id != id));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_checked_tool_probe_settles_unknown_and_goes_with_the_model() {
+        let lm = LocalModels::new(
+            std::env::temp_dir().join(format!("dn-local-probe-{}", dn_core::Id::new())),
+            Catalog::builtin(),
+            Machine::cpu_only(16 << 30),
+        );
+        let traits = |id: &str| {
+            lm.rows()
+                .into_iter()
+                .find(|r| r.id == id)
+                .and_then(|r| r.traits)
+                .unwrap()
+        };
+        assert_eq!(traits("phi-4-mini-instruct-q4_k_m").label, "Chat");
+        lock(&lm.probes)
+            .set("phi-4-mini-instruct-q4_k_m", true)
+            .unwrap();
+        let t = traits("phi-4-mini-instruct-q4_k_m");
+        assert_eq!(t.label, "Chat · Tools");
+        assert_eq!(t.traits.source, dn_models::kind::TraitsSource::Checked);
+        // A model the template already marks as tool-capable isn't changed by a stored result.
+        lock(&lm.probes).set("qwen3-8b-q4_k_m", false).unwrap();
+        assert_eq!(traits("qwen3-8b-q4_k_m").label, "Chat · Tools");
+        // Only chat models are checked; nothing is sent for an embedding model.
+        let err = lm
+            .check_tools("nomic-embed-text-v1.5-q4_k_m")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, CoreError::ModelUnavailable { ref user_message, .. } if user_message.contains("isn't a chat model"))
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

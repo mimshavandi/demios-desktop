@@ -385,6 +385,7 @@ function fakeApi() {
     },
     removeLocalModel: async () => null,
     cancelDownload: async () => null,
+    checkModelTools: async () => ({ kind: "chat", tool_support: "supported", source: "checked", label: "Chat · Tools" }),
     watchTools: async (onEvent) => {
       approvalSink = onEvent;
       return { approvals: [], servers: [] };
