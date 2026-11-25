@@ -44,7 +44,7 @@ Docs for people who use, build or contribute to Demios Desktop. Start with the [
 
 | Doc | What it covers |
 |---|---|
-| [store/](store/README.md) | Store and signing readiness: the audit, its findings and the proposed fixes |
+| [store/](store/README.md) | Store and signing readiness: the audit, its findings and the proposed fixes. Store submissions are deferred; the first releases are installers on GitHub Releases and demios.io |
 | [store/review-notes.md](store/review-notes.md) | Draft notes for store reviewers |
 | [store/updates.md](store/updates.md) | Signed updates for direct downloads: how they work, the key setup and what a release publishes |
-| [../packaging/msix/README.md](../packaging/msix/README.md) | Building the Microsoft Store (MSIX) package |
+| [../packaging/msix/README.md](../packaging/msix/README.md) | Building the Microsoft Store (MSIX) package (submission deferred) |

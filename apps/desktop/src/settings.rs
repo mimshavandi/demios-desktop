@@ -118,7 +118,7 @@ pub const SLOTS: &[SlotInfo] = &[
     SlotInfo {
         slot_id: "embed",
         label: "Embeddings",
-        description: "Knowledge search (arrives with dn-knowledge).",
+        description: "Knowledge search in projects. Without one, it searches by keywords only.",
         capability: Capability::Embedding,
         shown: true,
     },

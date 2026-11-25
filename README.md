@@ -14,8 +14,10 @@ An open-source desktop app for chatting with AI models you choose: one running o
 - Chat with streamed answers, with Markdown and highlighted code blocks. Links in answers open in your browser after a system dialog shows the full address.
 - Artifacts: web pages, small apps, diagrams and documents the model makes open in a side pane, where they run sealed off from your files, the app and the network. Go back to earlier versions, ask the model to fix errors, and allow network access per artifact if you need it.
 - Stop an answer mid-way (Ctrl+. or ⌘.) and retry it.
+- Group chats in projects, with instructions that apply to every chat in the project and files you add to it.
+- Choose a skill for a chat, such as Summarize or Write email. A skill adds instructions and can only narrow which tools the model may use; it never skips an approval.
 - Keep conversations between launches, and delete them with Undo.
-- Run models on your computer: download from a built-in catalogue of 12 open models. Each row shows whether the model fits your machine ("Won't fit" when it doesn't), its licence, and download progress. Downloads can be paused, resume after an interruption, and are checked against their SHA-256.
+- Run models on your computer: download from a built-in catalogue of 13 open models: 11 for chat and 2 embedding models. Each row shows whether the model fits your machine ("Won't fit" when it doesn't), its licence, and download progress. Downloads can be paused, resume after an interruption, and are checked against their SHA-256.
 - Add GGUF models from Hugging Face: search, see each version's size, whether it fits and its licence before downloading, and add a Hugging Face token for gated models. GGUF models already in your Hugging Face cache are used where they are, never changed or deleted. A `demios://models/add` link opens the same check in the app; nothing downloads until you choose to.
 - Use your own key for Anthropic, OpenAI or Google Gemini.
 - Light and dark appearance that follows your system, and keyboard shortcuts for the main actions.
@@ -33,8 +35,10 @@ An open-source desktop app for chatting with AI models you choose: one running o
 Not available yet:
 
 - Connecting the app to an OpenAI-compatible server (such as Ollama). The `dn` CLI can already do this.
-- Signed installers for macOS, Windows and Linux.
-- Updates in the app for copies downloaded from GitHub. **Settings → General → About → Check for updates** is built, and starts working with the first signed release. Microsoft Store and Flathub copies will be updated by their store.
+- Signed installers, on GitHub Releases and demios.io: `.dmg` for macOS, `.exe` for Windows, and AppImage, `.deb` and `.rpm` for Linux.
+- Updates in the app for those installers. **Settings → General → About → Check for updates** is built, and starts working with the first signed release.
+
+Versions in app stores (Mac App Store, Microsoft Store, Flathub) are not planned for the first releases.
 
 ## Screenshots
 
@@ -42,9 +46,33 @@ Screenshots coming with the first release.
 
 ## Install
 
-There are no installers or signed releases yet. To try Demios Desktop, build it from source.
+A **preview build** of Demios Desktop 0.1.0 is available for macOS, Windows and Linux. Download it from [demios.io/download](https://demios.io/download/) or from the [GitHub release](https://github.com/mimshavandi/demios-desktop/releases/tag/v0.1.0-preview.454e01b).
 
-### Prerequisites
+| System | File |
+|---|---|
+| macOS 11 or later, Apple silicon | `…-macos-arm64.dmg` |
+| macOS 11 or later, Intel | `…-macos-x64.dmg` |
+| Windows 10 or 11 (x64) | `…-windows-x64-setup.exe` |
+| Linux (x86_64), any distribution | `…-linux-x86_64.AppImage` |
+| Debian, Ubuntu (amd64) | `…-linux-amd64.deb` |
+| Fedora, openSUSE (x86_64) | `…-linux-x86_64.rpm` |
+
+**The preview builds aren't signed**, so your system warns you the first time you open the app:
+
+- **macOS:** open the `.dmg` and drag **Demios Desktop** to Applications. Open it once and close the warning, then go to **System Settings → Privacy & Security** and select **Open Anyway**.
+- **Windows:** run the `-setup.exe`; it installs for you only, without an administrator. If SmartScreen says "Windows protected your PC", select **More info → Run anyway**.
+- **Linux:**
+  - AppImage: `chmod +x Demios-Desktop-*.AppImage`, then run it. If it says FUSE is missing, install `libfuse2` (`libfuse2t64` on Ubuntu 24.04).
+  - `.deb`: `sudo apt install ./Demios-Desktop-0.1.0-preview-linux-amd64.deb`.
+  - `.rpm`: `sudo dnf install ./Demios-Desktop-0.1.0-preview-linux-x86_64.rpm`. On openSUSE, use `sudo zypper install --allow-unsigned-rpm ./Demios-Desktop-0.1.0-preview-linux-x86_64.rpm`.
+
+The release lists every file's SHA-256 in `SHA256SUMS.txt`, and its notes have the full steps. A preview build doesn't update itself. To get a newer one, install it over the old one; your chats and settings are kept.
+
+### Build from source
+
+To build Demios Desktop yourself instead:
+
+#### Prerequisites
 
 - **Rust** 1.89 or newer (stable toolchain with `rustfmt` and `clippy`; `rust-toolchain.toml` selects it if you use rustup).
 - **Node.js** 22 and npm.
@@ -54,7 +82,7 @@ There are no installers or signed releases yet. To try Demios Desktop, build it 
   - Linux (Debian/Ubuntu): `sudo apt-get install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev`
   - Windows: the WebView2 runtime (included with Windows 10 and 11) and the Visual Studio C++ build tools.
 
-### Build and run
+#### Build and run
 
 ```sh
 git clone https://github.com/mimshavandi/demios-desktop.git

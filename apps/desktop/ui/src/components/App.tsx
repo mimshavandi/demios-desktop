@@ -27,7 +27,8 @@ import { markArtifact } from "../artifactMarks";
 import { chatModel, chatModelReady, describeModel, modelName } from "../models";
 import { artifactFrameUrl, isMac, mod } from "../platform";
 import { chatReducer, initialChat } from "../state/chat";
-import { ArtifactPane } from "./ArtifactPane";
+import { ArtifactPane, NO_ARTIFACT_TOOLS } from "./ArtifactPane";
+import { configureSources } from "./Sources";
 import { ChatView, type ArtifactCardInfo } from "./ChatView";
 import { ModelBadge } from "./ModelBadge";
 import { NewProjectView, ProjectView, type ProjectDraft } from "./ProjectView";
@@ -42,6 +43,7 @@ type View =
   | { kind: "project"; id: Id | "new" };
 
 export function App({ api = realApi }: { api?: Api }) {
+  configureSources(api.messageSources);
   return (
     <TooltipProvider>
       <ToastProvider>
@@ -363,6 +365,20 @@ function Shell({ api }: { api: Api }) {
     };
   }, [api, toast]);
 
+  // The skill library, read again whenever the chat comes back into view (Settings ›
+  // Skills can reload it). Without a library the picker stays hidden.
+  useEffect(() => {
+    if (view.kind !== "chat") return;
+    let alive = true;
+    api
+      .listSkills()
+      .then((s) => alive && setSkills(s))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [api, view.kind]);
+
   useEffect(() => {
     void (async () => {
       try {
@@ -372,11 +388,6 @@ function Shell({ api }: { api: Api }) {
       }
       await refreshCatalog();
       void refreshProjects();
-      // Without the library the picker just stays hidden.
-      void api
-        .listSkills()
-        .then(setSkills)
-        .catch(() => {});
       try {
         const list = await api.listConversations();
         setConversations(list);
@@ -403,12 +414,6 @@ function Shell({ api }: { api: Api }) {
         if (event.conversation_id === openIdRef.current) {
           void refreshArtifacts(event.conversation_id, event.artifact_id);
           announceRef.current?.(`Artifact ${event.title}, version ${event.version}`);
-        }
-        return;
-      }
-      if (event.type === "artifact_not_saved") {
-        if (event.conversation_id === openIdRef.current) {
-          toast({ tone: "error", title: `"${event.title}" wasn't saved as an artifact. ${event.reason}` });
         }
         return;
       }
@@ -911,7 +916,7 @@ function Shell({ api }: { api: Api }) {
           modelName={(ref) => modelName(ref, catalog)}
           mark={(type, v) => markArtifact(type, v.content, v.model, v.created_at)}
           onClose={toggleArtifacts}
-          fixMode={catalog?.chat_model_tools === false ? "fenced" : "tools"}
+          notice={catalog?.chat_model_tools === false ? NO_ARTIFACT_TOOLS : null}
         />
       )}
       <div className="dn-visually-hidden" role="status" aria-live="polite">

@@ -68,6 +68,7 @@
     "allow-check-for-update",
     "allow-install-update",
     "allow-launch-update-check",
+    "allow-message-sources",
     "allow-artifact-child-open",
     "allow-artifact-child-render",
     "allow-artifact-child-bounds",

@@ -34,30 +34,7 @@ const OPTIONAL: &[OptionalParam] = &[
         aliases: &["thinking"],
         ..OptionalParam::new("think")
     },
-    // Never dropped silently: the schema moves into the system prompt instead.
-    OptionalParam {
-        aliases: &["json_schema"],
-        fallback: Some(schema_to_system_message),
-        ..OptionalParam::new("response_format")
-    },
 ];
-
-/// `response_format` rejected → same schema as a system instruction.
-fn schema_to_system_message(body: &mut Value, removed: Value) {
-    let instruction = http::schema_instruction(&removed["json_schema"]["schema"]);
-    let Some(msgs) = body["messages"].as_array_mut() else {
-        return;
-    };
-    // Extend the leading system message (some servers allow only one), else add one.
-    if let Some(first) = msgs.first_mut()
-        && first["role"] == "system"
-        && let Some(text) = first["content"].as_str()
-    {
-        first["content"] = json!(format!("{text}\n\n{instruction}"));
-    } else {
-        msgs.insert(0, json!({"role": "system", "content": instruction}));
-    }
-}
 
 impl OpenAi {
     fn headers(&self) -> Vec<(&'static str, String)> {
