@@ -1,0 +1,39 @@
+name: cache-cleanup
+# Keeps the Actions cache under the 10 GB repo limit (T-GOV-13): deletes closed PRs'
+# entries and superseded Rust caches on main (.github/scripts/cache-cleanup.sh).
+# Runs after each ci run on main (a merge closes a PR and may supersede a Rust cache),
+# daily for PRs closed without merging, and by hand. It checks out main only and never
+# runs PR code, so the actions: write token is never exposed to a pull request.
+on:
+  workflow_run:
+    workflows: [ci]
+    branches: [main]
+    types: [completed]
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Only print what would be deleted
+        type: boolean
+        default: false
+permissions:
+  actions: write
+  contents: read
+  pull-requests: read
+concurrency:
+  group: cache-cleanup
+  cancel-in-progress: false
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+      - run: .github/scripts/cache-cleanup.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
