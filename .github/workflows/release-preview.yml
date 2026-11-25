@@ -244,8 +244,18 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * `
             -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          # PATH goes through GITHUB_PATH (only the entries vcvars adds), so the shell tools
+          # later steps use stay on it; everything else through GITHUB_ENV.
+          $before = $env:PATH -split ';'
           cmd /c "`"$vs\VC\Auxiliary\Build\vcvars64.bat`" > nul && set" | ForEach-Object {
-            if ($_ -match '^([^=]+)=(.*)$') { "$($matches[1])=$($matches[2])" | Out-File -FilePath $env:GITHUB_ENV -Append }
+            if ($_ -match '^([^=]+)=(.*)$') {
+              if ($matches[1] -ieq 'PATH') {
+                $matches[2] -split ';' | Where-Object { $_ -and ($before -notcontains $_) } |
+                  Out-File -FilePath $env:GITHUB_PATH -Append
+              } else {
+                "$($matches[1])=$($matches[2])" | Out-File -FilePath $env:GITHUB_ENV -Append
+              }
+            }
           }
           if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) { choco install ninja -y --no-progress | Out-Host }
           "CMAKE_GENERATOR=Ninja" | Out-File -FilePath $env:GITHUB_ENV -Append
