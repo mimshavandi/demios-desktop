@@ -72,7 +72,7 @@ Each model on this device writes its prompts with its own chat template. The tem
 
 ## Your own key
 
-Under **Provider keys** there's a field for each provider: Anthropic, OpenAI and Google Gemini.
+On the **Providers** tab there's a field for each provider: Anthropic, OpenAI and Google Gemini.
 
 1. Get an API key from the provider's website.
 2. Paste it into the provider's field and select **Save key**.
