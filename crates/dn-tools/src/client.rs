@@ -97,7 +97,32 @@ pub trait HttpAuthProvider: Send + Sync {
     >;
 }
 
-type Service = RunningService<RoleClient, ()>;
+type Service = RunningService<RoleClient, Notifications>;
+
+/// Called with the server id when a server sends `notifications/tools/list_changed` (#178).
+pub type ToolsChangedSink = Arc<dyn Fn(&str) + Send + Sync>;
+
+/// The client side of a server's notifications. Only `tools/list_changed` is acted on: it
+/// is forwarded to the executor, which marks the server's tools stale at once.
+#[derive(Clone)]
+pub(crate) struct Notifications {
+    server_id: String,
+    sink: Arc<StdMutex<Option<ToolsChangedSink>>>,
+}
+
+impl rmcp::ClientHandler for Notifications {
+    fn on_tool_list_changed(
+        &self,
+        _context: rmcp::service::NotificationContext<RoleClient>,
+    ) -> impl std::future::Future<Output = ()> + Send + '_ {
+        // A poisoned lock still holds a valid sink: a change must never go unnoticed.
+        let sink = self.sink.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        if let Some(f) = sink {
+            f(&self.server_id);
+        }
+        std::future::ready(())
+    }
+}
 
 /// Owns a stdio server's process. The child leads its own process group (Unix) or job object
 /// (Windows), so terminating it also stops grandchildren (e.g. the node process an `npx`
@@ -196,6 +221,8 @@ pub struct McpClient {
     /// Secret values resolved for this server, scrubbed from diagnostics.
     secret_values: StdMutex<Vec<String>>,
     connects: std::sync::atomic::AtomicU32,
+    /// Where `tools/list_changed` goes (set by the executor when the server is added).
+    tools_changed: Arc<StdMutex<Option<ToolsChangedSink>>>,
 }
 
 impl std::fmt::Debug for McpClient {
@@ -219,7 +246,20 @@ impl McpClient {
             stderr_tail: Arc::new(StdMutex::new(VecDeque::new())),
             secret_values: StdMutex::new(Vec::new()),
             connects: std::sync::atomic::AtomicU32::new(0),
+            tools_changed: Arc::new(StdMutex::new(None)),
         })
+    }
+
+    /// Where this server's `tools/list_changed` notifications go.
+    pub(crate) fn set_tools_changed(&self, sink: ToolsChangedSink) {
+        *self.tools_changed.lock().unwrap_or_else(|p| p.into_inner()) = Some(sink);
+    }
+
+    fn notifications(&self) -> Notifications {
+        Notifications {
+            server_id: self.config.id.clone(),
+            sink: Arc::clone(&self.tools_changed),
+        }
     }
 
     /// Use OAuth for a Streamable HTTP server that has `oauth` settings.
@@ -422,7 +462,7 @@ impl McpClient {
                         }
                     });
                 }
-                match ().serve((stdout, stdin)).await {
+                match self.notifications().serve((stdout, stdin)).await {
                     Ok(service) => Ok(Conn {
                         service,
                         child: Some(guard),
@@ -471,10 +511,12 @@ impl McpClient {
                     })?;
                     let manager = auth.authorization_manager(&self.config).await?;
                     let client = rmcp::transport::auth::AuthClient::new(http, manager);
-                    ().serve(StreamableHttpClientTransport::with_client(client, cfg))
+                    self.notifications()
+                        .serve(StreamableHttpClientTransport::with_client(client, cfg))
                         .await
                 } else {
-                    ().serve(StreamableHttpClientTransport::with_client(http, cfg))
+                    self.notifications()
+                        .serve(StreamableHttpClientTransport::with_client(http, cfg))
                         .await
                 };
                 result
