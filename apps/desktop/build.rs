@@ -60,6 +60,8 @@ const COMMANDS: &[&str] = &[
     "watch_local_models",
     "download_model",
     "pause_download",
+    "remove_local_model",
+    "cancel_download",
     "check_for_update",
     "install_update",
     "launch_update_check",

@@ -98,6 +98,7 @@ function fakeApi() {
       state: { state: "not_downloaded" },
       fit: { status: "caution", estimated: true, reason: "Fits, with little memory left for other apps.", suggested_quant: null },
       traits: null,
+      remove_blocked: null,
     },
   ];
   const msgs = new Map<string, StoredMessage[]>();
@@ -334,6 +335,8 @@ function fakeApi() {
       pauses.push(id);
       return null;
     },
+    removeLocalModel: async () => null,
+    cancelDownload: async () => null,
     watchTools: async (onEvent) => {
       approvalSink = onEvent;
       return { approvals: [], servers: [] };

@@ -253,6 +253,7 @@ describe("LocalModelsCard with Hub and cache models", () => {
       state: { state: "ready" },
       fit: fit("ready", false),
       traits: null,
+      remove_blocked: null,
     };
     act(() => sink?.({ type: "changed", row }));
     expect(await screen.findByText(/From your Hugging Face cache, used where it is/)).toBeTruthy();
