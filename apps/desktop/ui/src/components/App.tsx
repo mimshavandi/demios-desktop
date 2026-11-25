@@ -170,15 +170,21 @@ function Shell({ api }: { api: Api }) {
       .then((pending) => {
         if (pending !== null) show(pending);
       })
-      .catch(() => {});
+      .catch((e: unknown) => {
+        if (alive) toast({ tone: "error", title: `demios:// links can't open in this window. ${errorMessage(e)}` });
+      });
     return () => {
       alive = false;
     };
-  }, [api]);
+  }, [api, toast]);
   const closeAddLink = useCallback(() => {
     setAddLink(null);
-    void api.addLinkDone().catch(() => {});
-  }, [api]);
+    void api
+      .addLinkDone()
+      .catch((e: unknown) =>
+        toast({ tone: "error", title: `Couldn't close the link. Restart Demios before opening another one. ${errorMessage(e)}` }),
+      );
+  }, [api, toast]);
 
   const openLink = useCallback(
     (href: string) => {
@@ -194,11 +200,11 @@ function Shell({ api }: { api: Api }) {
       // Start from the stored settings, not this render's copy (another screen may have saved).
       const current = await api.getSettings();
       hide(await api.updateSettings({ ...current, ai_notice_seen: true }));
-    } catch {
-      // Hide it for this session anyway; it comes back next start if saving failed.
-      setCatalog((c) => (c === null ? c : { ...c, settings: { ...c.settings, ai_notice_seen: true } }));
+    } catch (e) {
+      // The notice stays: hiding it would pretend the choice was saved (#141).
+      toast({ tone: "error", title: `Couldn't save that you've read the notice. ${errorMessage(e)}` });
     }
-  }, [api]);
+  }, [api, toast]);
 
   const refreshConversations = useCallback(async () => {
     try {
@@ -218,11 +224,15 @@ function Shell({ api }: { api: Api }) {
     }
   }, [api]);
 
+  // A failed load is shown above the chat with Retry, not hidden behind a stale catalog
+  // that would make the composer say no model is set up (#141).
+  const [catalogError, setCatalogError] = useState<string | null>(null);
   const refreshCatalog = useCallback(async () => {
     try {
       setCatalog(await api.listModels());
-    } catch {
-      // The settings screen shows its own error with Retry.
+      setCatalogError(null);
+    } catch (e) {
+      setCatalogError(errorMessage(e));
     }
   }, [api]);
 
@@ -455,7 +465,11 @@ function Shell({ api }: { api: Api }) {
                 dispatch({ kind: "open", conversationId: id, messages });
               }
             })
-            .catch(() => {});
+            .catch((e: unknown) => {
+              if (openIdRef.current === id) {
+                setError(`Couldn't load the saved answer, so what you see may be incomplete. Open the chat again. ${errorMessage(e)}`);
+              }
+            });
           void refreshUnknowns(id);
         }
       }
@@ -572,9 +586,17 @@ function Shell({ api }: { api: Api }) {
         toast({ tone: "error", title: `Couldn't delete the chat. ${errorMessage(e)}` });
         return;
       }
-      const list = await api.listConversations().catch(() => conversations.filter((x) => x.id !== c.id));
-      setConversations(list);
-      if (c.id === chat.conversationId) void open(list[0]?.id ?? null);
+      // A failed reload shows the list's error with Retry; no guessed list stands in (#141).
+      let next: Id | null = null;
+      try {
+        const list = await api.listConversations();
+        setConversations(list);
+        setListState({ kind: "ready" });
+        next = list[0]?.id ?? null;
+      } catch (e) {
+        setListState({ kind: "error", message: errorMessage(e) });
+      }
+      if (c.id === chat.conversationId) void open(next);
       toast({
         tone: "info",
         title: `Deleted “${c.title}”`,
@@ -590,7 +612,7 @@ function Shell({ api }: { api: Api }) {
         },
       });
     },
-    [api, chat.conversationId, conversations, open, refreshConversations, toast],
+    [api, chat.conversationId, open, refreshConversations, toast],
   );
 
   /** A new chat in `projectId`; like any new chat, it is created on the first message. */
@@ -799,6 +821,36 @@ function Shell({ api }: { api: Api }) {
         />
       )}
       <main className="main">
+        {info?.agent_error != null && (
+          <div className="approval-elsewhere" data-testid="agent-error">
+            <InlineMessage
+              tone="error"
+              action={
+                <Button size="sm" onClick={() => void report("problem", null)}>
+                  Report a problem
+                </Button>
+              }
+            >
+              Demios couldn't load its assistant instructions, so chats can't start. Reinstall Demios, or report a
+              problem. ({info.agent_error})
+            </InlineMessage>
+          </div>
+        )}
+        {/* Over the chat only: Settings › Models shows its own error with Retry. */}
+        {catalogError !== null && view.kind === "chat" && (
+          <div className="approval-elsewhere" data-testid="catalog-error">
+            <InlineMessage
+              tone="error"
+              action={
+                <Button size="sm" onClick={() => void refreshCatalog()}>
+                  Retry
+                </Button>
+              }
+            >
+              Couldn't load your models. {catalogError}
+            </InlineMessage>
+          </div>
+        )}
         {otherApprovals.length > 0 && (
           <div className="approval-elsewhere" role="status">
             <InlineMessage

@@ -35,26 +35,50 @@ pub fn skills_dir(resource_dir: Option<&Path>) -> Option<PathBuf> {
     (cfg!(debug_assertions) && dev.is_dir()).then_some(dev)
 }
 
-/// The loaded agent. Missing or broken skills fall back to a prompt-less default so chat
-/// still works; the problem is logged.
+/// The loaded agent. If `skills/` is missing or broken there is no stand-in: the agent
+/// records why ([`Self::load_error`]), the UI says so, and chats refuse to start
+/// ([`Self::ready`]) instead of answering without the assistant's instructions (#141).
 pub struct Agent {
     pub manifest: AgentManifest,
     system_prompt: Option<String>,
+    load_error: Option<String>,
 }
 
 impl Agent {
     pub fn load(skills: Option<&Path>) -> Self {
-        let loaded = skills.and_then(|dir| match Self::try_load(dir) {
-            Ok(a) => Some(a),
-            Err(e) => {
+        let result = match skills {
+            None => Err("the skills folder wasn't found".to_owned()),
+            Some(dir) => Self::try_load(dir).map_err(|e| {
                 eprintln!(
                     "could not load agent `{AGENT_ID}` from {}: {e}",
                     dir.display()
                 );
-                None
-            }
-        });
-        loaded.unwrap_or_else(Self::fallback)
+                e
+            }),
+        };
+        result.unwrap_or_else(|e| Self {
+            load_error: Some(e),
+            ..Self::empty()
+        })
+    }
+
+    /// Why the agent didn't load, if it didn't.
+    pub fn load_error(&self) -> Option<&str> {
+        self.load_error.as_deref()
+    }
+
+    /// Fails while the agent isn't loaded, so no chat starts without its instructions.
+    pub fn ready(&self) -> Result<(), IpcError> {
+        match &self.load_error {
+            None => Ok(()),
+            Some(e) => Err(IpcError::new(
+                "agent_unavailable",
+                format!(
+                    "Demios couldn't load its assistant instructions ({e}), so chats can't start. \
+                     Reinstall Demios, or report a problem."
+                ),
+            )),
+        }
     }
 
     fn try_load(dir: &Path) -> Result<Self, String> {
@@ -76,15 +100,20 @@ impl Agent {
         Ok(Self {
             manifest,
             system_prompt: Some(system_prompt),
+            load_error: None,
         })
     }
 
-    fn fallback() -> Self {
+    /// An agent with no prompt and no tools. Only a starting value: tests use it, and
+    /// [`crate::state::AppState::open_with`] replaces it with [`Self::load`]. It never stands
+    /// in for an agent that failed to load.
+    pub fn empty() -> Self {
         Self {
+            load_error: None,
             manifest: AgentManifest {
                 id: AGENT_ID.into(),
                 version: 1,
-                description: "Built-in fallback".into(),
+                description: "Empty agent".into(),
                 prompt: String::new(),
                 model_slots: vec![ModelSlot {
                     slot_id: CHAT_SLOT.into(),
@@ -249,10 +278,25 @@ mod tests {
     }
 
     #[test]
-    fn missing_skills_fall_back() {
-        let agent = Agent::load(Some(Path::new("/definitely/not/here")));
-        assert!(agent.system_prompt().is_none());
-        assert_eq!(agent.chat_slot().slot_id, CHAT_SLOT);
+    fn missing_or_broken_skills_stop_chats_with_a_reason() {
+        for agent in [
+            Agent::load(Some(Path::new("/definitely/not/here"))),
+            Agent::load(None),
+        ] {
+            assert!(agent.system_prompt().is_none());
+            assert!(agent.load_error().is_some());
+            assert!(
+                agent.manifest.tools.is_empty(),
+                "no tools without the manifest"
+            );
+            let e = agent.ready().unwrap_err();
+            assert_eq!(e.code, "agent_unavailable");
+            assert!(
+                e.message
+                    .contains("couldn't load its assistant instructions")
+            );
+        }
+        assert!(Agent::load(skills_dir(None).as_deref()).ready().is_ok());
     }
 
     #[test]
