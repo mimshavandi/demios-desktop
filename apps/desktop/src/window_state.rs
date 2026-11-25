@@ -5,7 +5,10 @@
 use crate::state::AppState;
 use crate::window_fit::{self, Decorations, Rect, Saved, Screen};
 use std::sync::Mutex;
-use tauri::{Manager, PhysicalPosition, PhysicalSize, Runtime, WebviewWindow, Window, WindowEvent};
+use tauri::{
+    Manager, PhysicalPosition, PhysicalSize, Runtime, WebviewWindow, WebviewWindowBuilder, Window,
+    WindowEvent,
+};
 
 pub const MAIN: &str = "main";
 
@@ -60,18 +63,27 @@ fn frame<R: Runtime>(w: &WebviewWindow<R>) -> tauri::Result<Rect> {
     })
 }
 
-/// Places the (hidden) main window, then shows it. A failure to read the monitors is
-/// logged and the window is shown where the OS put it: it must still appear.
-pub fn restore<R: Runtime>(app: &tauri::AppHandle<R>, state: &AppState) {
-    let Some(w) = app.get_webview_window(MAIN) else {
-        return;
+/// Creates the main window hidden, places it, then shows it (#195). The window is
+/// `create: false` in every config, so Tauri doesn't build it before setup: it would
+/// load the page while the database opens, and a later placement would undo any resize
+/// made meanwhile. Here nothing can resize it, and the page can't load, before it is placed.
+///
+/// A failure to read the monitors is logged and the window is shown where the OS put
+/// it: it must still appear. A failure to create it is an error.
+pub fn open<R: Runtime>(app: &tauri::AppHandle<R>, state: &AppState) -> tauri::Result<()> {
+    let Some(config) = app.config().app.windows.iter().find(|w| w.label == MAIN) else {
+        return Err(tauri::Error::WindowNotFound);
     };
+    let w = WebviewWindowBuilder::from_config(app, config)?
+        .visible(false)
+        .build()?;
     if let Err(e) = place(&w, state) {
         eprintln!("could not fit the window to the screen: {e}");
     }
     if let Err(e) = w.show().and_then(|()| w.set_focus()) {
         eprintln!("could not show the window: {e}");
     }
+    Ok(())
 }
 
 fn place<R: Runtime>(w: &WebviewWindow<R>, state: &AppState) -> Result<(), String> {

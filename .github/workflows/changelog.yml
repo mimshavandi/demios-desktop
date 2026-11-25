@@ -1,0 +1,22 @@
+name: changelog
+# A pull request must not add lines to a released CHANGELOG section: they belong under
+# [Unreleased]. A branch made before a release can otherwise merge its line into the
+# released section without a conflict. On pull_request the checkout is GitHub's merge
+# commit, so HEAD^1 is the base branch and HEAD is the result of the merge.
+# A correction to a released section is allowed with the label "changelog: edit released".
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+permissions:
+  contents: read
+jobs:
+  released-sections:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Released CHANGELOG sections unchanged
+        env:
+          CHANGELOG_EDIT_RELEASED: ${{ contains(github.event.pull_request.labels.*.name, 'changelog: edit released') && '1' || '0' }}
+        run: python3 scripts/changelog-guard.py HEAD^1 HEAD

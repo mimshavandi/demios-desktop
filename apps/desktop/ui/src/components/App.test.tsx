@@ -21,7 +21,10 @@ import type {
 } from "../ipc/types";
 import { App } from "./App";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  localStorage.clear();
+});
 
 // The real renderer needs a webview (constructable stylesheets, sandboxed frames); record
 // what the pane hands it instead. Its own behaviour is tested in ui/artifact-sandbox.
@@ -53,6 +56,20 @@ vi.mock("@dn-artifacts", () => ({
 Element.prototype.hasPointerCapture ??= () => false;
 Element.prototype.releasePointerCapture ??= () => {};
 Element.prototype.scrollIntoView ??= () => {};
+
+/** Opens Settings on a section through the section list (#174). */
+async function openSettings(section: "General" | "Models" | "Tools" | "Skills") {
+  fireEvent.click(await screen.findByRole("button", { name: /^Settings/ }));
+  const nav = await screen.findByRole("navigation", { name: "Settings sections" });
+  fireEvent.click(within(nav).getByRole("button", { name: section }));
+  await screen.findByRole("heading", { level: 1, name: section });
+}
+
+/** Moves to another section while Settings is open. */
+function settingsSection(section: string) {
+  const nav = screen.getByRole("navigation", { name: "Settings sections" });
+  fireEvent.click(within(nav).getByRole("button", { name: section }));
+}
 
 /** Opens a sidebar chat's menu with the keyboard (Radix opens menus on Enter). */
 async function chatMenu(title: string) {
@@ -472,6 +489,22 @@ describe("App", () => {
     expect(shown.opts?.allowNetwork?.("art-1")).toBe(false);
   });
 
+  it("starts with the artifact pane closed when the window is too narrow to show it beside the chat", async () => {
+    const matchMedia = vi.fn((q: string) => ({ matches: q === "(max-width: 1023px)" }) as MediaQueryList);
+    vi.stubGlobal("matchMedia", matchMedia);
+    try {
+      const { api } = fakeApi();
+      render(<App api={api} />);
+      expect(await screen.findByText("What can I help with?")).toBeTruthy();
+      expect(screen.queryByTestId("artifact-pane")).toBeNull();
+      fireEvent.click(screen.getByTestId("new-chat"));
+      fireEvent.click(screen.getByRole("button", { name: "Show artifacts" }));
+      expect(screen.getByTestId("artifact-pane")).toBeTruthy();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("sends a message and renders the streamed answer as markdown", async () => {
     const { api, emit } = fakeApi();
     render(<App api={api} />);
@@ -581,8 +614,7 @@ describe("App", () => {
     await waitFor(() => expect(reports).toEqual([["answer", "id-3"]]));
     expect(await screen.findByText("Opened the report form in your browser")).toBeTruthy();
 
-    fireEvent.click(await screen.findByRole("button", { name: "Models" }));
-    fireEvent.click(await screen.findByRole("tab", { name: "General" }));
+    await openSettings("General");
     fireEvent.click(await screen.findByRole("button", { name: "Report a problem" }));
     await waitFor(() => expect(reports).toEqual([["answer", "id-3"], ["problem", null]]));
     // Only kinds and message ids went to the backend: no chat text.
@@ -662,8 +694,7 @@ describe("App", () => {
       return false; // the user cancelled the native confirm
     };
     render(<App api={api} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Models" }));
-    fireEvent.click(await screen.findByRole("tab", { name: "General" }));
+    await openSettings("General");
     fireEvent.click(await screen.findByRole("button", { name: "Privacy policy" }));
     fireEvent.click(await screen.findByRole("button", { name: "Accessibility statement" }));
     await waitFor(() => expect(links).toEqual(["https://demios.io/privacy", "https://demios.io/accessibility"]));
@@ -782,24 +813,28 @@ describe("App", () => {
   it("shows models and settings with telemetry off", async () => {
     const { api } = fakeApi();
     render(<App api={api} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Models" }));
+    await openSettings("Models");
     expect(await screen.findByText("Model for each task")).toBeTruthy();
     expect(screen.getByLabelText("Chat")).toBeTruthy();
-    const key = screen.getByLabelText("OpenAI") as HTMLInputElement;
+    // On this device is the first tab; the models folder is shown there.
+    expect(screen.getByRole("tab", { name: "On this device" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByText("Downloaded models are stored in /tmp/models")).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", { name: "Providers" }));
+    const key = (await screen.findByLabelText("OpenAI")) as HTMLInputElement;
     expect(key.type).toBe("password");
-    expect(screen.getByText(/Messages in chats that use OpenAI models are sent to OpenAI/)).toBeTruthy();
+    // The data-flow sentence once for all providers, not under every key.
+    expect(screen.getAllByText(/sent to that provider under your account/)).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "Save key" }));
     expect(await screen.findByText("Paste the key first.")).toBeTruthy();
     expect(key.getAttribute("aria-invalid")).toBe("true");
 
-    fireEvent.click(screen.getByRole("tab", { name: "General" }));
-    expect(screen.getByRole("tabpanel").getAttribute("aria-labelledby")).toBe("tab-general");
+    settingsSection("General");
+    expect(await screen.findByRole("heading", { level: 1, name: "General" })).toBeTruthy();
     expect(screen.getByText(/Read-only tools run without asking/)).toBeTruthy();
     // No inert telemetry switch; a plain statement instead (T-STORE-11).
     expect(await screen.findByText(/Demios collects no usage data/)).toBeTruthy();
     expect(screen.queryByRole("switch")).toBeNull();
     expect(screen.getByText("Where your data goes")).toBeTruthy();
-    expect(screen.getByText("Downloaded models are stored in /tmp/models")).toBeTruthy();
   });
 
   it("deletes all local data only after a confirm, and cancel changes nothing", async () => {
@@ -812,8 +847,7 @@ describe("App", () => {
       return null;
     };
     render(<App api={api} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Models" }));
-    fireEvent.click(await screen.findByRole("tab", { name: "General" }));
+    await openSettings("General");
     const trigger = await screen.findByRole("button", { name: "Delete all local data" });
 
     fireEvent.click(trigger);
@@ -863,8 +897,7 @@ describe("App", () => {
         finish = () => void summary().then(resolve);
       });
     render(<App api={api} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Models" }));
-    fireEvent.click(await screen.findByRole("tab", { name: "General" }));
+    await openSettings("General");
     fireEvent.click(await screen.findByRole("button", { name: "Delete all local data" }));
     const confirm = (await screen.findByRole("button", { name: "Delete all data" })) as HTMLButtonElement;
     // Well past the 500 ms guard, still disabled: the list isn't known yet.
@@ -886,8 +919,7 @@ describe("App", () => {
       updates: "off",
     });
     render(<App api={api} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Models" }));
-    fireEvent.click(await screen.findByRole("tab", { name: "General" }));
+    await openSettings("General");
     expect(await screen.findByText("Preview build (unsigned), commit 1a2b3c4")).toBeTruthy();
   });
 
@@ -898,6 +930,11 @@ describe("App", () => {
     expect(await screen.findByText(/No model connected/)).toBeTruthy();
     expect((screen.getByLabelText("Message") as HTMLTextAreaElement).disabled).toBe(true);
     expect(screen.getAllByRole("button", { name: "Connect a model" }).length).toBeGreaterThan(0);
+    // The button is a deep link: it opens Models › On this device, even if another page was last.
+    localStorage.setItem("dn.settings", JSON.stringify({ section: "skills" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "Connect a model" })[0]!);
+    expect(await screen.findByRole("heading", { level: 1, name: "Models" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "On this device" }).getAttribute("aria-selected")).toBe("true");
   });
 
   it("shows an approval card with the exact arguments and never auto-allows", async () => {
@@ -1126,9 +1163,9 @@ describe("App", () => {
   it("downloads a local model with progress, pause and a licence warning", async () => {
     const f = fakeApi();
     render(<App api={f.api} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Models" }));
+    await openSettings("Models");
     const row = await screen.findByTestId("local-model-row");
-    expect(row.textContent).toContain("Caution (estimate)");
+    expect(row.textContent).toContain("Tight fit (estimate)");
     expect(row.textContent).toContain("Licence: cc-by-nc-4.0");
     expect(screen.getByText(/Check the licence before downloading/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Download model" }));
@@ -1332,6 +1369,40 @@ describe("Projects", () => {
     fireEvent.click(screen.getByRole("button", { name: "Undo" }));
     expect(await screen.findByRole("button", { name: "In project" })).toBeTruthy();
     expect(await screen.findByRole("button", { name: "Thesis" })).toBeTruthy();
+  });
+});
+
+describe("Settings quick fixes (#174 review)", () => {
+  it("shows General even when the model catalogue can't load; only Models shows the error", async () => {
+    const { api } = fakeApi();
+    const list = api.listModels;
+    let broken = true;
+    api.listModels = async () => {
+      if (broken) throw { code: "storage", message: "Could not read or write local data." };
+      return list();
+    };
+    render(<App api={api} />);
+    await openSettings("General");
+    expect(await screen.findByRole("button", { name: "Delete all local data" })).toBeTruthy();
+    expect(screen.queryByText(/Couldn't load your models/)).toBeNull();
+    settingsSection("Models");
+    expect(await screen.findByText(/Couldn't load your models/)).toBeTruthy();
+    broken = false;
+    fireEvent.click(screen.getAllByRole("button", { name: "Retry" }).at(-1)!);
+    await waitFor(() => expect(screen.queryByText(/Couldn't load your models/)).toBeNull());
+  });
+
+  it("hides the artifact pane while Settings is open and brings it back for the chat", async () => {
+    const { api } = fakeApi();
+    render(<App api={api} />);
+    expect(await screen.findByTestId("artifact-pane")).toBeTruthy();
+    await openSettings("General");
+    expect(screen.queryByTestId("artifact-pane")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Hide artifacts" })).toBeNull();
+    expect(document.querySelector(".app")?.classList.contains("artifacts-open")).toBe(false);
+    fireEvent.click(screen.getByTestId("new-chat"));
+    expect(await screen.findByTestId("artifact-pane")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Hide artifacts" })).toBeTruthy();
   });
 });
 
@@ -1574,11 +1645,98 @@ describe("No silent fallbacks (#141)", () => {
     let broken = true;
     api.watchLocalModels = async (cb) => (broken ? fail() : watch(cb));
     render(<App api={api} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Models" }));
+    await openSettings("Models");
     expect(await screen.findByText(/Couldn't load the models on this device/)).toBeTruthy();
     expect(screen.queryByText("No models in the catalogue.")).toBeNull();
     broken = false;
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(screen.queryByText(/Couldn't load the models on this device/)).toBeNull());
+  });
+});
+
+describe("Settings sections (#174)", () => {
+  it("lists General first, marks the open section, and moves with the arrow keys", async () => {
+    const { api } = fakeApi();
+    render(<App api={api} />);
+    await openSettings("General");
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    const items = within(nav).getAllByRole("button");
+    expect(items.map((b) => b.textContent)).toEqual(["General", "Models", "Tools", "Skills"]);
+    expect(items[0]!.getAttribute("aria-current")).toBe("page");
+    // Roving focus: only the open section is in the Tab order.
+    expect(items.map((b) => b.tabIndex)).toEqual([0, -1, -1, -1]);
+    items[0]!.focus();
+    fireEvent.keyDown(items[0]!, { key: "ArrowDown" });
+    expect(await screen.findByRole("heading", { level: 1, name: "Models" })).toBeTruthy();
+    await waitFor(() => expect(document.activeElement?.textContent).toBe("Models"));
+    fireEvent.keyDown(document.activeElement!, { key: "End" });
+    expect(await screen.findByRole("heading", { level: 1, name: "Skills" })).toBeTruthy();
+    fireEvent.keyDown(document.activeElement!, { key: "Home" });
+    expect(await screen.findByRole("heading", { level: 1, name: "General" })).toBeTruthy();
+  });
+
+  it("opens Tools and Skills on their own pages", async () => {
+    const { api } = fakeApi();
+    render(<App api={api} />);
+    await openSettings("Tools");
+    expect(await screen.findByRole("button", { name: "Add tool server" })).toBeTruthy();
+    settingsSection("Skills");
+    expect(await screen.findByRole("heading", { level: 1, name: "Skills" })).toBeTruthy();
+    // Skills moved out of General.
+    settingsSection("General");
+    await screen.findByRole("heading", { level: 1, name: "General" });
+    expect(screen.queryByRole("heading", { level: 2, name: "Skills" })).toBeNull();
+  });
+
+  it("remembers the last page and opens it again from the sidebar and ⌘,", async () => {
+    const { api } = fakeApi();
+    render(<App api={api} />);
+    await openSettings("Models");
+    fireEvent.click(screen.getByRole("tab", { name: "Providers" }));
+    settingsSection("Models");
+    fireEvent.click(screen.getByTestId("new-chat"));
+    await screen.findByLabelText("Message");
+    fireEvent.click(screen.getByRole("button", { name: /^Settings/ }));
+    expect(await screen.findByRole("heading", { level: 1, name: "Models" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Providers" }).getAttribute("aria-selected")).toBe("true");
+    fireEvent.click(screen.getByTestId("new-chat"));
+    await screen.findByLabelText("Message");
+    fireEvent.keyDown(window, { key: ",", metaKey: true, ctrlKey: true });
+    expect(await screen.findByRole("heading", { level: 1, name: "Models" })).toBeTruthy();
+  });
+
+  it("moves between the Models tabs with the arrow keys, Home and End", async () => {
+    const { api } = fakeApi();
+    render(<App api={api} />);
+    await openSettings("Models");
+    const device = screen.getByRole("tab", { name: "On this device" });
+    device.focus();
+    fireEvent.keyDown(device, { key: "ArrowRight" });
+    const providers = screen.getByRole("tab", { name: "Providers" });
+    expect(providers.getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(providers);
+    expect(screen.getByRole("tabpanel").getAttribute("aria-labelledby")).toBe("models-tab-providers");
+    fireEvent.keyDown(providers, { key: "Home" });
+    expect(screen.getByRole("tab", { name: "On this device" }).getAttribute("aria-selected")).toBe("true");
+    fireEvent.keyDown(document.activeElement!, { key: "End" });
+    expect(screen.getByRole("tab", { name: "Providers" }).getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("offers a select for the section on narrow windows", async () => {
+    const { api } = fakeApi();
+    render(<App api={api} />);
+    await openSettings("General");
+    const select = screen.getByLabelText("Settings section") as HTMLSelectElement;
+    expect(select.value).toBe("general");
+    fireEvent.change(select, { target: { value: "tools" } });
+    expect(await screen.findByRole("heading", { level: 1, name: "Tools" })).toBeTruthy();
+  });
+
+  it("has one Settings entry in the app sidebar", async () => {
+    const { api } = fakeApi();
+    render(<App api={api} />);
+    const side = await screen.findByRole("navigation", { name: "Chats" });
+    expect(within(side).queryByRole("button", { name: "Models" })).toBeNull();
+    expect(within(side).getByRole("button", { name: /^Settings/ })).toBeTruthy();
   });
 });

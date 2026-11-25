@@ -27,4 +27,6 @@ Press Esc to close the pane, also while the artifact has focus. From inside an a
 
 ## In Settings
 
-Use the Left and Right arrow keys to move between the **Models** and **General** tabs.
+- The section list on the left (**General**, **Models**, **Tools**, **Skills**): Up and Down move to the previous or next section and open it; Home and End go to the first and last. On a narrow window the list is a drop-down instead.
+- The tabs on **Models** (**On this device**, **Providers**): Left and Right move between them; Home and End go to the first and last.
+- Settings opens on the page you had open last.

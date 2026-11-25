@@ -1,10 +1,9 @@
-import { Boxes, Folder, FolderInput, FolderPlus, MessageSquarePlus, MoreHorizontal, Pencil, Settings, Trash2 } from "lucide-react";
+import { Folder, FolderInput, FolderPlus, MessageSquarePlus, MoreHorizontal, Pencil, Settings, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { errorMessage, type Conversation, type Id, type ProjectSummary } from "../ipc/types";
 import { mod } from "../platform";
 import { DropdownMenu } from "./DropdownMenu";
 import { Button, EmptyState, ICON, IconButton, InlineMessage, Skeleton } from "./primitives";
-import type { SettingsSection } from "./SettingsView";
 
 export type ListState = { kind: "loading" } | { kind: "ready" } | { kind: "error"; message: string };
 
@@ -19,7 +18,8 @@ interface Props {
   onNewProject: () => void;
   onOpenProject: (id: Id) => void;
   onRetryProjects: () => void;
-  settings: SettingsSection | null;
+  /** Settings is open (any page). */
+  settingsOpen: boolean;
   onNew: () => void;
   onOpen: (id: Id) => void;
   onDelete: (c: Conversation) => void;
@@ -28,7 +28,8 @@ interface Props {
   /** Renames a chat; rejects with the reason if it couldn't be saved. */
   onRename: (c: Conversation, title: string) => Promise<void>;
   onRetry: () => void;
-  onSettings: (s: SettingsSection) => void;
+  /** Opens Settings on the page used last. */
+  onSettings: () => void;
 }
 
 export function Sidebar(p: Props) {
@@ -153,18 +154,9 @@ export function Sidebar(p: Props) {
       <div className="sidebar-foot">
         <button
           type="button"
-          className={p.settings === "models" ? "nav active" : "nav"}
-          aria-current={p.settings === "models" ? "page" : undefined}
-          onClick={() => p.onSettings("models")}
-        >
-          <Boxes {...ICON} aria-hidden="true" />
-          Models
-        </button>
-        <button
-          type="button"
-          className={p.settings === "general" ? "nav active" : "nav"}
-          aria-current={p.settings === "general" ? "page" : undefined}
-          onClick={() => p.onSettings("general")}
+          className={p.settingsOpen ? "nav active" : "nav"}
+          aria-current={p.settingsOpen ? "page" : undefined}
+          onClick={() => p.onSettings()}
           aria-keyshortcuts={`${mod},`}
         >
           <Settings {...ICON} aria-hidden="true" />

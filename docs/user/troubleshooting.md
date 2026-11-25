@@ -17,7 +17,7 @@ Select **Retry** (or **Resume** if you paused it). The download continues from w
 The error under the answer says what happened. Select **Retry** to try again.
 
 - **The provider stopped responding.** If a provider sends nothing for 5 minutes, or goes silent for 60 seconds in the middle of an answer, the answer stops with an error. Retry, or check the provider's status page.
-- **A key problem.** Check that the key is still valid in your account with the provider, then paste it again in **Settings → Models → Provider keys**.
+- **A key problem.** Check that the key is still valid in your account with the provider, then paste it again in **Settings → Models → Providers**.
 
 ## "This model has no chat template"
 

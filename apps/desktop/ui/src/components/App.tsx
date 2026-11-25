@@ -25,6 +25,7 @@ import {
   type UpdateCheck,
 } from "../ipc/types";
 import { markArtifact } from "../artifactMarks";
+import { onHubDownloadFinished } from "../hubDownloads";
 import { chatModel, chatModelReady, describeModel, modelName } from "../models";
 import { artifactFrameUrl, isMac, mod } from "../platform";
 import { chatReducer, initialChat } from "../state/chat";
@@ -34,13 +35,13 @@ import { ChatView, type ArtifactCardInfo } from "./ChatView";
 import { ModelBadge } from "./ModelBadge";
 import { NewProjectView, ProjectView, type ProjectDraft } from "./ProjectView";
 import { Badge, Button, ICON, IconButton, InlineMessage, TooltipProvider } from "./primitives";
-import { SettingsView, type SettingsSection } from "./SettingsView";
+import { SettingsView, lastSettingsRoute, type SettingsRoute } from "./SettingsView";
 import { Sidebar, type ListState } from "./Sidebar";
 import { ToastProvider, useToast } from "./toast";
 
 type View =
   | { kind: "chat" }
-  | { kind: "settings"; section: SettingsSection }
+  | { kind: "settings"; route: SettingsRoute }
   | { kind: "project"; id: Id | "new" };
 
 export function App({ api = realApi }: { api?: Api }) {
@@ -61,6 +62,16 @@ function readPref(key: string, fallback: boolean): boolean {
   } catch {
     return fallback;
   }
+}
+
+// Below this width the artifact pane covers the whole window instead of sitting beside the
+// chat (the `max-width: 1023px` rule in styles.css). There it opens only when asked or when an
+// artifact arrives, never at launch, so Demios doesn't start behind an empty pane.
+const ARTIFACT_OVERLAY_QUERY = "(max-width: 1023px)";
+
+function artifactPaneAtLaunch(): boolean {
+  const overlays = typeof window.matchMedia === "function" && window.matchMedia(ARTIFACT_OVERLAY_QUERY).matches;
+  return !overlays && readPref("dn.artifacts", true);
 }
 
 function writePref(key: string, v: boolean) {
@@ -95,7 +106,7 @@ function Shell({ api }: { api: Api }) {
   const [error, setError] = useState<string | null>(null);
   const [announce, setAnnounce] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(() => readPref("dn.sidebar", true));
-  const [artifactsOpen, setArtifactsOpen] = useState(() => readPref("dn.artifacts", true));
+  const [artifactsOpen, setArtifactsOpen] = useState(artifactPaneAtLaunch);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const [approvals, setApprovals] = useState<ApprovalPrompt[]>([]);
   const [unknowns, setUnknowns] = useState<UnknownOutcome[]>([]);
@@ -163,7 +174,7 @@ function Shell({ api }: { api: Api }) {
       if (!alive) return;
       addLinkRef.current = l;
       setAddLink(l);
-      setView({ kind: "settings", section: "models" });
+      setView({ kind: "settings", route: { section: "models", tab: "device" } });
     };
     void api
       .watchAddLinks(show)
@@ -227,6 +238,18 @@ function Shell({ api }: { api: Api }) {
   // A failed load is shown above the chat with Retry, not hidden behind a stale catalog
   // that would make the composer say no model is set up (#141).
   const [catalogError, setCatalogError] = useState<string | null>(null);
+  // A Hugging Face download from Settings finished, wherever the user is now: pickers and
+  // the message box must see the new model.
+  useEffect(
+    () =>
+      onHubDownloadFinished((d) => {
+        toast({ tone: "success", title: `${d.label} downloaded` });
+        void refreshCatalogRef.current();
+      }),
+    [toast],
+  );
+  const refreshCatalogRef = useRef<() => Promise<void>>(async () => {});
+
   const refreshCatalog = useCallback(async () => {
     try {
       setCatalog(await api.listModels());
@@ -235,6 +258,7 @@ function Shell({ api }: { api: Api }) {
       setCatalogError(errorMessage(e));
     }
   }, [api]);
+  refreshCatalogRef.current = refreshCatalog;
 
   const refreshUnknowns = useCallback(
     async (id: Id | null) => {
@@ -420,7 +444,7 @@ function Shell({ api }: { api: Api }) {
         setListState({ kind: "ready" });
         await open(list[0]?.id ?? null);
         // A link that started the app wins over opening the last chat.
-        if (addLinkRef.current !== null) setView({ kind: "settings", section: "models" });
+        if (addLinkRef.current !== null) setView({ kind: "settings", route: { section: "models", tab: "device" } });
       } catch (e) {
         setListState({ kind: "error", message: errorMessage(e) });
       }
@@ -790,7 +814,7 @@ function Shell({ api }: { api: Api }) {
         newChat();
       } else if (k === ",") {
         e.preventDefault();
-        setView({ kind: "settings", section: "general" });
+        setView({ kind: "settings", route: lastSettingsRoute() });
       } else if (k === ".") {
         e.preventDefault();
         void stop();
@@ -806,7 +830,11 @@ function Shell({ api }: { api: Api }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [copyLastAnswer, newChat, stop, toggleSidebar]);
 
-  const goSettings = (section: SettingsSection) => setView({ kind: "settings", section });
+  // Opens a Settings page; with no route, the one the user had open last (#174).
+  const goSettings = (route: SettingsRoute = lastSettingsRoute()) => setView({ kind: "settings", route });
+  // Artifacts belong to the open chat. Settings and project pages get the full width; the
+  // pane comes back as it was when a chat is shown again.
+  const showArtifacts = artifactsOpen && view.kind === "chat";
   const otherApprovals = approvals.filter(
     (a) => a.scope.startsWith("conv:") && (view.kind !== "chat" || a.scope !== `conv:${chat.conversationId ?? ""}`),
   );
@@ -825,7 +853,7 @@ function Shell({ api }: { api: Api }) {
 
   return (
     <div
-      className={`app${sidebarOpen ? "" : " sidebar-collapsed"}${artifactsOpen ? " artifacts-open" : ""}${isMac ? " os-mac" : ""}`}
+      className={`app${sidebarOpen ? "" : " sidebar-collapsed"}${showArtifacts ? " artifacts-open" : ""}${isMac ? " os-mac" : ""}`}
     >
       <header className="titlebar" data-tauri-drag-region>
         <IconButton
@@ -841,13 +869,15 @@ function Shell({ api }: { api: Api }) {
         <div className="titlebar-end">
           {view.kind === "chat" && <ModelBadge info={describeModel(model, catalog)} />}
           {devFake && model === "local:dev-fake" && <Badge tone="warning">Dev build</Badge>}
-          <IconButton
-            label={artifactsOpen ? "Hide artifacts" : "Show artifacts"}
-            onClick={toggleArtifacts}
-            aria-pressed={artifactsOpen}
-          >
-            <PanelRight {...ICON} aria-hidden="true" />
-          </IconButton>
+          {view.kind === "chat" && (
+            <IconButton
+              label={artifactsOpen ? "Hide artifacts" : "Show artifacts"}
+              onClick={toggleArtifacts}
+              aria-pressed={artifactsOpen}
+            >
+              <PanelRight {...ICON} aria-hidden="true" />
+            </IconButton>
+          )}
         </div>
       </header>
       {sidebarOpen && (
@@ -861,7 +891,7 @@ function Shell({ api }: { api: Api }) {
           onNewProject={() => setView({ kind: "project", id: "new" })}
           onOpenProject={(id) => setView({ kind: "project", id })}
           onRetryProjects={() => void refreshProjects()}
-          settings={view.kind === "settings" ? view.section : null}
+          settingsOpen={view.kind === "settings"}
           onNew={newChat}
           onOpen={(id) => void open(id)}
           onDelete={(c) => void remove(c)}
@@ -927,7 +957,7 @@ function Shell({ api }: { api: Api }) {
                     onClick={() => {
                       setUpdateNotice(false);
                       setRevealUpdates(true);
-                      setView({ kind: "settings", section: "general" });
+                      setView({ kind: "settings", route: { section: "general" } });
                     }}
                   >
                     View update
@@ -955,7 +985,7 @@ function Shell({ api }: { api: Api }) {
             onSend={send}
             onStop={() => void stop()}
             onRegenerate={() => void regenerate()}
-            onConnect={() => goSettings("models")}
+            onConnect={() => goSettings({ section: "models", tab: "device" })}
             approvals={approvals.filter((a) => a.scope === `conv:${chat.conversationId ?? ""}`)}
             onDecide={decide}
             unknowns={unknowns}
@@ -1024,8 +1054,8 @@ function Shell({ api }: { api: Api }) {
           <SettingsView
             api={api}
             info={info}
-            section={view.section}
-            onSection={goSettings}
+            route={view.route}
+            onRoute={(route) => setView({ kind: "settings", route })}
             onCatalog={setCatalog}
             servers={servers}
             addLink={addLink}
@@ -1035,7 +1065,7 @@ function Shell({ api }: { api: Api }) {
           />
         )}
       </main>
-      {artifactsOpen && (
+      {showArtifacts && (
         <ArtifactPane
           artifacts={artifacts}
           detail={openArtifact === null ? null : (artifactDetails[openArtifact] ?? null)}
