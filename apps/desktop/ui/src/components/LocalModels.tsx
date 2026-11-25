@@ -11,6 +11,8 @@ import { errorMessage, type AddModelLink, type FitStatus, type LocalModelRow } f
 import { Badge, Button, ICON, IconButton, InlineMessage } from "./primitives";
 import { useToast } from "./toast";
 import { AddFromHub } from "./AddFromHub";
+import { Dialog } from "./Dialog";
+import { onHubDownloadFinished, pauseHubDownload, startHubDownload, useHubDownloads } from "../hubDownloads";
 
 export const SMALL = { size: 12, strokeWidth: 1.5 } as const;
 
@@ -100,39 +102,115 @@ export function LocalModelsCard({
     };
   }, [api, onReady, watchTry]);
 
+  // Hugging Face downloads started from the dialog. They run outside this list (hubDownloads),
+  // so they keep going, and show here again, after Settings is closed and opened.
+  const hub = useHubDownloads();
+  const toast = useToast();
+  useEffect(
+    () =>
+      onHubDownloadFinished((d) => {
+        // The app shows the toast and refreshes the catalogue (also with Settings closed).
+        setAnnounce("");
+        window.setTimeout(() => setAnnounce(`${d.label} downloaded`), 50);
+        // The new model's row comes with the next snapshot.
+        setWatchTry((n) => n + 1);
+      }),
+    [],
+  );
+  const runHub = (d: Parameters<typeof startHubDownload>[1], from = 0) => startHubDownload(api, d, from);
+  const closeDialog = () => {
+    setAdding(false);
+    if (link !== null) onLinkClosed?.();
+  };
+
   return (
     <section className="card" aria-labelledby="local-h">
       <div className="card-head">
         <h2 id="local-h">On this device</h2>
-        {!adding && link === null && (
-          <Button ref={addRef} size="sm" icon={<Plus {...ICON} aria-hidden="true" />} onClick={() => setAdding(true)}>
-            Add from Hugging Face
-          </Button>
-        )}
+        <Button ref={addRef} size="sm" variant="primary" icon={<Plus {...ICON} aria-hidden="true" />} onClick={() => setAdding(true)}>
+          Add a model
+        </Button>
       </div>
       <p className="dn-help">
         Runs on this computer; nothing leaves it. Downloads resume if interrupted and are checked
         against their published checksum.
       </p>
-      {link !== null && (
+      <Dialog
+        open={adding || link !== null}
+        onOpenChange={(o) => {
+          if (!o) closeDialog();
+        }}
+        title="Add a model"
+        description="From Hugging Face. Nothing downloads until you choose a version."
+        returnFocusTo={addRef}
+        testId="add-model-dialog"
+      >
         <AddFromHub
           api={api}
-          link={link}
-          onClose={() => {
-            onLinkClosed?.();
-            requestAnimationFrame(() => addRef.current?.focus());
+          {...(link !== null ? { link } : {})}
+          onClose={closeDialog}
+          isDownloading={(key) => hub[key]?.kind === "running"}
+          onDownload={(d) => {
+            closeDialog();
+            runHub(d);
           }}
         />
-      )}
-      {adding && link === null && (
-        <AddFromHub
-          api={api}
-          onClose={() => {
-            setAdding(false);
-            requestAnimationFrame(() => addRef.current?.focus());
-          }}
-        />
-      )}
+      </Dialog>
+      {Object.entries(hub).map(([key, h]) => (
+        <div key={key} className="row" data-testid="hub-download">
+          <div className="row-main">
+            <span className="row-title" id={`hubdl-${key}`}>
+              {h.d.label}
+            </span>
+            <span className="dn-help local-origin">From Hugging Face</span>
+            {h.kind !== "failed" && (
+              <div className="dl-progress">
+                <div
+                  className="dl-bar"
+                  role="progressbar"
+                  aria-labelledby={`hubdl-${key}`}
+                  aria-valuemin={0}
+                  aria-valuemax={h.total}
+                  aria-valuenow={h.done}
+                  aria-valuetext={`${formatBytes(h.done)} of ${formatBytes(h.total)}`}
+                >
+                  <span style={{ width: `${h.total > 0 ? Math.min(100, (h.done / h.total) * 100) : 0}%` }} />
+                </div>
+                <span className="dn-help">
+                  {h.kind === "paused" ? "Paused at " : ""}
+                  {formatBytes(h.done)} of {formatBytes(h.total)}
+                </span>
+              </div>
+            )}
+            {h.kind === "failed" && <InlineMessage tone="error">{h.error}</InlineMessage>}
+          </div>
+          <div className="row-actions local-actions">
+            {h.kind === "running" ? (
+              <Button
+                size="sm"
+                icon={<Pause {...ICON} aria-hidden="true" />}
+                aria-describedby={`hubdl-${key}`}
+                onClick={() =>
+                  void pauseHubDownload(api, h.d).catch((e: unknown) =>
+                    toast({ tone: "error", title: `Couldn't pause the download. ${errorMessage(e)}` }),
+                  )
+                }
+              >
+                Pause
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                icon={(h.kind === "paused" ? <Play {...ICON} aria-hidden="true" /> : <RotateCcw {...ICON} aria-hidden="true" />)}
+                aria-describedby={`hubdl-${key}`}
+                onClick={() => runHub(h.d, h.kind === "paused" ? h.done : 0)}
+              >
+                {h.kind === "paused" ? "Resume" : "Retry"}
+              </Button>
+            )}
+          </div>
+        </div>
+      ))}
       {watchError !== null && (
         <InlineMessage
           tone="error"

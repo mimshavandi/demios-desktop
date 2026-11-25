@@ -3,9 +3,10 @@
 // (verified against the published checksum, resumable). States per design-system §4–§5:
 // loading, empty, error with Retry, "Checking model…" while the repo's details are read.
 
-import { ArrowLeft, Copy, Cpu, Download, KeyRound, Pause, Search } from "lucide-react";
+import { ArrowLeft, Copy, Cpu, Download, KeyRound, Search } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Api } from "../ipc/commands";
+import { downloadKey, type HubDownload } from "../hubDownloads";
 import {
   errorMessage,
   type AddModelLink,
@@ -14,6 +15,7 @@ import {
   type HubRepoView,
   type HubSort,
   type HubVariant,
+  type ModelTraits,
 } from "../ipc/types";
 import { FIT, SMALL, formatBytes } from "./LocalModels";
 import { Badge, Button, ICON, IconButton, InlineMessage, Skeleton, TextField } from "./primitives";
@@ -32,17 +34,39 @@ const SORTS: { value: HubSort; label: string }[] = [
   { value: "updated", label: "Recently updated" },
 ];
 
+/** The search text, kept while the app runs (the dialog closes and opens again). */
+let lastQuery = "";
+
+/** Tests only: forget the kept search text. */
+export function forgetHubSearch(): void {
+  lastQuery = "";
+}
+
+/**
+ * The add-model dialog's content (#174): search Hugging Face, open a repo, pick a version.
+ * Download hands the version to `onDownload` (the On this device list runs it and shows its
+ * progress) and the dialog closes. Opened by a demios:// link, it starts on that model.
+ */
 export function AddFromHub({
   api,
   onClose,
+  onDownload,
+  isDownloading,
   link = null,
 }: {
   api: Api;
   onClose: () => void;
+  onDownload: (d: HubDownload) => void;
+  /** Whether a version is downloading now (started earlier from this list). */
+  isDownloading: (key: string) => boolean;
   /** Opened by a demios:// link: go straight to its confirmation. */
   link?: AddModelLink | null;
 }) {
-  const [text, setText] = useState("");
+  const [text, setTextState] = useState(lastQuery);
+  const setText = (t: string) => {
+    lastQuery = t;
+    setTextState(t);
+  };
   const [sort, setSort] = useState<HubSort>("downloads");
   const [results, setResults] = useState<Results>({ kind: "idle" });
   const [repo, setRepo] = useState<string | null>(null);
@@ -73,7 +97,16 @@ export function AddFromHub({
 
   if (link !== null) {
     // From a link: the confirmation only; leaving it closes the panel.
-    return <RepoDetail api={api} repo={link.repo} link={link} onBack={onClose} />;
+    return (
+      <RepoDetail
+        api={api}
+        repo={link.repo}
+        link={link}
+        onBack={onClose}
+        onDownload={onDownload}
+        isDownloading={isDownloading}
+      />
+    );
   }
 
   if (repo !== null) {
@@ -81,6 +114,8 @@ export function AddFromHub({
       <RepoDetail
         api={api}
         repo={repo}
+        onDownload={onDownload}
+        isDownloading={isDownloading}
         onBack={() => {
           setRepo(null);
           requestAnimationFrame(() =>
@@ -94,15 +129,10 @@ export function AddFromHub({
   }
 
   return (
-    <section className="hub" aria-labelledby="hub-h">
-      <div className="hub-head">
-        <h3 id="hub-h" ref={headingRef} tabIndex={-1} className="card-subhead">
-          Add a model from Hugging Face
-        </h3>
-        <Button size="sm" variant="ghost" onClick={onClose}>
-          Done
-        </Button>
-      </div>
+    <section className="hub" aria-label="Search Hugging Face">
+      <h3 id="hub-h" ref={headingRef} tabIndex={-1} className="card-subhead">
+        Search Hugging Face
+      </h3>
       <form
         className="hub-search"
         role="search"
@@ -172,7 +202,9 @@ export function AddFromHub({
                       setRepo(r.id);
                     }}
                   >
-                    <span className="hub-name">{r.id}</span>
+                    <span className="hub-name">
+                      {r.id} <TypeBadge traits={r.traits_hint} />
+                    </span>
                     <span className="hub-meta">
                       {r.downloads.toLocaleString()} downloads · {r.likes.toLocaleString()} likes
                       {r.license !== null ? ` · ${r.license}` : ""}
@@ -204,86 +236,35 @@ const LICENSE_NOTE: Record<NonNullable<HubLicense["warning"]>, { tone: "warning"
   use_policy: { tone: "info", text: "Commercial use is allowed under an acceptable-use policy. Read it on the model card." },
 };
 
-type Pull =
-  | { done: number; total: number }
-  | { paused: true; done: number; total: number }
-  | { error: string };
-
 function RepoDetail({
   api,
   repo,
   onBack,
+  onDownload,
+  isDownloading,
   link = null,
 }: {
   api: Api;
   repo: string;
   onBack: () => void;
+  onDownload: (d: HubDownload) => void;
+  isDownloading: (key: string) => boolean;
   link?: AddModelLink | null;
 }) {
   const toast = useToast();
   const [view, setView] = useState<HubRepoView | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [pulls, setPulls] = useState<Record<string, Pull>>({});
-  const [done, setDone] = useState<Record<string, string>>({});
-  const [announce, setAnnounce] = useState("");
   const headingRef = useRef<HTMLHeadingElement>(null);
-  /** Downloads started from this screen (their progress comes on our channel). */
-  const ours = useRef<Set<string>>(new Set());
-  const lastStep = useRef<Record<string, number>>({});
-
-  // Polite, in 25 % steps (not every update).
-  const progressed = (name: string, doneB: number, total: number) => {
-    const step = total > 0 ? Math.floor((doneB / total) * 4) : 0;
-    if (step > (lastStep.current[name] ?? 0) && step < 4) {
-      lastStep.current[name] = step;
-      setAnnounce(`${name}: ${step * 25}% downloaded`);
-    }
-  };
 
   const load = async () => {
     setError(null);
     setView(null);
     try {
-      const v = link !== null ? await api.hubResolveLink(link) : await api.hubRepo(repo);
-      setView(v);
-      // Downloads still running from an earlier visit: show them, then follow them below.
-      const running: Record<string, Pull> = {};
-      for (const x of v.variants) {
-        if (x.progress !== null && !ours.current.has(x.name)) {
-          running[x.name] = { done: x.progress.done_bytes, total: x.progress.total_bytes || x.total_size };
-        }
-      }
-      setPulls((p) => ({ ...running, ...p }));
+      setView(link !== null ? await api.hubResolveLink(link) : await api.hubRepo(repo));
     } catch (e) {
       setError(errorMessage(e));
     }
   };
-
-  // Follow downloads this screen didn't start (left and came back) until they end.
-  const followed = view === null ? [] : Object.keys(pulls).filter((n) => !ours.current.has(n) && "done" in pulls[n]! && !("paused" in pulls[n]!));
-  useEffect(() => {
-    if (view === null || followed.length === 0) return;
-    const t = window.setInterval(() => {
-      void api
-        .hubPullStatus(view.id, view.sha, followed)
-        .then((status) => {
-          setPulls((p) => {
-            const next = { ...p };
-            for (const n of followed) {
-              const st = status[n];
-              if (st !== undefined) next[n] = { done: st.done_bytes, total: st.total_bytes || (next[n] as { total: number }).total };
-              else delete next[n];
-            }
-            return next;
-          });
-          // A followed download ended: reload to show it as downloaded (or not).
-          if (followed.some((n) => status[n] === undefined)) void load();
-        })
-        .catch(() => {});
-    }, 1000);
-    return () => window.clearInterval(t);
-    // Re-run when the set of followed downloads changes.
-  }, [view, followed.join("|")]);
 
   useEffect(() => {
     void load();
@@ -291,33 +272,15 @@ function RepoDetail({
     // Load once per repo.
   }, [repo]);
 
-  const download = async (v: HubVariant) => {
+  const download = (v: HubVariant) => {
     if (view === null) return;
-    const prev = pulls[v.name];
-    ours.current.add(v.name);
-    setPulls((p) => ({ ...p, [v.name]: { done: prev !== undefined && "done" in prev ? prev.done : 0, total: v.total_size } }));
-    try {
-      const ref = await api.hubPull(view.id, view.sha, v.name, (ev) => {
-        setPulls((p) => ({ ...p, [v.name]: { done: ev.done_bytes, total: ev.total_bytes } }));
-        progressed(v.quant ?? v.name, ev.done_bytes, ev.total_bytes);
-      });
-      setAnnounce(`${v.quant ?? v.name} downloaded`);
-      setDone((d) => ({ ...d, [v.name]: ref }));
-      setPulls(({ [v.name]: _, ...rest }) => rest);
-      toast({ tone: "success", title: `${repo.split("/")[1] ?? repo} ${v.quant ?? v.name} downloaded` });
-    } catch (e) {
-      const paused = typeof e === "object" && e !== null && (e as { code?: string }).code === "cancelled";
-      setPulls((p) => {
-        const cur = p[v.name];
-        const at = cur !== undefined && "done" in cur ? cur : { done: 0, total: v.total_size };
-        return {
-          ...p,
-          [v.name]: paused ? { paused: true, done: at.done, total: at.total } : { error: errorMessage(e) },
-        };
-      });
-    } finally {
-      ours.current.delete(v.name);
-    }
+    onDownload({
+      repo: view.id,
+      sha: view.sha,
+      variant: v.name,
+      label: `${view.id.split("/")[1] ?? view.id} ${v.quant ?? v.name}`,
+      total: v.total_size,
+    });
   };
 
   return (
@@ -331,7 +294,7 @@ function RepoDetail({
         </InlineMessage>
       )}
       <h3 id="hub-repo-h" ref={headingRef} tabIndex={-1} className="card-subhead hub-repo-name">
-        {repo}
+        {repo} <TypeBadge traits={view?.traits} />
       </h3>
       {view === null && error === null && (
         <div>
@@ -385,8 +348,6 @@ function RepoDetail({
                 // The variant the link chose comes first.
                 .sort((a, b) => Number(b.name === view.selected) - Number(a.name === view.selected))
                 .map((v) => {
-                const pull = pulls[v.name];
-                const ref = done[v.name] ?? v.downloaded;
                 const fit = v.fit !== null ? FIT[v.fit.status] : null;
                 const nameId = `hubv-${v.name}`;
                 return (
@@ -413,55 +374,25 @@ function RepoDetail({
                           <span className="dn-help">Fit unknown: its details couldn't be read.</span>
                         )}
                       </span>
-                      {pull !== undefined && "done" in pull && !("paused" in pull) && (
-                        <div className="dl-progress">
-                          <div
-                            className="dl-bar"
-                            role="progressbar"
-                            aria-labelledby={nameId}
-                            aria-valuemin={0}
-                            aria-valuemax={pull.total}
-                            aria-valuenow={pull.done}
-                            aria-valuetext={`${formatBytes(pull.done)} of ${formatBytes(pull.total)}`}
-                          >
-                            <span style={{ width: `${pull.total > 0 ? Math.min(100, (pull.done / pull.total) * 100) : 0}%` }} />
-                          </div>
-                          <span className="dn-help">
-                            {formatBytes(pull.done)} of {formatBytes(pull.total)}
-                          </span>
-                        </div>
-                      )}
-                      {pull !== undefined && "paused" in pull && (
-                        <InlineMessage tone="info">
-                          Paused at {formatBytes(pull.done)} of {formatBytes(pull.total)}. Resume to continue where it
-                          stopped.
-                        </InlineMessage>
-                      )}
-                      {pull !== undefined && "error" in pull && <InlineMessage tone="error">{pull.error}</InlineMessage>}
                       {!v.verifiable && (
                         <span className="dn-help">No published checksum, so Demios won't download it.</span>
                       )}
                     </div>
                     <div className="row-actions local-actions">
-                      {ref !== null && ref !== undefined ? (
+                      {v.downloaded !== null && v.downloaded !== undefined ? (
                         <Badge tone="success">Downloaded</Badge>
-                      ) : pull !== undefined && "done" in pull && !("paused" in pull) ? (
-                        <Button
-                          size="sm"
-                          icon={<Pause {...ICON} aria-hidden="true" />}
-                          onClick={() => void api.hubCancel(view.id, view.sha, v.name)}
-                        >
-                          Pause
-                        </Button>
+                      ) : v.progress !== null || isDownloading(downloadKey({ repo: view.id, sha: view.sha, variant: v.name })) ? (
+                        <Badge tone="accent">Downloading, see On this device</Badge>
                       ) : (
                         <Button
                           size="sm"
-                          variant="secondary"
+                          variant="primary"
                           disabled={!v.verifiable}
                           icon={<Download {...ICON} aria-hidden="true" />}
-                          onClick={() => void download(v)}
+                          onClick={() => download(v)}
+                          aria-describedby={nameId}
                         >
-                          {pull === undefined ? "Download" : "paused" in pull ? "Resume" : "Retry"}
+                          Download
                         </Button>
                       )}
                     </div>
@@ -470,11 +401,8 @@ function RepoDetail({
               })}
             </ul>
           )}
-          <div className="dn-visually-hidden" role="status" aria-live="polite">
-            {announce}
-          </div>
           <p className="dn-help">
-            Downloads go to your models folder, are checked against Hugging Face's published checksum, and resume if
+            Download closes this window and shows progress under On this device. Downloads go to your models folder, are checked against Hugging Face's published checksum, and resume if
             interrupted.
           </p>
         </>
@@ -570,5 +498,16 @@ function HfToken({ api, onSaved }: { api: Api; onSaved: () => void }) {
         </form>
       )}
     </div>
+  );
+}
+
+/** The model's type (#175): "Chat · Tools", "Embedding"… A hint from the Hub says so. */
+function TypeBadge({ traits }: { traits: ModelTraits | null | undefined }) {
+  if (traits === null || traits === undefined) return null;
+  return (
+    <Badge tone={traits.kind === "base" ? "warning" : "neutral"}>
+      {traits.label}
+      {traits.source === "hint" ? " (from the model page)" : ""}
+    </Badge>
   );
 }

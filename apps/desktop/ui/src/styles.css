@@ -657,3 +657,12 @@ pre.code .code-copy { position: absolute; top: var(--dn-space-1); right: var(--d
 @container (max-width: 560px) {
   .mcp-value-row { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* ---------- Dialog (#174): large work dialogs; full screen on narrow windows ---------- */
+.dn-dialog-large { width: min(calc(var(--dn-space-16) * 14), calc(100vw - var(--dn-space-8))); max-width: none; height: min(calc(var(--dn-space-16) * 11), calc(100vh - var(--dn-space-8))); grid-template-rows: auto auto minmax(0, 1fr); }
+.dn-dialog-medium { width: min(calc(var(--dn-space-16) * 9), calc(100vw - var(--dn-space-8))); max-width: none; }
+.dn-dialog-head { display: flex; align-items: center; justify-content: space-between; gap: var(--dn-space-3); }
+.dn-dialog-large .dn-dialog-body { overflow-y: auto; min-height: 0; color: var(--dn-color-text); align-content: start; }
+@media (max-width: 720px) {
+  .dn-dialog-large, .dn-dialog-medium { inset: 0; transform: none; width: 100vw; height: 100vh; max-height: none; border-radius: 0; }
+}

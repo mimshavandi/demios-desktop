@@ -25,6 +25,7 @@ import {
   type UpdateCheck,
 } from "../ipc/types";
 import { markArtifact } from "../artifactMarks";
+import { onHubDownloadFinished } from "../hubDownloads";
 import { chatModel, chatModelReady, describeModel, modelName } from "../models";
 import { artifactFrameUrl, isMac, mod } from "../platform";
 import { chatReducer, initialChat } from "../state/chat";
@@ -227,6 +228,18 @@ function Shell({ api }: { api: Api }) {
   // A failed load is shown above the chat with Retry, not hidden behind a stale catalog
   // that would make the composer say no model is set up (#141).
   const [catalogError, setCatalogError] = useState<string | null>(null);
+  // A Hugging Face download from Settings finished, wherever the user is now: pickers and
+  // the message box must see the new model.
+  useEffect(
+    () =>
+      onHubDownloadFinished((d) => {
+        toast({ tone: "success", title: `${d.label} downloaded` });
+        void refreshCatalogRef.current();
+      }),
+    [toast],
+  );
+  const refreshCatalogRef = useRef<() => Promise<void>>(async () => {});
+
   const refreshCatalog = useCallback(async () => {
     try {
       setCatalog(await api.listModels());
@@ -235,6 +248,7 @@ function Shell({ api }: { api: Api }) {
       setCatalogError(errorMessage(e));
     }
   }, [api]);
+  refreshCatalogRef.current = refreshCatalog;
 
   const refreshUnknowns = useCallback(
     async (id: Id | null) => {

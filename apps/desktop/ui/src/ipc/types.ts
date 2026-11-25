@@ -325,8 +325,20 @@ export type LocalModelEvent = { type: "changed"; row: LocalModelRow } | { type: 
 
 export type HubSort = "downloads" | "likes" | "trending" | "updated";
 
+/** What kind of model it is (T-INF-26, W-inference). Optional until that lands. */
+export interface ModelTraits {
+  kind: "chat" | "embedding" | "base";
+  tool_support: "supported" | "unsupported" | "unknown";
+  /** "hint" comes from the Hub's tags, not the file. */
+  source: "header" | "hint" | "checked";
+  /** Ready to show: "Chat · Tools" | "Chat" | "Embedding" | "Base model". */
+  label: string;
+}
+
 export interface HubRepoSummary {
   id: string;
+  /** From the Hub's tags (T-INF-26); absent or null when it doesn't say. */
+  traits_hint?: ModelTraits | null;
   author: string;
   downloads: number;
   likes: number;
@@ -366,6 +378,8 @@ export interface HubVariant {
 }
 
 export interface HubRepoView {
+  /** Read from the model file's header (T-INF-26); absent until that lands. */
+  traits?: ModelTraits | null;
   id: string;
   sha: string;
   gated: boolean;
