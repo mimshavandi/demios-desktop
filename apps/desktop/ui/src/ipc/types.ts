@@ -158,8 +158,6 @@ export type ChatEvent =
       stop?: "completed" | "length" | "step_limit" | "cancelled";
     }
   | { type: "error"; message_id: Id; message: string; recovery: RecoveryAction[] }
-  /** A fenced artifact block (model without tool calling) wasn't saved; `reason` says why. */
-  | { type: "artifact_not_saved"; message_id: Id; conversation_id: Id; title: string; reason: string }
   /** An artifact was created or got a new version in this turn. */
   | {
       type: "artifact_changed";
@@ -389,7 +387,7 @@ export interface ModelCatalog {
   settings: Settings;
   /** The model chat uses now (chosen or picked automatically); null if none is usable. */
   chat_model: string | null;
-  /** Whether the chat model makes tool calls (artifact tools) or uses the fenced format. */
+  /** Whether the chat model makes tool calls; without them it can't make artifacts. */
   chat_model_tools: boolean;
 }
 

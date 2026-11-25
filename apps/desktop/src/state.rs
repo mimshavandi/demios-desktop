@@ -1277,8 +1277,7 @@ mod tests {
             let ctx = dn_artifacts::OpContext::model(None);
             let html = dn_core::artifact::ArtifactType::Html;
             for conv in [gone.id, kept.id] {
-                arts.create(conv, &html, "Page", "<p>x</p>", None, &ctx)
-                    .unwrap();
+                arts.create(conv, &html, "Page", "<p>x</p>", &ctx).unwrap();
             }
             let l = dn_store::open_connection(&path).unwrap();
             let args = serde_json::json!({});
@@ -1415,7 +1414,6 @@ mod tests {
                 &dn_core::artifact::ArtifactType::Html,
                 "Page",
                 "<p>x</p>",
-                None,
                 &dn_artifacts::OpContext::model(None),
             )
             .unwrap();
