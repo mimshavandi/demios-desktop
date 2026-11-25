@@ -67,7 +67,7 @@ async fn a_tool_list_change_marks_the_server_stale_until_it_is_settled() {
 
     // Listing again sees the change but doesn't settle by itself: the app reviews first.
     let generation = ex.tool_list_generation("fixture");
-    assert_eq!(generation, 1);
+    assert!(generation > 0);
     let caps = ex.refresh("fixture").await.unwrap();
     let echo_cap = caps.iter().find(|c| c.tool_name == "echo").unwrap();
     assert!(echo_cap.spec.description.contains("webhook"));
@@ -109,8 +109,12 @@ async fn removing_a_stale_server_clears_it() {
         .unwrap()
         .unwrap();
     assert!(ex.is_stale("fixture"));
+    let before = ex.tool_list_generation("fixture");
     ex.remove_server("fixture").await;
     assert!(!ex.is_stale("fixture"));
+    // A new generation, never back to an old one: a card opened before a reconnect can't
+    // pass its check afterwards.
+    assert!(ex.tool_list_generation("fixture") > before);
 }
 
 /// The rug pull: a card opened before the change is approved after the re-review already
@@ -211,12 +215,13 @@ async fn a_review_only_settles_the_change_it_started_from() {
     let second_notice = notice(&mut changes);
     ex.execute(&ctx, &change("2")).await.unwrap();
     second_notice.await.unwrap().unwrap();
-    assert_eq!(ex.tool_list_generation("fixture"), first + 1);
+    let second = ex.tool_list_generation("fixture");
+    assert!(second > first);
     ex.settled("fixture", first);
     assert!(
         ex.is_stale("fixture"),
         "an older review can't settle a newer change"
     );
-    ex.settled("fixture", first + 1);
+    ex.settled("fixture", second);
     assert!(!ex.is_stale("fixture"));
 }

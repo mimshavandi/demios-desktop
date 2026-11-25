@@ -89,6 +89,9 @@ pub struct Executor {
     /// list and refused until the app calls [`Executor::settled`] for that change. Simple
     /// values only, so a poisoned lock keeps valid data and is read, never treated as empty.
     changes: Arc<Mutex<HashMap<String, ToolListState>>>,
+    /// Source of generations, shared by all servers and only ever increasing, so a
+    /// server's generation never comes back to an earlier value (not after removal either).
+    generations: Arc<std::sync::atomic::AtomicU64>,
     /// Server ids, sent when a server's tool list changes.
     tool_changes: tokio::sync::broadcast::Sender<String>,
 }
@@ -164,6 +167,7 @@ impl Executor {
             diagnostics: Mutex::default(),
             unavailable: AtomicBool::new(false),
             changes: Arc::default(),
+            generations: Arc::default(),
             tool_changes: tokio::sync::broadcast::channel(TOOL_CHANGES_BUFFER).0,
         }
     }
@@ -203,7 +207,16 @@ impl Executor {
         v
     }
 
-    /// How many times `server_id` has changed its tools. Read it **before** listing them
+    fn generations_snapshot(&self) -> HashMap<String, u64> {
+        self.changes
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+            .map(|(id, st)| (id.clone(), st.generation))
+            .collect()
+    }
+
+    /// The server's change generation (increasing, shared counter). Read it **before** listing them
     /// again, and pass it to [`Self::settled`].
     pub fn tool_list_generation(&self, server_id: &str) -> u64 {
         self.list_state(server_id).generation
@@ -347,12 +360,13 @@ impl Executor {
         // Mark stale and bump the generation first, then tell the app: no call runs on the
         // old list in between, and no approval given before the change carries over.
         let list_states = Arc::clone(&self.changes);
+        let generations = Arc::clone(&self.generations);
         let notices = self.tool_changes.clone();
         client.set_tools_changed(Arc::new(move |server_id: &str| {
             {
                 let mut all = list_states.lock().unwrap_or_else(|p| p.into_inner());
                 let st = all.entry(server_id.to_owned()).or_default();
-                st.generation += 1;
+                st.generation = generations.fetch_add(1, Ordering::SeqCst) + 1;
                 st.stale = true;
             }
             // No receiver yet (tests, start-up): the server stays stale, which is safe.
@@ -376,10 +390,21 @@ impl Executor {
         }
         self.recovering_write(&self.capabilities)
             .retain(|_, c| c.server_id != server_id);
-        self.changes
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .remove(server_id);
+        // Not stale any more, but a new generation: a call resolved before the removal (an
+        // approval card open during a reconnect) can't pass its check afterwards.
+        {
+            let next = self.generations.fetch_add(1, Ordering::SeqCst) + 1;
+            self.changes
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .insert(
+                    server_id.to_owned(),
+                    ToolListState {
+                        generation: next,
+                        stale: false,
+                    },
+                );
+        }
         self.reindex_names();
     }
 
@@ -685,6 +710,9 @@ impl Executor {
         mut cancel: std::pin::Pin<&mut (impl std::future::Future<Output = ()> + Send)>,
     ) -> Result<ToolOutcome, ToolError> {
         self.check_available(&call.name)?;
+        // Read before resolving, so the capability is never older than the generation it is
+        // checked against.
+        let before = self.generations_snapshot();
         let cap = self
             .resolve(&call.name)
             .ok_or_else(|| Self::not_found(&call.name))?;
@@ -692,7 +720,7 @@ impl Executor {
         self.check_available(&call.name)?;
         // The server changed its tools and they aren't reviewed again yet: this call would
         // run on the old definition and approval (#178).
-        let seen = self.tool_list_generation(&cap.server_id);
+        let seen = before.get(&cap.server_id).copied().unwrap_or(0);
         self.check_fresh(&cap.server_id, &cap.spec.id, seen)?;
         let id = cap.spec.id.clone();
         let scope = ctx.scope();
