@@ -11,6 +11,7 @@ import {
   msixVersion,
   renderManifest,
   resolveIdentity,
+  storeBuildEnv,
 } from "./build-msix.mjs";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
@@ -46,6 +47,13 @@ test("bad identity values are refused", () => {
   assert.throws(() => resolveIdentity(placeholders, { MSIX_PUBLISHER: "DigiNote Inc." }), /CN=/);
   assert.throws(() => resolveIdentity(placeholders, { MSIX_IDENTITY_NAME: "has space" }), /identity name/);
   assert.throws(() => resolveIdentity(placeholders, { MSIX_IDENTITY_NAME: "x".repeat(51) }), /identity name/);
+});
+
+test("the app is built as the MSIX distribution, with its licences list", () => {
+  const env = storeBuildEnv({ PATH: "x", DEMIOS_DISTRIBUTION: "direct" });
+  assert.equal(env.DEMIOS_DISTRIBUTION, "msix");
+  assert.equal(env.DEMIOS_REQUIRE_LICENSES, "1");
+  assert.equal(env.PATH, "x");
 });
 
 test("a store build refuses a self-updater", () => {

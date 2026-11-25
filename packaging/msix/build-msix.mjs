@@ -38,10 +38,15 @@ const appDir = join(repoDir, "apps", "desktop");
 
 /**
  * Cargo features a Store build must not contain. The Store updates the app itself, so a
- * self-updater is not allowed in the package. The updater feature's name is agreed with the
- * updater task (#58); keep this list in step with it.
+ * self-updater is not allowed in the package. `updater` is the updater's cargo feature (#58);
+ * apps/desktop/build.rs also refuses it when DEMIOS_DISTRIBUTION=msix.
  */
 export const STORE_FORBIDDEN_FEATURES = ["updater"];
+
+/** The app's build environment for a Store package: tells the app (and its build.rs) it is the MSIX build. */
+export function storeBuildEnv(env = process.env) {
+  return { ...env, DEMIOS_REQUIRE_LICENSES: "1", DEMIOS_DISTRIBUTION: "msix" };
+}
 
 /** The values identity.json ships with; `--store` refuses them. */
 export const PLACEHOLDER_MARK = /placeholder|^CN=0{8}-0{4}-0{4}-0{4}-0{12}$/i;
@@ -224,7 +229,7 @@ function main() {
   if (!args.skipBuild) {
     const build = ["tauri", "build", "--no-bundle"];
     if (args.features.length) build.push("--features", args.features.join(","));
-    run("npx", build, { cwd: appDir, shell: true, env: { ...process.env, DEMIOS_REQUIRE_LICENSES: "1" } });
+    run("npx", build, { cwd: appDir, shell: true, env: storeBuildEnv() });
   }
 
   const target = process.env.CARGO_TARGET_DIR ? resolve(process.env.CARGO_TARGET_DIR) : join(repoDir, "target");

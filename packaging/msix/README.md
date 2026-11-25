@@ -54,7 +54,7 @@ We didn't use the MSIX Packaging Tool. It is a GUI that records an installer run
 The Store updates the app itself. A self-updater in the package is not allowed.
 
 - The updater task (#58) adds the updater behind a build flag that only direct-download builds turn on.
-- `build-msix.mjs` builds with no extra features and refuses the self-update feature (`STORE_FORBIDDEN_FEATURES`, currently `updater`). Keep the name in step with #58.
+- `build-msix.mjs` builds the app with `DEMIOS_DISTRIBUTION=msix` and no extra features, and refuses the `updater` feature (`STORE_FORBIDDEN_FEATURES`). The app's build script also fails when `updater` is on with `DEMIOS_DISTRIBUTION=msix`, so a Store build can't get a self-updater either way.
 - If the updater also needs a `plugins.updater` block in `tauri.conf.json`, the Store build must leave it out or turn it off. Check this when #58 lands.
 
 Artifacts stay off on Windows in this package, as in every Windows build. Threat model R8 (#75) explains why.
