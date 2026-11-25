@@ -576,11 +576,19 @@ function Shell({ api }: { api: Api }) {
         return;
       }
       setProjectDrafts(({ [p.id]: _gone, ...rest }) => rest);
-      const list = await api.listConversations().catch(() => conversations.filter((c) => c.project_id !== p.id));
-      setConversations(list);
       void refreshProjects();
+      // A failed reload shows the list's error with Retry; no guessed list stands in for it.
+      let next: Id | null = null;
+      try {
+        const list = await api.listConversations();
+        setConversations(list);
+        setListState({ kind: "ready" });
+        next = list[0]?.id ?? null;
+      } catch (e) {
+        setListState({ kind: "error", message: errorMessage(e) });
+      }
       const openGone = chatProjectId === p.id;
-      if (openGone || view.kind === "project") void open(openGone ? (list[0]?.id ?? null) : chat.conversationId);
+      if (openGone || view.kind === "project") void open(openGone ? next : chat.conversationId);
       toast({
         tone: "info",
         title:
@@ -601,7 +609,7 @@ function Shell({ api }: { api: Api }) {
         },
       });
     },
-    [api, chat.conversationId, chatProjectId, conversations, open, refreshConversations, refreshProjects, toast, view.kind],
+    [api, chat.conversationId, chatProjectId, open, refreshConversations, refreshProjects, toast, view.kind],
   );
 
   const copyLastAnswer = useCallback(() => {

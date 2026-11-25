@@ -460,11 +460,28 @@ pub async fn add_project_files(
         .pick_files(move |picked| {
             let _ = tx.send(picked);
         });
-    let picked = rx.await.ok().flatten().unwrap_or_default();
-    let paths: Vec<PathBuf> = picked
-        .into_iter()
-        .filter_map(|p| p.into_path().ok())
-        .collect();
+    let picked = rx.await.map_err(|_| {
+        IpcError::new(
+            "internal",
+            "The file picker closed unexpectedly. Try again.",
+        )
+    })?;
+    // `None`: the user closed the picker without choosing.
+    let Some(picked) = picked else {
+        return Ok(AddedFiles {
+            cancelled: true,
+            added: vec![],
+            skipped: vec![],
+        });
+    };
+    let mut paths = Vec::with_capacity(picked.len());
+    for p in picked {
+        // Desktop pickers return paths; anything else is refused, not skipped silently.
+        let path = p.into_path().map_err(|_| {
+            IpcError::invalid("One of the chosen items isn't a file on this computer.")
+        })?;
+        paths.push(path);
+    }
     if paths.is_empty() {
         return Ok(AddedFiles {
             cancelled: true,

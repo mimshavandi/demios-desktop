@@ -1073,6 +1073,20 @@ describe("App", () => {
 });
 
 describe("Projects", () => {
+  it("shows the chat list's error, not a guessed list, if reloading after a project delete fails", async () => {
+    const { api, projects, convs } = fakeApi();
+    projects.push({ id: "p1", name: "Thesis", instructions: "", created_at: 0, updated_at: 0 });
+    convs.push({ id: "c1", title: "In project", model: null, project_id: "p1", created_at: 0, updated_at: 0 });
+    render(<App api={api} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Thesis" }));
+    api.listConversations = async () => {
+      throw { code: "storage", message: "Could not read or write local data." };
+    };
+    fireEvent.click(await screen.findByRole("button", { name: "Delete project" }));
+    expect(await screen.findByText(/Couldn't load chats/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "In project" })).toBeNull();
+  });
+
   it("lists none at first, asks for a name and opens the new project", async () => {
     const { api, projects } = fakeApi();
     render(<App api={api} />);
