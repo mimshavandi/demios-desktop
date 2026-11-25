@@ -296,6 +296,8 @@ impl ProviderAdapter for Gemini {
                             .flatten()
                             .filter_map(|x| x.as_str().map(Into::into))
                             .collect(),
+                        tool_calls: None,
+                        embedding: None,
                     })
                 })
                 .collect())

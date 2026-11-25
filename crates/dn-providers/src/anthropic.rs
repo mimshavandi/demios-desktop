@@ -295,6 +295,8 @@ impl ProviderAdapter for Anthropic {
                         display_name: m["display_name"].as_str().map(Into::into),
                         context_window: None,
                         methods: vec![],
+                        tool_calls: None,
+                        embedding: None,
                     })
                 })
                 .collect())

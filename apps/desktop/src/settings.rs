@@ -146,6 +146,65 @@ pub struct Settings {
     /// counts). Tools that are new or differ always ask until reviewed (T-SHELL-11).
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub reviewed_tools: BTreeMap<String, BTreeMap<String, String>>,
+    /// OpenAI-compatible servers (T-PRV-05); their keys are in the keychain
+    /// ([`RemoteServer::key_id`]). Managed by the server commands.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub remote_servers: Vec<RemoteServer>,
+}
+
+/// An OpenAI-compatible server (Ollama, LM Studio, llama.cpp, vLLM, a hosted gateway). Its
+/// models are `remote:<id>:<model>`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RemoteServer {
+    /// Lowercase letters, digits and `-`; unique; used in model refs.
+    pub id: String,
+    pub name: String,
+    /// Checked by [`dn_providers::check_server_url`] (https, or http for local hosts).
+    pub base_url: String,
+    /// Which server it is (for its thinking switch), detected when added or refreshed.
+    #[serde(default)]
+    pub family: dn_providers::ServerFamily,
+    /// The models it listed when added or last refreshed.
+    #[serde(default)]
+    pub models: Vec<RemoteModel>,
+}
+
+impl RemoteServer {
+    /// The keychain id of its optional key (`provider/remote.<id>`).
+    pub fn key_id(&self) -> String {
+        remote_key_id(&self.id)
+    }
+
+    pub fn model(&self, model_id: &str) -> Option<&RemoteModel> {
+        self.models.iter().find(|m| m.id == model_id)
+    }
+}
+
+pub fn remote_key_id(server_id: &str) -> String {
+    format!("remote.{server_id}")
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RemoteModel {
+    pub id: String,
+    /// Tool calls as the server reports them; `None` when it doesn't say.
+    #[serde(default)]
+    pub tool_calls: Option<bool>,
+    /// The user's answer for a model whose server doesn't say (`None`: not set).
+    #[serde(default)]
+    pub tool_calls_user: Option<bool>,
+    #[serde(default)]
+    pub embedding: bool,
+}
+
+/// Whether `id` can name a remote server.
+pub fn valid_server_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 32
+        && id
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        && !id.starts_with('-')
 }
 
 impl Settings {
@@ -162,6 +221,14 @@ impl Settings {
             s.validate()
                 .map_err(|e| format!("MCP server `{}`: {e}", s.id))?;
         }
+        let mut ids = std::collections::HashSet::new();
+        for r in &self.remote_servers {
+            if !valid_server_id(&r.id) || !ids.insert(r.id.as_str()) {
+                return Err(format!("server id `{}` is invalid or used twice", r.id));
+            }
+            dn_providers::check_server_url(&r.base_url)
+                .map_err(|e| format!("server `{}`: {e}", r.name))?;
+        }
         Ok(())
     }
 
@@ -171,6 +238,7 @@ impl Settings {
         self.mcp_servers = stored.mcp_servers;
         self.tool_overrides = stored.tool_overrides;
         self.reviewed_tools = stored.reviewed_tools;
+        self.remote_servers = stored.remote_servers;
     }
 
     pub fn slot(&self, slot_id: &str) -> Option<ModelRef> {

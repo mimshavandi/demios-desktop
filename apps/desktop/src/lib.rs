@@ -20,6 +20,7 @@ pub mod links;
 pub mod local;
 pub mod mcp;
 pub mod models;
+pub mod remote;
 pub mod secrets;
 pub mod settings;
 pub mod skills;
@@ -249,6 +250,10 @@ pub fn run() {
             commands::update_settings,
             commands::list_models,
             commands::set_provider_key,
+            remote::add_remote_server,
+            remote::refresh_remote_server,
+            remote::remove_remote_server,
+            remote::set_remote_model_tools,
             commands::delete_provider_key,
             commands::restore_provider_key,
             commands::watch_tools,

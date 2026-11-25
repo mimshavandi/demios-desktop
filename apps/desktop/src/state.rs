@@ -233,6 +233,10 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 
 impl AppState {
     pub fn new(conn: Connection, models: ModelRegistry, keys: Keys) -> Self {
+        // The registry serves the OpenAI-compatible servers saved in settings.
+        if let Ok(s) = settings::load(&conn) {
+            models.set_remote_servers(&s.remote_servers);
+        }
         Self {
             db: Mutex::new(conn),
             models,
@@ -390,7 +394,9 @@ impl AppState {
 
     pub fn save_settings(&self, s: &Settings) -> IpcResult<()> {
         s.validate().map_err(IpcError::invalid)?;
-        Ok(settings::save(&*self.db()?, s)?)
+        settings::save(&*self.db()?, s)?;
+        self.models.set_remote_servers(&s.remote_servers);
+        Ok(())
     }
 
     pub fn create_conversation(&self) -> IpcResult<store::Conversation> {
@@ -563,6 +569,15 @@ impl AppState {
         if self.keys.has(HF_TOKEN_PROVIDER_ID).unwrap_or(false) {
             out.push("Hugging Face token".into());
         }
+        for r in self
+            .settings()
+            .map(|s| s.remote_servers)
+            .unwrap_or_default()
+        {
+            if self.keys.has(&r.key_id()).unwrap_or(false) {
+                out.push(format!("{} server key", r.name));
+            }
+        }
         let servers = self.settings().map(|s| s.mcp_servers).unwrap_or_default();
         let mut ids = mcp_secret_ids(&servers);
         if let Ok(db) = self.db()
@@ -597,12 +612,18 @@ impl AppState {
         let mut failed = Vec::new();
         // MCP secrets: those the saved servers name, plus every id ever written (servers
         // removed earlier). If settings can't be read, report it: their secrets may remain.
-        let mut mcp_ids = match self.settings() {
-            Ok(s) => mcp_secret_ids(&s.mcp_servers),
+        let (mut mcp_ids, remote_key_ids) = match self.settings() {
+            Ok(s) => (
+                mcp_secret_ids(&s.mcp_servers),
+                s.remote_servers
+                    .iter()
+                    .map(|r| r.key_id())
+                    .collect::<Vec<_>>(),
+            ),
             Err(e) => {
                 eprintln!("could not read settings: {}", e.message);
-                failed.push("tool-server sign-ins (settings unreadable)");
-                Vec::new()
+                failed.push("tool-server sign-ins and server keys (settings unreadable)");
+                (Vec::new(), Vec::new())
             }
         };
         match self
@@ -623,6 +644,8 @@ impl AppState {
         let mut keys_ok = true;
         let mut provider_ids: Vec<&str> = crate::models::PROVIDERS.iter().map(|p| p.id).collect();
         provider_ids.push(HF_TOKEN_PROVIDER_ID);
+        // Keys of OpenAI-compatible servers (removing a server deletes its key at once).
+        provider_ids.extend(remote_key_ids.iter().map(String::as_str));
         for id in provider_ids {
             if let Err(e) = self.keys.delete(id) {
                 eprintln!("could not delete the `{id}` key: {e}");
@@ -658,6 +681,9 @@ impl AppState {
                 if let Err(e) = &artifacts {
                     eprintln!("could not delete artifacts: {e}");
                     failed.push("artifacts");
+                }
+                if r.is_ok() {
+                    self.models.set_remote_servers(&[]);
                 }
                 if let Err(e) = r {
                     eprintln!("could not clear the database: {e}");
