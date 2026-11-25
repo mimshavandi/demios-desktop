@@ -56,6 +56,8 @@
     "allow-watch-local-models",
     "allow-download-model",
     "allow-pause-download",
+    "allow-check-for-update",
+    "allow-install-update",
     "core:window:allow-start-dragging"
   ]
 }

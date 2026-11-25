@@ -95,6 +95,23 @@ macOS has no WebDriver for WKWebView, so run this before every release, on a sig
 - [ ] Network stays off: in the frame console, `fetch("https://example.com")` is blocked by CSP. **Allow network for this artifact** asks a second time before it turns on.
 - [ ] Links in answers don't navigate the window (the navigation guard logs "blocked navigation").
 
+## Preview builds (unsigned)
+For testing real models before releases are signed (#51). The `preview` workflow (`.github/workflows/preview.yml`) makes a release build for Apple silicon: `tauri build`, with local inference (llama.cpp + Metal) on, no dev fake model and no e2e flags. A step checks that the binary contains no dev-only strings. The build is **not signed or notarized** and **not published**: it's a workflow artifact, kept 14 days and visible to repo collaborators only.
+
+- **Run it:** Actions › preview › Run workflow (on any branch), or push a tag `preview-*`. From a terminal: `gh workflow run preview --ref <branch>`.
+- **Get it:** the run's Artifacts list has `Demios-Desktop-<version>-preview-<sha>-macos-arm64` (a `.dmg` and an `.app.zip`), or use `gh run download <run-id>`. The run summary lists the commit, version and sizes. Settings › General › About shows "Preview build (unsigned), commit <sha>".
+- **Open it:** macOS blocks unsigned apps the first time. Right-click (Control-click) the app › **Open** › **Open**. On macOS 15 and later, if there is no Open button, try to open the app once, then use **System Settings › Privacy & Security › Open Anyway**. Or run `xattr -dr com.apple.quarantine "/Applications/Demios Desktop.app"`.
+- **Expected:** `codesign -dv` reports an ad-hoc signature (or none), and `spctl -a -vv` reports *rejected*. Keychain prompts name the app as unsigned, and you'll be asked again after each new build.
+
+Real-model checklist (#51), on the preview build:
+- [ ] Models › download a small model from the built-in list. Pause and resume three times: it resumes from where it stopped and ends **Ready** (checksum verified).
+- [ ] Start a download, quit (⌘Q) mid-download, relaunch: the row is **Paused** at its size, and Resume finishes it.
+- [ ] Chat with it: the answer streams and the model badge says **On this device**.
+- [ ] Switch models while a reply is streaming: the reply finishes on the old model, and memory (Activity Monitor) drops once it ends, with no second copy of the weights.
+- [ ] With nothing streaming, switch models five times: memory stays at one model's footprint.
+- [ ] Two chats on one local model: sending in the second while the first streams says the model is **busy**, without a crash or a mixed-up answer.
+- [ ] Hugging Face: Add from Hugging Face › search a GGUF repo › pull a quant. It downloads, verifies and chats. A gated repo asks for access or a token. A `demios://models/add` link opens the add screen.
+
 ## demios:// links: manual checks per OS (T-INF-12)
 
 These need an installed build, so CI can't run them. On every OS, open these from a browser or terminal:

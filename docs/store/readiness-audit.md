@@ -75,7 +75,7 @@ Targets: **MD** macOS direct, **MS** Microsoft Store, **WD** Windows direct, **F
   - Hugging Face, to list and download models (model files are fetched straight from `huggingface.co` or an `HF_ENDPOINT` mirror);
   - MCP HTTP servers and their OAuth servers;
   - MCP stdio servers the user installed, which run locally and may reach the network on their own.
-- **Later:** the update check, once T-STORE-08 lands, for direct downloads only.
+- **Direct downloads only:** the update check and the update download from GitHub Releases, when the user asks ([updates.md](updates.md)). MSIX and Flatpak builds have no updater.
 - **Store forms:** the Microsoft Store privacy and data answers can say "no data collected by the developer". The policy must still describe these user-started third-party flows.
 
 ## Verdict per target
