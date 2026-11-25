@@ -242,6 +242,12 @@ kbd { font-family: var(--dn-font-sans); font-size: var(--dn-text-xs); color: var
 .conv.active .conv-open { color: var(--dn-color-text); }
 .conv-delete { opacity: 0; }
 .conv:hover .conv-delete, .conv:focus-within .conv-delete { opacity: 1; }
+.group-head { display: flex; align-items: center; justify-content: space-between; padding-right: var(--dn-space-1); }
+.group-head .group { padding-right: 0; }
+.group-empty { padding: 0 var(--dn-space-2) var(--dn-space-2); }
+.project-open { display: flex; align-items: center; gap: var(--dn-space-2); }
+.project-open svg { flex: none; }
+.project-open-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .sidebar-foot { display: grid; gap: calc(var(--dn-space-1) / 2); padding-top: var(--dn-space-2); border-top: 1px solid var(--dn-color-border); }
 
 /* ---------- chat ---------- */
@@ -562,3 +568,33 @@ pre.code .code-copy { position: absolute; top: var(--dn-space-1); right: var(--d
 @media (prefers-reduced-motion: reduce) {
   .caret, .dn-skeleton, .dn-spin, .dn-toast, .dn-dialog, .dn-dialog-overlay { animation: none !important; }
 }
+
+/* ---------- projects (T-PRJ-01) ---------- */
+.project-head { display: flex; align-items: center; justify-content: space-between; gap: var(--dn-space-3); }
+.project-title { min-width: 0; overflow-wrap: anywhere; }
+.project-title:focus { outline: none; }
+.project-title:focus-visible { outline: 2px solid var(--dn-color-focus); outline-offset: 2px; }
+.project-form { gap: var(--dn-space-3); }
+.project-form-actions { display: flex; align-items: center; justify-content: flex-end; gap: var(--dn-space-3); }
+.project-instructions {
+  width: 100%; min-height: 8rem; padding: var(--dn-space-2) var(--dn-space-3); resize: vertical;
+  border: 1px solid var(--dn-color-border-strong); border-radius: var(--dn-radius-md);
+  background: var(--dn-color-surface); color: var(--dn-color-text);
+}
+.project-instructions::placeholder { color: var(--dn-color-text-subtle); }
+.dn-field.is-invalid .project-instructions { border-color: var(--dn-color-danger); }
+.project-section-head { display: flex; align-items: center; justify-content: space-between; gap: var(--dn-space-3); }
+.project-list { list-style: none; margin: var(--dn-space-2) 0 0; padding: 0; display: grid; }
+.project-file { display: flex; align-items: center; gap: var(--dn-space-3); padding: var(--dn-space-2) 0; border-top: 1px solid var(--dn-color-border); }
+.project-file:first-child { border-top: 0; }
+.project-file > svg { flex: none; color: var(--dn-color-text-subtle); }
+.project-file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-chat {
+  width: 100%; min-height: var(--dn-space-8); padding: 0 var(--dn-space-2); border: 0; border-radius: var(--dn-radius-md);
+  background: none; cursor: pointer; text-align: left; color: var(--dn-color-text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.project-chat:hover { background: var(--dn-color-surface-sunken); }
+.project-empty { padding: var(--dn-space-2) 0; }
+.project-skipped { margin: var(--dn-space-1) 0 0; padding-left: var(--dn-space-4); }
+.project-danger .row { border-top: 0; padding: 0; }

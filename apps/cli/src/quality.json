@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "about": "Small quality smoke set for `dn bench --quality` (T-INF-21). Greedy decoding, thinking off. It catches a broken backend, template or quant; it does not rank models.",
+  "items": [
+    { "id": "arith-mul", "prompt": "What is 17 × 23? Answer with just the number.", "check": { "number": 391 } },
+    { "id": "arith-word", "prompt": "A shop sells pens at 3 for 2 euros. How many euros do 12 pens cost? Answer with just the number.", "check": { "number": 8 } },
+    { "id": "sequence", "prompt": "Which number comes next: 2, 6, 12, 20, 30, …? Answer with just the number.", "check": { "number": 42 } },
+    { "id": "minutes", "prompt": "How many minutes are there in 3.5 hours? Answer with just the number.", "check": { "number": 210 } },
+    { "id": "apples", "prompt": "I have 5 apples. I eat 2, then buy twice as many as I have left. How many apples do I have now? Answer with just the number.", "check": { "number": 9 } },
+    { "id": "py-len", "prompt": "What does the Python expression len('hello world') return? Answer with just the number.", "check": { "number": 11 } },
+    { "id": "weekday", "prompt": "If today is Wednesday, which day of the week is it 10 days from today? Answer with one word.", "check": { "any_of": ["saturday"] } },
+    { "id": "gold", "prompt": "What is the chemical symbol for gold? Answer with the symbol only.", "check": { "any_of": ["au"] } },
+    { "id": "capital", "prompt": "What is the capital city of Canada? Answer with one word.", "check": { "any_of": ["ottawa"] } },
+    { "id": "shortest", "prompt": "Tom is taller than Sara. Sara is taller than Lee. Who is the shortest? Answer with one name.", "check": { "any_of": ["lee"] } },
+    { "id": "reverse", "prompt": "Write the word banana backwards, in lowercase, and nothing else.", "check": { "any_of": ["ananab"] } },
+    { "id": "german", "prompt": "Translate \"thank you\" into German. Answer with the translation only.", "check": { "any_of": ["danke"] } },
+    { "id": "json-object", "prompt": "Return only a JSON object with the key \"name\" set to \"Ada\" and the key \"age\" set to 36.", "check": { "json": { "name": "Ada", "age": 36 } } },
+    { "id": "json-primes", "prompt": "Return only a JSON object with the key \"primes\" holding the first four prime numbers as an array.", "check": { "json": { "primes": [2, 3, 5, 7] } } }
+  ]
+}

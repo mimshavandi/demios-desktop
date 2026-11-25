@@ -8,6 +8,8 @@ import type {
   ChatEvent,
   Conversation,
   ModelCatalog,
+  Project,
+  ProjectFile,
   Settings,
   StoredMessage,
   LocalModelEvent,
@@ -54,6 +56,17 @@ Element.prototype.scrollIntoView ??= () => {};
 function fakeApi() {
   const convs: Conversation[] = [];
   const trash: Conversation[] = [];
+  const projects: Project[] = [];
+  const deletedProjects: Project[] = [];
+  const files: ProjectFile[] = [];
+  const removedFiles: ProjectFile[] = [];
+  const created: (string | null)[] = [];
+  const project = {
+    failList: false,
+    pick: [] as { name: string; size: number }[],
+    skipped: [] as { name: string; reason: string }[],
+    updates: [] as [string, string, string][],
+  };
   let approvalSink: ((e: ToolEvent) => void) | null = null;
   const responses: [string, string][] = [];
   const resolved: [string, boolean][] = [];
@@ -167,6 +180,7 @@ function fakeApi() {
       data_dir: "/tmp",
       models_dir: "/tmp/models",
       models_bytes: 4_200_000_000,
+      projects: projects.length,
       keychain: ["OpenAI key"],
     }),
     deleteAllLocalData: async () => {
@@ -174,13 +188,83 @@ function fakeApi() {
       return null;
     },
     listConversations: async () => [...convs],
-    createConversation: async () => {
-      const c = { id: id(), title: "New chat", model: null, created_at: n, updated_at: n };
+    createConversation: async (projectId = null) => {
+      created.push(projectId);
+      const c = { id: id(), title: "New chat", model: null, project_id: projectId, created_at: n, updated_at: n };
       convs.unshift(c);
       msgs.set(c.id, []);
       return c;
     },
     renameConversation: async () => null,
+    listProjects: async () => {
+      if (project.failList) throw { code: "storage", message: "Could not read or write local data." };
+      return projects.map((p) => ({
+        ...p,
+        chats: convs.filter((c) => c.project_id === p.id).length,
+        files: files.filter((f) => f.project_id === p.id).length,
+      }));
+    },
+    createProject: async (name) => {
+      const p = { id: id(), name, instructions: "", created_at: n, updated_at: n };
+      projects.push(p);
+      return p;
+    },
+    updateProject: async (pid, name, instructions) => {
+      project.updates.push([pid, name, instructions]);
+      const p = projects.find((x) => x.id === pid);
+      if (!p) throw { code: "not_found", message: "gone" };
+      Object.assign(p, { name, instructions });
+      return { ...p };
+    },
+    deleteProject: async (pid) => {
+      const i = projects.findIndex((x) => x.id === pid);
+      const [p] = projects.splice(i, 1);
+      if (p) deletedProjects.push(p);
+      const inside = convs.filter((c) => c.project_id === pid);
+      for (const c of inside) {
+        convs.splice(convs.indexOf(c), 1);
+        trash.push(c);
+      }
+      return inside.length;
+    },
+    restoreProject: async (pid) => {
+      const i = deletedProjects.findIndex((x) => x.id === pid);
+      const [p] = deletedProjects.splice(i, 1);
+      if (p) projects.push(p);
+      for (const c of trash.filter((x) => x.project_id === pid)) {
+        trash.splice(trash.indexOf(c), 1);
+        convs.unshift(c);
+      }
+      return null;
+    },
+    listProjectFiles: async (pid) => files.filter((f) => f.project_id === pid),
+    addProjectFiles: async (pid) => {
+      const added = project.pick.map((x) => ({
+        id: id(),
+        project_id: pid,
+        name: x.name,
+        media_type: "text/plain",
+        size: x.size,
+        sha256: "0".repeat(64),
+        source_path: `/home/me/${x.name}`,
+        created_at: n,
+        updated_at: n,
+      }));
+      files.push(...added);
+      return { cancelled: project.pick.length === 0 && project.skipped.length === 0, added, skipped: project.skipped };
+    },
+    removeProjectFile: async (_pid, fid) => {
+      const i = files.findIndex((f) => f.id === fid);
+      const [f] = files.splice(i, 1);
+      if (f) removedFiles.push(f);
+      return null;
+    },
+    restoreProjectFile: async (_pid, fid) => {
+      const i = removedFiles.findIndex((f) => f.id === fid);
+      const [f] = removedFiles.splice(i, 1);
+      if (f) files.push(f);
+      return null;
+    },
     deleteConversation: async (cid) => {
       const i = convs.findIndex((c) => c.id === cid);
       const [c] = convs.splice(i, 1);
@@ -275,6 +359,11 @@ function fakeApi() {
   };
   return {
     api,
+    project,
+    projects,
+    files,
+    created,
+    convs,
     emit: (ev: ChatEvent) => listener?.(ev),
     msgs,
     approve: (e: ToolEvent) => approvalSink?.(e),
@@ -1025,5 +1114,132 @@ describe("App", () => {
     act(() => f.local({ type: "changed", row: { ...base, state: { state: "ready" } } }));
     expect(await screen.findByText("On this device", { selector: ".dn-badge" })).toBeTruthy();
     expect(await screen.findByText("Tiny Model downloaded")).toBeTruthy();
+  });
+});
+
+describe("Projects", () => {
+  it("shows the chat list's error, not a guessed list, if reloading after a project delete fails", async () => {
+    const { api, projects, convs } = fakeApi();
+    projects.push({ id: "p1", name: "Thesis", instructions: "", created_at: 0, updated_at: 0 });
+    convs.push({ id: "c1", title: "In project", model: null, project_id: "p1", created_at: 0, updated_at: 0 });
+    render(<App api={api} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Thesis" }));
+    api.listConversations = async () => {
+      throw { code: "storage", message: "Could not read or write local data." };
+    };
+    fireEvent.click(await screen.findByRole("button", { name: "Delete project" }));
+    expect(await screen.findByText(/Couldn't load chats/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "In project" })).toBeNull();
+  });
+
+  it("lists none at first, asks for a name and opens the new project", async () => {
+    const { api, projects } = fakeApi();
+    render(<App api={api} />);
+    expect(await screen.findByText("Group chats with their own files and instructions.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "New project" }));
+    const name = await screen.findByLabelText("Name");
+    expect(document.activeElement).toBe(name);
+    fireEvent.click(screen.getByRole("button", { name: "Create project" }));
+    expect(await screen.findByText("Enter a name for the project.")).toBeTruthy();
+    expect(projects).toHaveLength(0);
+    fireEvent.change(name, { target: { value: "Thesis" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create project" }));
+    const heading = await screen.findByRole("heading", { level: 1, name: "Thesis" });
+    await waitFor(() => expect(document.activeElement).toBe(heading));
+    expect(await screen.findByRole("button", { name: "Thesis" })).toBeTruthy();
+    expect(screen.getByText("No files yet.")).toBeTruthy();
+  });
+
+  it("shows an error with Retry when projects can't load", async () => {
+    const { api, project } = fakeApi();
+    project.failList = true;
+    render(<App api={api} />);
+    expect(await screen.findByText(/Couldn't load projects/)).toBeTruthy();
+    project.failList = false;
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("Group chats with their own files and instructions.")).toBeTruthy();
+  });
+
+  it("keeps unsaved instructions while a chat is open, then saves them", async () => {
+    const { api, project, projects } = fakeApi();
+    projects.push({ id: "p1", name: "Thesis", instructions: "", created_at: 0, updated_at: 0 });
+    render(<App api={api} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Thesis" }));
+    const box = await screen.findByLabelText("Instructions");
+    fireEvent.change(box, { target: { value: "Cite sources." } });
+    expect(screen.getByText("Unsaved changes")).toBeTruthy();
+    // Look at a chat and come back: the draft is still there.
+    fireEvent.click(screen.getByTestId("new-chat"));
+    fireEvent.click(await screen.findByRole("button", { name: "Thesis" }));
+    expect(((await screen.findByLabelText("Instructions")) as HTMLTextAreaElement).value).toBe("Cite sources.");
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(await screen.findByText("Project saved")).toBeTruthy();
+    expect(project.updates).toEqual([["p1", "Thesis", "Cite sources."]]);
+    expect(screen.queryByText("Unsaved changes")).toBeNull();
+  });
+
+  it("refuses instructions over the limit without calling the backend", async () => {
+    const { api, project, projects } = fakeApi();
+    projects.push({ id: "p1", name: "Thesis", instructions: "", created_at: 0, updated_at: 0 });
+    render(<App api={api} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Thesis" }));
+    fireEvent.change(await screen.findByLabelText("Instructions"), { target: { value: "x".repeat(8001) } });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(await screen.findByText(/Instructions can be at most 8,000 characters/)).toBeTruthy();
+    expect(project.updates).toHaveLength(0);
+  });
+
+  it("starts a chat in the project on the first message", async () => {
+    const { api, projects, created } = fakeApi();
+    projects.push({ id: "p1", name: "Thesis", instructions: "", created_at: 0, updated_at: 0 });
+    render(<App api={api} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Thesis" }));
+    fireEvent.click(await screen.findByRole("button", { name: "New chat" }));
+    const box = await screen.findByLabelText("Message");
+    expect(screen.getByText("Thesis / New chat")).toBeTruthy();
+    fireEvent.change(box, { target: { value: "Outline chapter 2" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    await waitFor(() => expect(created).toEqual(["p1"]));
+    // The chat shows on the project page.
+    fireEvent.click(screen.getByRole("button", { name: "Thesis" }));
+    const list = await screen.findByTestId("project-chats");
+    expect(list.textContent).toContain("Outline chapter 2");
+  });
+
+  it("adds files, reports skipped ones, and removes with Undo", async () => {
+    const { api, project, projects, files } = fakeApi();
+    projects.push({ id: "p1", name: "Thesis", instructions: "", created_at: 0, updated_at: 0 });
+    project.pick = [{ name: "notes.md", size: 2048 }];
+    project.skipped = [{ name: "video.mov", reason: "It's larger than 50 MB." }];
+    render(<App api={api} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Thesis" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Add files" }));
+    expect(await screen.findByText("Added “notes.md”")).toBeTruthy();
+    expect(screen.getByText(/video.mov: It's larger than 50 MB./)).toBeTruthy();
+    expect(screen.getAllByTestId("project-file")).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Remove “notes.md”" }));
+    expect(await screen.findByText("Removed “notes.md”")).toBeTruthy();
+    expect(screen.queryAllByTestId("project-file")).toHaveLength(0);
+    expect(files).toHaveLength(0);
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(screen.getAllByTestId("project-file")).toHaveLength(1));
+  });
+
+  it("deletes a project with its chats and brings both back with Undo", async () => {
+    const { api, projects, convs } = fakeApi();
+    projects.push({ id: "p1", name: "Thesis", instructions: "", created_at: 0, updated_at: 0 });
+    convs.push({ id: "c1", title: "In project", model: null, project_id: "p1", created_at: 0, updated_at: 0 });
+    convs.push({ id: "c2", title: "Loose", model: null, project_id: null, created_at: 0, updated_at: 0 });
+    render(<App api={api} />);
+    expect(await screen.findByRole("button", { name: "In project" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Thesis" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Delete project" }));
+    expect(await screen.findByText("Deleted “Thesis” and its chat")).toBeTruthy();
+    await waitFor(() => expect(screen.queryByRole("button", { name: "In project" })).toBeNull());
+    expect(screen.queryByRole("button", { name: "Thesis" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Loose" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    expect(await screen.findByRole("button", { name: "In project" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Thesis" })).toBeTruthy();
   });
 });

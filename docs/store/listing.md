@@ -1,6 +1,6 @@
 # Store listing copy (draft, T-STORE-12)
 
-**Status: draft for the owner to approve.** It describes only what the current build does (audit S-07: no future functionality in the listing). Update it when a feature ships, not before.
+**Status: draft for the owner to approve.** Store submissions are deferred (see [the store index](README.md)), so for now this copy is used by the installers on GitHub Releases and demios.io. It describes only what the current build does (audit S-07: no future functionality in the listing). Update it when a feature ships, not before.
 
 The same text is in `apps/desktop/tauri.conf.json` (`bundle.shortDescription`, `bundle.longDescription`). Installers (MSI/NSIS properties, DMG, .deb/.rpm) and later MSIX and AppStream metainfo read it from there. Keep both in sync.
 
@@ -36,10 +36,10 @@ These wait until they ship in the build being listed: nothing at the moment.
 
 | Field | Value | Who decides |
 |---|---|---|
-| `copyright` | Copyright © 2026 DigiNote Inc. Licensed under the Apache License 2.0. | Set (owner) |
+| `copyright` | Copyright © 2026 DigiNote, Inc. Licensed under the Apache License 2.0. | Set (owner) |
 | `category` | Productivity | Set |
 | `homepage` | https://github.com/mimshavandi/demios-desktop | Placeholder until the owner supplies a product URL |
-| `publisher` | DigiNote Inc. | Set (owner). Must match the Partner Center publisher for MSIX |
+| `publisher` | DigiNote, Inc. | Set (owner). Must match the Partner Center publisher for MSIX |
 | Support contact | mahdi@demios.io | Set (owner). Listing field only; not in `tauri.conf.json` |
 | Privacy policy URL | https://demios.io/privacy | Set (owner). Listing field only; live once published |
 | Accessibility statement URL | https://demios.io/accessibility | Set (owner). Listing field only; live once published |
