@@ -272,10 +272,12 @@ fn history(
     let fenced = (mode == ArtifactMode::Fenced
         && state.agent.manifest.allows_tool("artifact.create"))
     .then_some(dn_artifacts::protocol::FENCED_INSTRUCTIONS);
+    let project = crate::projects::instructions_for(db, conversation_id)?;
     let system: Vec<&str> = state
         .agent
         .system_prompt()
         .into_iter()
+        .chain(project.as_deref())
         .chain(fenced)
         .collect();
     if !system.is_empty() {
@@ -1245,6 +1247,27 @@ mod tests {
                     .collect::<String>()
             })
             .collect()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn project_instructions_are_sent_with_each_chat_of_the_project() {
+        let rec = Arc::new(Recorder::default());
+        let st = artifact_state("local:scripted", rec.clone(), true);
+        let (inside, outside) = {
+            let db = st.db().unwrap();
+            let p = dn_store::project::create_project(&db, "Thesis").unwrap();
+            dn_store::project::update_project(&db, p.id, "Thesis", "Answer in British English.")
+                .unwrap();
+            (
+                store::create_conversation_in(&db, "New chat", Some(p.id)).unwrap(),
+                store::create_conversation(&db, "New chat").unwrap(),
+            )
+        };
+        turn(&st, inside.id, "hi").await;
+        turn(&st, outside.id, "hi").await;
+        let reqs = rec.requests.lock().unwrap();
+        assert!(system_text(&reqs[0]).contains("Answer in British English."));
+        assert!(!system_text(&reqs[1]).contains("British"));
     }
 
     #[tokio::test(flavor = "multi_thread")]

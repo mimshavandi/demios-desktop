@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-add-project-files"
+description = "Enables the add_project_files command without any pre-configured scope."
+commands.allow = ["add_project_files"]
+
+[[permission]]
+identifier = "deny-add-project-files"
+description = "Denies the add_project_files command without any pre-configured scope."
+commands.deny = ["add_project_files"]
