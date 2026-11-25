@@ -11,6 +11,14 @@ You can do both and switch between them.
 
 The **On this device** card lists 12 open models in a built-in catalogue, from small ones to large ones, including one embedding model.
 
+Under its title, a line says where local models run on this computer:
+
+- **On the graphics card**, with its name and memory. On Windows and Linux this works with NVIDIA, AMD and Intel graphics that have a current driver.
+- **On the built-in graphics**, which share the computer's memory (Apple Silicon Macs, laptops with integrated graphics).
+- **On the processor**, when there is no graphics chip Demios can use (for example in a virtual machine, or without a graphics driver). Models still work, but replies are slower; smaller models are a good fit.
+
+Whether a model fits (below) is worked out for that graphics card or memory.
+
 Each row shows:
 
 - The model's name, its size and quality version (quantisation, such as Q4_K_M) and its download size.
