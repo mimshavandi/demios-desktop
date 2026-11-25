@@ -82,4 +82,8 @@ and can be wrong; the app says so next to the message box.
 - `--share=network`: AI providers, Hugging Face downloads, HTTP MCP servers.
 - `--socket=wayland` and `--socket=fallback-x11`, `--share=ipc`, `--device=dri`: WebKitGTK UI and GPU inference.
 - `--talk-name=org.freedesktop.secrets`: store provider keys in the user's keyring (the keyring library has no Secret-portal support yet).
-- MCP: say plainly which option the build uses (audit S-12). Under option A, local stdio MCP servers outside the sandbox are not available in the Flathub build, and the app says why.
+- `--env=DEMIOS_SKILLS_DIR=/app/share/demios-desktop/skills`: where the bundled agent prompts are installed (not a permission).
+- No `--filesystem`: data stays in `~/.var/app/io.demios.app/`; links open through the OpenURI portal.
+- MCP: the Flathub build connects to remote (HTTPS) tool servers only. It can't start programs on the host and doesn't ask for `org.freedesktop.Flatpak`. The app says so where servers are added (`flatpak` cargo feature, plus a `FLATPAK_ID` check at run time).
+
+The manifest, metainfo and build steps are in [packaging/flatpak/](../../packaging/flatpak/README.md).

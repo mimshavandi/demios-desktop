@@ -48,6 +48,8 @@ jobs:
       # Direct-download builds turn on the signed updater (T-STORE-08).
       - run: cargo clippy -p demios-desktop --all-targets --features updater -- -D warnings
       - run: cargo test -p demios-desktop --features updater
+      # The Flatpak build (packaging/flatpak): remote MCP servers only.
+      - run: cargo test -p demios-desktop --features flatpak
   design-tokens:
     runs-on: ubuntu-latest
     steps:

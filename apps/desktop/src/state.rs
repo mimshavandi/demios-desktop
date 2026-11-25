@@ -857,7 +857,7 @@ impl AppState {
             if !self.local_servers {
                 self.set_mcp_status(status(
                     "failed",
-                    Some("This version of Demios can't start programs on your computer.".into()),
+                    Some(crate::mcp::LOCAL_SERVERS_UNAVAILABLE.into()),
                     0,
                 ));
                 return true;
@@ -1292,6 +1292,8 @@ mod tests {
         let conn = dn_store::open_in_memory(&migration_sets()).unwrap();
         let keys = Keys::memory();
         let mut st = AppState::new(conn, ModelRegistry::default(), keys.clone());
+        // Tests run local (stdio) servers, also in a `--features flatpak` build.
+        st.local_servers = true;
         let ledger = dn_store::open_in_memory(&migration_sets()).unwrap();
         let (gate, _approvals) = dn_tools::ApprovalGate::new(1);
         let exec = Arc::new(dn_tools::Executor::new(
@@ -1407,6 +1409,8 @@ mod tests {
         let conn = dn_store::open_in_memory(&migration_sets()).unwrap();
         let keys = Keys::memory();
         let mut st = AppState::new(conn, ModelRegistry::default(), keys.clone());
+        // Tests run local (stdio) servers, also in a `--features flatpak` build.
+        st.local_servers = true;
         let ledger = dn_store::open_in_memory(&migration_sets()).unwrap();
         let (gate, _approvals) = dn_tools::ApprovalGate::new(1);
         let exec = Arc::new(dn_tools::Executor::new(

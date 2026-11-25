@@ -24,6 +24,9 @@ default = []
 # is on *and* debug assertions are enabled, so a release build never contains it.
 # `npm run dev:app` turns it on.
 dev-fake-model = []
+# Flatpak builds (packaging/flatpak): only remote (HTTP) MCP servers, since the sandbox
+# can't run programs on the host. Also detected at run time from `FLATPAK_ID`.
+flatpak = []
 # Set by `tauri build`: embed the built UI instead of using the dev server.
 custom-protocol = ["tauri/custom-protocol"]
 # T-STORE-08: the signed self-updater. Only direct-download builds (macOS DMG, Windows

@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Demios Desktop
+GenericName=AI Chat
+Comment=Chat with AI models on your own computer, or with your own provider API keys
+Exec=demios-desktop %u
+Icon=io.demios.app
+Terminal=false
+Categories=Utility;Office;
+Keywords=AI;LLM;chat;assistant;llama.cpp;MCP;
+MimeType=x-scheme-handler/demios;
+StartupNotify=true
+StartupWMClass=demios-desktop

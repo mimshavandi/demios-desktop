@@ -20,7 +20,7 @@ What it takes to ship Demios Desktop to its distribution targets: macOS direct d
 | T-STORE-03 | Windows Authenticode signing hook (`bundle.windows.signCommand`, timestamp) for MSI/NSIS | S-02 | Certificate or cloud signing (to run it) |
 | T-STORE-04 | MSIX packaging: manifest template, capabilities (`runFullTrust`, `internetClient`), identity filled in at build time, tile assets, clean-VM test | S-03, S-17, S-24 (assets) | Partner Center name reservation (to run it) |
 | T-STORE-05 | Privacy policy draft (data-collection declaration, network flows, data paths per OS) and a link in Settings › About | S-04, S-27 (docs) | Owner approves the text and the hosting URL |
-| T-STORE-06 | Flatpak manifest, AppStream metainfo (OARS, releases, screenshots), `.desktop` file, minimal `finish-args` | S-05, S-06, S-13, S-14, S-20 (OARS) | App id decision (new D-###) |
+| T-STORE-06 | Flatpak manifest, AppStream metainfo (OARS, releases, screenshots), `.desktop` file, minimal `finish-args`. In [packaging/flatpak/](../../packaging/flatpak/README.md); submission is the owner's | S-05, S-06, S-13, S-14, S-20 (OARS) | App id `io.demios.app` (decided); owner submits |
 | T-STORE-07 | Third-party licence notices generated at build time, plus an "Open-source licences" view | S-09 | Lead approves the notice tool |
 | T-STORE-08 | Signed Tauri updater behind an `updater` feature, direct builds only, private key in CI secrets | S-10 | Lead approves the dependency; owner picks the update host |
 | T-STORE-09 | AI disclosure line, per-message provenance, machine-readable "AI-generated" marking on exports and artifacts, `docs/ai-literacy.md` | S-11 | Owner/legal view on provider vs deployer |

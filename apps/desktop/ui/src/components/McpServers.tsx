@@ -524,7 +524,7 @@ function ServerForm({
           Remote (an HTTPS address)
         </label>
         {!localAllowed && (
-          <p className="dn-help">This version of Demios can't start programs on your computer, so only remote servers work.</p>
+          <p className="dn-help">The Flatpak version of Demios runs in a sandbox and can't start programs on your computer, so only remote (HTTPS) servers work.</p>
         )}
       </fieldset>
 
