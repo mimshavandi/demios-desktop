@@ -231,6 +231,20 @@ jobs:
           & $p --root $root --accept-licenses --default-answer --confirm-command install | Out-Host
           "VULKAN_SDK=$root" | Out-File -FilePath $env:GITHUB_ENV -Append
           "$root\Bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+      # llama.cpp's Vulkan shader generator is a nested CMake project; with the Visual Studio
+      # generator, MSBuild runs its install step before its build finishes. Ninja inside the
+      # MSVC developer environment builds it in order (and faster).
+      - name: MSVC developer environment and Ninja for CMake
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          cmd /c "`"$vs\VC\Auxiliary\Build\vcvars64.bat`" > nul && set" | ForEach-Object {
+            if ($_ -match '^([^=]+)=(.*)$') { "$($matches[1])=$($matches[2])" | Out-File -FilePath $env:GITHUB_ENV -Append }
+          }
+          if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) { choco install ninja -y --no-progress | Out-Host }
+          "CMAKE_GENERATOR=Ninja" | Out-File -FilePath $env:GITHUB_ENV -Append
       - &vulkan-loader
         name: Vulkan loader (pinned Khronos release, shipped next to the app)
         shell: bash
@@ -364,6 +378,8 @@ jobs:
       - name: Vulkan SDK (pinned, checksum verified)
         run: |
           set -euo pipefail
+          # The loader's window-system support (xcb, xlib, xrandr, wayland) needs their headers.
+          sudo apt-get install -y libx11-dev libxcb1-dev libxrandr-dev libwayland-dev
           f="vulkansdk-linux-x86_64-$VULKAN_SDK_VERSION.tar.xz"
           curl -sSfL -o "$RUNNER_TEMP/$f" "https://sdk.lunarg.com/sdk/download/$VULKAN_SDK_VERSION/linux/$f"
           echo "$VULKAN_SDK_SHA256_LINUX  $RUNNER_TEMP/$f" | sha256sum -c -
