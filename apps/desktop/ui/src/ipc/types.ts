@@ -55,11 +55,13 @@ export interface SkillInfo {
   source: "builtin" | "user";
 }
 
-/** A file in the user's skills folder that didn't load (skills.rs `SkillProblem`). */
+/** A skill file that didn't load (skills.rs `SkillProblem`). */
 export interface SkillProblem {
-  /** Relative to the skills folder, e.g. `my-skill/SKILL.md`. */
+  /** Relative to its skills folder, e.g. `my-skill/SKILL.md`. */
   file: string;
   message: string;
+  /** `builtin`: a file shipped with the app is broken (report it); `user`: the user's own. */
+  source: "builtin" | "user";
 }
 
 /** Settings › Skills (skills.rs `SkillsOverview`). */

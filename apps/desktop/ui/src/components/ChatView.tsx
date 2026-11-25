@@ -335,8 +335,15 @@ function SkillPicker({
         ]}
         onValueChange={(v) => onChange(v === "" ? null : v)}
       />
+      {value !== null && chosen === undefined && (
+        <span className="composer-skill-missing" role="status" data-testid="skill-missing">
+          “{value}” isn't available
+        </span>
+      )}
       <span id="composer-skill-d" className="dn-visually-hidden">
-        {chosen === undefined
+        {value !== null && chosen === undefined
+          ? `The skill “${value}” chosen for this chat was removed or didn't load. Choose another skill or No skill.`
+          : chosen === undefined
           ? "Skills change how the assistant works in this chat. They never skip a tool approval."
           : `${chosen.description} Applies from the next answer. It never skips a tool approval.`}
       </span>

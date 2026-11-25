@@ -261,16 +261,15 @@ pub async fn list_answer_skills(
     .await
 }
 
-/// The skill a chat uses, or `null`. A saved skill that is no longer in the library reads
-/// as `null`.
+/// The skill a chat uses, or `null`. A saved skill that is no longer in the library is
+/// still returned, so the composer can say it is missing (sending then fails clearly).
 #[tauri::command]
 pub async fn get_chat_skill(
     state: AppStateRef<'_>,
     conversation_id: Id,
 ) -> IpcResult<Option<String>> {
     blocking(&state, move |s| {
-        let name = crate::skills::chat_skill(&*s.db()?, conversation_id)?;
-        Ok(name.filter(|n| s.skills.get(n).is_some()))
+        Ok(crate::skills::chat_skill(&*s.db()?, conversation_id)?)
     })
     .await
 }

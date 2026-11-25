@@ -179,6 +179,8 @@ pub fn send(
     let (user, assistant, title, history, skill) = {
         let db = state.db()?;
         let conv = store::get_conversation(&db, conversation_id)?;
+        // Before any write: a chat whose skill is gone stops here with a clear message.
+        let skill = turn_skill(state, &db, conversation_id)?;
         let title = (conv.title == DEFAULT_TITLE).then(|| title_from(&text));
         if let Some(t) = &title {
             store::rename_conversation(&db, conversation_id, t)?;
@@ -190,7 +192,6 @@ pub fn send(
             conversation_id,
             NewMessage::assistant_placeholder(Some(model.to_string())),
         )?;
-        let skill = turn_skill(state, &db, conversation_id)?;
         if let Some(s) = &skill {
             crate::skills::record_answer_skill(&db, conversation_id, assistant.id, s)?;
         }
@@ -243,6 +244,7 @@ pub fn regenerate(
             .iter()
             .rposition(|m| m.role == Role::User)
             .ok_or_else(|| IpcError::invalid("Nothing to regenerate."))?;
+        let skill = turn_skill(state, &db, conversation_id)?;
         if let Some(after) = msgs.get(last_user + 1) {
             store::truncate_from(&db, conversation_id, after.id)?;
         }
@@ -252,7 +254,6 @@ pub fn regenerate(
             conversation_id,
             NewMessage::assistant_placeholder(Some(model.to_string())),
         )?;
-        let skill = turn_skill(state, &db, conversation_id)?;
         if let Some(s) = &skill {
             crate::skills::record_answer_skill(&db, conversation_id, assistant.id, s)?;
         }
@@ -297,7 +298,19 @@ fn turn_skill(
     db: &dn_store::Connection,
     conversation_id: Id,
 ) -> IpcResult<Option<Arc<Skill>>> {
-    Ok(crate::skills::chat_skill(db, conversation_id)?.and_then(|n| state.skills.get(&n)))
+    let Some(name) = crate::skills::chat_skill(db, conversation_id)? else {
+        return Ok(None);
+    };
+    // A skill that was removed or stopped loading never silently turns into "no skill".
+    state.skills.get(&name).map(Some).ok_or_else(|| {
+        IpcError::new(
+            "skill_unavailable",
+            format!(
+                "The skill \"{name}\" chosen for this chat isn't available any more. Choose \
+                 another skill, or No skill, in the message box."
+            ),
+        )
+    })
 }
 
 /// Whether this turn may make artifacts: the agent manifest allows it and so does the
@@ -308,14 +321,11 @@ fn artifacts_allowed(state: &AppState, skill: Option<&Skill>) -> bool {
 }
 
 /// Model-facing tool name → capability id: artifact tools by name, MCP tools through the
-/// executor (read live). Without an executor (tests) the name is the id.
+/// executor (read live). A name neither knows resolves to nothing, so `Narrowed` refuses it.
 fn tool_resolver(state: &AppState) -> CapabilityResolver {
     let mcp = state.executor.as_ref().map(|e| e.capability_resolver());
     Arc::new(move |name: &str| {
-        crate::artifacts::capability_id(name).or_else(|| match &mcp {
-            Some(resolve) => resolve(name),
-            None => Some(name.to_owned()),
-        })
+        crate::artifacts::capability_id(name).or_else(|| mcp.as_ref().and_then(|r| r(name)))
     })
 }
 
@@ -1405,13 +1415,27 @@ mod tests {
             call_tool: true,
             ..Default::default()
         });
-        let (st, conv) = skill_state(rec.clone(), true, &["calc"]);
+        let (st, conv) = skill_state(rec.clone(), true, &["artifact.create"]);
         turn(&st, conv, "make a page").await;
         let reqs = rec.requests.lock().unwrap();
         let names: Vec<&str> = reqs[0].tools.iter().map(|t| t.name.as_str()).collect();
-        assert_eq!(names, ["calc"], "artifact tools are outside the skill");
+        // Only the listed tool: not the other artifact tools, not `calc`.
+        assert_eq!(names, ["artifact_create"]);
         assert!(system_text(&reqs[0]).contains("Answer in bullet points."));
-        // The model's call to a tool outside the skill was refused, not run.
+        // The listed tool ran.
+        assert_eq!(crate::artifacts::list(&st, conv).unwrap().len(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_call_outside_the_skill_is_refused_not_run() {
+        let rec = Arc::new(Recorder {
+            call_tool: true,
+            ..Default::default()
+        });
+        // `calc` isn't a tool the app can resolve: listing it doesn't make it available.
+        let (st, conv) = skill_state(rec.clone(), true, &["calc"]);
+        turn(&st, conv, "make a page").await;
+        assert!(rec.requests.lock().unwrap()[0].tools.is_empty());
         assert!(crate::artifacts::list(&st, conv).unwrap().is_empty());
         let msgs = store::list_messages(&st.db().unwrap(), conv).unwrap();
         let tool = msgs
@@ -1419,6 +1443,27 @@ mod tests {
             .find(|m| m.role == Role::Tool)
             .expect("tool row");
         assert!(tool.text().contains("isn't available"), "{}", tool.text());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_chat_whose_skill_is_gone_fails_clearly_and_writes_nothing() {
+        let rec = Arc::new(Recorder::default());
+        let (st, conv) = skill_state(rec.clone(), true, &[]);
+        crate::skills::set_chat_skill(&st.db().unwrap(), conv, Some("removed")).unwrap();
+        let (_e, s) = sink();
+        let err = send(&st, conv, "hi".into(), s).unwrap_err();
+        assert_eq!(err.code, "skill_unavailable");
+        assert!(err.message.contains("\"removed\""), "{}", err.message);
+        assert!(
+            store::list_messages(&st.db().unwrap(), conv)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(rec.requests.lock().unwrap().is_empty());
+        // The chat isn't stuck: choosing no skill sends normally.
+        crate::skills::set_chat_skill(&st.db().unwrap(), conv, None).unwrap();
+        turn(&st, conv, "hi").await;
+        assert_eq!(rec.requests.lock().unwrap().len(), 1);
     }
 
     #[tokio::test(flavor = "multi_thread")]

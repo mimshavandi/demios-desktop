@@ -822,6 +822,15 @@ describe("App", () => {
     await waitFor(() => expect(screen.queryByText("Did this go through?")).toBeNull());
   });
 
+  it("says when the chat's saved skill is no longer available instead of hiding it", async () => {
+    const f = fakeApi();
+    const c = await f.api.createConversation();
+    f.chatSkills.set(c.id, "removed-skill");
+    render(<App api={f.api} />);
+    expect((await screen.findByTestId("skill-missing")).textContent).toContain("“removed-skill” isn't available");
+    expect(document.getElementById("composer-skill-d")?.textContent).toContain("Choose another skill or No skill");
+  });
+
   it("shows the skill each answer was written with, also after the chat's skill changed", async () => {
     const f = fakeApi();
     const c = await f.api.createConversation();

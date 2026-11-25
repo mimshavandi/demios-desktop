@@ -45,12 +45,14 @@ pub struct SkillInfo {
     pub source: SkillSource,
 }
 
-/// A user skill file that didn't load, and why.
+/// A skill file that didn't load, and why.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct SkillProblem {
-    /// The file, relative to the user's skills folder (`my-skill/SKILL.md`).
+    /// The file, relative to its skills folder (`my-skill/SKILL.md`).
     pub file: String,
     pub message: String,
+    /// Shipped with the app (a broken build) or the user's own file.
+    pub source: SkillSource,
 }
 
 /// What Settings shows: every skill, the files that didn't load, and the folder.
@@ -124,17 +126,16 @@ impl Library {
         lib
     }
 
-    /// Built-in skills only, without folders (tests).
+    /// Built-in skills only, without folders (tests). A bad allowlist panics.
     pub fn from_skills(skills: Vec<ChatSkill>) -> Self {
         let mut loaded = Loaded::default();
         for s in skills {
-            if let Ok(allow) = ToolAllowlist::new(&s.allowed_tools) {
-                loaded.skills.push(Arc::new(Skill {
-                    skill: s,
-                    allow,
-                    source: SkillSource::Builtin,
-                }));
-            }
+            let allow = ToolAllowlist::new(&s.allowed_tools).expect("valid allowed-tools");
+            loaded.skills.push(Arc::new(Skill {
+                skill: s,
+                allow,
+                source: SkillSource::Builtin,
+            }));
         }
         Self {
             loaded: RwLock::new(Arc::new(loaded)),
@@ -146,10 +147,14 @@ impl Library {
     pub fn reload(&self) {
         let mut out = Loaded::default();
         if let Some(dir) = self.bundled.as_deref().filter(|d| d.is_dir()) {
+            // A broken built-in file is a broken build: Settings shows it like a user file's
+            // problem instead of the skill just missing.
             let (skills, errors) = dn_agent::chat_skill::load_dir(dir);
-            for e in errors {
+            for e in &errors {
                 eprintln!("could not load a built-in skill: {e}");
             }
+            out.problems
+                .extend(errors.iter().map(|e| problem(dir, e, SkillSource::Builtin)));
             for s in skills {
                 match ToolAllowlist::new(&s.allowed_tools) {
                     Ok(allow) => out.skills.push(Arc::new(Skill {
@@ -157,19 +162,25 @@ impl Library {
                         allow,
                         source: SkillSource::Builtin,
                     })),
-                    Err(e) => eprintln!("could not load the built-in skill `{}`: {e}", s.name),
+                    Err(message) => out.problems.push(SkillProblem {
+                        file: format!("{}/{}", s.name, dn_agent::chat_skill::SKILL_FILE),
+                        message,
+                        source: SkillSource::Builtin,
+                    }),
                 }
             }
         }
         if let Some(dir) = self.user.as_deref().filter(|d| d.is_dir()) {
             let (skills, errors) = dn_agent::chat_skill::load_dir(dir);
-            out.problems.extend(errors.iter().map(|e| problem(dir, e)));
+            out.problems
+                .extend(errors.iter().map(|e| problem(dir, e, SkillSource::User)));
             let mut taken = 0;
             for s in skills {
                 let file = format!("{}/{}", s.name, dn_agent::chat_skill::SKILL_FILE);
                 if out.skills.iter().any(|b| b.skill.name == s.name) {
                     out.problems.push(SkillProblem {
                         file,
+                        source: SkillSource::User,
                         message: format!(
                             "A built-in skill is already called \"{}\". Rename the folder and \
                              the name in the file.",
@@ -181,6 +192,7 @@ impl Library {
                 if taken == MAX_USER_SKILLS {
                     out.problems.push(SkillProblem {
                         file,
+                        source: SkillSource::User,
                         message: format!("Only {MAX_USER_SKILLS} of your skills can load."),
                     });
                     continue;
@@ -195,21 +207,21 @@ impl Library {
                             source: SkillSource::User,
                         }));
                     }
-                    Err(message) => out.problems.push(SkillProblem { file, message }),
+                    Err(message) => out.problems.push(SkillProblem {
+                        file,
+                        message,
+                        source: SkillSource::User,
+                    }),
                 }
             }
         }
         out.problems.sort_by(|a, b| a.file.cmp(&b.file));
-        if let Ok(mut l) = self.loaded.write() {
-            *l = Arc::new(out);
-        }
+        // A panic elsewhere while holding the lock doesn't make the data wrong: keep using it.
+        *self.loaded.write().unwrap_or_else(|p| p.into_inner()) = Arc::new(out);
     }
 
     fn current(&self) -> Arc<Loaded> {
-        self.loaded
-            .read()
-            .map(|l| Arc::clone(&l))
-            .unwrap_or_default()
+        Arc::clone(&self.loaded.read().unwrap_or_else(|p| p.into_inner()))
     }
 
     pub fn list(&self) -> Vec<SkillInfo> {
@@ -240,7 +252,7 @@ impl Library {
 
 /// A load error as Settings shows it: the file relative to the folder, and each problem
 /// with the field it is about.
-fn problem(dir: &Path, e: &ManifestError) -> SkillProblem {
+fn problem(dir: &Path, e: &ManifestError, source: SkillSource) -> SkillProblem {
     let file = e
         .file
         .strip_prefix(dir)
@@ -256,7 +268,11 @@ fn problem(dir: &Path, e: &ManifestError) -> SkillProblem {
         })
         .collect::<Vec<_>>()
         .join("; ");
-    SkillProblem { file, message }
+    SkillProblem {
+        file,
+        message,
+        source,
+    }
 }
 
 /// App-owned tables: the skill each chat uses (no row = no skill), and the skill each
@@ -522,6 +538,22 @@ mod tests {
         assert!(msg("empty/SKILL.md").contains("front matter"));
         // The built-in skill of that name is the one in use.
         assert_eq!(lib.get("summarize").unwrap().source, SkillSource::Builtin);
+    }
+
+    #[test]
+    fn a_broken_built_in_skill_is_reported_not_just_missing() {
+        let root = Folder::new();
+        root.write("library/fine", &file("fine", "[]", ""));
+        root.write("library/broken", &file("broken", "[]", "risk: read\n"));
+        let lib = Library::load(Some(&root.0), None);
+        assert!(lib.get("fine").is_some());
+        assert!(lib.get("broken").is_none());
+        let p = &lib.overview().problems;
+        assert_eq!(p.len(), 1);
+        assert_eq!(
+            (p[0].file.as_str(), p[0].source),
+            ("broken/SKILL.md", SkillSource::Builtin)
+        );
     }
 
     #[test]

@@ -465,7 +465,7 @@ export function createMockApi(): Api {
       structuredClone(answerSkills.filter((a) => msgs.get(cid)?.some((m) => m.id === a.message_id))),
     skillsOverview: async () => ({
       skills: structuredClone(skills),
-      problems: [{ file: "my-skill/SKILL.md", message: "name: `My Skill` must be lowercase letters, digits and single hyphens" }],
+      problems: [{ file: "my-skill/SKILL.md", message: "name: `My Skill` must be lowercase letters, digits and single hyphens", source: "user" }],
       folder: "~/.local/share/demios/skills",
     }),
     reloadSkills: async () => ({ skills: structuredClone(skills), problems: [], folder: "~/.local/share/demios/skills" }),
