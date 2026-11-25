@@ -160,6 +160,13 @@ pub fn allowed_navigation(url: &tauri::Url) -> bool {
         && matches!(url.path(), "/host/" | "/frame/")
 }
 
+/// Whether a `/host/` request may be answered: on Windows, from the artifact webview, on the
+/// artifact origin (in either of the forms wry may pass: `artifact://localhost` or
+/// `http://artifact.localhost`).
+fn host_request_allowed(windows: bool, webview_label: &str, uri: &tauri::http::Uri) -> bool {
+    windows && webview_label == LABEL && crate::artifacts::is_frame_origin(uri)
+}
+
 fn valid_token(t: &str) -> bool {
     (32..=128).contains(&t.len()) && t.bytes().all(|b| b.is_ascii_hexdigit())
 }
@@ -430,10 +437,13 @@ pub fn host_response<R: tauri::Runtime>(
     if !path.starts_with("/host/") {
         return None;
     }
-    if !cfg!(windows) || webview_label != LABEL || req.uri().host() != Some("artifact.localhost") {
+    let state = app.state::<ChildState>();
+    if !host_request_allowed(cfg!(windows), webview_label, req.uri()) {
+        if webview_label == LABEL {
+            state.note(format!("refused {} {path}", req.method()));
+        }
         return Some(empty(StatusCode::NOT_FOUND));
     }
-    let state = app.state::<ChildState>();
     let get = req.method() == tauri::http::Method::GET;
     let post = req.method() == tauri::http::Method::POST;
     let response = match path {
@@ -675,6 +685,42 @@ mod tests {
         assert!(!ok("http://artifact.localhost:8080/host/"));
         assert!(!ok("https://example.com/host/"));
         assert!(!ok("artifact://localhost/host/"));
+    }
+
+    #[test]
+    fn host_routes_answer_only_the_artifact_webview_on_its_origin() {
+        let uri = |u: &str| u.parse::<tauri::http::Uri>().unwrap();
+        // wry on WebView2 passes the reverted `artifact://localhost` form (the e2e-windows bug).
+        assert!(host_request_allowed(
+            true,
+            LABEL,
+            &uri("artifact://localhost/host/")
+        ));
+        assert!(host_request_allowed(
+            true,
+            LABEL,
+            &uri("http://artifact.localhost/host/doc?seq=1")
+        ));
+        assert!(!host_request_allowed(
+            true,
+            "main",
+            &uri("artifact://localhost/host/")
+        ));
+        assert!(!host_request_allowed(
+            false,
+            LABEL,
+            &uri("artifact://localhost/host/")
+        ));
+        assert!(!host_request_allowed(
+            true,
+            LABEL,
+            &uri("artifact://evil/host/")
+        ));
+        assert!(!host_request_allowed(
+            true,
+            LABEL,
+            &uri("http://tauri.localhost/host/")
+        ));
     }
 
     #[test]

@@ -64,8 +64,10 @@ pub fn is_frame_path(path: &str) -> bool {
 }
 
 /// Whether the request is for the artifact origin itself: `artifact://localhost` (macOS, Linux)
-/// or `http://artifact.localhost` (Windows).
-fn is_frame_origin(uri: &tauri::http::Uri) -> bool {
+/// or `http://artifact.localhost` (Windows). On Windows wry hands the scheme handler the
+/// `artifact://localhost/…` form (it undoes its `http://artifact.localhost` workaround first), so
+/// both forms can reach a handler.
+pub fn is_frame_origin(uri: &tauri::http::Uri) -> bool {
     matches!(
         (uri.scheme_str(), uri.host()),
         (Some(SCHEME), Some("localhost")) | (Some("http"), Some("artifact.localhost"))
