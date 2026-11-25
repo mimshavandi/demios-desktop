@@ -94,6 +94,7 @@ export function createMockApi(): Api {
       state: { state: "ready" },
       fit: fit("ready", "Fits this computer with room to spare.", false),
       traits: { kind: "chat", tool_support: "supported", source: "header", label: "Chat · Tools" },
+      remove_blocked: null,
     },
     {
       id: "llama-3.2-3b-instruct-q4_k_m",
@@ -113,6 +114,7 @@ export function createMockApi(): Api {
       state: { state: "not_downloaded" },
       fit: fit("ready", "Fits this computer with room to spare."),
       traits: { kind: "chat", tool_support: "supported", source: "header", label: "Chat · Tools" },
+      remove_blocked: null,
     },
     {
       id: "example-70b-nc",
@@ -132,6 +134,7 @@ export function createMockApi(): Api {
       state: { state: "failed", message: "Not enough disk space: needs 42.5 GB, 12.0 GB free. Free up space, then retry.", done: 0, total: 42_500_000_000 },
       fit: fit("memory_blocked", "Won't fit in this computer's memory."),
       traits: { kind: "chat", tool_support: "supported", source: "header", label: "Chat · Tools" },
+      remove_blocked: null,
     },
   ];
   // MCP servers (T-SHELL-08): one local server that works, one remote one that needs sign-in.
@@ -880,6 +883,23 @@ export function createMockApi(): Api {
       window.clearTimeout(timersDl.get(id));
       if (r !== undefined && r.state.state === "downloading") {
         r.state = { state: "paused", done: r.state.done, total: r.state.total };
+        emitRow(r);
+      }
+      return null;
+    },
+    removeLocalModel: async (id) => {
+      const r = localRows.find((x) => x.id === id);
+      if (r === undefined) throw { code: "model_unavailable", message: "That model isn't on this computer." };
+      if (r.remove_blocked !== null) throw { code: "model_unavailable", message: r.remove_blocked };
+      r.state = { state: "not_downloaded" };
+      emitRow(r);
+      return null;
+    },
+    cancelDownload: async (id) => {
+      const r = localRows.find((x) => x.id === id);
+      window.clearTimeout(timersDl.get(id));
+      if (r !== undefined && r.state.state !== "ready") {
+        r.state = { state: "not_downloaded" };
         emitRow(r);
       }
       return null;

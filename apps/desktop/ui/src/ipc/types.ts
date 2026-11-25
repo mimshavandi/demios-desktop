@@ -319,6 +319,8 @@ export interface LocalModelRow {
   fit: FitView;
   /** What the model is for (T-INF-26); null when unknown. */
   traits: ModelTraits | null;
+  /** Why "Remove" can't delete this model, in the user's words (#176); null when it can. */
+  remove_blocked: string | null;
 }
 
 /**

@@ -297,6 +297,8 @@ pub fn run() {
             artifact_child::artifact_child_probe_report,
             artifact_child::artifact_child_state,
             commands::pause_download,
+            commands::remove_local_model,
+            commands::cancel_download,
             updates::check_for_update,
             updates::install_update,
             updates::launch_update_check,

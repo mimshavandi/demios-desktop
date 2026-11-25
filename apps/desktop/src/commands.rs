@@ -666,6 +666,29 @@ pub async fn pause_download(state: AppStateRef<'_>, model_id: String) -> IpcResu
     Ok(())
 }
 
+/// Removes a downloaded model and everything Demios wrote for it (#176). Refused, with a
+/// user message and nothing deleted, for Hugging Face cache models, a folder the user chose
+/// (the row's `remove_blocked` says why) and a model that is answering. The row update
+/// arrives through `watch_local_models`.
+#[tauri::command]
+pub async fn remove_local_model(state: AppStateRef<'_>, model_id: String) -> IpcResult<()> {
+    let local = local(&state)?;
+    local
+        .remove(&model_id)
+        .await
+        .map_err(crate::agent::model_error)
+}
+
+/// Cancels a catalogue download and deletes its partial file (#176).
+#[tauri::command]
+pub async fn cancel_download(state: AppStateRef<'_>, model_id: String) -> IpcResult<()> {
+    let local = local(&state)?;
+    local
+        .cancel_download(&model_id)
+        .await
+        .map_err(crate::agent::model_error)
+}
+
 // ---- MCP servers screen (T-SHELL-08)
 
 fn tools_executor(s: &AppState) -> IpcResult<Arc<dn_tools::Executor>> {
