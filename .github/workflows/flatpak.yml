@@ -51,9 +51,10 @@ jobs:
       - name: Build
         working-directory: packaging/flatpak
         # org.flatpak.Builder installs the SDK and extensions through the session bus, which
-        # a CI runner doesn't have: start one for the build.
+        # a CI runner doesn't have: start one for the build. No --sandbox: that mode refuses the
+        # manifest's repo-root `type: dir` source (Flathub's copy uses a git source instead).
         run: |
-          dbus-run-session -- flatpak run org.flatpak.Builder --user --sandbox --force-clean --disable-rofiles-fuse \
+          dbus-run-session -- flatpak run org.flatpak.Builder --user --force-clean --disable-rofiles-fuse \
             --install-deps-from=flathub --ccache \
             --mirror-screenshots-url=https://dl.flathub.org/media/ \
             --repo=repo build-dir io.demios.app.yml
