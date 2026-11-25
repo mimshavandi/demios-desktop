@@ -16,6 +16,7 @@ pub mod error;
 #[cfg(any(fake_model, test))]
 pub mod fake;
 pub mod hub;
+pub mod knowledge;
 pub mod links;
 pub mod local;
 pub mod mcp;
@@ -208,6 +209,7 @@ pub fn run() {
                 )
             })?;
             install_add_links(app.handle(), &state);
+            knowledge::start(&state);
             // The window starts hidden: fit it to the screen's work area (or put it back
             // where it was), then show it (#172).
             window_state::restore(app.handle(), &state);
@@ -280,6 +282,7 @@ pub fn run() {
             commands::rollback_artifact,
             commands::watch_local_models,
             commands::download_model,
+            knowledge::message_sources,
             artifact_child::artifact_child_open,
             artifact_child::artifact_child_render,
             artifact_child::artifact_child_bounds,
