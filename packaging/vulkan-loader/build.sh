@@ -35,7 +35,11 @@ cmake --build "$work/build" --config Release --parallel >/dev/null
 case "$(uname -s)" in
   MINGW* | MSYS* | CYGWIN*)
     lib=vulkan-1.dll
-    cp "$work/build/loader/Release/vulkan-1.dll" "$out/$lib"
+    # Multi-config generators (Visual Studio) put it under Release/, Ninja directly in loader/.
+    for f in "$work/build/loader/Release/$lib" "$work/build/loader/$lib"; do
+      [ -f "$f" ] && { cp "$f" "$out/$lib"; break; }
+    done
+    [ -f "$out/$lib" ] || { echo "built $lib not found" >&2; exit 1; }
     ;;
   Linux)
     lib=libvulkan.so.1

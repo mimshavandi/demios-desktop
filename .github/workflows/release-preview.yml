@@ -378,8 +378,9 @@ jobs:
       - name: Vulkan SDK (pinned, checksum verified)
         run: |
           set -euo pipefail
-          # The loader's window-system support (xcb, xlib, xrandr, wayland) needs their headers.
-          sudo apt-get install -y libx11-dev libxcb1-dev libxrandr-dev libwayland-dev
+          # The loader's window-system support (xcb, xlib, xrandr, wayland) needs their headers;
+          # llama.cpp links against libvulkan, which the LunarG Linux SDK no longer ships.
+          sudo apt-get install -y libx11-dev libxcb1-dev libxrandr-dev libwayland-dev libvulkan-dev
           f="vulkansdk-linux-x86_64-$VULKAN_SDK_VERSION.tar.xz"
           curl -sSfL -o "$RUNNER_TEMP/$f" "https://sdk.lunarg.com/sdk/download/$VULKAN_SDK_VERSION/linux/$f"
           echo "$VULKAN_SDK_SHA256_LINUX  $RUNNER_TEMP/$f" | sha256sum -c -
