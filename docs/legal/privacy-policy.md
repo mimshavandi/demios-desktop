@@ -1,14 +1,23 @@
 # Demios Desktop privacy policy
 
-> **Pending owner approval.** The owner approves the final text before it is published and linked from the app. Still open: the postal address, the publication URL, and for the GDPR section the legal basis, retention period and the right to complain to a supervisory authority when someone contacts us. Every statement below was checked against the code on `main`.
+> **Pending owner approval.** The owner approves the final text before it is published at demios.io/privacy and linked from the app and the store listings. Text in [square brackets] is still to be confirmed by the owner. Every statement about the app was checked against the code on `main`.
 
 Last updated: set on publication
 
 ## Who we are
 
-Demios Desktop ("the app") is an open-source desktop app licensed under Apache-2.0. It is published by **DigiNote Inc.**, `<postal address>`, which is responsible for this policy. DigiNote Inc. is also the provider of the app under the EU AI Act. App id: `io.demios.app`.
+Demios Desktop ("the app") is an open-source desktop app licensed under Apache-2.0. It is published by **DigiNote Inc.**, which is responsible for this policy and is the controller for the processing described in [Data protection (GDPR)](#data-protection-gdpr). DigiNote Inc. is also the provider of the app under the EU AI Act. App id: `io.demios.app`.
 
-Contact: mahdi@demios.io
+DigiNote Inc. [legal entity name and register: to be confirmed by the owner]
+Niederkasseler Kirchweg 85
+40547 Düsseldorf
+Germany
+
+Email: mahdi@demios.io
+
+Data protection officer: [DPO: to be confirmed by the owner whether one is required]
+
+This policy covers the app and the website at demios.io.
 
 ## The short version
 
@@ -113,16 +122,81 @@ Because your data is on your own computer, you control it:
 - **Uninstalling** removes the app but not your data folder, your models or your keychain entries. Use **Delete all local data** first, or delete them yourself.
 - **Data held by providers, Hugging Face, tool servers or GitHub** is controlled by them. Use their tools or contact them.
 
-### GDPR and similar laws
+## Data protection (GDPR)
 
-We don't process your personal data in the app, because nothing reaches us. Everything stays on your device or goes directly to services you choose, which are responsible for it under their own policies. If you contact us by email or through a GitHub issue, we use what you send only to answer you.
+This section gives the information required by Articles 13 and 14 of the EU General Data Protection Regulation (GDPR).
+
+### Controller
+
+DigiNote Inc., at the address in [Who we are](#who-we-are). Email: mahdi@demios.io. Data protection officer: [DPO: to be confirmed by the owner whether one is required].
+
+### What we process, why, and on what legal basis
+
+| Situation | Data | Do we receive it? | Legal basis |
+|---|---|---|---|
+| Using the app: chats, artifacts, settings, tool history, models, keys | Everything listed in [What stays on your device](#what-stays-on-your-device) | **No.** It stays on your computer and we have no access to it. | None needed: we don't process it. |
+| Chatting with a provider's model using your own key | Messages, tools, your key, your IP address | **No.** Your computer sends it straight to the provider you chose. | None needed: we don't process it. The provider is responsible for it. |
+| Searching for and downloading models | Search text, requested files, your IP address | **No.** Your computer sends it straight to Hugging Face (or the mirror you set). | None needed: we don't process it. |
+| Using tool servers | Tool arguments, which can contain chat text | **No.** Your computer sends it straight to the server you added. | None needed: we don't process it. |
+| Reporting a problem on GitHub | What you write, the app version and your operating system | Only as a public GitHub issue, which we read as the project's maintainers. | Our legitimate interest in fixing problems in the app (Art. 6(1)(f) GDPR). |
+| Emailing us | Your email address, what you write | **Yes.** | Answering you, and taking steps you ask for before a contract (Art. 6(1)(b)); otherwise our legitimate interest in answering questions about the app (Art. 6(1)(f)). |
+| Visiting demios.io | Your IP address, the page requested, time, browser details | Our hosting provider receives them in its server logs. [Whether we can see these logs: to be confirmed by the owner] | Our legitimate interest in delivering the website securely (Art. 6(1)(f)). |
+
+The website demios.io sets no cookies and uses no analytics or tracking. [To be confirmed by the owner for the published site.]
+
+We don't sell personal data, use it for advertising or make automated decisions about you, including profiling.
+
+You don't have to give us any personal data. The app works without contacting us at all.
+
+### How long we keep it
+
+- **Emails:** until your question or request is settled, then deleted, unless the law requires us to keep them longer (for example as business letters under German commercial or tax law). [Retention period: to be confirmed by the owner]
+- **GitHub issues:** they stay public in the repository until you or we delete them. You can edit or delete your own issues and comments on GitHub.
+- **Website server logs:** kept by the hosting provider under its own rules (see below).
+- **Data on your computer:** until you delete it. See [Your choices and how to delete data](#your-choices-and-how-to-delete-data).
+
+### Recipients and processors
+
+- **Services you choose in the app** (AI providers, Hugging Face, tool servers) receive data directly from your computer, only when you set them up or start an action. They are not our processors. They act on their own responsibility, under your agreement with them.
+- **GitHub** (GitHub, Inc., USA) hosts the project's repository and issues, and hosts the website demios.io on GitHub Pages. For the website, GitHub processes visitors' IP addresses and request details in its server logs. [Whether GitHub is a processor or a separate controller for this, and the agreement in place: to be confirmed by the owner]
+- **Our email provider** stores the emails you send us. [Email provider: to be confirmed by the owner]
+
+### Transfers outside the EU
+
+- **Services you choose:** Anthropic, OpenAI, Google and Hugging Face are based in or process data in the USA. Your computer sends data to them because you chose them; we don't transfer it.
+- **GitHub:** GitHub, Inc. is in the USA. Transfers rely on the EU–US Data Privacy Framework, under the European Commission's adequacy decision of 10 July 2023, [GitHub's certification under the Data Privacy Framework: to be confirmed by the owner] and on the EU Standard Contractual Clauses in GitHub's data protection agreement.
+
+### Your rights
+
+You have the right:
+
+- to know whether we process data about you, and to get a copy of it (Art. 15 GDPR),
+- to have it corrected (Art. 16),
+- to have it deleted (Art. 17),
+- to have its processing restricted (Art. 18),
+- to receive it in a common machine-readable format (Art. 20),
+- **to object** at any time, for reasons arising from your particular situation, to processing based on our legitimate interest (Art. 21). We then stop, unless we have compelling legitimate grounds or need it for legal claims.
+
+To use these rights, email mahdi@demios.io. Because the data in the app never reaches us, we can't see, copy or delete it for you; you can delete it yourself in the app. For data held by a service you chose, contact that service.
+
+### Your right to complain
+
+You can complain to a data protection supervisory authority, in particular in the EU country where you live or work, or where you think a breach happened (Art. 77 GDPR). The authority responsible for us is:
+
+Landesbeauftragte für Datenschutz und Informationsfreiheit Nordrhein-Westfalen (LDI NRW)
+Kavalleriestraße 2–4
+40213 Düsseldorf
+Germany
+Website: [www.ldi.nrw.de](https://www.ldi.nrw.de)
 
 ## Changes to this policy
 
-If the app starts sending any data to us (for example an update check or optional crash reports), we will update this policy **before** that version is released and describe the change in the release notes. Anything like that will be opt-in unless this policy says otherwise. The latest version is always at `<policy URL>`, and earlier versions are in the project's public repository.
+If the app starts sending any data to us (for example an update check or optional crash reports), we will update this policy **before** that version is released and describe the change in the release notes. Anything like that will be opt-in unless this policy says otherwise. The latest version is always at https://demios.io/privacy, and earlier versions are in the project's public repository.
 
 ## Contact
 
-DigiNote Inc. · mahdi@demios.io · `<postal address>` · [GitHub issues](https://github.com/mimshavandi/demios-desktop/issues)
+DigiNote Inc. · Niederkasseler Kirchweg 85, 40547 Düsseldorf, Germany · mahdi@demios.io · [GitHub issues](https://github.com/mimshavandi/demios-desktop/issues)
+
+Legal notice (Impressum): https://demios.io/impressum [URL: to be confirmed by the owner]
 
 For security problems, see [SECURITY.md](../../SECURITY.md).

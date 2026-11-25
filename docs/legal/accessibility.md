@@ -1,6 +1,6 @@
 # Demios Desktop accessibility statement
 
-> **Pending owner approval.** The owner approves the final text before it is published and linked from the app. Still open: the reply time.
+> **Pending owner approval.** The owner approves the final text before it is published at demios.io/accessibility and linked from the app and the store listings.
 
 Last reviewed: set on publication · App version: 0.1.0
 
@@ -47,6 +47,6 @@ We want Demios Desktop to be usable by everyone, including people who use a keyb
 
 ## Report a problem
 
-If something in the app is hard or impossible to use, please tell us at mahdi@demios.io, or use **Report a problem** in **Settings → General → About**. Tell us your operating system, any assistive technology you use, and what you were trying to do. We aim to reply within `<n>` working days.
+If something in the app is hard or impossible to use, please tell us at mahdi@demios.io, or use **Report a problem** in **Settings → General → About**. Tell us your operating system, any assistive technology you use, and what you were trying to do. We aim to reply within 72 hours.
 
 This statement is voluntary and is not a legal declaration of conformity.

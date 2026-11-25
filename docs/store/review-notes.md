@@ -21,7 +21,7 @@ The recording shows:
 - Adding a provider key (BYOK) and chatting with a cloud model
 - An artifact (HTML/SVG/Markdown) opening in the side pane
 - An MCP tool call: the approval prompt showing the exact arguments, then Allow / Deny
-- Settings > About: version, privacy policy link, open-source licences
+- Settings > About: version, open-source licences. The privacy policy link is added once the policy is published.
 There are no accounts, purchases, ads or user-to-user content, so those flows do not exist.
 
 2. APP PURPOSE
@@ -75,7 +75,7 @@ and can be wrong; the app says so next to the message box.
 
 - Restricted capability `runFullTrust`. Reason: "Win32 desktop app (Tauri/WebView2). It needs full trust to start local AI inference and the local tool servers (MCP) the user configures."
 - Age rating (IARC): answer honestly that the app shows unfiltered text from user-chosen AI models and can display links. There is no user-to-user communication.
-- Privacy policy URL: `<owner URL>`. Support contact: mahdi@demios.io (DigiNote Inc.).
+- Privacy policy URL: https://demios.io/privacy (live once the owner publishes it). Support contact: mahdi@demios.io (DigiNote Inc.).
 
 **Flathub** (one `finish-args` justification per line in the PR)
 
