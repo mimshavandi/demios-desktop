@@ -566,6 +566,16 @@ export interface Citation {
   end_line: number;
 }
 
+/** The embedding-model offer (knowledge.rs, #171). */
+export interface KnowledgeStatus {
+  /** `ask`: not answered yet (the project view may ask once); `declined`: "Not now". */
+  offer: "ask" | "declined" | "accepted";
+  /** The offered model; null when this build has no local models. */
+  model: { id: string; name: string; size: number; state: DownloadState } | null;
+  /** While the installed model hasn't embedded every passage yet. */
+  embedding: { done: number; total: number } | null;
+}
+
 /** What an answer in a project chat was given (`message_sources`). */
 export interface MessageSources {
   mode: SearchMode;
