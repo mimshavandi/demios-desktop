@@ -99,13 +99,17 @@ fn place<R: Runtime>(w: &WebviewWindow<R>, state: &AppState) -> Result<(), Strin
         "window: {:?} on {:?} (work area {:?}, scale {}), saved {:?}",
         p, list[p.screen].name, list[p.screen].work_area, list[p.screen].scale, saved
     );
+    // Move first, then size, then move again: crossing to a monitor with another scale
+    // makes Windows rescale the window, so it is sized where it ends up (and the second
+    // move fixes the position if the resize shifted it).
+    let at = PhysicalPosition::new(f.x, f.y);
+    w.set_position(at).map_err(|e| e.to_string())?;
     w.set_size(PhysicalSize::new(
         f.w.saturating_sub(deco.w),
         f.h.saturating_sub(deco.h),
     ))
     .map_err(|e| e.to_string())?;
-    w.set_position(PhysicalPosition::new(f.x, f.y))
-        .map_err(|e| e.to_string())?;
+    w.set_position(at).map_err(|e| e.to_string())?;
     if let (Some(t), Some(s)) = (
         w.try_state::<Tracker>(),
         window_fit::save(f, p.maximized, &list),

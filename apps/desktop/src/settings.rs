@@ -336,6 +336,7 @@ mod tests {
             w: 1200.0,
             h: 800.0,
             maximized: true,
+            origin: None,
         };
         save_window(&c, &w).unwrap();
         assert_eq!(load_window(&c).unwrap(), Some(w));

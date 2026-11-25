@@ -47,6 +47,10 @@ pub struct Saved {
     pub w: f64,
     pub h: f64,
     pub maximized: bool,
+    /// The monitor's work-area origin (physical) when saved: tells two monitors with the
+    /// same name apart (two of the same model often report the same name).
+    #[serde(default)]
+    pub origin: Option<(i32, i32)>,
 }
 
 /// Where to put the window, and whether to maximise it afterwards.
@@ -123,6 +127,25 @@ pub fn place(
     saved: Option<&Saved>,
     deco: Decorations,
 ) -> Option<Placement> {
+    // A monitor that reports an empty work area (seen on some Wayland setups) can't hold
+    // the window: leave it where the OS put it rather than size it to nothing.
+    if screens
+        .iter()
+        .any(|s| s.work_area.w == 0 || s.work_area.h == 0)
+    {
+        let usable: Vec<Screen> = screens
+            .iter()
+            .filter(|s| s.work_area.w > 0 && s.work_area.h > 0)
+            .cloned()
+            .collect();
+        let fb = screens
+            .get(fallback)
+            .and_then(|f| usable.iter().position(|u| u == f))
+            .unwrap_or(0);
+        let p = place(&usable, fb, saved, deco)?;
+        let screen = screens.iter().position(|s| *s == usable[p.screen])?;
+        return Some(Placement { screen, ..p });
+    }
     let fallback = fallback.min(screens.len().checked_sub(1)?);
     // A saved state with a zero, negative or non-finite number is treated as none: it was
     // written by a broken build or edited by hand, and the default fit is always safe.
@@ -136,10 +159,22 @@ pub fn place(
             maximized: false,
         });
     };
-    let same = saved
-        .monitor
-        .as_ref()
-        .and_then(|name| screens.iter().position(|s| s.name.as_ref() == Some(name)));
+    let named: Vec<usize> = match &saved.monitor {
+        Some(name) => (0..screens.len())
+            .filter(|&i| screens[i].name.as_ref() == Some(name))
+            .collect(),
+        None => vec![],
+    };
+    // Several monitors with that name: the one whose work area starts where it did.
+    let same = match named.as_slice() {
+        [] => None,
+        [only] => Some(*only),
+        many => many
+            .iter()
+            .copied()
+            .find(|&i| Some((screens[i].work_area.x, screens[i].work_area.y)) == saved.origin)
+            .or(Some(many[0])),
+    };
     let (i, frame) = match same {
         Some(i) => {
             let s = &screens[i];
@@ -184,14 +219,24 @@ pub fn screen_of(frame: Rect, screens: &[Screen]) -> Option<usize> {
         let y1 = (frame.y as i64 + frame.h as i64).min(a.y as i64 + a.h as i64);
         (x1 - x0).max(0) * (y1 - y0).max(0)
     };
-    let centre = |r: Rect| (r.x as i64 + r.w as i64 / 2, r.y as i64 + r.h as i64 / 2);
+    let centre = |r: Rect| {
+        (
+            f64::from(r.x) + f64::from(r.w) / 2.0,
+            f64::from(r.y) + f64::from(r.h) / 2.0,
+        )
+    };
     let (cx, cy) = centre(frame);
+    let distance = |r: Rect| {
+        let (sx, sy) = centre(r);
+        (sx - cx).hypot(sy - cy)
+    };
     screens
         .iter()
         .enumerate()
-        .max_by_key(|(_, s)| {
-            let (sx, sy) = centre(s.work_area);
-            (overlap(s.work_area), -((sx - cx).pow(2) + (sy - cy).pow(2)))
+        .max_by(|(_, a), (_, b)| {
+            overlap(a.work_area)
+                .cmp(&overlap(b.work_area))
+                .then(distance(b.work_area).total_cmp(&distance(a.work_area)))
         })
         .map(|(i, _)| i)
 }
@@ -207,6 +252,7 @@ pub fn save(frame: Rect, maximized: bool, screens: &[Screen]) -> Option<Saved> {
         w: f64::from(frame.w) / s.scale,
         h: f64::from(frame.h) / s.scale,
         maximized,
+        origin: Some((a.x, a.y)),
     })
 }
 
@@ -332,6 +378,7 @@ mod tests {
             w: 1400.0,
             h: 900.0,
             maximized: true,
+            origin: None,
         };
         let p = place(std::slice::from_ref(&primary), 0, Some(&gone), DECO).unwrap();
         assert!(inside(p.frame, &primary), "{:?}", p.frame);
@@ -345,6 +392,7 @@ mod tests {
             w: 1400.0,
             h: 900.0,
             maximized: false,
+            origin: None,
         };
         let p = place(std::slice::from_ref(&primary), 0, Some(&off), DECO).unwrap();
         assert!(inside(p.frame, &primary), "{:?}", p.frame);
@@ -445,6 +493,7 @@ mod tests {
                 w: 1000.0,
                 h: 800.0,
                 maximized: false,
+                origin: None,
             },
             Saved {
                 monitor: Some("primary".into()),
@@ -453,6 +502,7 @@ mod tests {
                 w: f64::INFINITY,
                 h: 800.0,
                 maximized: false,
+                origin: None,
             },
             Saved {
                 monitor: Some("primary".into()),
@@ -461,6 +511,7 @@ mod tests {
                 w: -5.0,
                 h: 800.0,
                 maximized: false,
+                origin: None,
             },
         ] {
             assert_eq!(
@@ -477,10 +528,60 @@ mod tests {
             w: 1e300,
             h: 1e300,
             maximized: false,
+            origin: None,
         };
         let p = place(one, 0, Some(&huge), DECO).unwrap();
         assert!(inside(p.frame, &s), "{:?}", p.frame);
         // A fallback index past the end uses the last screen.
         assert_eq!(place(one, 7, None, DECO).unwrap().screen, 0);
+    }
+
+    #[test]
+    fn twin_monitors_with_one_name_are_told_apart_by_position() {
+        let screens = [
+            screen("DELL U2720Q", 0, 0, 2560, 1400, 1.0),
+            screen("DELL U2720Q", 2560, 0, 2560, 1400, 1.0),
+        ];
+        let frame = Rect {
+            x: 2700,
+            y: 100,
+            w: 1200,
+            h: 800,
+        };
+        let saved = save(frame, false, &screens).unwrap();
+        let p = place(&screens, 0, Some(&saved), DECO).unwrap();
+        assert_eq!(p.screen, 1);
+        assert_eq!(p.frame, frame);
+    }
+
+    #[test]
+    fn a_monitor_with_an_empty_work_area_is_ignored() {
+        let screens = [
+            screen("broken", 0, 0, 0, 0, 1.0),
+            screen("good", 1920, 0, 1920, 1040, 1.0),
+        ];
+        let p = place(&screens, 0, None, DECO).unwrap();
+        assert_eq!(p.screen, 1);
+        assert!(inside(p.frame, &screens[1]));
+        assert_eq!(
+            place(&screens[..1], 0, None, DECO),
+            None,
+            "nothing usable: leave it"
+        );
+    }
+
+    #[test]
+    fn absurd_coordinates_do_not_overflow_screen_of() {
+        let screens = [
+            screen("a", i32::MIN / 2, 0, 100, 100, 1.0),
+            screen("b", i32::MAX / 2, 0, 100, 100, 1.0),
+        ];
+        let f = Rect {
+            x: i32::MAX - 10,
+            y: 0,
+            w: 5,
+            h: 5,
+        };
+        assert_eq!(screen_of(f, &screens), Some(1));
     }
 }
