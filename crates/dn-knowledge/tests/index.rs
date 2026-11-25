@@ -1,5 +1,7 @@
 use dn_knowledge::{
-    EmbedKind, Embedder, Index, SourceFile, chunk::Skip, context_block, delete_all, migrations,
+    Citation, EmbedKind, Embedder, Index, QueryVector, SearchMode, SourceFile, Sources,
+    chunk::Skip, context_block, delete_all, migrations, record_sources,
+    remove_conversation_sources, sources_for,
 };
 use rusqlite::Connection;
 use std::cell::Cell;
@@ -386,4 +388,121 @@ fn sources_lists_what_is_indexed() {
     );
     idx.remove_source("a").unwrap();
     assert_eq!(idx.sources().unwrap(), vec!["b".to_string()]);
+}
+
+#[test]
+fn removing_or_reindexing_one_file_leaves_none_of_its_old_text_in_the_fts_index() {
+    let conn = db();
+    let idx = Index::new(&conn);
+    idx.sync_source(
+        "p",
+        &[
+            file("a", "a.md", "codeword capybara"),
+            file("b", "b.md", "codeword ocelot"),
+        ],
+        None,
+    )
+    .unwrap();
+    assert!(fts_has(&conn, "capybara") > 0 && fts_has(&conn, "ocelot") > 0);
+    // One file removed from the project: its text goes, the other file's stays.
+    idx.sync_source("p", &[file("b", "b.md", "codeword ocelot")], None)
+        .unwrap();
+    assert_eq!(fts_has(&conn, "capybara"), 0);
+    assert!(fts_has(&conn, "ocelot") > 0);
+    // A file re-indexed with new content: the old text goes too.
+    idx.sync_source("p", &[file("b", "b.md", "codeword narwhal")], None)
+        .unwrap();
+    assert_eq!(fts_has(&conn, "ocelot"), 0);
+    assert!(fts_has(&conn, "narwhal") > 0);
+}
+
+#[test]
+fn the_caller_can_embed_outside_the_database_in_two_phases() {
+    let conn = db();
+    let idx = Index::new(&conn);
+    let e = FakeEmbedder::new("m");
+    idx.sync_source(
+        "p",
+        &[
+            file("f1", "garage.md", "my car needs tyres"),
+            file("f2", "cook.md", "bake bread"),
+        ],
+        None,
+    )
+    .unwrap();
+    let todo = idx.pending_embeddings(None, "m", 64, 10).unwrap();
+    assert_eq!(todo.len(), 2);
+    let texts: Vec<String> = todo.iter().map(|(_, t)| t.clone()).collect();
+    let vecs = e.embed(&texts, EmbedKind::Document).unwrap();
+    let items: Vec<(i64, Vec<f32>)> = todo.iter().map(|(id, _)| *id).zip(vecs).collect();
+    assert_eq!(idx.store_embeddings("m", 64, &items).unwrap(), 2);
+    assert!(
+        idx.pending_embeddings(None, "m", 64, 10)
+            .unwrap()
+            .is_empty()
+    );
+    // Wrong-size vectors are refused.
+    assert!(
+        idx.store_embeddings("m", 64, &[(items[0].0, vec![0.0; 3])])
+            .is_err()
+    );
+    // A query vector made by the caller ranks like the embedder path.
+    let qv = QueryVector {
+        model_id: "m".into(),
+        values: e
+            .embed(&["automobile".into()], EmbedKind::Query)
+            .unwrap()
+            .remove(0),
+    };
+    let hits = idx.search_with(&["p"], "automobile", 3, Some(&qv)).unwrap();
+    assert_eq!(hits[0].display_path, "garage.md");
+}
+
+#[test]
+fn an_answers_sources_are_recorded_and_go_with_its_conversation_and_delete_all() {
+    let conn = db();
+    let cite = Citation {
+        label: "S1".into(),
+        chunk_id: 1,
+        file_id: "f".into(),
+        display_path: "plan.md".into(),
+        start_line: 3,
+        end_line: 9,
+    };
+    let s = Sources {
+        mode: SearchMode::Keyword,
+        citations: vec![cite.clone()],
+    };
+    record_sources(&conn, "m1", "c1", &s).unwrap();
+    record_sources(
+        &conn,
+        "m2",
+        "c2",
+        &Sources {
+            mode: SearchMode::Hybrid,
+            citations: vec![],
+        },
+    )
+    .unwrap();
+    assert_eq!(sources_for(&conn, "m1").unwrap(), Some(s));
+    assert_eq!(sources_for(&conn, "nope").unwrap(), None);
+    // Regenerating replaces the record.
+    record_sources(
+        &conn,
+        "m1",
+        "c1",
+        &Sources {
+            mode: SearchMode::Hybrid,
+            citations: vec![cite],
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        sources_for(&conn, "m1").unwrap().unwrap().mode,
+        SearchMode::Hybrid
+    );
+    remove_conversation_sources(&conn, "c1").unwrap();
+    assert_eq!(sources_for(&conn, "m1").unwrap(), None);
+    delete_all(&conn).unwrap();
+    assert_eq!(sources_for(&conn, "m2").unwrap(), None);
 }

@@ -29,6 +29,10 @@ Chats are listed in the sidebar under **Recent**, the most recently used first, 
   - **Delete**: the chat goes at once, and a message lets you **Undo** for 10 seconds. After that it is removed for good the next time the app starts.
 - **Hide or show the sidebar:** select the sidebar button at the top left, or press ⌘\ (Ctrl+\).
 
+## Skills
+
+A skill changes how the assistant works in a chat, for example to summarise or to write an email. Choose one in the message box. See [Skills](skills.md).
+
 ## Links in answers
 
 Selecting a link in an answer never opens it inside the app. Instead, a system dialog, **Open link?**, shows the full address, with a note when it uses plain http or contains look-alike letters, and reminds you that the link comes from an AI answer. Select **Open in browser** to open it in your web browser, or **Cancel**. Only web links (http and https) can be opened.

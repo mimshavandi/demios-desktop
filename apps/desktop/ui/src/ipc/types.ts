@@ -95,6 +95,22 @@ export interface SkillInfo {
   description: string;
   /** Tool patterns it allows; `[]` means no tools. It never changes approvals. */
   allowed_tools: string[];
+  /** Shipped with the app, or a file in the user's skills folder. */
+  source: "builtin" | "user";
+}
+
+/** A file in the user's skills folder that didn't load (skills.rs `SkillProblem`). */
+export interface SkillProblem {
+  /** Relative to the skills folder, e.g. `my-skill/SKILL.md`. */
+  file: string;
+  message: string;
+}
+
+/** Settings › Skills (skills.rs `SkillsOverview`). */
+export interface SkillsOverview {
+  skills: SkillInfo[];
+  problems: SkillProblem[];
+  folder: string | null;
 }
 
 export type MessageStatus = "streaming" | "complete" | "cancelled" | "error";
@@ -142,8 +158,6 @@ export type ChatEvent =
       stop?: "completed" | "length" | "step_limit" | "cancelled";
     }
   | { type: "error"; message_id: Id; message: string; recovery: RecoveryAction[] }
-  /** A fenced artifact block (model without tool calling) wasn't saved; `reason` says why. */
-  | { type: "artifact_not_saved"; message_id: Id; conversation_id: Id; title: string; reason: string }
   /** An artifact was created or got a new version in this turn. */
   | {
       type: "artifact_changed";
@@ -373,7 +387,7 @@ export interface ModelCatalog {
   settings: Settings;
   /** The model chat uses now (chosen or picked automatically); null if none is usable. */
   chat_model: string | null;
-  /** Whether the chat model makes tool calls (artifact tools) or uses the fenced format. */
+  /** Whether the chat model makes tool calls; without them it can't make artifacts. */
   chat_model_tools: boolean;
 }
 
@@ -539,6 +553,25 @@ export interface McpServerToolsView {
 // ---- artifacts (apps/desktop/src/artifacts.rs, dn-artifacts)
 
 /** `dn_artifacts::ArtifactSummary`. */
+/** How a project search ranked (knowledge.rs): both ways, or keywords only (no embedding model). */
+export type SearchMode = "hybrid" | "keyword";
+
+/** One excerpt an answer was given: where it is in the project's files. */
+export interface Citation {
+  label: string;
+  chunk_id: number;
+  file_id: string;
+  display_path: string;
+  start_line: number;
+  end_line: number;
+}
+
+/** What an answer in a project chat was given (`message_sources`). */
+export interface MessageSources {
+  mode: SearchMode;
+  citations: Citation[];
+}
+
 export interface ArtifactSummary {
   id: Id;
   conversation_id: Id;

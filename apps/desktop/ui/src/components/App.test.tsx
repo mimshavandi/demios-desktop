@@ -154,6 +154,7 @@ function fakeApi() {
     artifactChildBounds: async () => null,
     artifactChildFocus: async () => null,
     artifactChildClose: async () => null,
+    messageSources: async () => null,
     appInfo: async () => ({ version: "0.1.0", dev_fake_model: true, data_dir: "/tmp", models_dir: "/tmp/models", updates: "off" }),
     checkForUpdate: async () => ({ status: "up_to_date", current: "0.1.0" }) as const,
     installUpdate: async () => null,
@@ -308,10 +309,13 @@ function fakeApi() {
     },
     listMessages: async (cid) => [...(msgs.get(cid) ?? [])],
     listSkills: async () => [
-      { name: "proofread", label: "Proofread", description: "Fixes spelling and grammar.", allowed_tools: [] },
-      { name: "explain-code", label: "Explain code", description: "Explains code.", allowed_tools: [] },
+      { name: "proofread", label: "Proofread", description: "Fixes spelling and grammar.", allowed_tools: [], source: "builtin" },
+      { name: "explain-code", label: "Explain code", description: "Explains code.", allowed_tools: [], source: "builtin" },
     ],
     getChatSkill: async (cid) => chatSkills.get(cid) ?? null,
+    skillsOverview: async () => ({ skills: [], problems: [], folder: "/tmp/skills" }),
+    reloadSkills: async () => ({ skills: [], problems: [], folder: "/tmp/skills" }),
+    openSkillsFolder: async () => null,
     setChatSkill: async (cid, skill) => {
       chatSkills.set(cid, skill);
       return null;

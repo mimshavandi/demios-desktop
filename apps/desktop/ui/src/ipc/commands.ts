@@ -3,6 +3,7 @@
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
+  MessageSources,
   AppInfo,
   ApprovalDecision,
   ArtifactDetail,
@@ -15,6 +16,7 @@ import type {
   ChatEvent,
   Conversation,
   SkillInfo,
+  SkillsOverview,
   Id,
   AddedFiles,
   Project,
@@ -87,6 +89,9 @@ interface Commands {
   delete_conversation: { args: { conversationId: Id }; ret: null };
   restore_conversation: { args: { conversationId: Id }; ret: null };
   list_skills: { args: Record<string, never>; ret: SkillInfo[] };
+  skills_overview: { args: Record<string, never>; ret: SkillsOverview };
+  reload_skills: { args: Record<string, never>; ret: SkillsOverview };
+  open_skills_folder: { args: Record<string, never>; ret: null };
   get_chat_skill: { args: { conversationId: Id }; ret: string | null };
   set_chat_skill: { args: { conversationId: Id; skill: string | null }; ret: null };
   list_messages: { args: { conversationId: Id }; ret: StoredMessage[] };
@@ -121,6 +126,8 @@ interface Commands {
   artifact_child_bounds: { args: { bounds: ChildBounds | null }; ret: null };
   artifact_child_focus: { args: Record<string, never>; ret: null };
   artifact_child_close: { args: Record<string, never>; ret: null };
+  // Knowledge search (knowledge.rs, #116).
+  message_sources: { args: { messageId: Id }; ret: MessageSources | null };
 }
 
 /** Where the artifact webview goes, in this webview's CSS pixels. */
@@ -156,6 +163,8 @@ export const api = {
   artifactChildBounds: (bounds: ChildBounds | null) => call("artifact_child_bounds", { bounds }),
   artifactChildFocus: () => call("artifact_child_focus", {}),
   artifactChildClose: () => call("artifact_child_close", {}),
+  /** What an answer in a project chat was given from the project's files (null: not a project chat). */
+  messageSources: (messageId: Id) => call("message_sources", { messageId }),
   appInfo: () => call("app_info", {}),
   /** Asks GitHub Releases for a newer version; downloads nothing. */
   checkForUpdate: () => call("check_for_update", {}),
@@ -232,6 +241,11 @@ export const api = {
   restoreConversation: (conversationId: Id) => call("restore_conversation", { conversationId }),
   listMessages: (conversationId: Id) => call("list_messages", { conversationId }),
   listSkills: () => call("list_skills", {}),
+  skillsOverview: () => call("skills_overview", {}),
+  /** Reads the skills folders again. */
+  reloadSkills: () => call("reload_skills", {}),
+  /** Opens the user's skills folder (created if missing) in the file manager. */
+  openSkillsFolder: () => call("open_skills_folder", {}),
   getChatSkill: (conversationId: Id) => call("get_chat_skill", { conversationId }),
   /** Applies from the chat's next answer on; `null` = no skill. */
   setChatSkill: (conversationId: Id, skill: string | null) =>

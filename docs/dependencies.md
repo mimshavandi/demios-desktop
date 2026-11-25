@@ -61,6 +61,13 @@ Every direct dependency is listed here with why and its licence (ADR-0009). Anyt
 
 Release builds (`tauri build` without `--debug`, i.e. `TAURI_ENV_DEBUG=false`, or `DEMIOS_REQUIRE_LICENSES=1`) fail if cargo-about is missing. Dev, test and debug builds skip the list with a warning.
 
+### Release signing (T-REL-02, #120; CI tools only, lead approved 2026-11-25)
+
+| Tool | Where | Why | Licence |
+|---|---|---|---|
+| trusted-signing-cli 0.11.0 ([levminer/trusted-signing-cli](https://github.com/levminer/trusted-signing-cli)), `cargo install --locked --version 0.11.0` | Windows job of the release workflow only; not a crate dependency, never in PR builds | Tauri's `bundle.windows.signCommand`: signs the exe and the NSIS installer with Azure Artifact Signing (formerly Trusted Signing), reading `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_CLIENT_SECRET` from the `release` environment | MIT |
+| `scripts/release/signing-check.mjs`, `latest-json.mjs` | our code, zero dependencies | which platforms are signed (labelled `-unsigned` otherwise; a half-set-up account fails); the updater's `latest.json` from signed bundles only | Apache-2.0 (this repo) |
+
 ### Flatpak packaging (T-STORE-06; build tools only, not dependencies of any crate)
 
 | Tool | Where | Why | Licence |

@@ -16,6 +16,7 @@ pub mod error;
 #[cfg(any(fake_model, test))]
 pub mod fake;
 pub mod hub;
+pub mod knowledge;
 pub mod links;
 pub mod local;
 pub mod mcp;
@@ -204,6 +205,7 @@ pub fn run() {
                 )
             })?;
             install_add_links(app.handle(), &state);
+            knowledge::start(&state);
             app.manage(state);
             app.manage(artifact_child::ChildState::default());
             Ok(())
@@ -239,6 +241,9 @@ pub fn run() {
             commands::rename_conversation,
             commands::delete_conversation,
             commands::list_skills,
+            commands::skills_overview,
+            commands::reload_skills,
+            commands::open_skills_folder,
             commands::get_chat_skill,
             commands::set_chat_skill,
             commands::restore_conversation,
@@ -271,6 +276,7 @@ pub fn run() {
             commands::rollback_artifact,
             commands::watch_local_models,
             commands::download_model,
+            knowledge::message_sources,
             artifact_child::artifact_child_open,
             artifact_child::artifact_child_render,
             artifact_child::artifact_child_bounds,
