@@ -11,6 +11,7 @@ import {
   type ArtifactSummary,
   type ChatEvent,
   type Conversation,
+  type SkillInfo,
   type Id,
   type McpServerStatus,
   type ModelCatalog,
@@ -71,6 +72,10 @@ function Shell({ api }: { api: Api }) {
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
+  // Chat skills (T-SKL-01): the library and the open chat's choice. A new chat keeps its
+  // choice here until its first message creates the conversation.
+  const [skills, setSkills] = useState<SkillInfo[]>([]);
+  const [skill, setSkill] = useState<string | null>(null);
   const [listState, setListState] = useState<ListState>({ kind: "loading" });
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [projectsState, setProjectsState] = useState<ListState>({ kind: "loading" });
@@ -275,6 +280,15 @@ function Shell({ api }: { api: Api }) {
       openIdRef.current = id;
       setOpenArtifact(null);
       void refreshArtifacts(id);
+      setSkill(null);
+      if (id !== null) {
+        void api
+          .getChatSkill(id)
+          .then((s) => {
+            if (openIdRef.current === id) setSkill(s);
+          })
+          .catch(() => {});
+      }
       if (id === null) {
         dispatch({ kind: "open", conversationId: null, messages: [] });
       } else {
@@ -336,6 +350,11 @@ function Shell({ api }: { api: Api }) {
       }
       await refreshCatalog();
       void refreshProjects();
+      // Without the library the picker just stays hidden.
+      void api
+        .listSkills()
+        .then(setSkills)
+        .catch(() => {});
       try {
         const list = await api.listConversations();
         setConversations(list);
@@ -440,6 +459,7 @@ function Shell({ api }: { api: Api }) {
         if (id === null) {
           const c = await api.createConversation(newChatProject);
           id = c.id;
+          if (skill !== null) await api.setChatSkill(id, skill);
           dispatch({ kind: "open", conversationId: id, messages: [] });
           dispatch({ kind: "sending" });
         }
@@ -453,7 +473,23 @@ function Shell({ api }: { api: Api }) {
         return false;
       }
     },
-    [api, chat.conversationId, newChatProject, onEvent, refreshConversations],
+    [api, chat.conversationId, newChatProject, onEvent, refreshConversations, skill],
+  );
+
+  const chooseSkill = useCallback(
+    async (name: string | null) => {
+      const id = chat.conversationId;
+      const before = skill;
+      setSkill(name);
+      if (id === null) return;
+      try {
+        await api.setChatSkill(id, name);
+      } catch (e) {
+        if (openIdRef.current === id) setSkill(before);
+        setError(errorMessage(e));
+      }
+    },
+    [api, chat.conversationId, skill],
   );
 
   const regenerate = useCallback(async () => {
@@ -745,6 +781,9 @@ function Shell({ api }: { api: Api }) {
             onOpenLink={openLink}
             aiNotice={showAiNotice}
             onDismissAiNotice={() => void dismissAiNotice()}
+            skills={skills}
+            skill={skill}
+            onSkill={(n) => void chooseSkill(n)}
           />
         ) : view.kind === "project" ? (
           view.id === "new" ? (

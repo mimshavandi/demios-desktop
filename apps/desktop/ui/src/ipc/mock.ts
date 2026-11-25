@@ -9,6 +9,7 @@ import type {
   ArtifactDetail,
   ChatEvent,
   Conversation,
+  SkillInfo,
   ModelCatalog,
   Settings,
   StoredMessage,
@@ -45,6 +46,21 @@ export function createMockApi(): Api {
     return p;
   };
   const msgs = new Map<string, StoredMessage[]>();
+  const chatSkills = new Map<string, string>();
+  const skills: SkillInfo[] = [
+    {
+      name: "proofread",
+      label: "Proofread",
+      description: "Fixes spelling, grammar and punctuation without changing the meaning or tone.",
+      allowed_tools: [],
+    },
+    {
+      name: "explain-code",
+      label: "Explain code",
+      description: "Explains what a piece of code does, step by step.",
+      allowed_tools: ["artifact.*"],
+    },
+  ];
   const keys = new Set<string>();
   let localSink: ((e: LocalModelEvent) => void) | null = null;
   const fit = (status: LocalModelRow["fit"]["status"], reason: string, estimated = true) => ({
@@ -530,6 +546,14 @@ export function createMockApi(): Api {
       return null;
     },
     listMessages: async (cid) => structuredClone(msgs.get(cid) ?? []),
+    listSkills: async () => structuredClone(skills),
+    getChatSkill: async (cid) => chatSkills.get(cid) ?? null,
+    setChatSkill: async (cid, skill) => {
+      if (skill === null) chatSkills.delete(cid);
+      else if (skills.some((s) => s.name === skill)) chatSkills.set(cid, skill);
+      else throw { code: "invalid_input", message: `There is no skill called "${skill}".`, recovery: [] };
+      return null;
+    },
     sendMessage: async (cid, text, onEvent) => {
       const c = convs.find((x) => x.id === cid);
       const title = c !== undefined && c.title === "New chat" ? text.slice(0, 48) : null;

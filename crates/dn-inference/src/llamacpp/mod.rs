@@ -295,13 +295,18 @@ fn context_with<'m>(l: &'m Loaded, embeddings: bool, kv: KvCacheQuant) -> Result
         .map_err(|e| InferenceError::Runtime(format!("context: {e}")))
 }
 
-/// Regex llama.cpp matches against tensor names to keep expert FFNs on the CPU.
+/// Regex suffix llama.cpp matches against tensor names to keep expert FFNs on the CPU. It
+/// covers the same tensors `dn_models` counts as experts (`ffn_*_exps`, `ffn_*_chexps`),
+/// including fused `ffn_gate_up_exps`; llama-cpp-2's `add_cpu_moe_override` misses those.
+const EXPERTS: &str = "\\.ffn_(up|down|gate|gate_up)_(ch|)exps";
+
+/// [`EXPERTS`] in every layer.
+const ALL_EXPERTS: &std::ffi::CStr = c"\\.ffn_(up|down|gate|gate_up)_(ch|)exps";
+
+/// [`EXPERTS`] in the first `first_layers` layers (llama.cpp `--n-cpu-moe`).
 fn moe_pattern(first_layers: u32) -> String {
     let layers: Vec<String> = (0..first_layers).map(|i| i.to_string()).collect();
-    format!(
-        "blk\\.({})\\.ffn_(up|down|gate)_(ch|)exps",
-        layers.join("|")
-    )
+    format!("blk\\.({}){EXPERTS}", layers.join("|"))
 }
 
 fn load_blocking(spec: &ModelSpec, opts: &LoadOptions) -> Result<Loaded> {
@@ -324,7 +329,7 @@ fn load_blocking(spec: &ModelSpec, opts: &LoadOptions) -> Result<Loaded> {
     let partial: CString;
     match opts.moe_offload {
         MoeOffload::None => {}
-        MoeOffload::All => params.as_mut().add_cpu_moe_override(),
+        MoeOffload::All => params.as_mut().add_cpu_buft_override(ALL_EXPERTS),
         MoeOffload::FirstLayers(0) => {}
         MoeOffload::FirstLayers(n) => {
             partial =
@@ -889,8 +894,9 @@ mod tests {
     fn moe_pattern_lists_layers() {
         assert_eq!(
             moe_pattern(3),
-            "blk\\.(0|1|2)\\.ffn_(up|down|gate)_(ch|)exps"
+            "blk\\.(0|1|2)\\.ffn_(up|down|gate|gate_up)_(ch|)exps"
         );
+        assert_eq!(ALL_EXPERTS.to_str().unwrap(), EXPERTS);
     }
 
     #[tokio::test]

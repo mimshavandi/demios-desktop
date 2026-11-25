@@ -88,6 +88,15 @@ export interface AddedFiles {
 export const PROJECT_NAME_MAX = 100;
 export const PROJECT_INSTRUCTIONS_MAX = 8000;
 
+/** A chat skill from the library (apps/desktop/src/skills.rs `SkillInfo`). */
+export interface SkillInfo {
+  name: string;
+  label: string;
+  description: string;
+  /** Tool patterns it allows; `[]` means no tools. It never changes approvals. */
+  allowed_tools: string[];
+}
+
 export type MessageStatus = "streaming" | "complete" | "cancelled" | "error";
 
 export interface StoredMessage {

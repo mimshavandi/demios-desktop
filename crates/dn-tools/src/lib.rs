@@ -21,6 +21,7 @@ pub mod config;
 pub mod error;
 pub mod executor;
 pub mod ledger;
+pub mod narrow;
 pub mod oauth;
 pub mod secrets;
 
@@ -30,5 +31,6 @@ pub use client::{ConnectionStatus, McpCallOutput, McpClient, McpTool};
 pub use config::{McpServerConfig, McpTransport, OAuthSettings, ValueRef};
 pub use executor::{CallContext, Executor, RetryPolicy, ToolOutcome};
 pub use ledger::migrations;
+pub use narrow::{CapabilityResolver, Narrowed, ToolAllowlist};
 pub use oauth::{LoopbackRedirect, OAuthManager, PendingAuthorization};
 pub use secrets::{DnSecrets, MemorySecretStore, SecretStore};

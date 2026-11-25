@@ -168,6 +168,20 @@
       "capabilities": ["embedding"],
       "license": "apache-2.0",
       "notes": "Multilingual embeddings for dn-knowledge."
+    },
+    {
+      "id": "nomic-embed-text-v1.5-q4_k_m",
+      "name": "Nomic Embed Text v1.5",
+      "repo": "nomic-ai/nomic-embed-text-v1.5-GGUF",
+      "revision": "0188c9bf409793f810680a5a431e7b899c46104c",
+      "file": "nomic-embed-text-v1.5.Q4_K_M.gguf",
+      "size": 84106624,
+      "sha256": "d4e388894e09cf3816e8b0896d81d265b55e7a9fff9ab03fe8bf4ef5e11295ac",
+      "quant": "Q4_K_M",
+      "params_b": 0.137,
+      "capabilities": ["embedding"],
+      "license": "apache-2.0",
+      "notes": "English embeddings (768 dimensions) for the knowledge index; small and fast."
     }
   ]
 }
