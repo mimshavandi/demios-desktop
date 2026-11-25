@@ -144,6 +144,10 @@ DigiNote Inc., at the address in [Who we are](#who-we-are). Email: mahdi@demios.
 
 The website demios.io sets no cookies and uses no analytics or tracking. [To be confirmed by the owner for the published site.]
 
+**Downloads:** the installers are served by GitHub, not by demios.io. When you download one, your browser connects to `github.com`, which sends it on to `release-assets.githubusercontent.com`. GitHub sees your IP address, the file you ask for, and standard request headers, under [GitHub's privacy statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement). No GitHub account is needed.
+
+The only script is on the download page. It reads which system your browser reports, to suggest the right installer, and sends nothing anywhere. The page lists every installer without it.
+
 We don't sell personal data, use it for advertising or make automated decisions about you, including profiling.
 
 You don't have to give us any personal data. The app works without contacting us at all.
@@ -159,6 +163,7 @@ You don't have to give us any personal data. The app works without contacting us
 
 - **Services you choose in the app** (AI providers, Hugging Face, tool servers) receive data directly from your computer, only when you set them up or start an action. They are not our processors. They act on their own responsibility, under your agreement with them.
 - **GitHub** (GitHub, Inc., USA) hosts the project's repository and issues, and hosts the website demios.io on GitHub Pages. For the website, GitHub processes visitors' IP addresses and request details in its server logs. [Whether GitHub is a processor or a separate controller for this, and the agreement in place: to be confirmed by the owner]
+- **GitHub (release downloads):** GitHub, Inc. serves the app's installers from `github.com` and `release-assets.githubusercontent.com`, and processes downloaders' IP addresses and request details. [Whether GitHub is a processor or a separate controller for this, and the agreement in place: to be confirmed by the owner]
 - **Our email provider** stores the emails you send us. [Email provider: to be confirmed by the owner]
 
 ### Transfers outside the EU
