@@ -33,12 +33,20 @@ The passages are sent to the model with your question. With a model on this devi
 
 ### Better search
 
-At first, files are searched by keywords, and the sources under an answer say "Keyword search". To also find passages by meaning, download the search model (about 84 MB):
+At first, files are searched by keywords, and the sources under an answer say "Keyword search". To also find passages by meaning, download the search model, nomic-embed-text v2 (about 371 MB, licence Apache-2.0). It also finds passages written in another language than your question, for example a German file for an English question.
 
-- The first time a project has files, its page asks **Turn on better search?** Choose **Download** or **Not now**. After **Not now**, it doesn't ask again.
+- The first time a project has files, its page asks **Turn on better search?** with the model's size and licence. Choose **Download** or **Not now**. After **Not now**, it doesn't ask again.
 - You can download it any time from **Project search** in **Settings → Models**.
 
 While the model downloads and your files are prepared, Sources show the progress, and keyword search keeps working.
+
+#### If you used the earlier search model
+
+Earlier versions offered a smaller, English-only search model (nomic-embed-text v1.5, 84 MB). Its results can't be mixed with the new model's, so Demios doesn't use it any more:
+
+- The project page and **Settings → Models → Project search** ask once whether to download the new model. Until you do, search uses keywords only, and the sources under an answer say so.
+- After the download, the passages of your projects are re-indexed with the new model from the text Demios already stored. Your files aren't read again.
+- **Project search** then says the earlier model is no longer used. You can remove it from the model list to free 84 MB.
 
 
 ## Chats in a project

@@ -470,6 +470,19 @@ fn options_for(rec: &dn_models::fit::Estimate, n_layer: u32) -> LoadOptions {
     }
 }
 
+/// The largest context an embedding model is loaded with.
+const EMBED_CTX: u32 = 2048;
+
+/// The context to load the embedding model at `path` with: its training context, at most
+/// [`EMBED_CTX`]; [`EMBED_CTX`] when the header can't be read or doesn't say.
+fn embedding_ctx(path: &Path) -> u32 {
+    Gguf::open(path)
+        .ok()
+        .map(|g| ModelFootprint::from_gguf(&g).n_ctx_train)
+        .filter(|&n| n > 0)
+        .map_or(EMBED_CTX, |n| n.min(EMBED_CTX))
+}
+
 /// Before download only the file size and parameter count are known: estimate with the
 /// weights and runtime overhead (the KV cache is left out, so this is optimistic).
 fn estimated_footprint(e: &CatalogEntry) -> ModelFootprint {
@@ -1575,24 +1588,28 @@ impl<B: InferenceBackend> LocalModels<B> {
         {
             eprintln!("could not unload the embedding model: {err}");
         }
-        // nomic-embed-text v1.5's training context; longer chunks are cut at the batch size
-        // anyway. A small embedding model needs no GPU/CPU split (`load_options`).
+        // At most the model's training context (512 tokens for nomic-embed-text v2 MoE, 2048
+        // for v1.5): text past it is cut rather than embedded at positions the model never
+        // saw. A small embedding model needs no GPU/CPU split (`load_options`).
+        let path = self.path(&e);
+        let n_ctx = {
+            let path = path.clone();
+            tauri::async_runtime::spawn_blocking(move || embedding_ctx(&path))
+                .await
+                .unwrap_or(EMBED_CTX)
+        };
         let opts = LoadOptions {
-            n_ctx: Some(2048),
+            n_ctx: Some(n_ctx),
             ..Default::default()
         };
-        let m = LoadedModel::load(
-            Arc::clone(&self.backend),
-            &ModelSpec::gguf(self.path(&e)),
-            &opts,
-        )
-        .await
-        .map_err(|err| {
-            unavailable(
-                format!("{} couldn't be loaded.", e.name),
-                format!("load {id}: {err}"),
-            )
-        })?;
+        let m = LoadedModel::load(Arc::clone(&self.backend), &ModelSpec::gguf(path), &opts)
+            .await
+            .map_err(|err| {
+                unavailable(
+                    format!("{} couldn't be loaded.", e.name),
+                    format!("load {id}: {err}"),
+                )
+            })?;
         let m = Arc::new(m);
         *slot = Some((id.to_string(), Arc::clone(&m)));
         Ok(m)
@@ -2655,6 +2672,40 @@ mod tests {
             label("nomic-embed-text-v1.5-q4_k_m").as_deref(),
             Some("Embedding")
         );
+    }
+
+    #[test]
+    fn an_unreadable_embedding_model_loads_with_the_largest_context() {
+        assert_eq!(embedding_ctx(Path::new("/nonexistent.gguf")), EMBED_CTX);
+    }
+
+    /// nomic-embed-text v2 MoE is loaded at its 512-token training context, and a chunk
+    /// longer than that is embedded (cut), not an error:
+    /// `DN_TEST_EMBED_GGUF=.../nomic-embed-text-v2-moe.Q5_K_M.gguf cargo test -p
+    /// demios-desktop --lib long_chunk -- --ignored`.
+    #[tokio::test]
+    #[ignore = "needs DN_TEST_EMBED_GGUF"]
+    async fn a_long_chunk_embeds_at_the_training_context() {
+        let path = PathBuf::from(std::env::var("DN_TEST_EMBED_GGUF").unwrap());
+        let n_ctx = embedding_ctx(&path);
+        assert_eq!(n_ctx, 512);
+        let m = LoadedModel::load(
+            Arc::new(LlamaCppBackend::new()),
+            &ModelSpec::gguf(path),
+            &LoadOptions {
+                n_ctx: Some(n_ctx),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let long = "search_document: ".to_owned() + &"Der Start ist im Mai. ".repeat(200);
+        let v = m
+            .embed(&[long, "search_query: Wann ist der Start?".into()])
+            .await
+            .unwrap();
+        assert_eq!(v.len(), 2);
+        assert_eq!(v[0].len(), 768);
     }
 
     #[test]

@@ -5,6 +5,7 @@
 import type { Api } from "./commands";
 import type {
   DownloadState,
+  KnowledgeStatus,
   ApprovalDecision,
   ApprovalPrompt,
   ArtifactDetail,
@@ -395,7 +396,7 @@ export function createMockApi(): Api {
     return x;
   };
 
-  const knowledge: { offer: "ask" | "declined" | "accepted"; started: number | null; state: DownloadState } = {
+  const knowledge: { offer: KnowledgeStatus["offer"]; started: number | null; state: DownloadState } = {
     offer: "ask",
     started: null,
     state: { state: "not_downloaded" },
@@ -417,12 +418,13 @@ export function createMockApi(): Api {
         const t = Date.now() - k.started;
         k.state =
           t < 3000
-            ? { state: "downloading", done: Math.round((84_000_000 * t) / 3000), total: 84_000_000, bytes_per_sec: 28_000_000 }
+            ? { state: "downloading", done: Math.round((370_828_256 * t) / 3000), total: 370_828_256, bytes_per_sec: 120_000_000 }
             : { state: "ready" };
       }
       const t = k.started === null ? 0 : Date.now() - k.started - 3000;
       const embedding = k.state.state === "ready" && t < 3000 ? { done: Math.max(0, Math.round((48 * t) / 3000)), total: 48 } : null;
-      return { offer: k.offer, model: { id: "nomic-embed-text-v1.5-q4_k_m", name: "nomic-embed-text v1.5", size: 84_000_000, state: k.state }, embedding };
+      const model = { id: "nomic-embed-text-v2-moe-q5_k_m", name: "Nomic Embed Text v2 MoE", size: 370_828_256, license: "apache-2.0", state: k.state };
+      return { offer: k.offer, model, embedding, unused: null };
     },
     knowledgeOffer: async (accept) => {
       knowledge.offer = accept ? "accepted" : "declined";

@@ -613,14 +613,30 @@ export interface Citation {
   end_line: number;
 }
 
-/** The embedding-model offer (knowledge.rs, #171). */
+/** A search model in the offer (knowledge.rs `OfferedModel`). */
+export interface OfferedModel {
+  id: string;
+  name: string;
+  size: number;
+  /** Licence id from the model card, shown with the offer. */
+  license: string;
+  state: DownloadState;
+}
+
+/** The embedding-model offer (knowledge.rs, #171, #201). */
 export interface KnowledgeStatus {
-  /** `ask`: not answered yet (the project view may ask once); `declined`: "Not now". */
-  offer: "ask" | "declined" | "accepted";
+  /**
+   * `ask`: not answered yet (the project view may ask once); `declined`: "Not now";
+   * `upgrade`: accepted for the earlier search model, and the new default isn't downloaded yet
+   * (asked once more; search is keyword only until then).
+   */
+  offer: "ask" | "declined" | "accepted" | "upgrade";
   /** The offered model; null when this build has no local models. */
-  model: { id: string; name: string; size: number; state: DownloadState } | null;
+  model: OfferedModel | null;
   /** While the installed model hasn't embedded every passage yet. */
   embedding: { done: number; total: number } | null;
+  /** The earlier search model, still downloaded but no longer used (it can be removed). */
+  unused: OfferedModel | null;
 }
 
 /** What an answer in a project chat was given (`message_sources`). */
