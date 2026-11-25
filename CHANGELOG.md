@@ -31,7 +31,7 @@ Only changes people using the app or the `dn` command-line tool can notice are l
 
 ### Fixed
 
-- Skills work in the installed app: the Skills page, the skill picker under the message box and each chat's skill used to fail with "list_skills not allowed", because the app didn't let its window call the skills commands ([#PR](https://github.com/mimshavandi/demios-desktop/pull/PR)).
+- Skills work in the installed app: the Skills page, the skill picker under the message box and each chat's skill used to fail with "list_skills not allowed", because the app didn't let its window call the skills commands ([#211](https://github.com/mimshavandi/demios-desktop/pull/211)).
 - Settings uses the whole window: the artifact pane is hidden while Settings or a project page is open, and comes back with the chat. If your models can't be loaded, only the Models page says so; General still works ([#185](https://github.com/mimshavandi/demios-desktop/pull/185)).
 - The window always opens inside the screen's free area, so its bottom, including the message box, is never hidden behind the Windows taskbar or the macOS Dock. Demios remembers the window's size, position and maximised state for each monitor, and pulls it back on screen if a monitor is gone or its scaling changed ([#180](https://github.com/mimshavandi/demios-desktop/pull/180)).
 - The window appears only once it is in place, so it no longer jumps back to its starting size if you resize it right after Demios opens. In a window narrower than 1024 pixels, the artifact pane no longer opens over the chat at launch ([#196](https://github.com/mimshavandi/demios-desktop/pull/196)).
