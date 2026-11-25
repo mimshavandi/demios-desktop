@@ -1,0 +1,9 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "resources": {
+      "../../target/vulkan-loader/vulkan-1.dll": "vulkan-1.dll",
+      "../../target/vulkan-loader/LICENSE.txt": "licenses/vulkan-loader-LICENSE.txt"
+    }
+  }
+}

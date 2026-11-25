@@ -27,6 +27,12 @@ concurrency:
 env:
   CARGO_ABOUT_VERSION: 0.9.3
   TAURI_DRIVER_VERSION: 2.0.6
+  # Windows and Linux run local models on the GPU through Vulkan (T-INF-24). The LunarG SDK
+  # builds llama.cpp's Vulkan backend; the loader the installers ship is built from a pinned
+  # Khronos release (packaging/vulkan-loader/build.sh). Same pins as vulkan.yml.
+  VULKAN_SDK_VERSION: 1.4.363.1
+  VULKAN_SDK_SHA256_WINDOWS: c02932bd9a968b22d404536108adaacac908c081cd6b0113f5bfefc523dd0a6a
+  VULKAN_SDK_SHA256_LINUX: b7867d8ca658563813af666f34b93db87f1b1c7d9d69d97e924c210c7ba33eb8
   # Shown on the About screen (apps/desktop/src/commands.rs, `app_info`).
   DEMIOS_BUILD_CHANNEL: preview
   # Release builds must ship the licences screen (apps/desktop/scripts/licenses.mjs).
@@ -194,6 +200,9 @@ jobs:
     env:
       DEMIOS_BUILD_COMMIT: ${{ needs.meta.outputs.short }}
       PREFIX: ${{ needs.meta.outputs.prefix }}
+      # llama.cpp's nested Vulkan shader-generator build goes past Windows' 260-character path
+      # limit under the default target dir (C1083); a short one keeps it under.
+      CARGO_TARGET_DIR: C:\t
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -207,22 +216,66 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: release-preview
+          workspaces: ". -> C:\\t"
       - *cargo-about-cache
       - *cargo-about-install
       - run: cargo fetch --locked
       - run: npm ci
         working-directory: apps/desktop
+      - name: Vulkan SDK (pinned, checksum verified)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $f = "vulkansdk-windows-X64-$env:VULKAN_SDK_VERSION.exe"
+          $p = Join-Path $env:RUNNER_TEMP $f
+          Invoke-WebRequest "https://sdk.lunarg.com/sdk/download/$env:VULKAN_SDK_VERSION/windows/$f" -OutFile $p
+          $h = (Get-FileHash $p -Algorithm SHA256).Hash.ToLower()
+          if ($h -ne $env:VULKAN_SDK_SHA256_WINDOWS) { throw "Vulkan SDK sha256 $h does not match" }
+          $root = "C:\VulkanSDK\$env:VULKAN_SDK_VERSION"
+          & $p --root $root --accept-licenses --default-answer --confirm-command install | Out-Host
+          "VULKAN_SDK=$root" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "$root\Bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+      # llama.cpp's Vulkan shader generator is a nested CMake project; with the Visual Studio
+      # generator, MSBuild runs its install step before its build finishes. Ninja inside the
+      # MSVC developer environment builds it in order (and faster).
+      - name: MSVC developer environment and Ninja for CMake
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          # PATH goes through GITHUB_PATH (only the entries vcvars adds), so the shell tools
+          # later steps use stay on it; everything else through GITHUB_ENV.
+          $before = $env:PATH -split ';'
+          cmd /c "`"$vs\VC\Auxiliary\Build\vcvars64.bat`" > nul && set" | ForEach-Object {
+            if ($_ -match '^([^=]+)=(.*)$') {
+              if ($matches[1] -ieq 'PATH') {
+                $matches[2] -split ';' | Where-Object { $_ -and ($before -notcontains $_) } |
+                  Out-File -FilePath $env:GITHUB_PATH -Append
+              } else {
+                "$($matches[1])=$($matches[2])" | Out-File -FilePath $env:GITHUB_ENV -Append
+              }
+            }
+          }
+          if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) { choco install ninja -y --no-progress | Out-Host }
+          "CMAKE_GENERATOR=Ninja" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - &vulkan-loader
+        name: Vulkan loader (pinned Khronos release, shipped next to the app)
+        shell: bash
+        run: packaging/vulkan-loader/build.sh target/vulkan-loader | tee -a "$GITHUB_STEP_SUMMARY"
       - name: tauri build (release)
         working-directory: apps/desktop
-        run: npx tauri build --ci --bundles nsis
+        run: npx tauri build --ci --features vulkan --config tauri.vulkan-windows.conf.json --bundles nsis
       - name: Collect
         id: c
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p out
-          cp "$(ls target/release/bundle/nsis/*-setup.exe | head -n1)" "out/$PREFIX-windows-x64-setup.exe"
-          echo "bin=target/release/demios-desktop.exe" >> "$GITHUB_OUTPUT"
+          t="$(cygpath -u "$CARGO_TARGET_DIR")"
+          cp "$(ls "$t"/release/bundle/nsis/*-setup.exe | head -n1)" "out/$PREFIX-windows-x64-setup.exe"
+          echo "- Windows installer (Vulkan build): $(du -k "out/$PREFIX-windows-x64-setup.exe" | cut -f1) KiB" >> "$GITHUB_STEP_SUMMARY"
+          echo "bin=$t/release/demios-desktop.exe" >> "$GITHUB_OUTPUT"
       - *guard
       # tauri-driver can't attach here: msedgedriver needs WebView2 remote debugging, which
       # only the e2e build's window config turns on (apps/desktop/e2e/README.md, T-SHELL-06),
@@ -274,6 +327,14 @@ jobs:
           $exe = Find-Exe (Join-Path $env:LOCALAPPDATA 'Demios Desktop')
           if (-not $exe) { throw 'NSIS install: demios-desktop.exe not found' }
           $log += "nsis: installed to $exe"
+          # The Vulkan loader the exe links against sits next to it (Windows loads an exe's
+          # DLLs from the app's own folder first), and is the one built from the pinned release.
+          $dll = Join-Path (Split-Path $exe) 'vulkan-1.dll'
+          if (-not (Test-Path $dll)) { throw "vulkan-1.dll not installed next to $exe" }
+          $want = (Select-String -Path target/vulkan-loader/SOURCE.txt -Pattern 'sha256 ([0-9a-f]{64})').Matches[0].Groups[1].Value
+          $got = (Get-FileHash $dll -Algorithm SHA256).Hash.ToLower()
+          if ($got -ne $want) { throw "installed vulkan-1.dll is $got, built $want" }
+          $log += "nsis: vulkan-1.dll next to the exe (sha256 $got); no GPU on this runner, so the app must start in CPU mode"
           Launch $exe 'nsis-1'
           if (-not (Test-Path (Join-Path $data 'demios.sqlite3'))) { throw "no database in $data" }
           Set-Content (Join-Path $data 'reinstall-check.txt') 'keep'
@@ -329,9 +390,24 @@ jobs:
       - run: cargo fetch --locked
       - run: npm ci
         working-directory: apps/desktop
+      - name: Vulkan SDK (pinned, checksum verified)
+        run: |
+          set -euo pipefail
+          # The loader's window-system support (xcb, xlib, xrandr, wayland) needs their headers;
+          # llama.cpp links against libvulkan, which the LunarG Linux SDK no longer ships.
+          sudo apt-get install -y libx11-dev libxcb1-dev libxrandr-dev libwayland-dev libvulkan-dev
+          f="vulkansdk-linux-x86_64-$VULKAN_SDK_VERSION.tar.xz"
+          curl -sSfL -o "$RUNNER_TEMP/$f" "https://sdk.lunarg.com/sdk/download/$VULKAN_SDK_VERSION/linux/$f"
+          echo "$VULKAN_SDK_SHA256_LINUX  $RUNNER_TEMP/$f" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/vulkan"
+          tar -xJf "$RUNNER_TEMP/$f" -C "$RUNNER_TEMP/vulkan"
+          sdk="$RUNNER_TEMP/vulkan/$VULKAN_SDK_VERSION/x86_64"
+          echo "VULKAN_SDK=$sdk" >> "$GITHUB_ENV"
+          echo "$sdk/bin" >> "$GITHUB_PATH"
+      - *vulkan-loader
       - name: tauri build (release)
         working-directory: apps/desktop
-        run: npx tauri build --ci --bundles appimage,deb,rpm
+        run: npx tauri build --ci --features vulkan --config tauri.vulkan-linux.conf.json --bundles appimage,deb,rpm
       - name: Collect
         id: c
         run: |
@@ -341,6 +417,17 @@ jobs:
           cp "$(ls target/release/bundle/deb/*.deb | head -n1)" "out/$PREFIX-linux-amd64.deb"
           cp "$(ls target/release/bundle/rpm/*.rpm | head -n1)" "out/$PREFIX-linux-x86_64.rpm"
           chmod +x "out/$PREFIX-linux-x86_64.AppImage"
+          for f in out/*; do echo "- $(basename "$f") (Vulkan build): $(du -k "$f" | cut -f1) KiB"; done >> "$GITHUB_STEP_SUMMARY"
+          # The AppImage carries the pinned loader; deb and rpm depend on the system one.
+          # linuxdeploy strips bundled libraries and rewrites their rpath, so compare the code
+          # (.text), which neither touches, with the loader built from the pinned release.
+          (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/out/$PREFIX-linux-x86_64.AppImage" --appimage-extract usr/lib/libvulkan.so.1 > /dev/null)
+          text() { objcopy -O binary --only-section=.text "$1" "$RUNNER_TEMP/text.bin" && sha256sum "$RUNNER_TEMP/text.bin" | cut -d' ' -f1; }
+          want=$(text target/vulkan-loader/libvulkan.so.1)
+          got=$(text "$RUNNER_TEMP/squashfs-root/usr/lib/libvulkan.so.1")
+          [ "$got" = "$want" ] || { echo "::error::AppImage libvulkan.so.1 code is $got, built loader's $want"; exit 1; }
+          echo "- AppImage bundles the pinned Vulkan loader (.text sha256 $got)" >> "$GITHUB_STEP_SUMMARY"
+          dpkg-deb -f "out/$PREFIX-linux-amd64.deb" Depends | grep -q libvulkan1 || { echo "::error::deb does not depend on libvulkan1"; exit 1; }
           echo "bin=target/release/demios-desktop" >> "$GITHUB_OUTPUT"
       - *guard
       - name: Cache tauri-driver
@@ -378,6 +465,10 @@ jobs:
           sleep 3
           kill "$run" 2>/dev/null || true; pkill -f /usr/bin/demios-desktop || true; wait "$run" 2>/dev/null || true
           test -f "$data/demios.sqlite3" || { echo "::error::no database in $data"; cat app.log; ls -la "$data" || true; exit 1; }
+          # No GPU on this runner: the Vulkan build must say it runs models on the processor.
+          grep -F "local models: Local models run on the processor" app.log \
+            || { echo "::error::the app did not report CPU mode"; cat app.log; exit 1; }
+          echo "deb: no GPU here, app reports CPU mode ($(grep -F 'local models:' app.log | head -1))" | tee -a smoke.txt
           echo keep > "$data/reinstall-check.txt"
           before="$(sha256sum "$data/demios.sqlite3")"
           sudo apt-get install -y --reinstall "$deb"
@@ -401,7 +492,8 @@ jobs:
             sleep 3
             kill -0 $pid || { echo "app exited"; cat /tmp/app.log; exit 1; }
             [ -f "$db" ] || { echo "no database after 90 s"; cat /tmp/app.log; exit 1; }
-            echo "rpm: app started under Xvfb (pid $pid alive, database created)"
+            grep -F "local models: Local models run on the processor" /tmp/app.log || { echo "no CPU-mode line"; cat /tmp/app.log; exit 1; }
+            echo "rpm: app started under Xvfb (pid $pid alive, database created, CPU mode reported)"
           ' 2>&1 | tee rpm.txt
           grep -E "^rpm: " rpm.txt >> smoke.txt
           cp rpm.txt "$out/smoke-linux-rpm.txt"
