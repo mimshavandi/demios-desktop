@@ -798,4 +798,55 @@ mod tests {
         assert_eq!(chat::list_tombstones(&c).unwrap(), vec![(id, 5)]);
         assert!(file_tombstones(&c).unwrap().is_empty());
     }
+
+    #[test]
+    fn a_chat_moves_into_and_out_of_projects() {
+        let c = db();
+        let a = create_project(&c, "a").unwrap();
+        let b = create_project(&c, "b").unwrap();
+        let chat_ = chat::create_conversation(&c, "q").unwrap();
+        assert_eq!(
+            chat::set_conversation_project(&c, chat_.id, Some(a.id)).unwrap(),
+            None
+        );
+        assert_eq!(
+            chat::get_conversation(&c, chat_.id).unwrap().project_id,
+            Some(a.id)
+        );
+        assert_eq!(
+            chat::set_conversation_project(&c, chat_.id, Some(b.id)).unwrap(),
+            Some(a.id)
+        );
+        assert_eq!(
+            chat::set_conversation_project(&c, chat_.id, None).unwrap(),
+            Some(b.id)
+        );
+        assert_eq!(
+            chat::get_conversation(&c, chat_.id).unwrap().project_id,
+            None
+        );
+        // Not into a missing or deleted project, and not a deleted chat.
+        assert!(matches!(
+            chat::set_conversation_project(&c, chat_.id, Some(Id::new())),
+            Err(StoreError::NotFound(_))
+        ));
+        delete_project(&c, b.id).unwrap();
+        assert!(chat::set_conversation_project(&c, chat_.id, Some(b.id)).is_err());
+        chat::delete_conversation(&c, chat_.id).unwrap();
+        assert!(chat::set_conversation_project(&c, chat_.id, Some(a.id)).is_err());
+    }
+
+    #[test]
+    fn a_chat_moved_out_first_survives_deleting_the_project() {
+        let c = db();
+        let p = create_project(&c, "p").unwrap();
+        let moved = chat::create_conversation_in(&c, "moved", Some(p.id)).unwrap();
+        let stays = chat::create_conversation_in(&c, "stays", Some(p.id)).unwrap();
+        chat::set_conversation_project(&c, moved.id, None).unwrap();
+        assert_eq!(delete_project(&c, p.id).unwrap(), vec![stays.id]);
+        chat::purge_deleted(&c, now_ms()).unwrap();
+        purge_deleted(&c, now_ms()).unwrap();
+        assert!(chat::get_conversation(&c, moved.id).is_ok());
+        assert!(chat::get_conversation(&c, stays.id).is_err());
+    }
 }

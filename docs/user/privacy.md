@@ -18,7 +18,7 @@ The full privacy policy is at [demios.io/privacy](https://demios.io/privacy), an
 
 ## Delete one chat
 
-Point at the chat in the sidebar and select the delete button. You can undo it for 10 seconds. After that, it's removed for good, with its artifacts, the next time the app starts. See [Chats](chats.md).
+In the sidebar, open the chat's **More actions** menu (the … button) and choose **Delete**. You can undo it for 10 seconds. After that, it's removed for good, with its artifacts, the next time the app starts. See [Chats](chats.md).
 
 ## Delete a project or a project file
 
