@@ -201,6 +201,55 @@ impl Default for Throttle {
 pub struct Updates {
     #[cfg(feature = "updater")]
     pending: std::sync::Mutex<Option<tauri_plugin_updater::Update>>,
+    /// The launch check already ran (or was skipped) in this process.
+    launch_done: std::sync::atomic::AtomicBool,
+}
+
+impl Updates {
+    /// Claims this process's one launch check: true the first time only.
+    fn claim_launch(&self) -> bool {
+        !self
+            .launch_done
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+/// Whether the launch check runs (#95): only in a self-updating build, only when the user
+/// turned it on, and only once per launch (a reloaded window doesn't ask GitHub again).
+pub fn launch_check_due(mode: UpdateMode, turned_on: bool, first_in_process: bool) -> bool {
+    mode == UpdateMode::SelfUpdate && turned_on && first_in_process
+}
+
+/// The opt-in check at launch (#95). Returns what it found, or nothing when it didn't run
+/// or failed: a failed launch check is silent, and the next launch tries again. It only
+/// checks; installing still needs "Install and restart" and its confirm.
+#[tauri::command]
+pub async fn launch_update_check(
+    app: tauri::AppHandle,
+    updates: tauri::State<'_, Updates>,
+    state: tauri::State<'_, std::sync::Arc<crate::state::AppState>>,
+) -> IpcResult<Option<UpdateCheck>> {
+    let mode = current_mode(app.config());
+    if mode != UpdateMode::SelfUpdate {
+        return Ok(None);
+    }
+    let st = std::sync::Arc::clone(state.inner());
+    let turned_on = tauri::async_runtime::spawn_blocking(move || st.settings())
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .is_some_and(|s| s.check_updates_at_launch);
+    if !launch_check_due(mode, turned_on, updates.claim_launch()) {
+        return Ok(None);
+    }
+    #[cfg(feature = "updater")]
+    {
+        Ok(imp::check(&app, &updates).await.ok())
+    }
+    #[cfg(not(feature = "updater"))]
+    {
+        Ok(None)
+    }
 }
 
 /// "Check for updates": asks GitHub Releases whether a newer version exists. Downloads
@@ -425,6 +474,30 @@ mod imp {
 mod tests {
     use super::*;
     use crate::distribution::check_build;
+
+    #[test]
+    fn the_launch_check_is_opt_in_self_update_only_and_once() {
+        assert!(launch_check_due(UpdateMode::SelfUpdate, true, true));
+        assert!(
+            !launch_check_due(UpdateMode::SelfUpdate, false, true),
+            "off by default"
+        );
+        assert!(
+            !launch_check_due(UpdateMode::SelfUpdate, true, false),
+            "once per launch"
+        );
+        for m in [
+            UpdateMode::MicrosoftStore,
+            UpdateMode::Flathub,
+            UpdateMode::Off,
+            UpdateMode::NoKey,
+        ] {
+            assert!(!launch_check_due(m, true, true), "{m:?}");
+        }
+        let u = Updates::default();
+        assert!(u.claim_launch());
+        assert!(!u.claim_launch());
+    }
 
     #[test]
     fn store_and_flathub_builds_never_update_themselves() {

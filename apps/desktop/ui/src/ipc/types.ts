@@ -243,6 +243,10 @@ export interface Settings {
   telemetry_enabled: boolean;
   /** First-run AI notice dismissed (T-STORE-09). Missing in older saves = not seen. */
   ai_notice_seen?: boolean;
+  /** Check for updates once when Demios starts (#95). Off by default. */
+  check_updates_at_launch?: boolean;
+  /** The one-time question about the launch check was answered. */
+  launch_check_offered?: boolean;
   /** Passed through untouched (no screen edits MCP servers yet). */
   mcp_servers?: unknown[];
 }
@@ -402,7 +406,15 @@ export interface ModelCatalog {
   chat_model: string | null;
   /** Whether the chat model makes tool calls; without them it can't make artifacts. */
   chat_model_tools: boolean;
+  /** Where local models run on this computer; null when local models are off. */
+  compute: LocalCompute | null;
 }
+
+/** Where local models run (T-INF-24): a graphics card, shared graphics, or the processor. */
+export type LocalCompute =
+  | { mode: "gpu"; name: string; backend: string; vram: number; description: string }
+  | { mode: "shared_gpu"; name: string; backend: string; description: string }
+  | { mode: "cpu"; reason: "no_gpu" | "no_gpu_support"; description: string };
 
 export interface AppInfo {
   version: string;
@@ -416,6 +428,8 @@ export interface AppInfo {
   commit?: string | null;
   /** Build channel, e.g. "preview" (CI builds only). */
   channel?: string | null;
+  /** Why the assistant's instructions didn't load; chats can't start until fixed (#141). */
+  agent_error?: string | null;
 }
 
 /**

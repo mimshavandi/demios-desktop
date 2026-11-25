@@ -274,6 +274,12 @@ export function createMockApi(): Api {
     settings,
     chat_model: settings.slots["chat"] ?? "local:dev-fake",
     chat_model_tools: true,
+    compute: {
+      mode: "shared_gpu",
+      name: "Apple M3",
+      backend: "Metal",
+      description: "Local models run on the built-in graphics (Apple M3), which share this computer's memory.",
+    },
   });
 
   const stream = (cid: string, a: StoredMessage, q: string, onEvent: (e: ChatEvent) => void) => {
@@ -435,6 +441,7 @@ export function createMockApi(): Api {
         date: "2027-01-15T10:00:00Z",
       };
     },
+    launchUpdateCheck: async () => null,
     installUpdate: async (version, onProgress) => {
       const total = 40 * 1024 * 1024;
       for (let done = 0; done <= total; done += total / 8) {

@@ -48,6 +48,7 @@ interface Commands {
   app_info: { args: Record<string, never>; ret: AppInfo };
   check_for_update: { args: Record<string, never>; ret: UpdateCheck };
   install_update: { args: { version: string; onProgress: Channel<UpdateProgress> }; ret: null };
+  launch_update_check: { args: Record<string, never>; ret: UpdateCheck | null };
   delete_all_local_data: { args: Record<string, never>; ret: null };
   local_data_summary: { args: Record<string, never>; ret: LocalDataSummary };
   report_problem: { args: { kind: ReportKind; messageId: Id | null }; ret: null };
@@ -177,6 +178,11 @@ export const api = {
   appInfo: () => call("app_info", {}),
   /** Asks GitHub Releases for a newer version; downloads nothing. */
   checkForUpdate: () => call("check_for_update", {}),
+  /**
+   * The opt-in check at launch: null unless this build updates itself, the setting is on and
+   * it hasn't run in this process yet. Failures are silent (null).
+   */
+  launchUpdateCheck: () => call("launch_update_check", {}),
   /** After the user confirmed `version`: downloads, verifies, installs and restarts. */
   installUpdate: (version: string, onProgress: (p: UpdateProgress) => void) =>
     call("install_update", { version, onProgress: channel(onProgress) }),

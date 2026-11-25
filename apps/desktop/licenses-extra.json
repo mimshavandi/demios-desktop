@@ -53,6 +53,12 @@
       "version": "3.54.1, bundled by libsqlite3-sys 0.40.0",
       "licence": "blessing",
       "text_files": ["licenses/sqlite.txt"]
+    },
+    {
+      "name": "Khronos Vulkan-Loader",
+      "version": "v1.4.368, shipped with the Windows and Linux AppImage builds (T-INF-24)",
+      "licence": "Apache-2.0",
+      "text_files": ["licenses/vulkan-loader.txt"]
     }
   ]
 }

@@ -23,7 +23,23 @@ Select **Add files** and pick one or more files. Demios keeps a copy of each fil
 
 To remove a file, select the remove button next to it. A message lets you **Undo** for 10 seconds. The copy is deleted for good the next time the app starts.
 
-Answers don't use the files yet. Searching them for answers is coming in a later version.
+## Answers from your files
+
+In a project's chats, Demios searches the project's text files for each question and gives the model the best passages, so answers can use them. Only text files of up to 2 MB are searched. Chats outside a project don't use any files.
+
+Under each answer, a list shows the sources the model was given, for example "[S1] plan.md lines 3–9". If nothing matched, it says "No passages in this project's files matched this question." Sources record only the file and lines, not the text.
+
+The passages are sent to the model with your question. With a model on this device, nothing leaves your computer. With a provider's model, the passages go to that provider. See [Privacy and your data](privacy.md).
+
+### Better search
+
+At first, files are searched by keywords, and the sources under an answer say "Keyword search". To also find passages by meaning, download the search model (about 84 MB):
+
+- The first time a project has files, its page asks **Turn on better search?** Choose **Download** or **Not now**. After **Not now**, it doesn't ask again.
+- You can download it any time from **Project search** in **Settings → Models**.
+
+While the model downloads and your files are prepared, Sources show the progress, and keyword search keeps working.
+
 
 ## Chats in a project
 

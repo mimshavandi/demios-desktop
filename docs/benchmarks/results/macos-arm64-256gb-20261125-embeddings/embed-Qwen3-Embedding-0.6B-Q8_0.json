@@ -1,0 +1,106 @@
+{
+  "schema": "dn.bench-embed.v1",
+  "unix_time": 1795613512,
+  "model": {
+    "arch": "qwen3",
+    "file": "Qwen3-Embedding-0.6B-Q8_0.gguf",
+    "file_size": 639150592,
+    "moe": false,
+    "n_layer": 28,
+    "n_params": 595776512,
+    "quant": "Q8_0"
+  },
+  "machine": {
+    "arch": "aarch64",
+    "cpu": "Apple M3 Ultra",
+    "cpu_threads": 32,
+    "devices": [
+      {
+        "backend": "MTL",
+        "description": "Apple M3 Ultra",
+        "kind": "gpu",
+        "memory_free": 239143043072,
+        "memory_total": 239143780352,
+        "name": "MTL0"
+      },
+      {
+        "backend": "CPU",
+        "description": "Apple M3 Ultra",
+        "kind": "cpu",
+        "memory_free": 274877906944,
+        "memory_total": 274877906944,
+        "name": "CPU"
+      }
+    ],
+    "gpu_offload": true,
+    "memory": {
+      "memory": {
+        "gpu_budget": 239143780352,
+        "kind": "unified"
+      },
+      "total_ram": 274877906944
+    },
+    "os": "macos"
+  },
+  "query_prefix": "Instruct: Given a question, retrieve the passage that answers it\nQuery:",
+  "doc_prefix": "",
+  "dimension": 1024,
+  "load_ms": 185.146875,
+  "docs_per_s": 63.51415902622208,
+  "query_ms": 13.799732638888889,
+  "peak_rss_bytes": 1074790400,
+  "overall": {
+    "n": 36,
+    "recall_at_1": 0.8888888888888888,
+    "recall_at_3": 1.0,
+    "mrr": 0.9444444444444444
+  },
+  "by_lang": {
+    "de": {
+      "n": 12,
+      "recall_at_1": 0.9166666666666666,
+      "recall_at_3": 1.0,
+      "mrr": 0.9583333333333334
+    },
+    "de-en": {
+      "n": 6,
+      "recall_at_1": 0.8333333333333334,
+      "recall_at_3": 1.0,
+      "mrr": 0.9166666666666666
+    },
+    "en": {
+      "n": 12,
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "mrr": 1.0
+    },
+    "en-de": {
+      "n": 6,
+      "recall_at_1": 0.6666666666666666,
+      "recall_at_3": 1.0,
+      "mrr": 0.8333333333333334
+    }
+  },
+  "misses": [
+    {
+      "lang": "de",
+      "query": "Worüber haben sich die Kunden am meisten beschwert?",
+      "rank": 2
+    },
+    {
+      "lang": "de-en",
+      "query": "Ist Zwei-Faktor-Anmeldung jetzt Pflicht?",
+      "rank": 2
+    },
+    {
+      "lang": "en-de",
+      "query": "What is the notice period for the flat?",
+      "rank": 2
+    },
+    {
+      "lang": "en-de",
+      "query": "How often do we test restoring a backup?",
+      "rank": 2
+    }
+  ]
+}
