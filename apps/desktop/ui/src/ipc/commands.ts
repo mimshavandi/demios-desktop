@@ -81,6 +81,7 @@ interface Commands {
   update_project: { args: { projectId: Id; name: string; instructions: string }; ret: Project };
   delete_project: { args: { projectId: Id }; ret: number };
   restore_project: { args: { projectId: Id }; ret: null };
+  move_conversation: { args: { conversationId: Id; projectId: Id | null }; ret: Id | null };
   list_project_files: { args: { projectId: Id }; ret: ProjectFile[] };
   add_project_files: { args: { projectId: Id }; ret: AddedFiles };
   remove_project_file: { args: { projectId: Id; fileId: Id }; ret: null };
@@ -233,6 +234,9 @@ export const api = {
   /** Soft delete with its chats and files; returns how many chats went with it. */
   deleteProject: (projectId: Id) => call("delete_project", { projectId }),
   restoreProject: (projectId: Id) => call("restore_project", { projectId }),
+  /** Moves a chat into a project, or out with `null`; returns the project it was in, for Undo. */
+  moveConversation: (conversationId: Id, projectId: Id | null) =>
+    call("move_conversation", { conversationId, projectId }),
   listProjectFiles: (projectId: Id) => call("list_project_files", { projectId }),
   /** Opens the system file picker (shown by the backend) and copies the picked files in. */
   addProjectFiles: (projectId: Id) => call("add_project_files", { projectId }),

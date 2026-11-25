@@ -7,6 +7,7 @@ import {
   type ArtifactType,
   type Id,
   type ModelCatalog,
+  type ProjectSummary,
   type SkillInfo,
   type StoredMessage,
   type UnknownOutcome,
@@ -63,6 +64,11 @@ interface Props {
   /** The skill this chat uses, or `null`. */
   skill?: string | null;
   onSkill?: (name: string | null) => void;
+  /** Projects the chat can be in (#136); the picker hides when there are none. */
+  projects?: ProjectSummary[];
+  /** The chat's project (or, for a new chat, the one it will start in), or `null`. */
+  projectId?: Id | null;
+  onProject?: (id: Id | null) => void;
 }
 
 /** One artifact a message created or changed: its latest version from that message. */
@@ -261,6 +267,9 @@ export function ChatView(p: Props) {
           onKeyDown={onKeyDown}
         />
         <div className="composer-bar">
+          {p.projects !== undefined && p.projects.length > 0 && p.onProject !== undefined && (
+            <ProjectPicker projects={p.projects} value={p.projectId ?? null} onChange={p.onProject} />
+          )}
           {p.skills !== undefined && p.skills.length > 0 && p.onSkill !== undefined && (
             <SkillPicker skills={p.skills} value={p.skill ?? null} onChange={p.onSkill} />
           )}
@@ -299,6 +308,40 @@ export function ChatView(p: Props) {
         {AI_DISCLOSURE}
       </p>
     </section>
+  );
+}
+
+/** Moves the chat into a project or out of one (#136): a labelled select, like the skill's. */
+function ProjectPicker({
+  projects,
+  value,
+  onChange,
+}: {
+  projects: ProjectSummary[];
+  value: Id | null;
+  onChange: (id: Id | null) => void;
+}) {
+  const chosen = projects.find((x) => x.id === value);
+  return (
+    <div className="composer-skill" data-testid="project-picker">
+      <label htmlFor="composer-project" className="dn-visually-hidden">
+        Project
+      </label>
+      <Select
+        id="composer-project"
+        value={chosen?.id ?? ""}
+        placeholder="No project"
+        emptyText="No projects"
+        aria-describedby="composer-project-d"
+        groups={[{ label: "Move to project", options: projects.map((x) => ({ value: x.id, label: x.name })) }]}
+        onValueChange={(v) => onChange(v === "" ? null : v)}
+      />
+      <span id="composer-project-d" className="dn-visually-hidden">
+        {chosen === undefined
+          ? "This chat isn't in a project. Choose one to give it that project's instructions."
+          : `In ${chosen.name}. Its instructions apply from the next message.`}
+      </span>
+    </div>
   );
 }
 

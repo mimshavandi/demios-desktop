@@ -371,6 +371,24 @@ pub async fn restore_project(state: AppStateRef<'_>, project_id: Id) -> IpcResul
     .await
 }
 
+/// Moves a chat into a project, or out of one with `None` (#136). Returns the project it
+/// was in before, for Undo. The next message uses the new project's instructions.
+#[tauri::command]
+pub async fn move_conversation(
+    state: AppStateRef<'_>,
+    conversation_id: Id,
+    project_id: Option<Id>,
+) -> IpcResult<Option<Id>> {
+    crate::commands::blocking(&state, move |s| {
+        Ok(store::set_conversation_project(
+            &*s.db()?,
+            conversation_id,
+            project_id,
+        )?)
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn list_project_files(
     state: AppStateRef<'_>,
@@ -682,6 +700,33 @@ mod tests {
         assert!(text.contains("\"Thesis\"") && text.ends_with("Cite sources."));
         assert_eq!(instructions_for(&c, outside.id).unwrap(), None);
         assert_eq!(instructions_for(&c, in_empty.id).unwrap(), None);
+    }
+
+    #[test]
+    fn instructions_follow_a_chat_that_moves() {
+        let c = db();
+        let a = project::create_project(&c, "A").unwrap();
+        project::update_project(&c, a.id, "A", "Answer in French.").unwrap();
+        let b = project::create_project(&c, "B").unwrap();
+        project::update_project(&c, b.id, "B", "Answer in Dutch.").unwrap();
+        let chat = store::create_conversation(&c, "q").unwrap();
+        assert_eq!(instructions_for(&c, chat.id).unwrap(), None);
+        store::set_conversation_project(&c, chat.id, Some(a.id)).unwrap();
+        assert!(
+            instructions_for(&c, chat.id)
+                .unwrap()
+                .unwrap()
+                .contains("French")
+        );
+        store::set_conversation_project(&c, chat.id, Some(b.id)).unwrap();
+        assert!(
+            instructions_for(&c, chat.id)
+                .unwrap()
+                .unwrap()
+                .contains("Dutch")
+        );
+        store::set_conversation_project(&c, chat.id, None).unwrap();
+        assert_eq!(instructions_for(&c, chat.id).unwrap(), None);
     }
 
     #[test]

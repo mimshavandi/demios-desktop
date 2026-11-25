@@ -252,6 +252,7 @@ pub fn run() {
             projects::update_project,
             projects::delete_project,
             projects::restore_project,
+            projects::move_conversation,
             projects::list_project_files,
             projects::add_project_files,
             projects::remove_project_file,
