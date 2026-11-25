@@ -62,6 +62,10 @@ Preview build, not signed: installers for macOS, Windows and Linux on the [GitHu
 - An answer from a provider or server that stops sending now ends with a message you can retry: after 5 minutes with no first response, or 60 seconds of silence once the answer has started ([#44](https://github.com/mimshavandi/demios-desktop/pull/44)).
 - Larger models that don't fully fit on the graphics chip can now run with part of the model in regular memory. The fit check picks this for mixture-of-experts models such as Qwen3 30B-A3B, says replies will be a little slower, and the app loads the model that way. `dn fit` shows the chosen preset ([#129](https://github.com/mimshavandi/demios-desktop/pull/129)).
 
+### Fixed
+
+- The window always opens inside the screen's free area, so its bottom, including the message box, is never hidden behind the Windows taskbar or the macOS Dock. Demios remembers the window's size, position and maximised state for each monitor, and pulls it back on screen if a monitor is gone or its scaling changed ([#PRNUM](https://github.com/mimshavandi/demios-desktop/pull/PRNUM)).
+
 ### Security
 
 - Provider API keys are kept in the system keychain (macOS Keychain, Windows Credential Manager, Linux Secret Service), never in the database or logs ([#4](https://github.com/mimshavandi/demios-desktop/pull/4)).
