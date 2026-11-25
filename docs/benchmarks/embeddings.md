@@ -1,10 +1,14 @@
 # Embedding models for the knowledge index (#128)
 
-The local knowledge index embeds project files and questions with nomic-embed-text v1.5, which
+The local knowledge index embedded project files and questions with nomic-embed-text v1.5, which
 is trained mostly on English. This compares it with multilingual GGUF embedding models that run
 through dn-inference (llama.cpp), on English and German.
 
-**Recommendation: nomic-embed-text v2 MoE (Q8_0, `nomic-embed-text-v2-moe-q8_0`).**
+**Decision (#201):** the default search model is now nomic-embed-text v2 MoE at Q5_K_M
+(`nomic-embed-text-v2-moe-q5_k_m`, 371 MB). It gets the same results as Q8_0 here at about 70% of
+the size (see [Quantisations](#quantisations-of-nomic-v2-moe)).
+
+**Recommendation of the first comparison: nomic-embed-text v2 MoE (Q8_0, `nomic-embed-text-v2-moe-q8_0`).**
 - It is already in the catalogue and is Apache-2.0.
 - It is the fastest of the multilingual models and second best in quality (0.97 recall@1).
 - It needs the same prefixes (`search_query: ` / `search_document: `) and gives the same
@@ -73,6 +77,24 @@ languages.
     Apache-2.0 model.
 - **bge-m3:** as good as nomic v2, but slower and bigger, with 1024 dimensions.
 - **granite 278M and Qwen3-Embedding 0.6B:** behind on German and across languages.
+
+## Quantisations of nomic v2 MoE
+
+Every published quantisation, on the same set and machine (`dn bench-embed`). Q5_K_M answers the
+same questions right as Q8_0; at Q4 one cross-language question drops from rank 1 to rank 2.
+
+| quant | size | recall@1 | across languages (de→en, en→de) | docs/s |
+|---|---:|---:|---:|---:|
+| Q8_0 | 512 MB | 0.97 | 0.92 | 148 |
+| Q6_K | 397 MB | 0.97 | 0.92 | 147 |
+| **Q5_K_M (default)** | 371 MB | 0.97 | 0.92 | 128 |
+| Q4_K_M | 344 MB | 0.94 | 0.83 | 144 |
+| Q4_K_S | 325 MB | 0.92 | 0.83 | 144 |
+| Q3_K_M | 308 MB | 0.92 | 0.83 | 130 |
+| Q2_K | 273 MB | 0.67 | 0.25 | 133 |
+
+Speed differences are within run-to-run noise. The app loads v2 at its 512-token training
+context; a longer passage is cut there.
 
 ## Prefixes each model needs (`dn bench-embed`, `embed_eval::prefixes`)
 

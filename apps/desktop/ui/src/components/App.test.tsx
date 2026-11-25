@@ -179,7 +179,7 @@ function fakeApi() {
     artifactChildFocus: async () => null,
     artifactChildClose: async () => null,
     messageSources: async () => null,
-    knowledgeStatus: async () => ({ offer: "ask", model: null, embedding: null }),
+    knowledgeStatus: async () => ({ offer: "ask", model: null, embedding: null, unused: null }),
     knowledgeOffer: async () => null,
     appInfo: async () => ({ version: "0.1.0", dev_fake_model: true, data_dir: "/tmp", models_dir: "/tmp/models", updates: launch.mode }),
     checkForUpdate: async () => ({ status: "up_to_date", current: "0.1.0" }) as const,
