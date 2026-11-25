@@ -27,7 +27,7 @@ Every direct dependency is listed here with why and its licence (ADR-0009). Anyt
 | sha2 | dn-models, demios-desktop | SHA-256 verification of downloads; fingerprints of MCP tools | MIT/Apache-2.0 | T-INF-05 |
 | sysinfo (`system`; `disk` in dn-models) | dn-models, dn | RAM detection for the fit estimator; free disk space before a model download; peak RSS in `dn bench` | MIT | T-INF-03 |
 | clap (derive) | dn | `dn` command-line parsing | MIT/Apache-2.0 | T-INF-04 |
-| tauri 2, tauri-build 2 | apps/desktop | desktop shell, typed IPC, capabilities (ADR-0002) | MIT/Apache-2.0 | T-SHELL-01 |
+| tauri 2, tauri-build 2 | apps/desktop | desktop shell, typed IPC, capabilities (ADR-0002). Pinned to `tauri ~2.11` / `tauri-build ~2.6` with the `unstable` feature (multiwebview) for the Windows artifact webview (ADR-0012, owner approved); every upgrade must pass `e2e-windows` | MIT/Apache-2.0 | T-SHELL-01, #75 |
 | tokio (`sync`, `macros`, `time`, `rt`) | apps/desktop | cancel a streaming answer (`select!` + `oneshot`); timer for the dev fake model | MIT | T-SHELL-01 |
 | tauri-plugin-opener 2 | apps/desktop | open the "Report a problem" form in the system browser; called from Rust only, its JS commands are not granted (lead approved 2026-11-24); links in answers also open through it, from the `open_link` command after a native confirm (T-SHELL-09) | MIT/Apache-2.0 | T-STORE-14 |
 | tauri-plugin-dialog 2 | apps/desktop | native confirms shown from Rust only: "start this program?" before a local MCP server is launched, and "open this link?" with the full URL for links in answers (T-SHELL-09); its JS commands are not granted (lead approved) | MIT/Apache-2.0 | T-SHELL-08 |

@@ -141,8 +141,24 @@ Expect:
 - Single instance works over D-Bus: a link while the app runs focuses the existing window, and `pgrep -c demios-desktop` stays 1.
 - Flatpak: a link from the host browser reaches the sandboxed app through the portal and opens the confirmation.
 
-## Windows: artifacts are off (threat model R8)
-WebView2 runs the app's init scripts in sub-frames too, and Tauri defines its IPC object there so that it can't be removed. The artifact frame shell refuses to run artifact code in a frame that can still reach the app's IPC. So for now artifacts are saved but not shown on Windows, and the pane says "Artifacts aren't available on Windows yet". On Windows the `artifact` scheme serves an inert page with no script. `e2e-windows` asserts the gate message and that no artifact frame is created. Making artifacts safe on WebView2 is tracked in #75.
+## Windows: the artifact webview (threat model R8, ADR-0012)
+WebView2 runs the app's init scripts in sub-frames too, and Tauri defines its IPC object there so that it can't be removed. So on Windows artifacts render in a separate child webview labelled `artifact`. No capability names that webview, and Tauri's ACL refuses every call from it. The child is out of WebDriver's reach, so:
+
+- `artifacts.e2e.mjs` checks the Windows flow through the pane and the e2e-only `artifact_child_state` command (dev fake-model builds only).
+- `artifact-child.e2e.mjs` runs the isolation checks:
+  - from the child's host page (`artifact_child_probe`);
+  - from artifact code in its frame (the fake model's "probe artifact", which reports in the pane's issue list).
+
+  It also checks that an app dialog over the pane hides the child, and that the child follows window resizes. Whole-screen captures go to the `e2e-screenshots-windows` CI artifact.
+
+**Tauri upgrades.** Multiwebview is Tauri's `unstable` API, and Tauri is pinned to `~2.11`. Any change to the Tauri version must pass `e2e-windows`, with `artifact-child.e2e.mjs`, before it merges, plus the manual window checks below on macOS.
+
+## Manual window checks (every Tauri upgrade)
+`unstable` makes every window's own webview an auto-resized child. `window.e2e.mjs` covers resizing on all three OSes. Check these by hand:
+- [ ] macOS: the overlay title bar and the traffic lights are where they were; dragging the title bar moves the window; double-clicking it zooms.
+- [ ] Windows and Linux: dragging the title bar moves the window; resizing from every edge keeps the app filling the window.
+- [ ] Windows: with an artifact open, open the model menu, a tooltip and the Delete-all dialog over the pane. The artifact area goes blank while each is open and comes back after.
+- [ ] Windows: click into an artifact and press Esc: the pane closes. Press Ctrl+N inside an artifact: a new chat starts. Tab through an artifact: focus comes back to the app.
 
 ## Release checklist: artifacts
 Run these on the signed release build of each platform, in addition to the lists above.
@@ -159,8 +175,10 @@ Run these on the signed release build of each platform, in addition to the lists
 - [ ] Delete all local data → the confirm lists the artifact count → afterwards no artifact is listed.
 
 **Windows (WebView2)**
-- [ ] An artifact request saves the artifact: the card shows. **Open** shows "Artifacts aren't available on Windows yet" and creates no frame.
-- [ ] `http://artifact.localhost/frame/` opened in DevTools serves the inert page (no script).
+- [ ] The same artifact flow as macOS: create, update, restore, the "AI-generated" line, "Ask to fix", network consent per version.
+- [ ] In the artifact webview's DevTools (right-click › Inspect inside the artifact, debug builds): `__TAURI_INTERNALS__.invoke("list_conversations")` in the host page and in the frame rejects with "not allowed".
+- [ ] `http://artifact.localhost/frame/` opened in the **main** window's DevTools serves the inert page (no script).
+- [ ] The manual window checks above.
 
 **Linux (WebKitGTK, release build)**
 - [ ] The same artifact flow as macOS, on the release `.deb`/AppImage, not just the debug e2e build.

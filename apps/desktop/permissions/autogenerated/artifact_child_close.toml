@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-artifact-child-close"
+description = "Enables the artifact_child_close command without any pre-configured scope."
+commands.allow = ["artifact_child_close"]
+
+[[permission]]
+identifier = "deny-artifact-child-close"
+description = "Denies the artifact_child_close command without any pre-configured scope."
+commands.deny = ["artifact_child_close"]

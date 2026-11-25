@@ -96,6 +96,24 @@ await writeFile(
   join(dist, "frame", "csp.json"),
   JSON.stringify({ strict: artifactCsp(false), network: artifactCsp(true) }, null, 2) + "\n",
 );
+// Host page of the desktop app's artifact webview (Windows, ADR-0012). Served by the app at
+// /host/ with its own CSP (apps/desktop/src/artifact_child.rs); the script is a separate file so
+// that CSP needs no inline script.
+await build({
+  entryPoints: [join(root, "src", "host", "host.ts")],
+  bundle: true,
+  format: "iife",
+  minify: true,
+  target: ["es2020"],
+  platform: "browser",
+  outfile: join(dist, "host", "host.js"),
+  plugins: [runtimeText],
+  logLevel: "warning",
+});
+await writeFile(
+  join(dist, "host", "index.html"),
+  `<!doctype html><html><head><meta charset="utf-8"><meta name="referrer" content="no-referrer"><title>Artifact</title><script defer src="/host/host.js"></script></head><body><div id="dn-start" tabindex="0"></div><div id="dn-frame"></div><div id="dn-end" tabindex="0"></div></body></html>\n`,
+);
 const shipped = {};
 for (const f of await readdir(dist, { recursive: true, withFileTypes: true })) {
   if (f.isFile() && /\.(js|html)$/.test(f.name)) {

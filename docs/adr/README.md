@@ -15,3 +15,4 @@ Format: Context → Decision → Options (table) → Trade-offs → Consequences
 | [0009](0009-security-baseline.md) | Security and supply-chain baseline | Proposed |
 | [0010](0010-design-system.md) | One design system: tokens + headless primitives | Accepted |
 | [0011](0011-model-sources.md) | Model sources: Hugging Face Hub first, no in-house registry | Accepted |
+| [0012](0012-windows-artifact-webview.md) | Artifacts on Windows render in a separate, capability-less webview | Accepted |

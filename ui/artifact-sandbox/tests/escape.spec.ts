@@ -325,11 +325,13 @@ test("cannot move the host through session history", async ({ page }) => {
 // WebView2 (Windows) runs the app's init scripts in sub-frames too, so the frame itself can
 // start with Tauri's IPC object (and its invoke key). The shell must remove it before artifact
 // code runs, or refuse to render. `addInitScript` runs in every frame, like WebView2 does.
-function injectFrameIpc(configurable: boolean): string {
+function injectFrameIpc(configurable: boolean, label = "main"): string {
   return `(() => {
     if (location.port !== "4175") return;
     const report = (what) => parent.postMessage({ probe: ["injectedIpc", what] }, "*");
     const internals = { invoke: () => report("invoke-called"), postMessage: () => report("pm-called") };
+    // Tauri sets this before page scripts run, read-only (manager/webview.rs).
+    Object.defineProperty(internals, "metadata", { value: { currentWindow: { label: "main" }, currentWebview: { label: ${JSON.stringify(label)} } } });
     Object.defineProperty(window, "__TAURI_INTERNALS__", { value: internals, configurable: ${configurable}, writable: ${configurable} });
     Object.defineProperty(window, "ipc", { value: Object.freeze({ postMessage: () => report("ipc-called") }), configurable: ${configurable} });
     window.chrome = Object.assign(window.chrome || {}, { webview: { postMessage: () => report("webview-called") } });
@@ -361,4 +363,17 @@ test("a frame whose injected IPC can't be removed refuses to render", async ({ p
   await page.waitForTimeout(500);
   const all = await page.evaluate(() => (window as unknown as { __probes: unknown[] }).__probes);
   expect(all).toEqual([]);
+});
+
+// Windows (ADR-0012): in the separate artifact webview the IPC object can't be removed either,
+// but no capability names that webview, so the shell renders there (and only there: the label
+// is Tauri's, set before any page script and read-only).
+test("a frame in the isolated artifact webview renders although its IPC object stays", async ({ page }) => {
+  await page.addInitScript(injectFrameIpc(false, "artifact"));
+  await openDemo(page);
+  await instrumentHost(page);
+  await show(page, { kind: "html" }, attackDoc({ ran: `return "artifact code ran";` }));
+  const r = await probes(page, 1);
+  expect(r["ran"]).toBe("ok:artifact code ran");
+  await expect(page.locator(".dn-av-error")).toBeHidden();
 });

@@ -132,7 +132,9 @@ jobs:
         run: xvfb-run -a npm test
 
   # Windows (WebView2 + msedgedriver): runs the same specs as `e2e`, including the axe check,
-  # and is a required check. Its e2e build turns on WebView2 remote debugging through the
+  # and is a required check. It includes the artifact webview isolation spec
+  # (specs/artifact-child.e2e.mjs, ADR-0012): artifacts on Windows rely on Tauri's `unstable`
+  # multiwebview API, so EVERY TAURI UPGRADE MUST PASS THIS JOB before it merges. Its e2e build turns on WebView2 remote debugging through the
   # window config (apps/desktop/e2e/README.md, "T-SHELL-06: Windows WebView2 session").
   e2e-windows:
     runs-on: windows-latest
@@ -218,6 +220,16 @@ jobs:
       - name: e2e
         working-directory: apps/desktop/e2e
         run: npm test
+      # Whole-screen captures from the artifact webview spec (the child webview is drawn by the
+      # OS, outside WebDriver's screenshots): dialog over the pane, after a resize.
+      - name: Upload screen captures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-screenshots-windows
+          path: apps/desktop/e2e/screenshots/
+          retention-days: 14
+          if-no-files-found: ignore
       - name: Upload msedgedriver log
         if: always()
         uses: actions/upload-artifact@v4

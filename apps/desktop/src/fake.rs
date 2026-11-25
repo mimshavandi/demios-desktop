@@ -42,6 +42,38 @@ impl Default for FakeChatModel {
 pub const FAKE_ARTIFACT_V1: &str = "Version one";
 pub const FAKE_ARTIFACT_V2: &str = "Version two";
 
+/// "make a probe artifact": artifact code that tries to reach the app from inside the frame
+/// and reports what happened as one console error line (`dn-probe {json}`), which the pane shows
+/// in its issue list. The e2e-windows isolation spec reads it there (the frame is in the
+/// artifact webview, out of WebDriver's reach). Evidence only: the spec also checks from outside.
+pub const FAKE_PROBE_ARTIFACT: &str = r##"<!doctype html>
+<html><head><title>Probe</title></head><body><h1>Probe</h1>
+<script>
+(async () => {
+  const out = {};
+  const T = window.__TAURI_INTERNALS__;
+  out.tauri = typeof T;
+  out.label = T && T.metadata && T.metadata.currentWebview ? T.metadata.currentWebview.label : null;
+  out.origin = self.origin;
+  const call = async (cmd, args) => {
+    if (!T || typeof T.invoke !== "function") return "no-invoke";
+    const timeout = new Promise((r) => setTimeout(() => r("timeout"), 5000));
+    try { return await Promise.race([T.invoke(cmd, args).then((v) => "ok:" + JSON.stringify(v).slice(0, 80)), timeout]); }
+    catch (e) { return "err:" + String(e && e.message ? e.message : e).slice(0, 120); }
+  };
+  const attempt = async (f) => { try { return "ok:" + String(await f()).slice(0, 80); } catch (e) { return "blocked:" + (e && e.name ? e.name : String(e)); } };
+  out.listConversations = await call("list_conversations", {});
+  out.createConversation = await call("create_conversation", {});
+  out.parentDocument = await attempt(() => parent.document.title);
+  out.topDocument = await attempt(() => top.document.title);
+  out.hostDoc = await attempt(() => fetch("http://artifact.localhost/host/doc?seq=1").then((r) => r.status));
+  out.hostEvent = await attempt(() => fetch("http://artifact.localhost/host/event", { method: "POST", body: "{}" }).then((r) => r.status));
+  out.ipcHttp = await attempt(() => fetch("http://ipc.localhost/create_conversation", { method: "POST", body: "{}" }).then((r) => r.status));
+  console.error("dn-probe " + JSON.stringify(out));
+})();
+</script></body></html>
+"##;
+
 fn text_of(m: &dn_core::chat::ChatMessage) -> String {
     m.content
         .iter()
@@ -99,6 +131,20 @@ impl FakeChatModel {
                     }),
                 );
             }
+        }
+        if user.contains("probe artifact") && offered("artifact_create") {
+            return (
+                "Making a probe artifact.".into(),
+                Some(ToolCall {
+                    id: "fake_probe".into(),
+                    name: "artifact_create".into(),
+                    arguments: serde_json::json!({
+                        "type": "html",
+                        "title": "Probe artifact",
+                        "content": FAKE_PROBE_ARTIFACT,
+                    }),
+                }),
+            );
         }
         if user.contains("html artifact") && offered("artifact_create") {
             let content = format!(

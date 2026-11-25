@@ -58,6 +58,14 @@
     "allow-pause-download",
     "allow-check-for-update",
     "allow-install-update",
+    "allow-artifact-child-open",
+    "allow-artifact-child-render",
+    "allow-artifact-child-bounds",
+    "allow-artifact-child-focus",
+    "allow-artifact-child-close",
+    "allow-artifact-child-probe",
+    "allow-artifact-child-probe-report",
+    "allow-artifact-child-state",
     "core:window:allow-start-dragging"
   ]
 }
