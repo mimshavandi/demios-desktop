@@ -16,6 +16,7 @@ import { Badge, Button, ICON, InlineMessage, Select, Skeleton, TextField, type S
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Licences } from "./Licences";
 import { McpServersCard } from "./McpServers";
+import { RemoteServersCard } from "./RemoteServers";
 import { Updates } from "./Updates";
 import { LocalModelsCard, formatBytes } from "./LocalModels";
 import { useToast } from "./toast";
@@ -233,6 +234,8 @@ function ModelsPage({
         {...(onAddLinkClosed !== undefined ? { onLinkClosed: onAddLinkClosed } : {})}
       />
 
+      <RemoteServersCard api={api} catalog={catalog} onCatalog={onCatalog} />
+
       <McpServersCard api={api} live={servers} />
 
       <section className="card" aria-labelledby="keys-h">
@@ -268,6 +271,12 @@ function SlotRow({
         .filter((m) => m.source === "local" || m.source === "dev")
         .map((m) => ({ value: m.model_ref, label: m.label })),
     },
+    ...catalog.remote_servers.map((r) => ({
+      label: r.name,
+      options: usable
+        .filter((m) => m.model_ref.startsWith(`remote:${r.id}:`))
+        .map((m) => ({ value: m.model_ref, label: m.label.replace(`${r.name} · `, "") })),
+    })),
     ...catalog.providers.map((p) => ({
       label: p.name,
       options: usable

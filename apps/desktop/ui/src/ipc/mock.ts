@@ -11,6 +11,7 @@ import type {
   Conversation,
   SkillInfo,
   ModelCatalog,
+  RemoteServerView,
   Settings,
   StoredMessage,
   LocalModelEvent,
@@ -212,6 +213,8 @@ export function createMockApi(): Api {
   const emitRow = (r: LocalModelRow) => localSink?.({ type: "changed", row: { ...r } });
   const deleted = new Set<string>();
   const removedKeys = new Set<string>();
+  // OpenAI-compatible servers: an Ollama-like server on localhost has two models.
+  let remotes: RemoteServerView[] = [];
   let settings: Settings = { slots: {}, telemetry_enabled: false };
   const timers = new Map<string, number>();
   const id = () => crypto.randomUUID();
@@ -239,6 +242,16 @@ export function createMockApi(): Api {
     ],
     models: [
       { model_ref: "local:dev-fake", label: "Dev fake model (canned replies)", source: "dev", capabilities: ["chat"], available: true, note: null },
+      ...remotes.flatMap((r) =>
+        r.models.map((m) => ({
+          model_ref: m.model_ref,
+          label: `${r.name} · ${m.id}`,
+          source: "remote" as const,
+          capabilities: [m.embedding ? ("embedding" as const) : ("chat" as const)],
+          available: true,
+          note: null,
+        })),
+      ),
       ...[...keys].flatMap((p) =>
         (p === "anthropic" ? ["claude-sonnet-5-5", "claude-haiku-5-5"] : ["gpt-5"]).map((m) => ({
           model_ref: `byok:${p}:${m}`,
@@ -255,6 +268,7 @@ export function createMockApi(): Api {
       { id: "openai", name: "OpenAI", has_key: keys.has("openai") },
       { id: "gemini", name: "Google Gemini", has_key: keys.has("gemini") },
     ],
+    remote_servers: remotes,
     local_models: localRows.map((r) => ({ ...r })),
     key_store: "session only (browser mock)",
     settings,
@@ -505,6 +519,47 @@ export function createMockApi(): Api {
     listModels: async () => catalog(),
     setProviderKey: async (p) => {
       keys.add(p);
+      return catalog();
+    },
+    addRemoteServer: async (name, baseUrl, apiKey) => {
+      await new Promise((r) => setTimeout(r, 400));
+      const url = baseUrl.trim();
+      if (!/^https?:\/\//.test(url)) throw { code: "invalid", message: "The address must start with http:// or https://." };
+      if (url.startsWith("http://") && !/^http:\/\/(localhost|127\.|192\.168\.|10\.)/.test(url))
+        throw { code: "invalid", message: "This host isn't on your local network, so it needs https://." };
+      const id = (name.trim() || "server").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "server";
+      const ref = (m: string) => `remote:${id}:${m}`;
+      remotes = [
+        ...remotes,
+        {
+          id,
+          name: name.trim() || new URL(url).host,
+          base_url: url.replace(/\/$/, "") + (new URL(url).pathname === "/" ? "/v1" : ""),
+          has_key: apiKey !== null && apiKey.trim() !== "",
+          models: [
+            { id: "qwen3:8b", model_ref: ref("qwen3:8b"), embedding: false, tool_support: "supported", tool_support_reported: true },
+            { id: "mystery-7b", model_ref: ref("mystery-7b"), embedding: false, tool_support: "unknown", tool_support_reported: false },
+            { id: "nomic-embed-text", model_ref: ref("nomic-embed-text"), embedding: true, tool_support: "unsupported", tool_support_reported: true },
+          ],
+        },
+      ];
+      return catalog();
+    },
+    refreshRemoteServer: async () => {
+      await new Promise((r) => setTimeout(r, 400));
+      return catalog();
+    },
+    removeRemoteServer: async (id) => {
+      remotes = remotes.filter((r) => r.id !== id);
+      settings = { ...settings, slots: Object.fromEntries(Object.entries(settings.slots).filter(([, m]) => !m.startsWith(`remote:${id}:`))) };
+      return catalog();
+    },
+    setRemoteModelTools: async (serverId, modelId, enabled) => {
+      remotes = remotes.map((r) =>
+        r.id !== serverId
+          ? r
+          : { ...r, models: r.models.map((m) => (m.id === modelId ? { ...m, tool_support: enabled ? "supported" : "unsupported" } : m)) },
+      );
       return catalog();
     },
     deleteProviderKey: async (p) => {

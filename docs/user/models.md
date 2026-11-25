@@ -85,6 +85,22 @@ Once a key is saved, that provider's models appear in the model lists:
 
 Using a provider's model costs whatever that provider charges your account.
 
+## A model server (Ollama, LM Studio and others)
+
+If you already run models in Ollama, LM Studio, llama.cpp's `llama-server`, vLLM, or any server with an OpenAI-compatible API, add it under **Model servers**:
+
+1. Enter its address, for example `http://localhost:11434` (Ollama) or `http://localhost:1234` (LM Studio). If the address has no path, `/v1` is added.
+2. Optionally give it a name, and an API key if the server needs one. The key is stored in your system keychain and sent only to this server.
+3. Select **Add server**. The app lists the server's models; they appear in the model lists under the server's name.
+
+Addresses on your computer or local network (for example `localhost`, `192.168.x.x`, `10.x.x.x` or a `.local` name) can use `http://`. Any other server needs `https://`. The app never follows a redirect to another address.
+
+Messages in chats that use a server's model go to that server.
+
+**Tool calls.** Making artifacts and using tools need a model that makes tool calls. Ollama, LM Studio and llama.cpp say which of their models do; the list shows **Tool calls** or **No tool calls** for each. If a server doesn't say, turn **tool calls** on for a model only if it supports them. Otherwise the model can chat, but can't make artifacts or use tools.
+
+Select **Refresh** after loading or removing models on the server. **Remove** deletes the server's address, model list and key from this computer; tasks that used one of its models then ask you to choose another.
+
 ## Choose which model answers
 
 **Model for each task**, at the top of **Settings → Models**, sets which model does what. **Chat** is the model that answers in conversations.

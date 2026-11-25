@@ -87,6 +87,10 @@ interface Commands {
   list_models: { args: Record<string, never>; ret: ModelCatalog };
   set_provider_key: { args: { providerId: string; apiKey: string }; ret: ModelCatalog };
   delete_provider_key: { args: { providerId: string }; ret: ModelCatalog };
+  add_remote_server: { args: { name: string; baseUrl: string; apiKey: string | null }; ret: ModelCatalog };
+  refresh_remote_server: { args: { serverId: string }; ret: ModelCatalog };
+  remove_remote_server: { args: { serverId: string }; ret: ModelCatalog };
+  set_remote_model_tools: { args: { serverId: string; modelId: string; enabled: boolean }; ret: ModelCatalog };
   restore_provider_key: { args: { providerId: string }; ret: ModelCatalog };
   watch_tools: { args: { onEvent: Channel<ToolEvent> }; ret: ToolSnapshot };
   respond_approval: { args: { requestId: Id; decision: ApprovalDecision }; ret: null };
@@ -218,6 +222,12 @@ export const api = {
     call("set_provider_key", { providerId, apiKey }),
   deleteProviderKey: (providerId: string) => call("delete_provider_key", { providerId }),
   restoreProviderKey: (providerId: string) => call("restore_provider_key", { providerId }),
+  addRemoteServer: (name: string, baseUrl: string, apiKey: string | null) =>
+    call("add_remote_server", { name, baseUrl, apiKey }),
+  refreshRemoteServer: (serverId: string) => call("refresh_remote_server", { serverId }),
+  removeRemoteServer: (serverId: string) => call("remove_remote_server", { serverId }),
+  setRemoteModelTools: (serverId: string, modelId: string, enabled: boolean) =>
+    call("set_remote_model_tools", { serverId, modelId, enabled }),
   watchTools: (onEvent: (ev: ToolEvent) => void) =>
     call("watch_tools", { onEvent: channel(onEvent) }),
   respondApproval: (requestId: Id, decision: ApprovalDecision) =>

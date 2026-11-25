@@ -110,6 +110,7 @@ function fakeApi() {
       { model_ref: "local:dev-fake", label: "Dev fake", source: "dev", capabilities: ["chat"], available: true, note: null },
     ],
     providers: [{ id: "openai", name: "OpenAI", has_key: false }],
+    remote_servers: [],
     local_models: localRows,
     key_store: "memory",
     settings,
@@ -222,6 +223,10 @@ function fakeApi() {
     },
     listModels: async () => catalog(),
     setProviderKey: async () => catalog(),
+    addRemoteServer: async () => catalog(),
+    refreshRemoteServer: async () => catalog(),
+    removeRemoteServer: async () => catalog(),
+    setRemoteModelTools: async () => catalog(),
     deleteProviderKey: async () => catalog(),
     restoreProviderKey: async () => catalog(),
     watchLocalModels: async (onEvent) => {
