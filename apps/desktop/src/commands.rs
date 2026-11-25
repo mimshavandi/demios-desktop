@@ -41,6 +41,10 @@ pub struct AppInfo {
     pub data_dir: Option<String>,
     /// Where downloaded models live (shared with the `dn` CLI).
     pub models_dir: Option<String>,
+    /// Commit the build was made from, set by CI (`DEMIOS_BUILD_COMMIT`); `None` for local builds.
+    pub commit: Option<&'static str>,
+    /// Build channel set by CI (`DEMIOS_BUILD_CHANNEL`, e.g. `preview`); `None` for local builds.
+    pub channel: Option<&'static str>,
 }
 
 #[tauri::command]
@@ -54,6 +58,8 @@ pub async fn app_info(state: AppStateRef<'_>) -> IpcResult<AppInfo> {
             .local
             .as_ref()
             .map(|l| l.dir().display().to_string()),
+        commit: option_env!("DEMIOS_BUILD_COMMIT").filter(|c| !c.is_empty()),
+        channel: option_env!("DEMIOS_BUILD_CHANNEL").filter(|c| !c.is_empty()),
     })
 }
 

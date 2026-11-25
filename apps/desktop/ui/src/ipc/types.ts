@@ -330,6 +330,10 @@ export interface AppInfo {
   data_dir: string | null;
   /** Where downloaded models live (shared with the `dn` CLI). */
   models_dir: string | null;
+  /** Commit the build was made from (CI builds only). */
+  commit?: string | null;
+  /** Build channel, e.g. "preview" (CI builds only). */
+  channel?: string | null;
 }
 
 // ---- MCP servers screen (T-SHELL-08). Secret values never come back from the backend.
