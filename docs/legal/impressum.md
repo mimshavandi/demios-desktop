@@ -1,17 +1,16 @@
 # Legal notice (Impressum)
 
-> **Not published yet.** This page is published at demios.io/impressum once the owner confirms the items in [square brackets].
-
 Information under § 5 of the German Digital Services Act (Digitale-Dienste-Gesetz, DDG). It applies to the website demios.io and to the Demios Desktop app.
 
 ## Provider
 
-DigiNote Inc.
+DigiNote, Inc.
+A corporation under the laws of the State of Delaware, USA (Delaware C Corporation)
 Niederkasseler Kirchweg 85
 40547 Düsseldorf
 Germany
 
-Represented by: [representative (managing director or other authorised person): to be confirmed by the owner]
+Represented by: Mahdi Shavandi
 
 ## Contact
 
@@ -20,7 +19,8 @@ A telephone or postal contact is available on request.
 
 ## Register
 
-[Register, register court and number, or state of incorporation, if any: to be confirmed by the owner]
+Delaware Department of State, Division of Corporations
+File number: 7278083
 
 ## Consumer dispute resolution
 

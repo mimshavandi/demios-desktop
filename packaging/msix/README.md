@@ -155,7 +155,7 @@ The app never runs `bash`, `reg` or `cdb` itself. Optional tests don't block cer
 
 ## What the owner has to do
 
-1. **Partner Center account.** Open a Microsoft Store developer account for DigiNote Inc. (company account), and declare the DSA trader status (audit S-25).
+1. **Partner Center account.** Open a Microsoft Store developer account for DigiNote, Inc. (company account), and declare the DSA trader status (audit S-25).
 2. **Reserve the name.** Apps and games › New product › MSIX or PWA app › reserve "Demios Desktop", or the name you want listed.
 3. **Copy the identity values** from the product's *Product management › Product identity* page:
 
@@ -163,7 +163,7 @@ The app never runs `bash`, `reg` or `cdb` itself. Optional tests don't block cer
    |---|---|---|
    | Package/Identity/Name | `Identity/@Name` | `MSIX_IDENTITY_NAME` |
    | Package/Identity/Publisher (`CN=…`) | `Identity/@Publisher` | `MSIX_PUBLISHER` |
-   | Package/Properties/PublisherDisplayName | `Properties/PublisherDisplayName` | `MSIX_PUBLISHER_DISPLAY_NAME` (default `DigiNote Inc.`) |
+   | Package/Properties/PublisherDisplayName | `Properties/PublisherDisplayName` | `MSIX_PUBLISHER_DISPLAY_NAME` (default `DigiNote, Inc.`) |
    | The reserved app name | `DisplayName` (package and tile) | `MSIX_DISPLAY_NAME` (default `Demios Desktop`) |
 
    - These values identify the product but aren't secret.
