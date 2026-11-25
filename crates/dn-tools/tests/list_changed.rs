@@ -225,3 +225,51 @@ async fn a_review_only_settles_the_change_it_started_from() {
     ex.settled("fixture", second);
     assert!(!ex.is_stale("fixture"));
 }
+
+/// A server that changes its tools and then can't list them stays stale: its tools stay
+/// left out and refused. Nothing falls back to the old list.
+#[tokio::test]
+async fn a_failed_re_list_keeps_the_server_stale_and_its_tools_refused() {
+    let (ex, _approvals) = executor();
+    let mut changes = ex.tool_changes();
+    ex.add_server(
+        McpClient::new(
+            McpServerConfig::stdio("fixture", fixture_server_path().to_string_lossy(), vec![]),
+            Arc::new(MemorySecretStore::new()),
+        )
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    let ctx = ctx_in("conv", Id::new());
+    ex.execute(
+        &ctx,
+        &call(
+            "1",
+            "mcp__fixture__change_tools_and_break_listing",
+            serde_json::json!({}),
+        ),
+    )
+    .await
+    .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), changes.recv())
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert!(ex.refresh("fixture").await.is_err(), "listing fails");
+    assert!(ex.is_stale("fixture"));
+    assert!(
+        !ex.tool_specs()
+            .iter()
+            .any(|t| t.name.starts_with("mcp__fixture__"))
+    );
+    let echo = call("2", "mcp__fixture__echo", serde_json::json!({"text": "hi"}));
+    match ex.execute(&ctx, &echo).await.unwrap_err() {
+        dn_core::CoreError::Capability { user_message, .. } => {
+            assert!(user_message.contains("changed its tools"), "{user_message}");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(ex.preflight(&ctx, &echo).is_err());
+}

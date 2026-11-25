@@ -130,6 +130,7 @@ function fakeApi() {
       notes: "",
       state: { state: "not_downloaded" },
       fit: { status: "caution", estimated: true, reason: "Fits, with little memory left for other apps.", suggested_quant: null },
+      traits: null,
     },
   ];
   const msgs = new Map<string, StoredMessage[]>();
@@ -614,6 +615,7 @@ describe("App", () => {
         card_url: "https://huggingface.co/org/Tiny-GGUF",
         selected: "Tiny-Q8_0",
         fit_unknown: false,
+        traits: null,
         variants: [
           { name: "Tiny-Q4_K_M", quant: "Q4_K_M", total_size: 1e9, parts: 1, verifiable: true, fit: null, downloaded: null, progress: null },
           { name: "Tiny-Q8_0", quant: "Q8_0", total_size: 2e9, parts: 1, verifiable: true, fit: null, downloaded: null, progress: null },

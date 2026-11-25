@@ -40,6 +40,7 @@ const repoView = (over: Partial<HubRepoView> = {}): HubRepoView => ({
   card_url: "https://huggingface.co/org/Tiny-GGUF",
   selected: null,
   fit_unknown: false,
+  traits: null,
   variants: [
     { name: "Tiny-Q4_K_M", quant: "Q4_K_M", total_size: 1e9, parts: 1, verifiable: true, fit: fit("ready", false), downloaded: null, progress: null },
     { name: "Tiny-F16", quant: "F16", total_size: 4e9, parts: 2, verifiable: false, fit: fit("memory_blocked", true), downloaded: null, progress: null },
@@ -248,6 +249,7 @@ describe("LocalModelsCard with Hub and cache models", () => {
       notes: "",
       state: { state: "ready" },
       fit: fit("ready", false),
+      traits: null,
     };
     act(() => sink?.({ type: "changed", row }));
     expect(await screen.findByText(/From your Hugging Face cache, used where it is/)).toBeTruthy();
