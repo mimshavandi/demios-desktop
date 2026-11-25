@@ -24,7 +24,7 @@ This policy covers the app and the website at demios.io.
 - **We collect nothing.** The app has no account, no analytics, no crash reporting and no Demios server. Nothing you do in the app is sent to us.
 - Your chats, settings and tool history stay on your computer.
 - Your API keys and tokens are kept in your operating system's keychain.
-- When you choose an online AI provider, a model download or a tool server, the app connects **directly** to that service for you. That service's own terms and privacy policy apply.
+- When you choose an online AI provider, a model download, a tool server or an update, the app connects **directly** to that service for you. That service's own terms and privacy policy apply.
 
 ## What the app collects
 
