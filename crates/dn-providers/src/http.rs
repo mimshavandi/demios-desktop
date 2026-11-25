@@ -172,7 +172,11 @@ fn schema_rejected(
         ),
         format!(
             "{provider_id}: response schema rejected: {}",
-            redact(&error_text.chars().take(300).collect::<String>(), secret)
+            // Redact first: cutting first could split the key so it no longer matches.
+            redact(error_text, secret)
+                .chars()
+                .take(300)
+                .collect::<String>()
         ),
         vec![],
     ))
