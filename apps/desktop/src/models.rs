@@ -20,8 +20,8 @@ use std::sync::{Arc, Mutex};
 #[derive(Default)]
 pub struct ModelRegistry {
     fixed: HashMap<String, Arc<dyn ChatModel>>,
-    /// Fixed models that can't make tool calls: they get artifacts through the fenced
-    /// `<artifact>` format instead of the `artifact_*` tools (ADR-0004).
+    /// Fixed models that can't make tool calls: they get no `artifact_*` tools and can't
+    /// make artifacts.
     no_tools: std::collections::HashSet<String>,
     providers: Mutex<Providers>,
     /// The OpenAI-compatible servers in settings (kept in step by `AppState::save_settings`).
@@ -469,7 +469,7 @@ pub struct ModelCatalog {
     /// The model chat uses now (the user's choice, or the one picked automatically when no
     /// chat model is chosen); `None` if nothing is usable.
     pub chat_model: Option<String>,
-    /// Whether `chat_model` makes tool calls (artifacts through tools, not the fenced format).
+    /// Whether `chat_model` makes tool calls (without them the model can't make artifacts).
     pub chat_model_tools: bool,
 }
 
