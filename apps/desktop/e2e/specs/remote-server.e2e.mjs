@@ -115,7 +115,13 @@ describe("OpenAI-compatible server", () => {
     if (models === undefined) throw new Error("no Models button in the sidebar");
     await models.click();
     const url = await byTestId("server-url");
-    await url.waitForDisplayed({ timeout: 30_000 });
+    // waitForExist, not waitForDisplayed: WebKitWebDriver's visibility check fails for
+    // fields below the fold of the long Models page. Scroll it in before typing.
+    await url.waitForExist({
+      timeout: 30_000,
+      timeoutMsg: "Settings › Models has no Model servers card (server-url field)",
+    });
+    await url.scrollIntoView();
     await url.setValue(mock.base);
     await (await byTestId("server-name")).setValue("Mock");
     await (await byTestId("add-server")).click();
