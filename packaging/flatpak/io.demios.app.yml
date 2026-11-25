@@ -77,6 +77,9 @@ modules:
         XDG_CACHE_HOME: /run/build/demios-desktop/flatpak-node/cache
         # The licences list is required in this build: fail instead of shipping without it.
         DEMIOS_REQUIRE_LICENSES: '1'
+        # Flathub updates the app: About says so, and the `updater` cargo feature must stay
+        # off (the cargo build below doesn't enable it; build.rs refuses both together).
+        DEMIOS_DISTRIBUTION: flatpak
     build-commands:
       - cd ui/artifact-sandbox && npm ci --offline --no-audit --no-fund
       - cd apps/desktop && npm ci --offline --no-audit --no-fund
