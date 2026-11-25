@@ -9,6 +9,7 @@ import type {
   ApprovalPrompt,
   ArtifactDetail,
   ChatEvent,
+  AnswerSkill,
   Conversation,
   SkillInfo,
   ModelCatalog,
@@ -48,6 +49,7 @@ export function createMockApi(): Api {
   };
   const msgs = new Map<string, StoredMessage[]>();
   const chatSkills = new Map<string, string>();
+  const answerSkills: AnswerSkill[] = [];
   const skills: SkillInfo[] = [
     {
       name: "proofread",
@@ -576,9 +578,11 @@ export function createMockApi(): Api {
     listMessages: async (cid) => structuredClone(msgs.get(cid) ?? []),
     listSkills: async () => structuredClone(skills),
     getChatSkill: async (cid) => chatSkills.get(cid) ?? null,
+    listAnswerSkills: async (cid) =>
+      structuredClone(answerSkills.filter((a) => msgs.get(cid)?.some((m) => m.id === a.message_id))),
     skillsOverview: async () => ({
       skills: structuredClone(skills),
-      problems: [{ file: "my-skill/SKILL.md", message: "name: `My Skill` must be lowercase letters, digits and single hyphens" }],
+      problems: [{ file: "my-skill/SKILL.md", message: "name: `My Skill` must be lowercase letters, digits and single hyphens", source: "user" }],
       folder: "~/.local/share/demios/skills",
     }),
     reloadSkills: async () => ({ skills: structuredClone(skills), problems: [], folder: "~/.local/share/demios/skills" }),
@@ -603,7 +607,9 @@ export function createMockApi(): Api {
       else if (/html artifact|update the artifact/i.test(text)) artifactTurn(cid, a, text, onEvent);
       else stops.set(cid, stream(cid, a, text, onEvent));
       // IPC serialises; hand out copies so the UI never shares objects with the mock.
-      return structuredClone({ user_message: u, assistant_message: a, title });
+      const skill = skills.find((s) => s.name === chatSkills.get(cid)) ?? null;
+      if (skill !== null) answerSkills.push({ message_id: a.id, name: skill.name, label: skill.label });
+      return structuredClone({ user_message: u, assistant_message: a, title, skill: skill?.label ?? null });
     },
     regenerate: async (cid, onEvent) => {
       const list = msgs.get(cid) ?? [];
@@ -612,7 +618,7 @@ export function createMockApi(): Api {
       const a = message(cid, "assistant", "", "streaming");
       list.push(a);
       stops.set(cid, stream(cid, a, list[lastUser] ? (list[lastUser].content[0] as { text: string }).text : "", onEvent));
-      return structuredClone({ user_message: null, assistant_message: a, title: null });
+      return structuredClone({ user_message: null, assistant_message: a, title: null, skill: null });
     },
     stopGeneration: async (cid) => {
       const s = stops.get(cid);
