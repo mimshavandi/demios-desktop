@@ -25,7 +25,9 @@ Or run it without installing: `cargo run -p dn -- <command>`.
 | `dn fit <model>` | Say whether a model fits this machine and which settings to use |
 | `dn run -m <model> "prompt"` | Chat with a model in the terminal |
 | `dn run --endpoint <url> -m <model> "prompt"` | Chat with a model on an OpenAI-compatible server, such as Ollama or llama-server |
-| `dn bench <model>` | Measure speed and peak memory, and write a JSON report |
+| `dn bench <model>` | Measure speed and peak memory, and write a JSON report. `--quality` also runs 14 short prompts with checkable answers |
+| `dn bench default --endpoint <url>` | The same against an OpenAI-compatible server, such as mistral.rs or llama-server. `--server-pid` measures the server's memory |
+| `dn bench-report <folder>` | Turn `dn bench` reports into a table |
 
 `<model>` is a catalogue id or a path to a GGUF file.
 

@@ -17,6 +17,7 @@ Docs for people who use, build or contribute to Demios Desktop. Start with the [
 | [apps/desktop/e2e/README.md](../apps/desktop/e2e/README.md) | Real-app end-to-end tests, the manual macOS release checklist and the unsigned macOS preview build |
 | [dependencies.md](dependencies.md) | Every direct dependency, why it is used and its licence |
 | [releasing.md](releasing.md) | How changelog entries are written and how a release turns them into release notes |
+| [benchmarks/](benchmarks/README.md) | How local models perform on 8, 16 and 32 GB machines, how to run the benchmark suite, and how the mistral.rs decision will be made |
 
 ## Architecture
 
