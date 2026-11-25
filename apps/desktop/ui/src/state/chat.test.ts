@@ -42,7 +42,7 @@ describe("chatReducer", () => {
     let s = chatReducer(opened, {
       kind: "turn_started",
       conversationId: "c1",
-      turn: { user_message: msg("u1", "user", "hi"), assistant_message: msg("a1", "assistant", "", "streaming"), title: "hi" },
+      turn: { user_message: msg("u1", "user", "hi"), assistant_message: msg("a1", "assistant", "", "streaming"), title: "hi", skill: null },
     });
     expect(s.streamingId).toBe("a1");
     expect(canRegenerate(s)).toBe(false);
@@ -63,7 +63,7 @@ describe("chatReducer", () => {
     s = chatReducer(s, {
       kind: "turn_started",
       conversationId: "c1",
-      turn: { user_message: msg("u1", "user", "x"), assistant_message: msg("a1", "assistant", "", "streaming"), title: null },
+      turn: { user_message: msg("u1", "user", "x"), assistant_message: msg("a1", "assistant", "", "streaming"), title: null, skill: null },
     });
     expect(s.pending).toEqual({});
     expect(s.messages[1]?.content).toEqual([{ type: "text", text: "early bird" }]);
@@ -77,7 +77,7 @@ describe("chatReducer", () => {
     s = chatReducer(s, {
       kind: "turn_started",
       conversationId: "c1",
-      turn: { user_message: msg("u1", "user", "x"), assistant_message: msg("a1", "assistant", "", "streaming"), title: null },
+      turn: { user_message: msg("u1", "user", "x"), assistant_message: msg("a1", "assistant", "", "streaming"), title: null, skill: null },
     });
     expect(s.streamingId).toBeNull();
     expect(s.messages[1]?.status).toBe("complete");
@@ -92,7 +92,7 @@ describe("chatReducer", () => {
     s = chatReducer(s, {
       kind: "turn_started",
       conversationId: "c1",
-      turn: { user_message: null, assistant_message: msg("a2", "assistant", "", "streaming"), title: null },
+      turn: { user_message: null, assistant_message: msg("a2", "assistant", "", "streaming"), title: null, skill: null },
     });
     expect(s.messages.map((m) => m.id)).toEqual(["u1", "a2"]);
   });
@@ -118,7 +118,7 @@ describe("chatReducer", () => {
     const s = chatReducer(opened, {
       kind: "turn_started",
       conversationId: "other",
-      turn: { user_message: msg("u1", "user", "x"), assistant_message: msg("a1", "assistant", ""), title: null },
+      turn: { user_message: msg("u1", "user", "x"), assistant_message: msg("a1", "assistant", ""), title: null, skill: null },
     });
     expect(s).toBe(opened);
   });

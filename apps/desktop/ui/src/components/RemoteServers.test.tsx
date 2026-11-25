@@ -42,6 +42,7 @@ function fake(statuses: RemoteServerStatus[] = [{ state: "connected", models: 4 
     settings: { slots: {}, telemetry_enabled: false },
     chat_model: null,
     chat_model_tools: false,
+    compute: null,
   });
   const api = {
     addRemoteServer: async (name: string, url: string, key: string | null) => {

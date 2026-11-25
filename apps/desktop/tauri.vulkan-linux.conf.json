@@ -1,0 +1,15 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "linux": {
+      "deb": { "depends": ["libvulkan1"] },
+      "rpm": { "depends": ["vulkan-loader"] },
+      "appimage": {
+        "files": {
+          "/usr/lib/libvulkan.so.1": "../../target/vulkan-loader/libvulkan.so.1",
+          "/usr/share/licenses/vulkan-loader/LICENSE.txt": "../../target/vulkan-loader/LICENSE.txt"
+        }
+      }
+    }
+  }
+}

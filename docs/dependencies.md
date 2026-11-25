@@ -60,6 +60,13 @@ Every direct dependency is listed here with why and its licence (ADR-0009). Anyt
 
 Release builds (`tauri build` without `--debug`, i.e. `TAURI_ENV_DEBUG=false`, or `DEMIOS_REQUIRE_LICENSES=1`) fail if cargo-about is missing. Dev, test and debug builds skip the list with a warning.
 
+### Release signing (T-REL-02, #120; CI tools only, lead approved 2026-11-25)
+
+| Tool | Where | Why | Licence |
+|---|---|---|---|
+| trusted-signing-cli 0.11.0 ([levminer/trusted-signing-cli](https://github.com/levminer/trusted-signing-cli)), `cargo install --locked --version 0.11.0` | Windows job of the release workflow only; not a crate dependency, never in PR builds | Tauri's `bundle.windows.signCommand`: signs the exe and the NSIS installer with Azure Artifact Signing (formerly Trusted Signing), reading `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_CLIENT_SECRET` from the `release` environment | MIT |
+| `scripts/release/signing-check.mjs`, `latest-json.mjs` | our code, zero dependencies | which platforms are signed (labelled `-unsigned` otherwise; a half-set-up account fails); the updater's `latest.json` from signed bundles only | Apache-2.0 (this repo) |
+
 ### Flatpak packaging (T-STORE-06; build tools only, not dependencies of any crate)
 
 | Tool | Where | Why | Licence |
@@ -76,6 +83,8 @@ Release builds (`tauri build` without `--debug`, i.e. `TAURI_ENV_DEBUG=false`, o
 | axe-core 4.14.1 | accessibility check on the chat screen (injected via WebDriver) | MPL-2.0 | T-SHELL-05 |
 | tauri-driver 2.0.6 (CI tool, `cargo install --locked`, not a dependency of any crate) | WebDriver server that launches the Tauri app | Apache-2.0 OR MIT | T-SHELL-05 |
 | msedgedriver (CI tool, Windows; runner's copy or Microsoft's download matching WebView2) | native WebDriver for WebView2 | Microsoft | T-SHELL-05 |
+| Khronos Vulkan-Loader v1.4.368 (commit `f61c41f6b4c0a2fa3d2b900ab690febbf3235172`; **shipped**: `vulkan-1.dll` next to the exe in the Windows installer, `libvulkan.so.1` in the AppImage) | lets the Vulkan build start on machines without a Vulkan runtime and use the GPU where a driver is installed (T-INF-24). Built from source by `packaging/vulkan-loader/build.sh`, which refuses a tag that doesn't resolve to the pinned commit and records the built file's SHA-256 (release job summary, `target/vulkan-loader/SOURCE.txt`); the installer smoke tests check the installed copy against it. Windows loads it from the app's own folder only (an exe's linked DLLs are searched there first). deb and rpm depend on the system loader instead (`libvulkan1`, `vulkan-loader`). Listed on the licences screen | Apache-2.0 | T-INF-24 |
+| LunarG Vulkan SDK 1.4.363.1 (CI tool, Windows and Linux; installer/tarball SHA-256 pinned in `vulkan.yml` and `release-preview.yml`) | builds llama.cpp's Vulkan backend (`glslc`, headers); not shipped | Apache-2.0 and others (build tools) | T-INF-24 |
 
 Pre-approved, add a row when first used: tauri 2, tokio, serde_yaml (or a maintained successor), llama-cpp-2, rmcp, rusqlite (chosen over sqlx: sync, SQLCipher + sqlite-vec support), keyring, reqwest, axum (team server).
 

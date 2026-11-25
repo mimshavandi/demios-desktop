@@ -72,7 +72,8 @@ export function SkillsCard({ api, onChanged }: { api: Api; onChanged?: () => voi
             {overview.problems.length === 1 ? "1 skill didn't load" : `${overview.problems.length} skills didn't load`}
           </h3>
           {overview.problems.map((p) => (
-            <InlineMessage key={p.file} tone="warning">
+            <InlineMessage key={`${p.source}:${p.file}`} tone={p.source === "builtin" ? "error" : "warning"}>
+              {p.source === "builtin" && "Built-in skill, please report this problem: "}
               <strong>{p.file}</strong>: {p.message}
             </InlineMessage>
           ))}

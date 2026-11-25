@@ -471,6 +471,17 @@ pub struct ModelCatalog {
     pub chat_model: Option<String>,
     /// Whether `chat_model` makes tool calls (without them the model can't make artifacts).
     pub chat_model_tools: bool,
+    /// Where local models run on this computer (T-INF-24): shown above the local models, so
+    /// running on the processor is a stated mode. `None` when local models are off.
+    pub compute: Option<LocalCompute>,
+}
+
+/// [`dn_models::compute::Compute`] with its sentence for the UI.
+#[derive(Clone, Debug, Serialize)]
+pub struct LocalCompute {
+    #[serde(flatten)]
+    pub compute: dn_models::compute::Compute,
+    pub description: String,
 }
 
 pub fn catalog(registry: &ModelRegistry, keys: &Keys, settings: &Settings) -> ModelCatalog {
@@ -568,6 +579,14 @@ pub fn catalog(registry: &ModelRegistry, keys: &Keys, settings: &Settings) -> Mo
         settings: settings.clone(),
         chat_model: None,
         chat_model_tools: false,
+        compute: registry
+            .local
+            .as_ref()
+            .and_then(|l| l.compute())
+            .map(|c| LocalCompute {
+                description: c.describe(),
+                compute: c,
+            }),
     }
 }
 

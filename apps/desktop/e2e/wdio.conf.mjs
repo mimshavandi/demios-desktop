@@ -31,6 +31,15 @@ process.env.DEMIOS_FAKE_DELAY_MS ??= "80";
 
 let driver;
 
+/** The size the specs are written for (the app's default window size). */
+async function sizeWindow() {
+  const { browser } = await import("@wdio/globals");
+  await browser.waitUntil(async () => browser.execute(() => document.readyState === "complete"), {
+    timeout: 60_000,
+  });
+  await browser.setWindowSize(1280, 820);
+}
+
 export const config = {
   runner: "local",
   // Explicit order: the chat scenario counts conversations from an empty data dir.
@@ -68,6 +77,18 @@ export const config = {
     if (win && process.env.MSEDGEDRIVER) args.push("--native-driver", process.env.MSEDGEDRIVER);
     driver = spawn(tauriDriver, args, { stdio: [null, process.stdout, process.stderr] });
     await new Promise((r) => setTimeout(r, 1500));
+  },
+
+  // The app now fits its window to the screen's work area (#172). CI desktops are small
+  // (1024×768 on windows-latest), which would put the app in its narrow layout, where the
+  // artifact pane overlays the sidebar. The specs are written for the desktop layout, so set
+  // the size every session starts with, and again after reloadSession() relaunches the app.
+  async before() {
+    await sizeWindow();
+  },
+
+  async onReload() {
+    await sizeWindow();
   },
 
   afterSession() {

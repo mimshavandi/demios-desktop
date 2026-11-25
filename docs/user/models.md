@@ -9,7 +9,15 @@ You can do both and switch between them.
 
 ## On this device
 
-The **On this device** card lists 12 open models in a built-in catalogue, from small ones to large ones, including one embedding model.
+The **On this device** card lists 13 open models in a built-in catalogue, from small ones to large ones: 11 for chat and 2 embedding models.
+
+Under its title, a line says where local models run on this computer:
+
+- **On the graphics card**, with its name and memory. On Windows and Linux this works with NVIDIA, AMD and Intel graphics that have a current driver.
+- **On the built-in graphics**, which share the computer's memory (Apple Silicon Macs, laptops with integrated graphics).
+- **On the processor**, when there is no graphics chip Demios can use (for example in a virtual machine, or without a graphics driver). Models still work, but replies are slower; smaller models are a good fit.
+
+Whether a model fits (below) is worked out for that graphics card or memory.
 
 Each row shows:
 
@@ -65,6 +73,10 @@ The token is kept in your system keychain and is sent only to Hugging Face. Sele
 If you've used Hugging Face tools before, the app also lists GGUF models it finds in your Hugging Face cache. Their row says "From your Hugging Face cache, used where it is". The app uses the file in place and never changes or deletes it, not even with **Delete all local data**.
 
 Models you downloaded from Hugging Face with the `dn` command-line tool show up here too.
+
+### Chat templates
+
+Each model on this device writes its prompts with its own chat template. The template comes from the model file. If the file has none, Demios uses the template from the model's Hugging Face repository, saved when you downloaded the model. A model without a chat template can't be used for chat: its row says "This model has no chat template, so it can't be used for chat." Choose another model, or another version of the same one.
 
 ## Your own key
 

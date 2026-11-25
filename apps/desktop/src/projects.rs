@@ -271,9 +271,11 @@ pub fn purge_on_start(conn: &Connection, root: &Path) -> dn_store::Result<()> {
     sweep(conn, root)
 }
 
-/// Called after a project's files change (added, removed, restored). dn-knowledge (#116)
-/// re-indexes here; until then there is nothing to do.
-pub fn files_changed(_state: &AppState, _project_id: Id) {}
+/// Called after a project's files change (added, removed, restored): dn-knowledge (#116)
+/// re-indexes the project in the background.
+pub fn files_changed(_state: &AppState, project_id: Id) {
+    crate::knowledge::files_changed(project_id);
+}
 
 /// The project's standing instructions for the system prompt of a chat, if it has any.
 pub fn instructions_for(conn: &Connection, conversation_id: Id) -> IpcResult<Option<String>> {

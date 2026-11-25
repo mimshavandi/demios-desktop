@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-message-sources"
+description = "Enables the message_sources command without any pre-configured scope."
+commands.allow = ["message_sources"]
+
+[[permission]]
+identifier = "deny-message-sources"
+description = "Denies the message_sources command without any pre-configured scope."
+commands.deny = ["message_sources"]

@@ -42,7 +42,10 @@ describe("SkillsCard", () => {
     const { api } = fake(
       {
         skills: [builtin, mine],
-        problems: [{ file: "Draft/SKILL.md", message: "name: `draft` must match its folder name `Draft`" }],
+        problems: [
+          { file: "Draft/SKILL.md", message: "name: `draft` must match its folder name `Draft`", source: "user" },
+          { file: "broken/SKILL.md", message: "the instructions are empty", source: "builtin" },
+        ],
         folder: "/data/skills",
       },
       { skills: [], problems: [], folder: "/data/skills" },
@@ -53,14 +56,15 @@ describe("SkillsCard", () => {
     expect(within(rows[1]!).getByText("Tools: artifact.*")).toBeTruthy();
     expect(within(rows[0]!).getByText("No tools")).toBeTruthy();
     const problems = screen.getByTestId("skill-problems");
-    expect(within(problems).getByRole("heading", { name: "1 skill didn't load" })).toBeTruthy();
+    expect(within(problems).getByRole("heading", { name: "2 skills didn't load" })).toBeTruthy();
+    expect(problems.textContent).toContain("Built-in skill, please report this problem: broken/SKILL.md");
     expect(problems.textContent).toContain("Draft/SKILL.md: name: `draft` must match its folder name `Draft`");
     expect(screen.getByTestId("skills-card").textContent).toContain("/data/skills");
   });
 
   it("reloads the folder, clears fixed problems and tells the composer", async () => {
     const { api, calls } = fake(
-      { skills: [builtin], problems: [{ file: "haiku/SKILL.md", message: "the instructions are empty" }], folder: "/d" },
+      { skills: [builtin], problems: [{ file: "haiku/SKILL.md", message: "the instructions are empty", source: "user" }], folder: "/d" },
       { skills: [builtin, mine], problems: [], folder: "/d" },
     );
     let changed = 0;
