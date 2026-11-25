@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT_SIZE: (f64, f64) = (1280.0, 820.0);
 /// The smallest inner size, in logical pixels, at which the layout still works (the
 /// sidebar, the chat and the message box are all visible). Mirrors `minWidth` /
-/// `minHeight` in `tauri.conf.json`.
+/// `minHeight` in `tauri.conf.json` and the platform files (#197).
 pub const MIN_SIZE: (f64, f64) = (720.0, 480.0);
 /// Space left around a fitted default window, in logical pixels.
 pub const MARGIN: f64 = 24.0;
@@ -479,6 +479,31 @@ mod tests {
         assert_eq!(w["height"].as_f64(), Some(DEFAULT_SIZE.1));
         // Shown only after it has been fitted, so it never flashes at the wrong size.
         assert_eq!(w["visible"], false);
+    }
+
+    /// The platform files replace the whole `windows` list, so each repeats the sizes; a
+    /// different minimum there would let the window shrink below, or refuse sizes above,
+    /// what `fit` assumes (#197).
+    #[test]
+    fn every_platform_config_has_the_same_sizes() {
+        for (name, text) in [
+            (
+                "tauri.windows.conf.json",
+                include_str!("../tauri.windows.conf.json"),
+            ),
+            (
+                "tauri.macos.conf.json",
+                include_str!("../tauri.macos.conf.json"),
+            ),
+        ] {
+            let conf: serde_json::Value = serde_json::from_str(text).expect(name);
+            let w = &conf["app"]["windows"][0];
+            assert_eq!(w["label"], "main", "{name}");
+            assert_eq!(w["minWidth"].as_f64(), Some(MIN_SIZE.0), "{name}");
+            assert_eq!(w["minHeight"].as_f64(), Some(MIN_SIZE.1), "{name}");
+            assert_eq!(w["width"].as_f64(), Some(DEFAULT_SIZE.0), "{name}");
+            assert_eq!(w["height"].as_f64(), Some(DEFAULT_SIZE.1), "{name}");
+        }
     }
 
     #[test]
