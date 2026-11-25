@@ -65,6 +65,9 @@ const COMMANDS: &[&str] = &[
     "launch_update_check",
     // Knowledge search (knowledge.rs, #116): what an answer was given.
     "message_sources",
+    // The embedding-model offer (#171).
+    "knowledge_status",
+    "knowledge_offer",
     // Windows artifact webview (artifact_child.rs, ADR-0012); main webview only.
     "artifact_child_open",
     "artifact_child_render",

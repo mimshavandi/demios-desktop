@@ -4,6 +4,7 @@
 
 import type { Api } from "./commands";
 import type {
+  DownloadState,
   ApprovalDecision,
   ApprovalPrompt,
   ArtifactDetail,
@@ -246,7 +247,7 @@ export function createMockApi(): Api {
   const catalog = (): ModelCatalog => ({
     slots: [
       { slot_id: "chat", label: "Chat", description: "Answers in conversations.", capability: "chat" },
-      { slot_id: "embed", label: "Embeddings", description: "Knowledge search (arrives with dn-knowledge).", capability: "embedding" },
+      { slot_id: "embed", label: "Embeddings", description: "Knowledge search in projects. Without one, it searches by keywords only.", capability: "embedding" },
     ],
     models: [
       { model_ref: "local:dev-fake", label: "Dev fake model (canned replies)", source: "dev", capabilities: ["chat"], available: true, note: null },
@@ -379,6 +380,11 @@ export function createMockApi(): Api {
     return x;
   };
 
+  const knowledge: { offer: "ask" | "declined" | "accepted"; started: number | null; state: DownloadState } = {
+    offer: "ask",
+    started: null,
+    state: { state: "not_downloaded" },
+  };
   const api: Api = {
     // The Windows artifact webview has no browser equivalent.
     artifactChildOpen: async () => {
@@ -389,6 +395,25 @@ export function createMockApi(): Api {
     artifactChildFocus: async () => null,
     artifactChildClose: async () => null,
     messageSources: async () => null,
+    // The embedding-model offer: a simulated download, then "improving search".
+    knowledgeStatus: async () => {
+      const k = knowledge;
+      if (k.started !== null) {
+        const t = Date.now() - k.started;
+        k.state =
+          t < 3000
+            ? { state: "downloading", done: Math.round((84_000_000 * t) / 3000), total: 84_000_000, bytes_per_sec: 28_000_000 }
+            : { state: "ready" };
+      }
+      const t = k.started === null ? 0 : Date.now() - k.started - 3000;
+      const embedding = k.state.state === "ready" && t < 3000 ? { done: Math.max(0, Math.round((48 * t) / 3000)), total: 48 } : null;
+      return { offer: k.offer, model: { id: "nomic-embed-text-v1.5-q4_k_m", name: "nomic-embed-text v1.5", size: 84_000_000, state: k.state }, embedding };
+    },
+    knowledgeOffer: async (accept) => {
+      knowledge.offer = accept ? "accepted" : "declined";
+      if (accept && knowledge.started === null) knowledge.started = Date.now();
+      return null;
+    },
     appInfo: async () => ({
       version: "0.1.0 (browser mock)",
       dev_fake_model: true,

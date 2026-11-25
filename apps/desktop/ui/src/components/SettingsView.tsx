@@ -20,6 +20,7 @@ import { McpServersCard } from "./McpServers";
 import { SkillsCard } from "./Skills";
 import { Updates } from "./Updates";
 import { LocalModelsCard, formatBytes } from "./LocalModels";
+import { BetterSearchSetting } from "./BetterSearch";
 import { useToast } from "./toast";
 
 export type SettingsSection = "models" | "general";
@@ -249,6 +250,7 @@ function ModelsPage({
         link={addLink}
         {...(onAddLinkClosed !== undefined ? { onLinkClosed: onAddLinkClosed } : {})}
       />
+      <BetterSearchSetting api={api} />
 
       <McpServersCard api={api} live={servers} />
 

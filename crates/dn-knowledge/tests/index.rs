@@ -506,3 +506,70 @@ fn an_answers_sources_are_recorded_and_go_with_its_conversation_and_delete_all()
     delete_all(&conn).unwrap();
     assert_eq!(sources_for(&conn, "m2").unwrap(), None);
 }
+
+#[test]
+fn a_model_added_later_embeds_the_existing_chunks_without_rechunking_and_a_new_model_re_embeds() {
+    let conn = db();
+    let idx = Index::new(&conn);
+    idx.sync_source(
+        "p",
+        &[
+            file("f1", "garage.md", "my car needs tyres"),
+            file("f2", "cook.md", "bake bread"),
+        ],
+        None,
+    )
+    .unwrap();
+    let ids = |conn: &Connection| -> Vec<i64> {
+        let mut st = conn
+            .prepare("SELECT id FROM knowledge_chunks ORDER BY id")
+            .unwrap();
+        st.query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    };
+    let before = ids(&conn);
+    assert_eq!(dn_knowledge::embedding_counts(&conn, "m1").unwrap(), (0, 2));
+    // The model arrives: only the stored chunks are embedded (two-phase, no file bytes needed).
+    let embed_all = |e: &FakeEmbedder| loop {
+        let todo = idx
+            .pending_embeddings(None, e.model_id(), e.dimension(), 16)
+            .unwrap();
+        if todo.is_empty() {
+            break;
+        }
+        let texts: Vec<String> = todo.iter().map(|(_, t)| t.clone()).collect();
+        let v = e.embed(&texts, EmbedKind::Document).unwrap();
+        let items: Vec<(i64, Vec<f32>)> = todo.iter().map(|(id, _)| *id).zip(v).collect();
+        idx.store_embeddings(e.model_id(), e.dimension(), &items)
+            .unwrap();
+    };
+    embed_all(&FakeEmbedder::new("m1"));
+    assert_eq!(ids(&conn), before, "no re-chunking: same chunks, same ids");
+    assert_eq!(dn_knowledge::embedding_counts(&conn, "m1").unwrap(), (2, 2));
+    // Another model later: everything is pending again, by model id, and re-embedded.
+    assert_eq!(idx.pending_embeddings(None, "m2", 64, 16).unwrap().len(), 2);
+    embed_all(&FakeEmbedder::new("m2"));
+    assert_eq!(dn_knowledge::embedding_counts(&conn, "m2").unwrap(), (2, 2));
+    assert_eq!(dn_knowledge::embedding_counts(&conn, "m1").unwrap(), (0, 2));
+    assert_eq!(ids(&conn), before);
+}
+
+#[test]
+fn prefs_are_remembered_and_go_with_delete_all() {
+    let conn = db();
+    assert_eq!(dn_knowledge::get_pref(&conn, "offer").unwrap(), None);
+    dn_knowledge::set_pref(&conn, "offer", "declined").unwrap();
+    assert_eq!(
+        dn_knowledge::get_pref(&conn, "offer").unwrap().as_deref(),
+        Some("declined")
+    );
+    dn_knowledge::set_pref(&conn, "offer", "accepted").unwrap();
+    assert_eq!(
+        dn_knowledge::get_pref(&conn, "offer").unwrap().as_deref(),
+        Some("accepted")
+    );
+    delete_all(&conn).unwrap();
+    assert_eq!(dn_knowledge::get_pref(&conn, "offer").unwrap(), None);
+}
