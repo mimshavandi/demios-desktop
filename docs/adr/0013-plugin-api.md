@@ -43,7 +43,7 @@ Every rule below says whether it is **enforced by the host** or is a **review ru
 The add-on build's CI backs review with checks. They are **backstops, not guarantees**:
 - `#![forbid(unsafe_code)]`;
 - a `cargo deny` ban list of network, process and FFI crates, **including transitive dependencies**;
-- a gate that fails on any use of `std::net`, `std::process` or `std::fs` in add-on crates.
+- a gate that fails on any use of `std::net`, `std::process` or `std::fs` in add-on crates, and of the same I/O re-exported by allowed crates (for example `tokio::net`, `tokio::fs` and `tokio::process`, so add-ons use `tokio` without those features).
 
 That is why this path is for first-party add-ons only. **Third-party tools keep using MCP** (ADR-0006), which runs out of process and is covered by approvals. A third-party plugin system needs a real sandbox, which needs its own ADR (§8).
 
@@ -80,7 +80,7 @@ pub trait Plugin: Send + Sync + 'static {
     - A job's tool calls go through approvals as usual, but `auto` applies **only to tools the user explicitly set to "run without asking" for this add-on**. The `read`-tier default doesn't count.
     - Every other call is **held**. It goes into a persisted queue that waits for the user, shows the add-on, the job and the exact arguments, and is never auto-approved. It doesn't time out into a silent denial; it stays held until the user answers or dismisses it.
     - "Delete all" clears the queue.
-    - A job's `http()` calls whose arguments come from model output are held the same way.
+    - **Every `http()` call from a job that isn't a GET is held** the same way (enforced). The host can't tell where an argument's text came from, so it doesn't try to.
   - A job gets a cancel token and a time budget. When either ends, the job is stopped.
   - A job reports to the user only through the host's notification service (§4), which follows the OS's notification permission.
 - **Settings panels** are **declarative**: a JSON-Schema form with titles, help text and the design system's controls, rendered by the host UI.
@@ -122,7 +122,9 @@ pub trait Plugin: Send + Sync + 'static {
 - `chat_model()` output built from any of them;
 - `http()` responses.
 
-`chat_model()` takes untrusted values **only** through the quoted, cited block helper, the same format as `dn_knowledge::context_block`. The types enforce that it can't be passed in as instructions. Whether an add-on's own logic treats untrusted text with care is a **review rule**.
+`chat_model()` takes untrusted values **only** through the quoted, cited block helper, the same format as `dn_knowledge::context_block`. Its instruction parameters take plain `String`s, never `Untrusted<T>`, so the types keep untrusted text out of the instructions **of that call**.
+
+To use the text otherwise, an add-on calls `Untrusted::into_inner()`, a named accessor that is easy to find in review. What it does with the text after that, including feeding it back as instructions or as tool or `http()` arguments, is a **review rule**. The types don't track it.
 
 - **`chats()`**: list and read messages in the consented scope.
 - **`memory()`**: see §5.
@@ -136,7 +138,7 @@ pub trait Plugin: Send + Sync + 'static {
   - **Prompts:** every approval prompt from an add-on call **names the add-on** (and the job, if any), so it never looks like the model's own request. That adds a requester field to `ApprovalPrompt`.
 - **`notify()`**, **`settings()`** and **`secrets()`** (its own ids only).
 - **`http()`**: listed hosts only, through the app's client, honouring the user's proxy settings. Using `http()` rather than its own sockets is a review rule, backed by the CI checks in §1.
-- **`files()`**: a directory under `<data dir>/plugins/<id>/` that the host owns and deletes. Writing only there is a review rule, backed by the same checks.
+- **`files()`**: read, write, list and delete operations on the add-on's own area under `<data dir>/plugins/<id>/`, which the host owns and deletes. It hands out no path, so an add-on needs no file-system API of its own. Not touching files elsewhere is a review rule, backed by the same checks.
 
 ### 5. Storage, memory and "Delete all"
 - **Each add-on gets its own SQLite database file**, `<data dir>/plugins/<id>/plugin.sqlite3` (enforced).
@@ -147,11 +149,11 @@ pub trait Plugin: Send + Sync + 'static {
   - An add-on that also keeps derived data in its own database must expose it through the same listing. That is a review rule; the conformance kit (§7) checks that the two agree in its scenarios.
 - **Delete all local data never skips an add-on.** The host:
   1. **first** pauses the scheduler, cancels running jobs and handlers, and revokes every `Host` handle, so nothing writes during or after the deletion;
-  2. calls `delete_all` on every add-on;
+  2. calls `delete_all` on every add-on, with a fresh `Host` that can only delete the add-on's own data;
   3. **then** deletes every add-on's database file and `plugins/` directory itself, its settings namespace, its keychain ids from the ownership registry, and the held-approvals queue, whether or not the add-on's own step succeeded;
   4. lists any failure in the "couldn't delete" report, as it does for the app's own data.
 - **When a chat is purged:**
-  - The host itself deletes memory items whose only source is that chat (enforced).
+  - The host itself deletes memory items whose only source is that chat, and held approvals from that chat (enforced).
   - It then calls `forget_conversation` on each add-on, which must drop everything else derived from it.
   - If an add-on isn't loaded (version mismatch, failed `register`, disabled, licence ended), its purges are **queued** in the app database. The add-on can't be used again until they have run.
   - A failing purge is reported and retried before the add-on's next use.
@@ -213,7 +215,7 @@ This ADR only keeps that path open (§1). It doesn't build it. Until then, third
   - What it can't enforce (raw std I/O) is listed as review rules with CI backstops.
 - **Declarative settings panels** limit what an add-on can show. That's deliberate: custom UI in the main webview would bypass the capability model. A richer panel would be a new host component, added through an API minor version.
 - **Background jobs that hold, rather than ask,** make unattended work less capable. That's the point: an approval needs a person.
-- **A risk floor from permissions** makes some plugin tools ask more often than their author would like. A tool that only reads its own data can avoid that by being registered by an add-on without `network`, or by asking for narrower permissions.
+- **A risk floor from permissions** makes some plugin tools ask more often than their author would like. Every add-on has its own database file, so in practice almost every plugin tool is at least `low_write` and asks once per chat by default. This fails safe. A tool that only reads its own data can avoid that by being registered by an add-on without `network`, or by asking for narrower permissions.
 - **An offline licence** can't be revoked instantly. Expiry dates bound that, and users get privacy and offline use in exchange.
 
 ## Consequences
