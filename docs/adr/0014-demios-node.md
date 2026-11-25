@@ -1,6 +1,6 @@
 # ADR-0014: Demios Node: the engine run headless on the user's own machine or server, with paired clients
 
-**Status:** Proposed · **Date:** 2026-11-25 · **Deciders:** project owner, lead · **Extends:** [ADR-0001](0001-repo-and-crate-layout.md), [ADR-0006](0006-tools-mcp-capabilities.md), [ADR-0007](0007-local-storage-and-secrets.md), [ADR-0009](0009-security-baseline.md), [ADR-0013](0013-plugin-api.md) · **Issue:** #203
+**Status:** Proposed · **Date:** 2026-11-25 · **Deciders:** project owner, lead · **Extends:** [ADR-0001](0001-repo-and-crate-layout.md), [ADR-0006](0006-tools-mcp-capabilities.md), [ADR-0007](0007-local-storage-and-secrets.md), [ADR-0009](0009-security-baseline.md), [ADR-0013](0013-plugin-api.md), [ADR-0016](0016-demios-relay.md) · **Issue:** #203
 
 ## Context
 Everything in Demios runs inside the desktop app today. When the app is closed or the computer sleeps, nothing runs:
@@ -52,7 +52,7 @@ This ADR decides the Node's shape: pairing, sync, models, approvals, secrets, op
   - logs.
 - **Encryption:**
   - In transit, every sync message travels over the paired TLS channel (§2).
-  - Records are also **sealed per device group** with a symmetric group key, so a later blind relay (§4) or a backup of the sync log sees only ciphertext.
+  - Records are also **sealed per device group** with a symmetric group key, so the Relay (§4) or a backup of the sync log sees only ciphertext.
   - The group key is rotated when a device is removed.
 - **Model:** each device appends changes to its own log. Records carry a hybrid logical clock, and a field's last write wins.
   - **Deletes are tombstones,** so deleting a chat on one device deletes it everywhere. A purge also removes the data behind it on every runtime (§8).
@@ -65,12 +65,14 @@ This ADR decides the Node's shape: pairing, sync, models, approvals, secrets, op
   - the same local network, found by mDNS or by entering an address;
   - the user's own VPN or overlay network, such as WireGuard or Tailscale;
   - a port the user forwards, or their own reverse proxy. TLS is still end to end with the pinned keys, so a proxy that terminates TLS breaks pairing on purpose.
-- **A Demios relay is not part of this ADR.** If one is offered later, it relays ciphertext only (§3) and stays optional. Its own ADR states what it sees: addresses, timing and sizes.
+- **The Demios Relay is optional** (ADR-0016). It's an encrypted store-and-forward mailbox service: when two devices aren't online at the same time, a device delivers its sealed changes, approvals or notifications to the other's mailbox there. It holds ciphertext only (§3), never decrypts and holds no keys. ADR-0016 states what it can still see: mailbox ids, timing and sizes.
+  - **A Node can run its own Relay** (ADR-0016 §7), so even store-and-forward needs no Demios server.
+  - **Without any Relay,** devices sync only when they reach the Node directly, and Settings › Node says so.
 - **Push to a phone is the one exception the platforms impose.** iOS and Android deliver background notifications only through Apple's and Google's push services, which need a sender that holds the app's push credentials. So:
   - **Without push, nothing breaks.** Approvals wait until a device connects. The desktop app keeps a live connection while it runs.
   - **Push is opt-in per device.** The Node can send a **content-free** wake-up ("1 approval waiting", nothing about what it is) through either:
-    - an optional Demios push relay, which forwards a fixed message and sees the device's push token; or
-    - the user's own push server (UnifiedPush or ntfy on Android).
+    - the Demios-hosted Relay (ADR-0016 §4.2), which sends the fixed wake-up and sees the device's push token. Official app push can only come from there, because it needs the app's push credentials; or
+    - the user's own push server (UnifiedPush or ntfy on Android), from the Node or the user's own Relay.
 
     The device then connects to the Node directly to read and answer.
   - The pairing screen says which of these is on.
@@ -142,7 +144,8 @@ The database is encrypted at rest with SQLCipher (ADR-0007's option), with its k
 - **Delete all local data** on one device deletes that device's data, as today. The confirmation adds two separate choices:
   - **"Also delete everything on the Node and on every paired device."** It sends a signed wipe command. The Node runs it at once: it pauses jobs, deletes its data and secrets, and unpairs every device. Paired devices run it when they next connect to the Node. The report lists devices that haven't confirmed yet.
   - **"Unpair this device"** only, for a device being handed on, so it stops syncing without wiping the others.
-  - What a wipe can't reach (data already sent to a provider or a tool server, shared links per ADR-0015) is listed, as it is in the app.
+  - Before deleting keys, the wipe revokes shared links (ADR-0015) and closes the user's Relay mailboxes (ADR-0016), because the keys that manage them go with it.
+  - What a wipe can't reach (data already sent to a provider or a tool server, a link or mailbox it couldn't reach) is listed, as it is in the app.
 - **Uninstalling** the Node doesn't delete its data folder by itself. `dn node delete-all` does, with the same confirmation.
 
 ### 9. Install paths
@@ -198,7 +201,7 @@ Each path runs the Node as a **dedicated, unprivileged user**, with its data in 
 
 ## Trade-offs
 - **The Node holds decrypted data.** That's the cost of always-on work. A machine at home keeps it in the user's hands. A VPS puts it in the hands of the hosting provider too. The docs and the pairing screen say so, in plain words.
-- **No Demios relay** means a phone outside the home network needs the user's own VPN or forwarded port. That's harder to set up, and it keeps Demios out of the data path. A blind relay can come later without changing the encryption.
+- **A live connection to the Node** from outside the home network needs the user's own VPN or forwarded port. That's harder to set up, and it keeps Demios out of the data path. The optional Relay (ADR-0016) covers the case where devices aren't online together, with ciphertext only, and the user can run their own.
 - **No phone push without a push service** is a platform limit, not a choice. Push is opt-in, content-free, and approvals still work without it, just later.
 - **Held approvals make unattended work slower.** That's deliberate: an approval needs a person.
 - **Full copies on every runtime** cost disk space, and widen where data lives. They also make the app work offline, with or without the Node. Removing a device can't wipe a device that's offline or stolen, and the confirmation says so.
@@ -222,4 +225,4 @@ Each path runs the Node as a **dedicated, unprivileged user**, with its data in 
 8. "Delete all" across devices: the signed wipe, unpairing, and the report.
 9. Install paths: Docker image, systemd unit, launchd, Windows service, and their docs.
 10. Threat model for the Node (extends ADR-0009): the trust boundary of the Node's host, pairing, transport, sync and push.
-11. Optional push: a content-free wake-up through the user's own push server; a Demios push relay only with its own ADR.
+11. Optional push: a content-free wake-up through the Relay (ADR-0016 §4.2) or the user's own push server.
