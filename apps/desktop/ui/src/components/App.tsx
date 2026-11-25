@@ -33,13 +33,13 @@ import { ChatView, type ArtifactCardInfo } from "./ChatView";
 import { ModelBadge } from "./ModelBadge";
 import { NewProjectView, ProjectView, type ProjectDraft } from "./ProjectView";
 import { Badge, Button, ICON, IconButton, InlineMessage, TooltipProvider } from "./primitives";
-import { SettingsView, type SettingsSection } from "./SettingsView";
+import { SettingsView, lastSettingsRoute, type SettingsRoute } from "./SettingsView";
 import { Sidebar, type ListState } from "./Sidebar";
 import { ToastProvider, useToast } from "./toast";
 
 type View =
   | { kind: "chat" }
-  | { kind: "settings"; section: SettingsSection }
+  | { kind: "settings"; route: SettingsRoute }
   | { kind: "project"; id: Id | "new" };
 
 export function App({ api = realApi }: { api?: Api }) {
@@ -160,7 +160,7 @@ function Shell({ api }: { api: Api }) {
       if (!alive) return;
       addLinkRef.current = l;
       setAddLink(l);
-      setView({ kind: "settings", section: "models" });
+      setView({ kind: "settings", route: { section: "models", tab: "device" } });
     };
     void api
       .watchAddLinks(show)
@@ -404,7 +404,7 @@ function Shell({ api }: { api: Api }) {
         setListState({ kind: "ready" });
         await open(list[0]?.id ?? null);
         // A link that started the app wins over opening the last chat.
-        if (addLinkRef.current !== null) setView({ kind: "settings", section: "models" });
+        if (addLinkRef.current !== null) setView({ kind: "settings", route: { section: "models", tab: "device" } });
       } catch (e) {
         setListState({ kind: "error", message: errorMessage(e) });
       }
@@ -767,7 +767,7 @@ function Shell({ api }: { api: Api }) {
         newChat();
       } else if (k === ",") {
         e.preventDefault();
-        setView({ kind: "settings", section: "general" });
+        setView({ kind: "settings", route: lastSettingsRoute() });
       } else if (k === ".") {
         e.preventDefault();
         void stop();
@@ -783,7 +783,8 @@ function Shell({ api }: { api: Api }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [copyLastAnswer, newChat, stop, toggleSidebar]);
 
-  const goSettings = (section: SettingsSection) => setView({ kind: "settings", section });
+  // Opens a Settings page; with no route, the one the user had open last (#174).
+  const goSettings = (route: SettingsRoute = lastSettingsRoute()) => setView({ kind: "settings", route });
   // Artifacts belong to the open chat. Settings and project pages get the full width; the
   // pane comes back as it was when a chat is shown again.
   const showArtifacts = artifactsOpen && view.kind === "chat";
@@ -843,7 +844,7 @@ function Shell({ api }: { api: Api }) {
           onNewProject={() => setView({ kind: "project", id: "new" })}
           onOpenProject={(id) => setView({ kind: "project", id })}
           onRetryProjects={() => void refreshProjects()}
-          settings={view.kind === "settings" ? view.section : null}
+          settingsOpen={view.kind === "settings"}
           onNew={newChat}
           onOpen={(id) => void open(id)}
           onDelete={(c) => void remove(c)}
@@ -909,7 +910,7 @@ function Shell({ api }: { api: Api }) {
                     onClick={() => {
                       setUpdateNotice(false);
                       setRevealUpdates(true);
-                      setView({ kind: "settings", section: "general" });
+                      setView({ kind: "settings", route: { section: "general" } });
                     }}
                   >
                     View update
@@ -937,7 +938,7 @@ function Shell({ api }: { api: Api }) {
             onSend={send}
             onStop={() => void stop()}
             onRegenerate={() => void regenerate()}
-            onConnect={() => goSettings("models")}
+            onConnect={() => goSettings({ section: "models", tab: "device" })}
             approvals={approvals.filter((a) => a.scope === `conv:${chat.conversationId ?? ""}`)}
             onDecide={decide}
             unknowns={unknowns}
@@ -1005,8 +1006,8 @@ function Shell({ api }: { api: Api }) {
           <SettingsView
             api={api}
             info={info}
-            section={view.section}
-            onSection={goSettings}
+            route={view.route}
+            onRoute={(route) => setView({ kind: "settings", route })}
             onCatalog={setCatalog}
             servers={servers}
             addLink={addLink}

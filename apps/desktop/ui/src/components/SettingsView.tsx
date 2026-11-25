@@ -1,5 +1,5 @@
-import { Cpu, ExternalLink, KeyRound, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Boxes, Cpu, ExternalLink, KeyRound, SlidersHorizontal, Sparkles, Trash2, Wrench } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { Api } from "../ipc/commands";
 import {
   errorMessage,
@@ -13,7 +13,19 @@ import {
   type SlotInfo,
   type UpdateCheck,
 } from "../ipc/types";
-import { Badge, Button, ICON, InlineMessage, Select, Skeleton, TextField, type SelectGroup } from "./primitives";
+import {
+  Badge,
+  Button,
+  ICON,
+  InlineMessage,
+  Select,
+  Skeleton,
+  Tabs,
+  TextField,
+  tabPanelProps,
+  type SelectGroup,
+  type TabItem,
+} from "./primitives";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Licences } from "./Licences";
 import { McpServersCard } from "./McpServers";
@@ -23,7 +35,48 @@ import { LocalModelsCard, formatBytes } from "./LocalModels";
 import { BetterSearchSetting } from "./BetterSearch";
 import { useToast } from "./toast";
 
-export type SettingsSection = "models" | "general";
+export type SettingsSection = "general" | "models" | "tools" | "skills";
+export type ModelsTab = "device" | "providers";
+
+/** Where Settings opens: a section, and for Models which tab. Banners and hints link here. */
+export interface SettingsRoute {
+  section: SettingsSection;
+  tab?: ModelsTab;
+}
+
+const SECTIONS: { id: SettingsSection; label: string; icon: typeof Cpu }[] = [
+  { id: "general", label: "General", icon: SlidersHorizontal },
+  { id: "models", label: "Models", icon: Boxes },
+  { id: "tools", label: "Tools", icon: Wrench },
+  { id: "skills", label: "Skills", icon: Sparkles },
+];
+
+const MODEL_TABS: TabItem<ModelsTab>[] = [
+  { id: "device", label: "On this device" },
+  { id: "providers", label: "Providers" },
+];
+
+const ROUTE_PREF = "dn.settings";
+
+/** The last Settings page the user had open (a per-window convenience; may be unavailable). */
+export function lastSettingsRoute(): SettingsRoute {
+  try {
+    const v = JSON.parse(localStorage.getItem(ROUTE_PREF) ?? "null") as Partial<SettingsRoute> | null;
+    const section = SECTIONS.find((x) => x.id === v?.section)?.id ?? "general";
+    const tab = MODEL_TABS.find((t) => t.id === v?.tab)?.id;
+    return tab === undefined ? { section } : { section, tab };
+  } catch {
+    return { section: "general" };
+  }
+}
+
+function rememberRoute(r: SettingsRoute) {
+  try {
+    localStorage.setItem(ROUTE_PREF, JSON.stringify(r));
+  } catch {
+    // A convenience only: Settings still opens, on General.
+  }
+}
 
 /** The privacy policy and accessibility statement on demios.io (T-STORE-05, T-STORE-13). */
 export const PRIVACY_URL = "https://demios.io/privacy";
@@ -32,8 +85,8 @@ export const ACCESSIBILITY_URL = "https://demios.io/accessibility";
 interface Props {
   api: Api;
   info: AppInfo | null;
-  section: SettingsSection;
-  onSection: (s: SettingsSection) => void;
+  route: SettingsRoute;
+  onRoute: (r: SettingsRoute) => void;
   /** Keeps the shell's copy of the catalog (model badge, composer state) current. */
   onCatalog: (c: ModelCatalog) => void;
   /** MCP tool servers and their connection state. */
@@ -49,11 +102,16 @@ interface Props {
 
 type Load = { kind: "loading" } | { kind: "error"; message: string } | { kind: "ready"; catalog: ModelCatalog };
 
+/**
+ * Settings (#174): a section list on the left (a select on narrow windows) with General,
+ * Models, Tools and Skills. Models has its own tabs. The open page is remembered, and
+ * banners and hints elsewhere open a page directly through `route`.
+ */
 export function SettingsView({
   api,
   info,
-  section,
-  onSection,
+  route,
+  onRoute,
   onCatalog,
   servers,
   addLink = null,
@@ -64,9 +122,21 @@ export function SettingsView({
   const toast = useToast();
   const [load, setLoad] = useState<Load>({ kind: "loading" });
   const headingRef = useRef<HTMLHeadingElement>(null);
+  const navRef = useRef<HTMLUListElement>(null);
+  const section = route.section;
+  const tab: ModelsTab = route.tab ?? "device";
+  const title = SECTIONS.find((x) => x.id === section)?.label ?? "Settings";
 
-  // ⌘, and the sidebar land on the same page; focus its heading (design-system §7).
+  useEffect(() => rememberRoute(route), [route]);
+
+  // A new page: its heading takes focus (design-system §7), unless the user is moving
+  // through the section list with the arrow keys.
+  const keyNav = useRef(false);
   useEffect(() => {
+    if (keyNav.current) {
+      keyNav.current = false;
+      return;
+    }
     headingRef.current?.focus();
   }, [section]);
 
@@ -101,78 +171,123 @@ export function SettingsView({
     }
   };
 
+  const go = (id: SettingsSection) => onRoute(id === "models" ? { section: id, tab } : { section: id });
+
+  // Up/Down (and Home/End) move between sections and open them; Tab leaves the list.
+  const onNavKey = (e: KeyboardEvent<HTMLUListElement>) => {
+    const i = SECTIONS.findIndex((x) => x.id === section);
+    const to =
+      e.key === "ArrowDown" ? Math.min(i + 1, SECTIONS.length - 1)
+      : e.key === "ArrowUp" ? Math.max(i - 1, 0)
+      : e.key === "Home" ? 0
+      : e.key === "End" ? SECTIONS.length - 1
+      : null;
+    if (to === null) return;
+    e.preventDefault();
+    const next = SECTIONS[to];
+    if (next === undefined || next.id === section) return;
+    keyNav.current = true;
+    go(next.id);
+    requestAnimationFrame(() =>
+      navRef.current?.querySelector<HTMLButtonElement>(`[data-section="${next.id}"]`)?.focus(),
+    );
+  };
+
+  const catalogState = (
+    <>
+      {load.kind === "loading" && (
+        <div className="card" aria-busy="true" aria-label="Loading models">
+          <Skeleton width="30%" />
+          <Skeleton kind="block" />
+          <Skeleton kind="block" />
+        </div>
+      )}
+      {load.kind === "error" && (
+        <InlineMessage
+          tone="error"
+          action={
+            <Button size="sm" onClick={() => void fetch()}>
+              Retry
+            </Button>
+          }
+        >
+          Couldn't load your models. {load.message}
+        </InlineMessage>
+      )}
+    </>
+  );
+
   return (
     <section className="settings" aria-labelledby="settings-h">
-      <div className="settings-column">
-        <h1 id="settings-h" ref={headingRef} tabIndex={-1}>
-          Settings
-        </h1>
-        <div
-          className="tabs"
-          role="tablist"
-          aria-label="Settings sections"
-          onKeyDown={(e) => {
-            if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
-            e.preventDefault();
-            const next = section === "models" ? "general" : "models";
-            onSection(next);
-            e.currentTarget.querySelector<HTMLButtonElement>(`[data-section="${next}"]`)?.focus();
-          }}
-        >
-          {(["models", "general"] as const).map((s) => (
-            <button
-              key={s}
-              type="button"
-              role="tab"
-              id={`tab-${s}`}
-              aria-controls={`panel-${s}`}
-              aria-selected={section === s}
-              tabIndex={section === s ? 0 : -1}
-              data-section={s}
-              className={section === s ? "tab selected" : "tab"}
-              onClick={() => onSection(s)}
+      <div className="settings-layout">
+        <nav className="settings-nav" aria-label="Settings sections">
+          <ul ref={navRef} onKeyDown={onNavKey}>
+            {SECTIONS.map(({ id, label, icon: Icon }) => (
+              <li key={id}>
+                <button
+                  type="button"
+                  className={id === section ? "nav active" : "nav"}
+                  aria-current={id === section ? "page" : undefined}
+                  data-section={id}
+                  tabIndex={id === section ? 0 : -1}
+                  onClick={() => go(id)}
+                >
+                  <Icon {...ICON} aria-hidden="true" />
+                  {label}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </nav>
+        <div className="settings-column">
+          {/* Narrow windows: the section list becomes this select (CSS shows one of the two). */}
+          <div className="settings-select">
+            <label htmlFor="settings-section" className="dn-visually-hidden">
+              Settings section
+            </label>
+            <select
+              id="settings-section"
+              className="dn-select dn-native-select"
+              value={section}
+              onChange={(e) => go(e.target.value as SettingsSection)}
             >
-              {s === "models" ? "Models" : "General"}
-            </button>
-          ))}
-        </div>
-
-        <div role="tabpanel" id={`panel-${section}`} aria-labelledby={`tab-${section}`} className="tabpanel">
-        {/* The model catalogue only feeds Models: General shows whatever happens to it. */}
-        {section === "models" && load.kind === "loading" && (
-          <div className="card" aria-busy="true" aria-label="Loading models">
-            <Skeleton width="30%" />
-            <Skeleton kind="block" />
-            <Skeleton kind="block" />
+              {SECTIONS.map((x) => (
+                <option key={x.id} value={x.id}>
+                  {x.label}
+                </option>
+              ))}
+            </select>
           </div>
-        )}
-        {section === "models" && load.kind === "error" && (
-          <InlineMessage
-            tone="error"
-            action={
-              <Button size="sm" onClick={() => void fetch()}>
-                Retry
-              </Button>
-            }
-          >
-            Couldn't load your models. {load.message}
-          </InlineMessage>
-        )}
-        {load.kind === "ready" && section === "models" && (
-          <ModelsPage
-            api={api}
-            info={info}
-            servers={servers}
-            catalog={load.catalog}
-            onCatalog={set}
-            onSave={(next, what) => void save(load.catalog, next, what)}
-            addLink={addLink}
-            {...(onAddLinkClosed !== undefined ? { onAddLinkClosed } : {})}
-          />
-        )}
-        {section === "general" && (
-          <GeneralPage api={api} info={info} launchUpdate={launchUpdate} revealUpdates={revealUpdates} />
-        )}
+          <h1 id="settings-h" ref={headingRef} tabIndex={-1}>
+            {title}
+          </h1>
+
+          {section === "general" && (
+            <GeneralPage api={api} info={info} launchUpdate={launchUpdate} revealUpdates={revealUpdates} />
+          )}
+
+          {section === "models" && (
+            <>
+              {catalogState}
+              {load.kind === "ready" && (
+                <ModelsPage
+                  api={api}
+                  info={info}
+                  catalog={load.catalog}
+                  tab={tab}
+                  onTab={(t) => onRoute({ section: "models", tab: t })}
+                  onCatalog={set}
+                  onSave={(next, what) => void save(load.catalog, next, what)}
+                  addLink={addLink}
+                  {...(onAddLinkClosed !== undefined ? { onAddLinkClosed } : {})}
+                />
+              )}
+            </>
+          )}
+
+          {section === "tools" && <McpServersCard api={api} live={servers} />}
+
+          {section === "skills" && <SkillsCard api={api} />}
         </div>
       </div>
     </section>
@@ -182,8 +297,9 @@ export function SettingsView({
 function ModelsPage({
   api,
   info,
-  servers,
   catalog,
+  tab,
+  onTab,
   onCatalog,
   onSave,
   addLink,
@@ -193,8 +309,9 @@ function ModelsPage({
   onAddLinkClosed?: () => void;
   api: Api;
   info: AppInfo | null;
-  servers: McpServerStatus[];
   catalog: ModelCatalog;
+  tab: ModelsTab;
+  onTab: (t: ModelsTab) => void;
   onCatalog: (c: ModelCatalog) => void;
   onSave: (s: Settings, what: string) => void;
 }) {
@@ -210,6 +327,8 @@ function ModelsPage({
         toast({ tone: "error", title: `Couldn't refresh the model list. ${errorMessage(e)}` }),
       );
   }, [api, onCatalog, toast]);
+  // A demios:// add-model link opens On this device, where the add panel is.
+  const shown: ModelsTab = addLink !== null ? "device" : tab;
   return (
     <>
       <section className="card" aria-labelledby="slots-h">
@@ -231,43 +350,52 @@ function ModelsPage({
         ))}
       </section>
 
-      {info?.dev_fake_model === true && (
-        <section className="card" aria-labelledby="dev-h">
-          <h2 id="dev-h">Development</h2>
-          <div className="row">
-            <div className="row-main">
-              <span className="row-title">Dev fake model</span>
-              <span className="dn-help">
-                Streams a canned reply so the app works without a real model. Development builds only.
-              </span>
-            </div>
-            <Badge tone="local" icon={<Cpu size={12} strokeWidth={1.5} aria-hidden="true" />}>
-              Ready
-            </Badge>
-          </div>
-        </section>
-      )}
-
-      <LocalModelsCard
-        api={api}
-        initial={catalog.local_models}
-        onReady={refreshCatalog}
-        link={addLink}
-        {...(onAddLinkClosed !== undefined ? { onLinkClosed: onAddLinkClosed } : {})}
-      />
-      <BetterSearchSetting api={api} />
-
-      <McpServersCard api={api} live={servers} />
-
-      <section className="card" aria-labelledby="keys-h">
-        <h2 id="keys-h">Provider keys</h2>
-        <p className="dn-help">
-          Bring your own key. Keys are never shown again after you save them. Storage: {catalog.key_store}.
-        </p>
-        {catalog.providers.map((p) => (
-          <ProviderRow key={p.id} api={api} provider={p} onCatalog={onCatalog} />
-        ))}
-      </section>
+      <Tabs label="Where models come from" idBase="models" items={MODEL_TABS} value={shown} onChange={onTab} />
+      <div {...tabPanelProps("models", shown)}>
+        {shown === "device" && (
+          <>
+            <LocalModelsCard
+              api={api}
+              initial={catalog.local_models}
+              onReady={refreshCatalog}
+              link={addLink}
+              {...(onAddLinkClosed !== undefined ? { onLinkClosed: onAddLinkClosed } : {})}
+            />
+            {info?.models_dir != null && (
+              <p className="dn-help settings-note">Downloaded models are stored in {info.models_dir}</p>
+            )}
+            <BetterSearchSetting api={api} />
+            {info?.dev_fake_model === true && (
+              <section className="card" aria-labelledby="dev-h">
+                <h2 id="dev-h">Development</h2>
+                <div className="row">
+                  <div className="row-main">
+                    <span className="row-title">Dev fake model</span>
+                    <span className="dn-help">
+                      Streams a canned reply so the app works without a real model. Development builds only.
+                    </span>
+                  </div>
+                  <Badge tone="local" icon={<Cpu size={12} strokeWidth={1.5} aria-hidden="true" />}>
+                    Ready
+                  </Badge>
+                </div>
+              </section>
+            )}
+          </>
+        )}
+        {shown === "providers" && (
+          <section className="card" aria-labelledby="keys-h">
+            <h2 id="keys-h">Provider keys</h2>
+            <p className="dn-help">
+              Bring your own key. Keys are never shown again after you save them. Storage: {catalog.key_store}. Messages
+              in chats that use a provider's models are sent to that provider under your account with them.
+            </p>
+            {catalog.providers.map((p) => (
+              <ProviderRow key={p.id} api={api} provider={p} onCatalog={onCatalog} />
+            ))}
+          </section>
+        )}
+      </div>
     </>
   );
 }
@@ -328,7 +456,7 @@ function SlotRow({
         value={current}
         groups={groups}
         placeholder={fallback}
-        emptyText="No models yet. Add a provider key below."
+        emptyText="No models yet. Download one under On this device, or add a key under Providers."
         aria-describedby={`${id}-d`}
         onValueChange={onChange}
       />
@@ -413,7 +541,7 @@ function ProviderRow({
         placeholder={provider.has_key ? "Paste a new key to replace it" : "Paste API key"}
         value={key}
         error={error}
-        help={`${provider.has_key ? "Key saved." : "No key yet."} Messages in chats that use ${provider.name} models are sent to ${provider.name} under your account with them.`}
+        help={provider.has_key ? "Key saved." : "No key yet."}
         onChange={(e) => {
           setKey(e.target.value);
           if (error !== null) setError(null);
@@ -506,7 +634,29 @@ function GeneralPage({
 
   return (
     <>
-      <SkillsCard api={api} />
+      <section className="card" aria-labelledby="about-h">
+        <h2 id="about-h">About</h2>
+        <div className="row">
+          <div className="row-main">
+            <span className="row-title">Demios Desktop {info?.version ?? ""}</span>
+            {(info?.channel != null || info?.commit != null) && (
+              <span className="dn-help">
+                {[info.channel === "preview" ? "Preview build (unsigned)" : info.channel, info.commit && `commit ${info.commit}`]
+                  .filter(Boolean)
+                  .join(", ")}
+              </span>
+            )}
+            <span className="dn-help">
+              Answers come from the AI model you choose, on this computer or from a provider you add a key for. Demios
+              doesn't check them: they can be wrong or made up, so verify anything important.
+            </span>
+          </div>
+        </div>
+        {info !== null && (
+          <Updates api={api} mode={info.updates} initial={launchUpdate} reveal={revealUpdates} />
+        )}
+      </section>
+
       <section className="card" aria-labelledby="privacy-h">
         <h2 id="privacy-h">Privacy</h2>
         <p className="dn-help">Demios collects no usage data. There is no Demios account and no Demios server.</p>
@@ -550,11 +700,44 @@ function GeneralPage({
             </li>
           )}
         </ul>
+      </section>
+
+      <section className="card" aria-labelledby="help-h">
+        <h2 id="help-h">Help and legal</h2>
+        <ul className="link-list">
+          <li>
+            <Button icon={<ExternalLink {...ICON} aria-hidden="true" />} onClick={() => void reportProblem()}>
+              Report a problem
+            </Button>
+            <span className="dn-help">
+              A form on GitHub with the app version and your operating system filled in. Nothing from your chats is sent.
+              To report an answer, use the flag under it.
+            </span>
+          </li>
+          <li>
+            <Button icon={<ExternalLink {...ICON} aria-hidden="true" />} onClick={() => void openPage(PRIVACY_URL)}>
+              Privacy policy
+            </Button>
+            <span className="dn-help">What Demios does with your data, on demios.io.</span>
+          </li>
+          <li>
+            <Button icon={<ExternalLink {...ICON} aria-hidden="true" />} onClick={() => void openPage(ACCESSIBILITY_URL)}>
+              Accessibility statement
+            </Button>
+            <span className="dn-help">How accessible Demios is and how to report a barrier, on demios.io.</span>
+          </li>
+        </ul>
+        <p className="dn-help">Demios asks before it opens a page in your browser.</p>
+        <Licences />
+      </section>
+
+      <section className="card card-danger" aria-labelledby="delete-h">
+        <h2 id="delete-h">Delete local data</h2>
         <div className="row">
           <div className="row-main">
-            <span className="row-title">Delete all local data</span>
             <span className="dn-help">
-              Chats, settings, tool history, downloaded models, and the keys and sign-ins Demios saved in your keychain.
+              Chats, projects, settings, tool history, downloaded models, and the keys and sign-ins Demios saved in your
+              keychain. You can't undo this.
             </span>
           </div>
           <div className="row-actions">
@@ -568,67 +751,6 @@ function GeneralPage({
             </Button>
           </div>
         </div>
-      </section>
-      <section className="card" aria-labelledby="about-h">
-        <h2 id="about-h">About</h2>
-        <div className="row">
-          <div className="row-main">
-            <span className="row-title">Demios Desktop {info?.version ?? ""}</span>
-            {(info?.channel != null || info?.commit != null) && (
-              <span className="dn-help">
-                {[info.channel === "preview" ? "Preview build (unsigned)" : info.channel, info.commit && `commit ${info.commit}`]
-                  .filter(Boolean)
-                  .join(", ")}
-              </span>
-            )}
-            <span className="dn-help">
-              Answers come from the AI model you choose, on this computer or from a provider you add a key for. Demios
-              doesn't check them: they can be wrong or made up, so verify anything important.
-            </span>
-            <span className="dn-help">Your chats are stored in {info?.data_dir ?? "the app data folder"}</span>
-            {info?.models_dir != null && <span className="dn-help">Downloaded models are stored in {info.models_dir}</span>}
-          </div>
-        </div>
-        {info !== null && (
-          <Updates api={api} mode={info.updates} initial={launchUpdate} reveal={revealUpdates} />
-        )}
-        <div className="row">
-          <div className="row-main">
-            <span className="row-title">Report a problem</span>
-            <span className="dn-help">
-              Opens a form on GitHub in your browser, with the app version and your operating system filled in. Nothing
-              from your chats is sent. To report an answer, use the flag under it.
-            </span>
-          </div>
-          <div className="row-actions">
-            <Button icon={<ExternalLink {...ICON} aria-hidden="true" />} onClick={() => void reportProblem()}>
-              Report a problem
-            </Button>
-          </div>
-        </div>
-        <div className="row">
-          <div className="row-main">
-            <span className="row-title">Privacy policy</span>
-            <span className="dn-help">What Demios does with your data, on demios.io. Demios asks before it opens your browser.</span>
-          </div>
-          <div className="row-actions">
-            <Button icon={<ExternalLink {...ICON} aria-hidden="true" />} onClick={() => void openPage(PRIVACY_URL)}>
-              Privacy policy
-            </Button>
-          </div>
-        </div>
-        <div className="row">
-          <div className="row-main">
-            <span className="row-title">Accessibility statement</span>
-            <span className="dn-help">How accessible Demios is and how to report a barrier, on demios.io.</span>
-          </div>
-          <div className="row-actions">
-            <Button icon={<ExternalLink {...ICON} aria-hidden="true" />} onClick={() => void openPage(ACCESSIBILITY_URL)}>
-              Accessibility statement
-            </Button>
-          </div>
-        </div>
-        <Licences />
       </section>
       <ConfirmDialog
         open={confirming}

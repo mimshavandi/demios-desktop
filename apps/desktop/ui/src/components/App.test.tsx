@@ -21,7 +21,10 @@ import type {
 } from "../ipc/types";
 import { App } from "./App";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  localStorage.clear();
+});
 
 // The real renderer needs a webview (constructable stylesheets, sandboxed frames); record
 // what the pane hands it instead. Its own behaviour is tested in ui/artifact-sandbox.
@@ -53,6 +56,20 @@ vi.mock("@dn-artifacts", () => ({
 Element.prototype.hasPointerCapture ??= () => false;
 Element.prototype.releasePointerCapture ??= () => {};
 Element.prototype.scrollIntoView ??= () => {};
+
+/** Opens Settings on a section through the section list (#174). */
+async function openSettings(section: "General" | "Models" | "Tools" | "Skills") {
+  fireEvent.click(await screen.findByRole("button", { name: /^Settings/ }));
+  const nav = await screen.findByRole("navigation", { name: "Settings sections" });
+  fireEvent.click(within(nav).getByRole("button", { name: section }));
+  await screen.findByRole("heading", { level: 1, name: section });
+}
+
+/** Moves to another section while Settings is open. */
+function settingsSection(section: string) {
+  const nav = screen.getByRole("navigation", { name: "Settings sections" });
+  fireEvent.click(within(nav).getByRole("button", { name: section }));
+}
 
 /** Opens a sidebar chat's menu with the keyboard (Radix opens menus on Enter). */
 async function chatMenu(title: string) {
@@ -570,8 +587,7 @@ describe("App", () => {
     await waitFor(() => expect(reports).toEqual([["answer", "id-3"]]));
     expect(await screen.findByText("Opened the report form in your browser")).toBeTruthy();
 
-    fireEvent.click(await screen.findByRole("button", { name: "Models" }));
-    fireEvent.click(await screen.findByRole("tab", { name: "General" }));
+    await openSettings("General");
     fireEvent.click(await screen.findByRole("button", { name: "Report a problem" }));
     await waitFor(() => expect(reports).toEqual([["answer", "id-3"], ["problem", null]]));
     // Only kinds and message ids went to the backend: no chat text.
@@ -650,8 +666,7 @@ describe("App", () => {
       return false; // the user cancelled the native confirm
     };
     render(<App api={api} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Models" }));
-    fireEvent.click(await screen.findByRole("tab", { name: "General" }));
+    await openSettings("General");
     fireEvent.click(await screen.findByRole("button", { name: "Privacy policy" }));
     fireEvent.click(await screen.findByRole("button", { name: "Accessibility statement" }));
     await waitFor(() => expect(links).toEqual(["https://demios.io/privacy", "https://demios.io/accessibility"]));
@@ -770,24 +785,28 @@ describe("App", () => {
   it("shows models and settings with telemetry off", async () => {
     const { api } = fakeApi();
     render(<App api={api} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Models" }));
+    await openSettings("Models");
     expect(await screen.findByText("Model for each task")).toBeTruthy();
     expect(screen.getByLabelText("Chat")).toBeTruthy();
-    const key = screen.getByLabelText("OpenAI") as HTMLInputElement;
+    // On this device is the first tab; the models folder is shown there.
+    expect(screen.getByRole("tab", { name: "On this device" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByText("Downloaded models are stored in /tmp/models")).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", { name: "Providers" }));
+    const key = (await screen.findByLabelText("OpenAI")) as HTMLInputElement;
     expect(key.type).toBe("password");
-    expect(screen.getByText(/Messages in chats that use OpenAI models are sent to OpenAI/)).toBeTruthy();
+    // The data-flow sentence once for all providers, not under every key.
+    expect(screen.getAllByText(/sent to that provider under your account/)).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "Save key" }));
     expect(await screen.findByText("Paste the key first.")).toBeTruthy();
     expect(key.getAttribute("aria-invalid")).toBe("true");
 
-    fireEvent.click(screen.getByRole("tab", { name: "General" }));
-    expect(screen.getByRole("tabpanel").getAttribute("aria-labelledby")).toBe("tab-general");
+    settingsSection("General");
+    expect(await screen.findByRole("heading", { level: 1, name: "General" })).toBeTruthy();
     expect(screen.getByText(/Read-only tools run without asking/)).toBeTruthy();
     // No inert telemetry switch; a plain statement instead (T-STORE-11).
     expect(await screen.findByText(/Demios collects no usage data/)).toBeTruthy();
     expect(screen.queryByRole("switch")).toBeNull();
     expect(screen.getByText("Where your data goes")).toBeTruthy();
-    expect(screen.getByText("Downloaded models are stored in /tmp/models")).toBeTruthy();
   });
 
   it("deletes all local data only after a confirm, and cancel changes nothing", async () => {
@@ -800,8 +819,7 @@ describe("App", () => {
       return null;
     };
     render(<App api={api} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Models" }));
-    fireEvent.click(await screen.findByRole("tab", { name: "General" }));
+    await openSettings("General");
     const trigger = await screen.findByRole("button", { name: "Delete all local data" });
 
     fireEvent.click(trigger);
@@ -851,8 +869,7 @@ describe("App", () => {
         finish = () => void summary().then(resolve);
       });
     render(<App api={api} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Models" }));
-    fireEvent.click(await screen.findByRole("tab", { name: "General" }));
+    await openSettings("General");
     fireEvent.click(await screen.findByRole("button", { name: "Delete all local data" }));
     const confirm = (await screen.findByRole("button", { name: "Delete all data" })) as HTMLButtonElement;
     // Well past the 500 ms guard, still disabled: the list isn't known yet.
@@ -874,8 +891,7 @@ describe("App", () => {
       updates: "off",
     });
     render(<App api={api} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Models" }));
-    fireEvent.click(await screen.findByRole("tab", { name: "General" }));
+    await openSettings("General");
     expect(await screen.findByText("Preview build (unsigned), commit 1a2b3c4")).toBeTruthy();
   });
 
@@ -1077,7 +1093,7 @@ describe("App", () => {
   it("downloads a local model with progress, pause and a licence warning", async () => {
     const f = fakeApi();
     render(<App api={f.api} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Models" }));
+    await openSettings("Models");
     const row = await screen.findByTestId("local-model-row");
     expect(row.textContent).toContain("Caution (estimate)");
     expect(row.textContent).toContain("Licence: cc-by-nc-4.0");
@@ -1296,11 +1312,10 @@ describe("Settings quick fixes (#174 review)", () => {
       return list();
     };
     render(<App api={api} />);
-    fireEvent.click(await screen.findByRole("button", { name: /^Settings/ }));
-    fireEvent.click(await screen.findByRole("tab", { name: "General" }));
+    await openSettings("General");
     expect(await screen.findByRole("button", { name: "Delete all local data" })).toBeTruthy();
     expect(screen.queryByText(/Couldn't load your models/)).toBeNull();
-    fireEvent.click(screen.getByRole("tab", { name: "Models" }));
+    settingsSection("Models");
     expect(await screen.findByText(/Couldn't load your models/)).toBeTruthy();
     broken = false;
     fireEvent.click(screen.getAllByRole("button", { name: "Retry" }).at(-1)!);
@@ -1311,8 +1326,7 @@ describe("Settings quick fixes (#174 review)", () => {
     const { api } = fakeApi();
     render(<App api={api} />);
     expect(await screen.findByTestId("artifact-pane")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: /^Settings/ }));
-    await screen.findByRole("heading", { name: "Settings" });
+    await openSettings("General");
     expect(screen.queryByTestId("artifact-pane")).toBeNull();
     expect(screen.queryByRole("button", { name: "Hide artifacts" })).toBeNull();
     expect(document.querySelector(".app")?.classList.contains("artifacts-open")).toBe(false);
@@ -1561,7 +1575,7 @@ describe("No silent fallbacks (#141)", () => {
     let broken = true;
     api.watchLocalModels = async (cb) => (broken ? fail() : watch(cb));
     render(<App api={api} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Models" }));
+    await openSettings("Models");
     expect(await screen.findByText(/Couldn't load the models on this device/)).toBeTruthy();
     expect(screen.queryByText("No models in the catalogue.")).toBeNull();
     broken = false;
