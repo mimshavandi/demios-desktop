@@ -2,6 +2,7 @@
 //! (T-INF-01..06).
 
 mod bench;
+mod embed_eval;
 mod quality;
 mod report;
 
@@ -45,6 +46,8 @@ enum Cmd {
     Bench(bench::BenchArgs),
     /// Turn `dn bench` JSON reports into a markdown table.
     BenchReport(report::ReportArgs),
+    /// Retrieval quality (English and German), speed and memory of an embedding model.
+    BenchEmbed(embed_eval::EmbedArgs),
     /// The curated model catalogue.
     Models {
         #[command(subcommand)]
@@ -1167,6 +1170,7 @@ async fn main() -> ExitCode {
         Cmd::Fit(a) => fit_cmd(a).await,
         Cmd::Bench(a) => bench::run(a).await,
         Cmd::BenchReport(a) => report::run(a),
+        Cmd::BenchEmbed(a) => embed_eval::run(a).await,
         Cmd::Models { cmd } => models_cmd(cmd).await,
     };
     match r {
