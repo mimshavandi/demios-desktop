@@ -1262,6 +1262,91 @@ mod tests {
         assert!(t.contains("LOG=\"shown-plain-value\""), "{t}");
     }
 
+    /// dn-tools' stdio test server (`crates/dn-tools/examples/fixture_server.rs`). Built
+    /// on demand when this crate's tests run alone; a failed build fails the test.
+    fn fixture_server() -> std::path::PathBuf {
+        if let Some(p) = std::env::var_os("DN_TOOLS_FIXTURE_SERVER") {
+            return p.into();
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let name = format!("fixture_server{}", std::env::consts::EXE_SUFFIX);
+        let path = root.join("target/debug/examples").join(&name);
+        if !path.is_file() {
+            let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+            let ok = std::process::Command::new(cargo)
+                .args([
+                    "build",
+                    "-q",
+                    "-p",
+                    "dn-tools",
+                    "--example",
+                    "fixture_server",
+                ])
+                .current_dir(&root)
+                .status()
+                .is_ok_and(|s| s.success());
+            assert!(ok, "couldn't build dn-tools' fixture_server example");
+        }
+        assert!(path.is_file(), "no fixture server at {}", path.display());
+        path
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_server_that_changes_its_tools_mid_session_is_reviewed_again() {
+        use dn_core::capability::ApprovalPolicy;
+        let (st, exec, _keys, _rx) = app_with_exec();
+        let _ = st.launch_approver.set(Arc::new(FakeApprover {
+            allow: true,
+            asked: Default::default(),
+        }));
+        st.watch_tool_changes(Arc::clone(&exec));
+        let cfg = McpServerConfig::stdio("fx", fixture_server().to_string_lossy(), vec![]);
+        st.set_mcp_servers(vec![cfg.clone()]).unwrap();
+        st.connect_mcp_server(&exec, cfg, st.mcp_epoch_now()).await;
+        let before = state_of(&st, "fx").unwrap();
+        assert_eq!(
+            (before.state, before.review, before.revision),
+            ("connected", 0, 0)
+        );
+        let approval = |name: &str| {
+            exec.capabilities()
+                .into_iter()
+                .find(|c| c.tool_name == name)
+                .map(|c| c.approval)
+        };
+        assert_eq!(approval("echo"), Some(ApprovalPolicy::Auto));
+
+        // The server changes `echo` and adds `added`, then sends tools/list_changed.
+        let ctx = dn_tools::CallContext::new(Some("c".into()), dn_core::Id::new());
+        let change = dn_core::chat::ToolCall {
+            id: "1".into(),
+            name: "mcp__fx__change_tools".into(),
+            arguments: serde_json::json!({}),
+        };
+        exec.execute(&ctx, &change).await.unwrap();
+
+        let mut after = None;
+        for _ in 0..200 {
+            if let Some(s) = state_of(&st, "fx").filter(|s| s.revision == 1) {
+                after = Some(s);
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        let after = after.expect("the server was reviewed again");
+        assert_eq!(after.state, "connected");
+        assert_eq!(after.tools, before.tools + 1);
+        assert_eq!(after.review, 2, "echo changed, added is new");
+        // Both ask every time until the user reviews them; the rest keep their choices.
+        assert_eq!(approval("echo"), Some(ApprovalPolicy::AlwaysAsk));
+        assert_eq!(approval("added"), Some(ApprovalPolicy::AlwaysAsk));
+        assert_eq!(approval("pid"), Some(ApprovalPolicy::Auto));
+        // Offered again only now, after the review policy applied.
+        assert!(!exec.is_stale("fx"));
+        assert!(!st.tools_settling.contains("fx"));
+        exec.remove_server("fx").await;
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn delete_all_local_data_forgets_launch_approvals() {
         let (st, exec, _keys, _rx) = app_with_exec();

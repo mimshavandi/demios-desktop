@@ -18,7 +18,7 @@ globalThis.ResizeObserver ??= class {
 const tracker: McpServersView["servers"][number] = {
   id: "tracker",
   name: "Issue tracker",
-  status: { server_id: "tracker", name: "Issue tracker", state: "needs_auth", message: "Sign in to use this server's tools.", tools: 0, review: 0 },
+  status: { server_id: "tracker", name: "Issue tracker", state: "needs_auth", message: "Sign in to use this server's tools.", tools: 0, review: 0, revision: 0 },
   transport: {
     type: "streamable_http",
     url: "https://mcp.tracker.example/mcp",
@@ -150,7 +150,7 @@ describe("McpServersCard", () => {
     fireEvent.click(within(row).getByRole("button", { name: "Sign in" }));
     await waitFor(() => expect(calls).toContainEqual(["signin", "tracker"]));
 
-    const connected: McpServerStatus = { server_id: "tracker", name: "Issue tracker", state: "connected", message: null, tools: 2, review: 0 };
+    const connected: McpServerStatus = { server_id: "tracker", name: "Issue tracker", state: "connected", message: null, tools: 2, review: 0, revision: 0 };
     const signedIn = { ...tracker, transport: { ...tracker.transport, oauth: { scopes: ["read"], client_id: null, signed_in: true } } } as typeof tracker;
     const after = fake({ servers: [signedIn], local_servers_allowed: true });
     rerender(
@@ -246,7 +246,7 @@ describe("McpServersCard", () => {
         { server_id: serverId, connected: true, tools: [] }
       ),
     } as Api;
-    const live: McpServerStatus = { server_id: "tracker", name: "Issue tracker", state: "connected", message: null, tools: 2, review: 2 };
+    const live: McpServerStatus = { server_id: "tracker", name: "Issue tracker", state: "connected", message: null, tools: 2, review: 2, revision: 0 };
     ui(withTools, [live]);
     const row = await screen.findByTestId("mcp-server-row");
     expect(within(row).getByText("2 to review")).toBeTruthy();

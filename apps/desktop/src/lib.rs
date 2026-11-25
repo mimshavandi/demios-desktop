@@ -248,6 +248,7 @@ pub fn run() {
             commands::rename_conversation,
             commands::delete_conversation,
             commands::list_skills,
+            commands::list_answer_skills,
             commands::skills_overview,
             commands::reload_skills,
             commands::open_skills_folder,

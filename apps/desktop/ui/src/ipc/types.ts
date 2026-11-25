@@ -99,11 +99,13 @@ export interface SkillInfo {
   source: "builtin" | "user";
 }
 
-/** A file in the user's skills folder that didn't load (skills.rs `SkillProblem`). */
+/** A skill file that didn't load (skills.rs `SkillProblem`). */
 export interface SkillProblem {
-  /** Relative to the skills folder, e.g. `my-skill/SKILL.md`. */
+  /** Relative to its skills folder, e.g. `my-skill/SKILL.md`. */
   file: string;
   message: string;
+  /** `builtin`: a file shipped with the app is broken (report it); `user`: the user's own. */
+  source: "builtin" | "user";
 }
 
 /** Settings › Skills (skills.rs `SkillsOverview`). */
@@ -172,6 +174,15 @@ export interface TurnStarted {
   user_message: StoredMessage | null;
   assistant_message: StoredMessage;
   title: string | null;
+  /** Label of the skill this answer is written with, if any. */
+  skill: string | null;
+}
+
+/** An answer written with a skill (skills.rs `AnswerSkill`). */
+export interface AnswerSkill {
+  message_id: Id;
+  name: string;
+  label: string;
 }
 
 // ---- tools (dn-tools via the app)
@@ -199,6 +210,8 @@ export interface McpServerStatus {
   tools: number;
   /** Tools that are new or changed since they were reviewed; they always ask meanwhile. */
   review: number;
+  /** Bumped when the server changed its tools mid-session, so the Tools view reloads. */
+  revision: number;
 }
 
 /** Tool-runtime events (`watch_tools`). */

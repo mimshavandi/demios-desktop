@@ -12,6 +12,7 @@ import {
   type ChatEvent,
   type Conversation,
   type SkillInfo,
+  type TurnStarted,
   type Id,
   type McpServerStatus,
   type ModelCatalog,
@@ -79,6 +80,8 @@ function Shell({ api }: { api: Api }) {
   // choice here until its first message creates the conversation.
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [skill, setSkill] = useState<string | null>(null);
+  // Which answers of the open chat were written with a skill (message id → label).
+  const [answerSkills, setAnswerSkills] = useState<Record<Id, string>>({});
   const [listState, setListState] = useState<ListState>({ kind: "loading" });
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [projectsState, setProjectsState] = useState<ListState>({ kind: "loading" });
@@ -315,13 +318,26 @@ function Shell({ api }: { api: Api }) {
       setOpenArtifact(null);
       void refreshArtifacts(id);
       setSkill(null);
+      setAnswerSkills({});
       if (id !== null) {
         void api
           .getChatSkill(id)
           .then((s) => {
             if (openIdRef.current === id) setSkill(s);
           })
-          .catch(() => {});
+          .catch((e: unknown) => {
+            if (openIdRef.current === id) setError(`Couldn't read this chat's skill. ${errorMessage(e)}`);
+          });
+        void api
+          .listAnswerSkills(id)
+          .then((list) => {
+            if (openIdRef.current === id) {
+              setAnswerSkills(Object.fromEntries(list.map((a) => [a.message_id, a.label])));
+            }
+          })
+          .catch((e: unknown) => {
+            if (openIdRef.current === id) setError(`Couldn't read which skills wrote these answers. ${errorMessage(e)}`);
+          });
       }
       if (id === null) {
         dispatch({ kind: "open", conversationId: null, messages: [] });
@@ -376,14 +392,14 @@ function Shell({ api }: { api: Api }) {
   }, [api, toast]);
 
   // The skill library, read again whenever the chat comes back into view (Settings ›
-  // Skills can reload it). Without a library the picker stays hidden.
+  // Skills can reload it). An empty library hides the picker; a failed read says so.
   useEffect(() => {
     if (view.kind !== "chat") return;
     let alive = true;
     api
       .listSkills()
       .then((s) => alive && setSkills(s))
-      .catch(() => {});
+      .catch((e: unknown) => alive && setError(`Couldn't load the skills. ${errorMessage(e)}`));
     return () => {
       alive = false;
     };
@@ -491,6 +507,11 @@ function Shell({ api }: { api: Api }) {
     void open(null);
   }, [open]);
 
+  const noteAnswerSkill = useCallback((turn: TurnStarted) => {
+    const label = turn.skill;
+    if (label !== null) setAnswerSkills((m) => ({ ...m, [turn.assistant_message.id]: label }));
+  }, []);
+
   const send = useCallback(
     async (text: string): Promise<boolean> => {
       setError(null);
@@ -506,6 +527,7 @@ function Shell({ api }: { api: Api }) {
         }
         const turn = await api.sendMessage(id, text, onEvent);
         dispatch({ kind: "turn_started", conversationId: id, turn });
+        noteAnswerSkill(turn);
         void refreshConversations();
         return true;
       } catch (e) {
@@ -514,7 +536,7 @@ function Shell({ api }: { api: Api }) {
         return false;
       }
     },
-    [api, chat.conversationId, newChatProject, onEvent, refreshConversations, skill],
+    [api, chat.conversationId, newChatProject, onEvent, refreshConversations, skill, noteAnswerSkill],
   );
 
   const chooseSkill = useCallback(
@@ -541,11 +563,12 @@ function Shell({ api }: { api: Api }) {
     try {
       const turn = await api.regenerate(id, onEvent);
       dispatch({ kind: "turn_started", conversationId: id, turn });
+      noteAnswerSkill(turn);
     } catch (e) {
       dispatch({ kind: "turn_failed" });
       setError(errorMessage(e));
     }
-  }, [api, chat.conversationId, onEvent]);
+  }, [api, chat.conversationId, onEvent, noteAnswerSkill]);
 
   // Stop by conversation, so ⌘. also works between Send and the reply that names the
   // assistant message.
@@ -953,6 +976,7 @@ function Shell({ api }: { api: Api }) {
             onDismissAiNotice={() => void dismissAiNotice()}
             skills={skills}
             skill={skill}
+            answerSkills={answerSkills}
             onSkill={(n) => void chooseSkill(n)}
             projects={projects}
             projectId={chatProjectId}

@@ -203,6 +203,7 @@ impl ManifestTools {
             .filter(|c| {
                 !c.disabled
                     && !self.settling.contains(&c.server_id)
+                    && !self.executor.is_stale(&c.server_id)
                     && self.manifest.allows_tool(&c.spec.id)
             })
             .map(|c| c.llm_name)
