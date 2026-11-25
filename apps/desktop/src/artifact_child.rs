@@ -97,6 +97,9 @@ struct Inner {
     /// A render asked for before the host page loaded.
     pending: Option<u64>,
     shown: Option<Bounds>,
+    /// What happened to the child lately (page loads, host requests, renders), newest last;
+    /// shown by the e2e-only `artifact_child_state`. No content, tokens or URLs with secrets.
+    log: VecDeque<String>,
 }
 
 /// State of the artifact webview (managed by the app).
@@ -106,6 +109,14 @@ pub struct ChildState(Mutex<Inner>);
 impl ChildState {
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
         self.0.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    fn note(&self, what: impl Into<String>) {
+        let mut s = self.lock();
+        if s.log.len() >= 60 {
+            s.log.pop_front();
+        }
+        s.log.push_back(what.into());
     }
 }
 
@@ -174,13 +185,13 @@ pub async fn artifact_child_open(
     app: tauri::AppHandle,
     state: tauri::State<'_, ChildState>,
     token: String,
-    background: String,
+    background: Option<String>,
     events: Channel<ChildEvent>,
 ) -> IpcResult<()> {
     if !cfg!(windows) {
         return Err(not_windows());
     }
-    if !valid_token(&token) || !valid_background(&background) {
+    if !valid_token(&token) || !background.as_deref().is_none_or(valid_background) {
         return Err(IpcError::invalid("bad artifact webview session"));
     }
     {
@@ -198,7 +209,10 @@ pub async fn artifact_child_open(
     let window = app
         .get_window("main")
         .ok_or_else(|| IpcError::invalid("no main window"))?;
-    let url: tauri::Url = format!("{ORIGIN}/host/?bg=%23{}", &background[1..])
+    let query = background
+        .map(|bg| format!("?bg=%23{}", &bg[1..]))
+        .unwrap_or_default();
+    let url: tauri::Url = format!("{ORIGIN}/host/{query}")
         .parse()
         .map_err(|e| IpcError::invalid(format!("{e}")))?;
     let mut builder =
@@ -212,12 +226,17 @@ pub async fn artifact_child_open(
                 ok
             })
             .on_page_load(|wv, payload| {
-                if !matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
-                    return;
-                }
                 use tauri::Manager;
                 let app = wv.app_handle();
                 let state = app.state::<ChildState>();
+                state.note(format!(
+                    "page-load {:?} {}",
+                    payload.event(),
+                    payload.url().path()
+                ));
+                if !matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
+                    return;
+                }
                 let mut s = state.lock();
                 s.loaded = true;
                 if let (Some(seq), Some(token)) = (s.pending.take(), s.token.clone()) {
@@ -228,15 +247,15 @@ pub async fn artifact_child_open(
     if let Some(args) = main_browser_args(app.config()) {
         builder = builder.additional_browser_args(&args);
     }
-    let webview = window
+    window
         .add_child(
             builder,
             tauri::LogicalPosition::new(0.0, 0.0),
             tauri::LogicalSize::new(1.0, 1.0),
         )
         .map_err(|e| IpcError::invalid(format!("could not open the artifact webview: {e}")))?;
-    let _ = webview.hide();
     state.lock().shown = None;
+    state.note("created");
     Ok(())
 }
 
@@ -282,10 +301,13 @@ pub async fn artifact_child_render(
     ));
     if !s.loaded {
         s.pending = Some(seq);
+        drop(s);
+        state.note(format!("render {seq} queued (host page not loaded)"));
         return Ok(());
     }
     drop(s);
     if let Some(wv) = child(&app) {
+        state.note(format!("render {seq}"));
         wv.eval(render_call(seq, &token))
             .map_err(|e| IpcError::invalid(e.to_string()))?;
     }
@@ -316,10 +338,12 @@ pub async fn artifact_child_bounds(
             .map_err(err)?;
             wv.show().map_err(err)?;
             state.lock().shown = Some(b);
+            state.note("shown");
         }
         None => {
             wv.hide().map_err(err)?;
             state.lock().shown = None;
+            state.note("hidden");
         }
     }
     Ok(())
@@ -403,7 +427,7 @@ pub fn host_response<R: tauri::Runtime>(
 ) -> Option<Response<Vec<u8>>> {
     use tauri::Manager;
     let path = req.uri().path();
-    if !path.starts_with("/host/") && !path.starts_with("/probe/") {
+    if !path.starts_with("/host/") {
         return None;
     }
     if !cfg!(windows) || webview_label != LABEL || req.uri().host() != Some("artifact.localhost") {
@@ -412,7 +436,7 @@ pub fn host_response<R: tauri::Runtime>(
     let state = app.state::<ChildState>();
     let get = req.method() == tauri::http::Method::GET;
     let post = req.method() == tauri::http::Method::POST;
-    Some(match path {
+    let response = match path {
         "/host/" | "/host/index.html" if get => Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
@@ -466,9 +490,15 @@ pub fn host_response<R: tauri::Runtime>(
             None => empty(StatusCode::BAD_REQUEST),
         },
         #[cfg(fake_model)]
-        "/probe/report" => probe::record(req),
+        "/host/probe-report" if post => probe::record(req),
         _ => empty(StatusCode::NOT_FOUND),
-    })
+    };
+    state.note(format!(
+        "{} {path} {}",
+        req.method(),
+        response.status().as_u16()
+    ));
+    Some(response)
 }
 
 /// e2e only (dev fake-model builds): runs the isolation probes inside the real artifact
@@ -521,6 +551,8 @@ pub async fn artifact_child_state(
         "exists": wv.is_some(),
         "url": wv.and_then(|w| w.url().ok()).map(|u| u.to_string()),
         "shown": state.lock().shown,
+        "loaded": state.lock().loaded,
+        "log": state.lock().log.iter().cloned().collect::<Vec<_>>(),
     }))
 }
 
@@ -568,7 +600,7 @@ mod probe {
   };
   out.listConversations = await call("list_conversations", {});
   out.createConversation = await call("create_conversation", {});
-  out.childOpen = await call("artifact_child_open", { token: "0".repeat(32), background: "#000000", events: null });
+  out.childOpen = await call("artifact_child_open", { token: "0".repeat(32), background: null, events: null });
   out.channelHits = [];
   for (let id = 0; id < 64; id++) {
     const r = await call("plugin:__TAURI_CHANNEL__|fetch", null, { headers: { "Tauri-Channel-Id": String(id) } });
@@ -581,7 +613,7 @@ mod probe {
   out.cookie = document.cookie;
   out.parentDom = (() => { try { return window.parent.document.getElementById("dn-child-sentinel") ? "visible" : "not-found"; } catch (e) { return "err:" + e.name; } })();
   out.hostDoc = await fetch("/host/doc?seq=0").then((r) => r.status).catch((e) => "err:" + e);
-  await fetch("/probe/report", { method: "POST", body: JSON.stringify(out) }).catch(() => {});
+  await fetch("/host/probe-report", { method: "POST", body: JSON.stringify(out) }).catch(() => {});
 })();"##;
 }
 

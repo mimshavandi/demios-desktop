@@ -108,6 +108,13 @@ async function versionLabel() {
 }
 
 describe("artifacts", () => {
+  // Windows: on a failure, show what the artifact webview did (page loads, host requests, renders).
+  afterEach(async function () {
+    if (WINDOWS && this.currentTest?.state === "failed") {
+      console.log("artifact webview state:", JSON.stringify(await childState(), null, 2));
+    }
+  });
+
   let spy;
   before(async () => {
     spy = await spyServer();

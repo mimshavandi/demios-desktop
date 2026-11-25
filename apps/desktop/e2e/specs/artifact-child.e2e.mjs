@@ -91,6 +91,13 @@ describe("Windows artifact webview (ADR-0012)", () => {
     if (!WINDOWS) this.skip();
   });
 
+  // On a failure, show what the artifact webview did (page loads, host requests, renders).
+  afterEach(async function () {
+    if (this.currentTest?.state === "failed") {
+      console.log("artifact webview state:", JSON.stringify(await invoke("artifact_child_state"), null, 2));
+    }
+  });
+
   it("is isolated: the host page can call nothing and sees nothing of the main webview", async () => {
     await (await byTestId("new-chat")).waitForExist({ timeout: 60_000 });
     await browser.execute(() => {
@@ -187,7 +194,7 @@ describe("Windows artifact webview (ADR-0012)", () => {
     });
     osScreenshot("artifact-dialog-over-pane");
     // The dialog is usable: its own button is on top.
-    await (await $('[role="alertdialog"] button=Cancel')).click();
+    await (await (await $('[role="alertdialog"]')).$("button=Cancel")).click();
     await dialog.waitForDisplayed({ reverse: true, timeout: 10_000 });
     await browser.waitUntil(() => shownNear(slot), { timeout: 5_000, timeoutMsg: "the artifact webview didn't come back" });
   });

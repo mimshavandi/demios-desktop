@@ -98,5 +98,5 @@ describe("keys from the artifact frame", () => {
 it("host page background comes from the pane's computed colour", () => {
   expect(cssColorToHex("rgb(255, 255, 255)")).toBe("#ffffff");
   expect(cssColorToHex("rgba(17, 24, 39, 1)")).toBe("#111827");
-  expect(cssColorToHex("transparent")).toBe("#ffffff");
+  expect(cssColorToHex("transparent")).toBeNull();
 });

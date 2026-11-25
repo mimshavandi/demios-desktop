@@ -98,7 +98,7 @@ interface Commands {
   download_model: { args: { modelId: string }; ret: null };
   pause_download: { args: { modelId: string }; ret: null };
   // Windows artifact webview (artifactWebview.ts, ADR-0012).
-  artifact_child_open: { args: { token: string; background: string; events: Channel<ChildEvent> }; ret: null };
+  artifact_child_open: { args: { token: string; background: string | null; events: Channel<ChildEvent> }; ret: null };
   artifact_child_render: { args: { seq: number; html: string; nonce: string; net: boolean; title: string }; ret: null };
   artifact_child_bounds: { args: { bounds: ChildBounds | null }; ret: null };
   artifact_child_focus: { args: Record<string, never>; ret: null };
@@ -132,7 +132,7 @@ function channel<T>(onEvent: (ev: T) => void): Channel<T> {
 }
 
 export const api = {
-  artifactChildOpen: (token: string, background: string, events: Channel<ChildEvent>) =>
+  artifactChildOpen: (token: string, background: string | null, events: Channel<ChildEvent>) =>
     call("artifact_child_open", { token, background, events }),
   artifactChildRender: (doc: Commands["artifact_child_render"]["args"]) => call("artifact_child_render", doc),
   artifactChildBounds: (bounds: ChildBounds | null) => call("artifact_child_bounds", { bounds }),

@@ -26,10 +26,13 @@ function randomToken(): string {
   return Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
 }
 
-/** `rgb(…)` / `rgba(…)` → `#rrggbb` (the host page's background, so it doesn't flash white). */
-export function cssColorToHex(c: string): string {
+/**
+ * `rgb(…)` / `rgba(…)` → `#rrggbb`: the host page's background, the pane's surface colour, so it
+ * doesn't flash. `null` when the colour isn't an rgb() value (the host page stays transparent).
+ */
+export function cssColorToHex(c: string): string | null {
   const m = /rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(c);
-  if (!m) return "#ffffff";
+  if (!m) return null;
   return `#${[m[1], m[2], m[3]].map((v) => Number(v).toString(16).padStart(2, "0")).join("")}`;
 }
 
