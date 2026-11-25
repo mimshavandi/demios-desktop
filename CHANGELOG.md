@@ -11,6 +11,7 @@ Only changes people using the app or the `dn` command-line tool can notice are l
 #### Desktop app
 
 - Projects: group chats with standing instructions that are sent with each chat in the project, and add files, which Demios copies into its data folder. Deleting a project, or a file in it, can be undone for 10 seconds ([#135](https://github.com/mimshavandi/demios-desktop/pull/135)).
+- **Check for updates when Demios starts**, off by default: after your first check for updates, Demios asks once whether to turn it on. When it's on, a new version shows a notice; nothing downloads until you install it ([#139](https://github.com/mimshavandi/demios-desktop/pull/139)).
 
 #### `dn` command-line tool
 
@@ -50,7 +51,6 @@ Preview build, not signed: installers for macOS, Windows and Linux on the [GitHu
 - Choose a skill for a chat in the message box: six starter skills (compare, critique, design review, outline, summarize, write an email) add instructions for that chat. A skill can only narrow which tools the model may use, and never skips a tool approval ([#132](https://github.com/mimshavandi/demios-desktop/pull/132)).
 - Links in answers open in your browser after a system dialog shows the full address ([#74](https://github.com/mimshavandi/demios-desktop/pull/74)).
 - **Settings → General → About → Updates**: a copy downloaded from GitHub checks for a new version only when you select **Check for updates**, shows its release notes, and installs it after you confirm with **Install and restart**. Copies from the Microsoft Store or Flathub say that their store updates them. Builds that don't update themselves, like preview builds and builds from source, say where to get new versions ([#94](https://github.com/mimshavandi/demios-desktop/pull/94)).
-- **Check for updates when Demios starts**, off by default: after your first check for updates, Demios asks once whether to turn it on. When it's on, a new version shows a notice; nothing downloads until you install it ([#139](https://github.com/mimshavandi/demios-desktop/pull/139)).
 - **Settings → General → About** links to the privacy policy and the accessibility statement on demios.io. Demios asks before it opens your browser ([#97](https://github.com/mimshavandi/demios-desktop/pull/97)).
 - **Report a problem** (Settings → General) and **Report this answer** (the flag under an answer) open a prefilled form on GitHub in your browser ([#42](https://github.com/mimshavandi/demios-desktop/pull/42)).
 
