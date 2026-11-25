@@ -55,6 +55,24 @@ pub enum TraitsSource {
     Checked,
 }
 
+/// [`ModelTraits`] with its label, the shape the app's IPC sends (rows, repo view, search).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TraitsView {
+    #[serde(flatten)]
+    pub traits: ModelTraits,
+    /// "Chat · Tools", "Chat", "Embedding" or "Base model".
+    pub label: String,
+}
+
+impl From<ModelTraits> for TraitsView {
+    fn from(traits: ModelTraits) -> Self {
+        Self {
+            label: traits.label().to_string(),
+            traits,
+        }
+    }
+}
+
 impl ModelTraits {
     /// The label for the UI: "Chat · Tools", "Chat", "Embedding" or "Base model".
     pub fn label(&self) -> &'static str {
@@ -149,6 +167,28 @@ pub fn of_file(g: &Gguf, path: &Path) -> ModelTraits {
     }
     let side = std::fs::read_to_string(crate::template::sidecar_path(path)).ok();
     from_template(side.as_deref().filter(|s| !s.trim().is_empty()))
+}
+
+/// Traits of a catalogue entry before download: its capabilities and the `tool_support` the
+/// catalogue records (checked against each file's header by a network test).
+pub fn of_catalog(e: &crate::CatalogEntry) -> ModelTraits {
+    use dn_core::model::Capability;
+    let chat = e.capabilities.contains(&Capability::Chat);
+    let kind = if chat {
+        ModelKind::Chat
+    } else if e.capabilities.contains(&Capability::Embedding) {
+        ModelKind::Embedding
+    } else {
+        ModelKind::Base
+    };
+    ModelTraits {
+        kind,
+        tool_support: match kind {
+            ModelKind::Chat => e.tool_support.unwrap_or(ToolSupport::Unknown),
+            _ => ToolSupport::Unsupported,
+        },
+        source: TraitsSource::Header,
+    }
 }
 
 /// A hint from Hub metadata, before any header is read (search results). `None` when the

@@ -111,6 +111,9 @@ pub struct LocalModelRow {
     pub notes: String,
     pub state: DownloadState,
     pub fit: FitView,
+    /// What the model is for (T-INF-26): from the file once it's on disk, else from the
+    /// catalogue; `None` when unknown.
+    pub traits: Option<dn_models::kind::TraitsView>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -228,6 +231,8 @@ pub struct LocalModels<B: InferenceBackend = LlamaCppBackend> {
     externals: Mutex<Vec<External>>,
     /// The user's Hugging Face cache, read for models to reuse; `None` = don't look (tests).
     hf_cache: Option<PathBuf>,
+    /// Kind and tool support read from files on disk (T-INF-26), by model id.
+    traits: Mutex<HashMap<String, dn_models::kind::ModelTraits>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -349,6 +354,7 @@ fn external_entry(
         capabilities: vec![Capability::Chat],
         license,
         notes: notes.to_string(),
+        tool_support: None,
     }
 }
 
@@ -543,6 +549,7 @@ impl<B: InferenceBackend> LocalModels<B> {
             embedding: tokio::sync::Mutex::new(None),
             externals: Mutex::new(Vec::new()),
             hf_cache: None,
+            traits: Mutex::new(HashMap::new()),
         };
         lm.scan();
         lm
@@ -588,6 +595,7 @@ impl<B: InferenceBackend> LocalModels<B> {
         for id in &gone {
             lock(&self.state).remove(id);
             lock(&self.fits).remove(id);
+            lock(&self.traits).remove(id);
         }
         for x in &mut list {
             lock(&self.state).insert(x.entry.id.clone(), DownloadState::Ready);
@@ -604,6 +612,7 @@ impl<B: InferenceBackend> LocalModels<B> {
             // Every local chat model renders with its own template (T-INF-23): one without
             // a template is never offered for chat.
             if let Some(g) = &g {
+                lock(&self.traits).insert(x.entry.id.clone(), dn_models::kind::of_file(g, &x.path));
                 if dn_models::template::is_embedding(g) {
                     x.entry.capabilities = vec![Capability::Embedding];
                 } else if dn_models::template::source(g, &x.path).is_none() {
@@ -702,8 +711,12 @@ impl<B: InferenceBackend> LocalModels<B> {
     }
 
     /// Exact fit from the GGUF header (blocking file read).
+    /// The fit of a downloaded model from its header. Also records the model's traits from the
+    /// same header.
     fn exact_fit(&self, e: &CatalogEntry) -> Option<FitView> {
-        Gguf::open(&self.path(e)).ok().map(|g| {
+        let path = self.path(e);
+        Gguf::open(&path).ok().map(|g| {
+            lock(&self.traits).insert(e.id.clone(), dn_models::kind::of_file(&g, &path));
             fit_view(
                 &dn_models::fit(&ModelFootprint::from_gguf(&g), &self.machine),
                 false,
@@ -753,6 +766,11 @@ impl<B: InferenceBackend> LocalModels<B> {
             notes: e.notes.clone(),
             state,
             fit,
+            traits: lock(&self.traits)
+                .get(&e.id)
+                .copied()
+                .or_else(|| ext.is_none().then(|| dn_models::kind::of_catalog(e)))
+                .map(Into::into),
         }
     }
 
@@ -1089,6 +1107,8 @@ impl<B: InferenceBackend> LocalModels<B> {
             }
         }
         self.scan();
+        // Traits read from deleted files go; externals that remain are read again below.
+        lock(&self.traits).clear();
         // Hub downloads went with the folder; cache models (not ours) stay listed.
         self.refresh_externals();
         for e in &self.catalog.models {
@@ -1275,6 +1295,7 @@ mod tests {
             capabilities: vec![Capability::Chat],
             license: "apache-2.0".into(),
             notes: String::new(),
+            tool_support: None,
         }
     }
 
@@ -2079,6 +2100,43 @@ mod tests {
         assert_eq!(
             row("hf/org/Emb-GGUF/Emb-Q8_0").capabilities,
             [Capability::Embedding]
+        );
+        // Each row says what it is, read from the file (T-INF-26).
+        let label = |id: &str| row(id).traits.map(|t| t.label);
+        assert_eq!(
+            label("hf/org/NoTpl-GGUF/NoTpl-Q4_K_M").as_deref(),
+            Some("Base model")
+        );
+        assert_eq!(label("hf/org/Tpl-GGUF/Tpl-Q4_K_M").as_deref(), Some("Chat"));
+        assert_eq!(
+            label("hf/org/Side-GGUF/Side-Q4_K_M").as_deref(),
+            Some("Chat")
+        );
+        assert_eq!(
+            label("hf/org/Emb-GGUF/Emb-Q8_0").as_deref(),
+            Some("Embedding")
+        );
+    }
+
+    #[test]
+    fn catalogue_rows_say_what_they_are_before_download() {
+        let lm = LocalModels::new(
+            std::env::temp_dir().join(format!("dn-local-kind-{}", dn_core::Id::new())),
+            Catalog::builtin(),
+            Machine::cpu_only(16 << 30),
+        );
+        let label = |id: &str| {
+            lm.rows()
+                .into_iter()
+                .find(|r| r.id == id)
+                .and_then(|r| r.traits)
+                .map(|t| t.label)
+        };
+        assert_eq!(label("qwen3-8b-q4_k_m").as_deref(), Some("Chat · Tools"));
+        assert_eq!(label("phi-4-mini-instruct-q4_k_m").as_deref(), Some("Chat"));
+        assert_eq!(
+            label("nomic-embed-text-v1.5-q4_k_m").as_deref(),
+            Some("Embedding")
         );
     }
 

@@ -46,6 +46,8 @@ pub struct RepoView {
     pub selected: Option<String>,
     /// The fit couldn't be worked out (the GGUF header wasn't readable).
     pub fit_unknown: bool,
+    /// What the model is for, from the same header (T-INF-26); `None` when it wasn't readable.
+    pub traits: Option<dn_models::kind::TraitsView>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -259,10 +261,16 @@ pub async fn repo(
         .into_iter()
         .filter(|v| v.kind == VariantKind::Model)
         .collect();
-    let base_fp = match base_variant(&variants) {
-        Some(b) => hub.footprint(&info, b).await.ok().map(|fp| (b.clone(), fp)),
+    let inspected = match base_variant(&variants) {
+        Some(b) => hub
+            .inspect(&info, b)
+            .await
+            .ok()
+            .map(|(fp, t)| (b.clone(), fp, t)),
         None => None,
     };
+    let traits = inspected.as_ref().map(|(_, _, t)| (*t).into());
+    let base_fp = inspected.map(|(b, fp, _)| (b, fp));
     let fits = variants
         .iter()
         .map(|v| {
@@ -273,15 +281,9 @@ pub async fn repo(
         })
         .collect();
     let fit_unknown = base_fp.is_none();
-    Ok(build_view(
-        &info,
-        &variants,
-        fits,
-        None,
-        fit_unknown,
-        local,
-        pulls,
-    ))
+    let mut view = build_view(&info, &variants, fits, None, fit_unknown, local, pulls);
+    view.traits = traits;
+    Ok(view)
 }
 
 /// The screen's view of a repo pinned to a commit: model variants with fit, downloaded and
@@ -330,6 +332,7 @@ fn build_view(
         variants: views,
         selected,
         fit_unknown,
+        traits: None,
     }
 }
 
