@@ -122,14 +122,15 @@ export function SettingsView({ api, info, section, onSection, onCatalog, servers
         </div>
 
         <div role="tabpanel" id={`panel-${section}`} aria-labelledby={`tab-${section}`} className="tabpanel">
-        {load.kind === "loading" && (
-          <div className="card" aria-busy="true" aria-label="Loading settings">
+        {/* The model catalogue only feeds Models: General shows whatever happens to it. */}
+        {section === "models" && load.kind === "loading" && (
+          <div className="card" aria-busy="true" aria-label="Loading models">
             <Skeleton width="30%" />
             <Skeleton kind="block" />
             <Skeleton kind="block" />
           </div>
         )}
-        {load.kind === "error" && (
+        {section === "models" && load.kind === "error" && (
           <InlineMessage
             tone="error"
             action={
@@ -138,7 +139,7 @@ export function SettingsView({ api, info, section, onSection, onCatalog, servers
               </Button>
             }
           >
-            Couldn't load settings. {load.message}
+            Couldn't load your models. {load.message}
           </InlineMessage>
         )}
         {load.kind === "ready" && section === "models" && (
@@ -153,9 +154,7 @@ export function SettingsView({ api, info, section, onSection, onCatalog, servers
             {...(onAddLinkClosed !== undefined ? { onAddLinkClosed } : {})}
           />
         )}
-        {load.kind === "ready" && section === "general" && (
-          <GeneralPage api={api} info={info} />
-        )}
+        {section === "general" && <GeneralPage api={api} info={info} />}
         </div>
       </div>
     </section>

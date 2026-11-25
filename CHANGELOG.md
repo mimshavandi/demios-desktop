@@ -20,6 +20,10 @@ Only changes people using the app or the `dn` command-line tool can notice are l
 
 - Models on this device now write their prompts with their own chat template, from the model file or from its Hugging Face repository. A model without a chat template can't be used for chat: its row says so, and choosing it gives "This model has no chat template, so it can't be used for chat. Pick another model." ([#150](https://github.com/mimshavandi/demios-desktop/pull/150)).
 
+### Fixed
+
+- Settings uses the whole window: the artifact pane is hidden while Settings or a project page is open, and comes back with the chat. If your models can't be loaded, only the Models page says so; General still works ([#PRNUM](https://github.com/mimshavandi/demios-desktop/pull/PRNUM)).
+
 ## [0.1.0-preview.454e01b] - 2026-11-25
 
 Preview build, not signed: installers for macOS, Windows and Linux on the [GitHub release](https://github.com/mimshavandi/demios-desktop/releases/tag/v0.1.0-preview.454e01b) and [demios.io/download](https://demios.io/download/). It doesn't update itself. Everything below is in this preview.

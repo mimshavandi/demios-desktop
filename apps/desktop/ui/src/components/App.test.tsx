@@ -1204,3 +1204,39 @@ describe("Projects", () => {
     expect(await screen.findByRole("button", { name: "Thesis" })).toBeTruthy();
   });
 });
+
+describe("Settings quick fixes (#174 review)", () => {
+  it("shows General even when the model catalogue can't load; only Models shows the error", async () => {
+    const { api } = fakeApi();
+    const list = api.listModels;
+    let broken = true;
+    api.listModels = async () => {
+      if (broken) throw { code: "storage", message: "Could not read or write local data." };
+      return list();
+    };
+    render(<App api={api} />);
+    fireEvent.click(await screen.findByRole("button", { name: /^Settings/ }));
+    fireEvent.click(await screen.findByRole("tab", { name: "General" }));
+    expect(await screen.findByRole("button", { name: "Delete all local data" })).toBeTruthy();
+    expect(screen.queryByText(/Couldn't load your models/)).toBeNull();
+    fireEvent.click(screen.getByRole("tab", { name: "Models" }));
+    expect(await screen.findByText(/Couldn't load your models/)).toBeTruthy();
+    broken = false;
+    fireEvent.click(screen.getAllByRole("button", { name: "Retry" }).at(-1)!);
+    await waitFor(() => expect(screen.queryByText(/Couldn't load your models/)).toBeNull());
+  });
+
+  it("hides the artifact pane while Settings is open and brings it back for the chat", async () => {
+    const { api } = fakeApi();
+    render(<App api={api} />);
+    expect(await screen.findByTestId("artifact-pane")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /^Settings/ }));
+    await screen.findByRole("heading", { name: "Settings" });
+    expect(screen.queryByTestId("artifact-pane")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Hide artifacts" })).toBeNull();
+    expect(document.querySelector(".app")?.classList.contains("artifacts-open")).toBe(false);
+    fireEvent.click(screen.getByTestId("new-chat"));
+    expect(await screen.findByTestId("artifact-pane")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Hide artifacts" })).toBeTruthy();
+  });
+});
