@@ -1504,8 +1504,9 @@ describe("No silent fallbacks (#141)", () => {
     convs.push({ id: "c1", title: "Gone", model: null, project_id: null, created_at: 0, updated_at: 0 });
     convs.push({ id: "c2", title: "Kept", model: null, project_id: null, created_at: 0, updated_at: 0 });
     render(<App api={api} />);
-    await chatMenuItem("Gone", "Delete");
+    await chatMenu("Gone");
     api.listConversations = async () => fail();
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
     expect(await screen.findByText(/Couldn't load chats/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Kept" })).toBeNull();
   });
