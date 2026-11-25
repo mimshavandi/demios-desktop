@@ -95,6 +95,22 @@ export interface SkillInfo {
   description: string;
   /** Tool patterns it allows; `[]` means no tools. It never changes approvals. */
   allowed_tools: string[];
+  /** Shipped with the app, or a file in the user's skills folder. */
+  source: "builtin" | "user";
+}
+
+/** A file in the user's skills folder that didn't load (skills.rs `SkillProblem`). */
+export interface SkillProblem {
+  /** Relative to the skills folder, e.g. `my-skill/SKILL.md`. */
+  file: string;
+  message: string;
+}
+
+/** Settings › Skills (skills.rs `SkillsOverview`). */
+export interface SkillsOverview {
+  skills: SkillInfo[];
+  problems: SkillProblem[];
+  folder: string | null;
 }
 
 export type MessageStatus = "streaming" | "complete" | "cancelled" | "error";

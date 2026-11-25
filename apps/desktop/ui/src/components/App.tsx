@@ -341,6 +341,20 @@ function Shell({ api }: { api: Api }) {
     };
   }, [api, toast]);
 
+  // The skill library, read again whenever the chat comes back into view (Settings ›
+  // Skills can reload it). Without a library the picker stays hidden.
+  useEffect(() => {
+    if (view.kind !== "chat") return;
+    let alive = true;
+    api
+      .listSkills()
+      .then((s) => alive && setSkills(s))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [api, view.kind]);
+
   useEffect(() => {
     void (async () => {
       try {
@@ -350,11 +364,6 @@ function Shell({ api }: { api: Api }) {
       }
       await refreshCatalog();
       void refreshProjects();
-      // Without the library the picker just stays hidden.
-      void api
-        .listSkills()
-        .then(setSkills)
-        .catch(() => {});
       try {
         const list = await api.listConversations();
         setConversations(list);

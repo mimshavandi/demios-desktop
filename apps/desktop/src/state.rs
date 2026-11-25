@@ -332,7 +332,9 @@ impl AppState {
         models.local = Some(crate::local::LocalModels::open());
         let mut state = Self::new(conn, models, keys);
         state.agent = agent;
-        state.skills = crate::skills::Library::load(skills);
+        // The user's own skills sit next to the database, in the app's data directory.
+        let user_skills = path.parent().map(|d| d.join(crate::skills::USER_DIR));
+        state.skills = crate::skills::Library::load(skills, user_skills);
         state.tools = tools;
         state.executor = Some(Arc::clone(&executor));
         state.tools_settling = settling;

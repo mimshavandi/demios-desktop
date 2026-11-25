@@ -15,6 +15,7 @@ use dn_core::Id;
 use dn_store::chat::{self as store, Conversation, StoredMessage};
 use dn_tools::ApprovalDecision;
 use serde::Serialize;
+use std::path::Path;
 use std::sync::Arc;
 use tauri::State;
 use tauri::ipc::Channel;
@@ -210,6 +211,48 @@ pub async fn rename_conversation(
 #[tauri::command]
 pub async fn list_skills(state: AppStateRef<'_>) -> IpcResult<Vec<crate::skills::SkillInfo>> {
     Ok(state.skills.list())
+}
+
+/// Settings › Skills: every skill, the user's files that didn't load and why, and the
+/// user's skills folder.
+#[tauri::command]
+pub async fn skills_overview(state: AppStateRef<'_>) -> IpcResult<crate::skills::SkillsOverview> {
+    Ok(state.skills.overview())
+}
+
+/// Reads the skills folders again. Chats keep their choice; one whose skill is gone uses
+/// none until the user picks another.
+#[tauri::command]
+pub async fn reload_skills(state: AppStateRef<'_>) -> IpcResult<crate::skills::SkillsOverview> {
+    let st = Arc::clone(&*state);
+    tauri::async_runtime::spawn_blocking(move || {
+        st.skills.reload();
+        st.skills.overview()
+    })
+    .await
+    .map_err(|_| IpcError::new("internal", "Couldn't reload the skills."))
+}
+
+/// Opens the user's skills folder in the file manager, creating it first. The path is the
+/// app's own; the webview can't pass one.
+#[tauri::command]
+pub async fn open_skills_folder(app: tauri::AppHandle, state: AppStateRef<'_>) -> IpcResult<()> {
+    use tauri_plugin_opener::OpenerExt;
+    let dir = state
+        .skills
+        .user_dir()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| IpcError::new("unavailable", "There is no skills folder in this build."))?;
+    std::fs::create_dir_all(&dir).map_err(|e| {
+        eprintln!("could not create the skills folder: {e}");
+        IpcError::new("unavailable", "Couldn't create the skills folder.")
+    })?;
+    app.opener()
+        .open_path(dir.to_string_lossy(), None::<&str>)
+        .map_err(|e| {
+            eprintln!("could not open the skills folder: {e}");
+            IpcError::new("unavailable", "Couldn't open the skills folder.")
+        })
 }
 
 /// The skill a chat uses, or `null`. A saved skill that is no longer in the library reads
