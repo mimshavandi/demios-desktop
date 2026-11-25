@@ -198,7 +198,7 @@ export function Updates({
             tone="info"
             action={
               <span className="update-offer-actions">
-                <Button size="sm" variant="primary" onClick={() => void saveLaunch(true)}>
+                <Button size="sm" onClick={() => void saveLaunch(true)}>
                   Turn on
                 </Button>
                 <Button size="sm" onClick={() => void saveLaunch(false)}>
