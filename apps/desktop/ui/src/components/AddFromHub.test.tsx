@@ -162,6 +162,18 @@ describe("AddFromHub", () => {
 });
 
 describe("AddFromHub, review fixes", () => {
+  it("says it couldn't check the token instead of claiming there is none (#141)", async () => {
+    const f = fake(repoView({ gated: true }));
+    f.api.hfTokenStatus = async () => {
+      throw { code: "key_store", message: "Couldn't use your system keychain. Try again." };
+    };
+    ui(<AddFromHub api={f.api} onClose={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+    fireEvent.click(await screen.findByRole("button", { name: /org\/Tiny-GGUF/ }));
+    expect(await screen.findByText(/Couldn't check for a saved Hugging Face token/)).toBeTruthy();
+  });
+
   const open = async (f: ReturnType<typeof fake>) => {
     ui(<AddFromHub api={f.api} onClose={() => {}} />);
     fireEvent.click(screen.getByRole("button", { name: "Search" }));

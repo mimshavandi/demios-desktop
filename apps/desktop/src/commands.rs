@@ -47,6 +47,9 @@ pub struct AppInfo {
     pub commit: Option<&'static str>,
     /// Build channel set by CI (`DEMIOS_BUILD_CHANNEL`, e.g. `preview`); `None` for local builds.
     pub channel: Option<&'static str>,
+    /// Why the assistant's instructions (`skills/`) didn't load, if they didn't; chats
+    /// can't start until this is fixed (#141).
+    pub agent_error: Option<String>,
 }
 
 #[tauri::command]
@@ -63,6 +66,7 @@ pub async fn app_info(app: tauri::AppHandle, state: AppStateRef<'_>) -> IpcResul
         updates: crate::updates::current_mode(app.config()),
         commit: option_env!("DEMIOS_BUILD_COMMIT").filter(|c| !c.is_empty()),
         channel: option_env!("DEMIOS_BUILD_CHANNEL").filter(|c| !c.is_empty()),
+        agent_error: state.agent.load_error().map(str::to_owned),
     })
 }
 
