@@ -68,6 +68,8 @@
     "allow-check-for-update",
     "allow-install-update",
     "allow-message-sources",
+    "allow-knowledge-status",
+    "allow-knowledge-offer",
     "allow-artifact-child-open",
     "allow-artifact-child-render",
     "allow-artifact-child-bounds",
