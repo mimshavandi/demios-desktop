@@ -103,23 +103,6 @@ For testing real models before releases are signed (#51). The `preview` workflow
 - **Open it:** macOS blocks unsigned apps the first time. Right-click (Control-click) the app › **Open** › **Open**. On macOS 15 and later, if there is no Open button, try to open the app once, then use **System Settings › Privacy & Security › Open Anyway**. Or run `xattr -dr com.apple.quarantine "/Applications/Demios Desktop.app"`.
 - **Expected:** `codesign -dv` reports an ad-hoc signature (or none), and `spctl -a -vv` reports *rejected*. Keychain prompts name the app as unsigned, and you'll be asked again after each new build.
 
-### Preview installers for all OSes (`release-preview`)
-`.github/workflows/release-preview.yml` builds unsigned release installers:
-- macOS `.dmg` for arm64 and x64, each built natively and ad-hoc signed with `codesign -s -`;
-- Windows NSIS `-setup.exe` (no `.msi` in previews);
-- Linux AppImage, `.deb` and `.rpm`, built on Ubuntu 22.04 for an older glibc.
-
-The `updater` feature is off. Each installer is smoke-tested on its own OS:
-- **macOS:** mount the dmg, copy the app to Applications, launch it, and check that the process is alive and has a window.
-- **Windows:** install silently. UI Automation must find the "New chat" button. tauri-driver can't attach to a build without WebView2 remote debugging, which must not ship.
-- **Linux:** install the deb, then run `npm run smoke` (`specs/smoke.e2e.mjs`, tauri-driver) against both the installed binary and the AppImage. The `.rpm` is installed with dnf in a `fedora:latest` container and must start under Xvfb.
-- **Every OS:** reinstalling must leave the local data folder unchanged.
-
-The workflow artifact holds every installer, `SHA256SUMS.txt` and the smoke logs.
-
-- **Dry run:** start the workflow with `publish` off, or push a `release-preview-check-*` tag; neither ever publishes.
-- **Publishing:** the `publish` job runs only from `main` with `publish: true`. It creates a GitHub pre-release, "Demios Desktop <version> (Preview, unsigned)", with notes from `.github/release-preview/notes.md`.
-
 Real-model checklist (#51), on the preview build:
 - [ ] Models › download a small model from the built-in list. Pause and resume three times: it resumes from where it stopped and ends **Ready** (checksum verified).
 - [ ] Start a download, quit (⌘Q) mid-download, relaunch: the row is **Paused** at its size, and Resume finishes it.

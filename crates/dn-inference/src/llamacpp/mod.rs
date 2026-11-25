@@ -9,6 +9,10 @@
 //! prompt batches or on its next token and stops. A panic in generation becomes an `Err`
 //! item, never a silently ended stream.
 //!
+//! Chat templates: the model's own Jinja template (GGUF `tokenizer.chat_template`) through
+//! minijinja, sandboxed ([`jinja`]); if it is missing or fails, llama.cpp's built-in matcher;
+//! if that fails too, chatml.
+//!
 //! Prompt safety: the chat template is rendered with placeholders for message content; only
 //! the template's own text is tokenized with special-token parsing, so a message or tool
 //! result cannot forge role boundaries (see [`crate::prompt::split_rendered`]). Our own
@@ -22,6 +26,7 @@
 //!
 //! No `unsafe` here: all FFI stays inside `llama-cpp-2`.
 
+mod jinja;
 mod utf8;
 
 use crate::backend::{TokenStream, normalize};
@@ -96,6 +101,8 @@ impl Drop for ActiveGuard {
 struct Loaded {
     model: LlamaModel,
     template: Option<LlamaChatTemplate>,
+    /// The same template compiled for minijinja; `None` when missing or it doesn't compile.
+    jinja: Option<jinja::ChatTemplate>,
     /// The model's template mentions `<think>` (Qwen3, DeepSeek-R1, QwQ, ...).
     thinks: bool,
     /// Text of every control token, for the fallback content sanitiser.
@@ -137,6 +144,8 @@ pub struct ModelInfo {
     pub n_ctx_train: u32,
     pub n_ctx: u32,
     pub has_chat_template: bool,
+    /// The model's own Jinja template compiled; prompts use it unless it fails to render.
+    pub jinja_template: bool,
 }
 
 /// One `dn bench` measurement (llama-bench style: fixed token counts, EOS ignored).
@@ -211,6 +220,7 @@ impl LlamaCppBackend {
             n_ctx_train: l.model.n_ctx_train(),
             n_ctx: l.n_ctx,
             has_chat_template: l.template.is_some(),
+            jinja_template: l.jinja.is_some(),
         })
     }
 
@@ -348,6 +358,13 @@ fn load_blocking(spec: &ModelSpec, opts: &LoadOptions) -> Result<Loaded> {
         .and_then(|t| t.to_str().ok())
         .is_some_and(|t| t.contains("<think>"));
     let vocab = model.vocab();
+    let piece = |t| String::from_utf8(vocab.token_to_piece(t, true, None)).unwrap_or_default();
+    let jinja = template
+        .as_ref()
+        .and_then(|t| t.to_str().ok())
+        .and_then(|src| {
+            jinja::ChatTemplate::new(src, &piece(vocab.bos()), &piece(vocab.eos())).ok()
+        });
     let control: Vec<String> = vocab
         .tokens()
         .filter(|&t| vocab.is_control(t))
@@ -357,6 +374,7 @@ fn load_blocking(spec: &ModelSpec, opts: &LoadOptions) -> Result<Loaded> {
     Ok(Loaded {
         model,
         template,
+        jinja,
         thinks,
         control,
         gate: Arc::new(Semaphore::new(1)),
@@ -366,9 +384,13 @@ fn load_blocking(spec: &ModelSpec, opts: &LoadOptions) -> Result<Loaded> {
     })
 }
 
-/// Apply the model's chat template; chatml when the model has none or its template fails
-/// (llama.cpp's built-in engine only knows the common templates).
+/// Apply the model's chat template: its own Jinja source first; llama.cpp's built-in engine
+/// (which only knows the common template families) when that is missing or fails; chatml
+/// when the model has no template or neither applies.
 fn render(l: &Loaded, turns: &[Turn]) -> Result<String> {
+    if let Some(Ok(s)) = l.jinja.as_ref().map(|j| j.render(turns)) {
+        return Ok(s);
+    }
     let msgs = turns
         .iter()
         .map(|t| LlamaChatMessage::new(t.role.into(), t.content.clone()))
@@ -888,6 +910,29 @@ mod tests {
             .collect::<String>();
         assert!(!evil.is_empty(), "model has no control tokens");
         assert_eq!(count("hello"), count(&evil));
+    }
+
+    /// A real GGUF's own template compiles and is what prompts use (Qwen2.5: with its
+    /// default system prompt).
+    #[tokio::test]
+    #[ignore = "needs DN_TEST_GGUF"]
+    async fn gguf_jinja_template_is_used() {
+        let path = std::env::var("DN_TEST_GGUF").expect("set DN_TEST_GGUF");
+        let l = load_blocking(&ModelSpec::gguf(path), &LoadOptions::default()).unwrap();
+        let src = l.template.as_ref().unwrap().to_str().unwrap().to_string();
+        let j = l.jinja.as_ref().expect("the model's template compiles");
+        let turns = vec![Turn {
+            role: "user",
+            content: "Hi".into(),
+        }];
+        let rendered = render(&l, &turns).unwrap();
+        assert_eq!(rendered, j.render(&turns).unwrap());
+        if src.contains("You are Qwen, created by Alibaba Cloud") {
+            assert!(
+                rendered.contains("You are Qwen, created by Alibaba Cloud"),
+                "{rendered}"
+            );
+        }
     }
 
     #[test]

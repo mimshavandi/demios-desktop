@@ -6,8 +6,7 @@
   "type": "module",
   "description": "Real-app end-to-end tests: tauri-driver + WebdriverIO (T-SHELL-05).",
   "scripts": {
-    "test": "wdio run ./wdio.conf.mjs",
-    "smoke": "wdio run ./wdio.conf.mjs --spec ./specs/smoke.e2e.mjs"
+    "test": "wdio run ./wdio.conf.mjs"
   },
   "devDependencies": {
     "@wdio/cli": "9.33.1",
