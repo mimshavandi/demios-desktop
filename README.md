@@ -24,10 +24,10 @@ An open-source desktop app for chatting with AI models you choose: one running o
 - See where your data goes in **Settings → General**, and remove everything with **Delete all local data**: chats, settings, downloaded models and the keys Demios saved, after a confirmation that lists what will go.
 - A notice on first run, and a line under the message box, say that answers come from the model you chose and can be wrong.
 - Report a problem, or a single answer, through a prefilled form on GitHub. Nothing from your chats is sent.
-- Read the licence of every package shipped with the app, searchable, in **Settings → General → About → Open-source licences**.
-- Open the privacy policy and the accessibility statement from **Settings → General → About**.
+- Read the licence of every package shipped with the app, searchable, in **Settings → General → Help and legal → Open-source licences**.
+- Open the privacy policy and the accessibility statement from **Settings → General → Help and legal**.
 - An answer from a provider that stops responding ends with an error you can retry, instead of waiting forever.
-- Add tool servers (MCP) in **Settings → Models → Tool servers**: a program on this computer, which starts only after you allow its exact command, or a remote HTTPS server, with sign-in in your browser. Tools that change something show their exact arguments and wait for you to allow or deny them. See each server's tools and their risk, choose per tool whether it asks, and review new or changed tools before they run without asking.
+- Add tool servers (MCP) in **Settings → Tools**: a program on this computer, which starts only after you allow its exact command, or a remote HTTPS server, with sign-in in your browser. Tools that change something show their exact arguments and wait for you to allow or deny them. See each server's tools and their risk, choose per tool whether it asks, and review new or changed tools before they run without asking.
 - The `dn` command-line tool: run a model, check whether it fits, browse and download models from Hugging Face, and open `demios://` add-model links.
 
 ## Coming next
@@ -102,7 +102,7 @@ To try the app without touching your normal data, use a throwaway data folder: `
 
 The [user guide](docs/user/README.md) covers everything below in more detail.
 
-Open **Settings → Models** (select **Models** at the bottom of the sidebar) and pick one of these:
+Open **Settings → Models** (select **Settings** at the bottom of the sidebar, then **Models**) and pick one of these:
 
 - **On this device:** choose a model from the catalogue and select **Download model**. Check the fit status first: it tells you whether the model fits this computer's memory. When the download finishes, the app picks a ready model for chat unless you choose one for the Chat slot.
 - **Your own key:** add an Anthropic, OpenAI or Google Gemini API key. The key goes into your system keychain; macOS may ask you to allow keychain access.
