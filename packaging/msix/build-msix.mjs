@@ -14,7 +14,10 @@
 //   node packaging/msix/build-msix.mjs [--store] [--skip-build] [--features a,b] [--out dir]
 //     --store       refuse the placeholder identity values (a package meant for upload)
 //     --skip-build  package an existing target/release build
-//     --features    cargo features for the app build; a store build refuses self-update ones
+//     --features    cargo features for the app build; a store build refuses self-update ones.
+//                   `vulkan` (GPU inference, T-INF-24) also packs the pinned Vulkan loader next
+//                   to the exe, as the NSIS installer does (packaging/vulkan-loader/build.sh
+//                   must have written target/vulkan-loader first)
 //     --out         output folder (default target/msix)
 // Identity values: identity.json, overridden by MSIX_IDENTITY_NAME, MSIX_PUBLISHER,
 // MSIX_PUBLISHER_DISPLAY_NAME and MSIX_DISPLAY_NAME.
@@ -196,6 +199,19 @@ $src.Dispose()`;
   rmSync(specs);
 }
 
+/**
+ * The files to lay out next to the exe: tauri.conf.json's bundle.resources, plus, for a
+ * `vulkan` build, tauri.vulkan-windows.conf.json's (the Vulkan loader and its licence), the
+ * same config the NSIS build is given with --config.
+ */
+export function bundleResources(conf, features, vulkanConf) {
+  const out = { ...(conf.bundle?.resources ?? {}) };
+  if (features.includes("vulkan")) Object.assign(out, vulkanConf.bundle?.resources ?? {});
+  return out;
+}
+
+export const VULKAN_CONF = "tauri.vulkan-windows.conf.json";
+
 function parseArgs(argv) {
   const a = { store: false, skipBuild: false, features: [], out: join(repoDir, "target", "msix") };
   for (let i = 0; i < argv.length; i++) {
@@ -229,6 +245,7 @@ function main() {
   if (!args.skipBuild) {
     const build = ["tauri", "build", "--no-bundle"];
     if (args.features.length) build.push("--features", args.features.join(","));
+    if (args.features.includes("vulkan")) build.push("--config", VULKAN_CONF);
     run("npx", build, { cwd: appDir, shell: true, env: storeBuildEnv() });
   }
 
@@ -241,7 +258,9 @@ function main() {
   mkdirSync(layout, { recursive: true });
   cpSync(exe, join(layout, values.EXECUTABLE));
   // On Windows, Tauri's resource_dir() is the exe's folder: copy bundle.resources next to it.
-  for (const [from, to] of Object.entries(conf.bundle.resources ?? {})) {
+  const vulkanConf = JSON.parse(readFileSync(join(appDir, VULKAN_CONF), "utf8"));
+  for (const [from, to] of Object.entries(bundleResources(conf, args.features, vulkanConf))) {
+    if (!existsSync(resolve(appDir, from))) throw new Error(`${from} not found (vulkan build: run packaging/vulkan-loader/build.sh target/vulkan-loader)`);
     cpSync(resolve(appDir, from), join(layout, to), { recursive: true });
   }
   makeAssets(join(appDir, "icons", "icon.png"), join(layout, "Assets"));

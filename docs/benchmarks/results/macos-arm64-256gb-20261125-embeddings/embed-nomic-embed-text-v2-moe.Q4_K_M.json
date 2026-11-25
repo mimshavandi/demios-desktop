@@ -1,0 +1,96 @@
+{
+  "schema": "dn.bench-embed.v1",
+  "unix_time": 1795613602,
+  "model": {
+    "arch": "nomic-bert-moe",
+    "file": "nomic-embed-text-v2-moe.Q4_K_M.gguf",
+    "file_size": 344120288,
+    "moe": true,
+    "n_layer": 12,
+    "n_params": 475288320,
+    "quant": "Q4_K_M"
+  },
+  "machine": {
+    "arch": "aarch64",
+    "cpu": "Apple M3 Ultra",
+    "cpu_threads": 32,
+    "devices": [
+      {
+        "backend": "MTL",
+        "description": "Apple M3 Ultra",
+        "kind": "gpu",
+        "memory_free": 239143043072,
+        "memory_total": 239143780352,
+        "name": "MTL0"
+      },
+      {
+        "backend": "CPU",
+        "description": "Apple M3 Ultra",
+        "kind": "cpu",
+        "memory_free": 274877906944,
+        "memory_total": 274877906944,
+        "name": "CPU"
+      }
+    ],
+    "gpu_offload": true,
+    "memory": {
+      "memory": {
+        "gpu_budget": 239143780352,
+        "kind": "unified"
+      },
+      "total_ram": 274877906944
+    },
+    "os": "macos"
+  },
+  "query_prefix": "search_query: ",
+  "doc_prefix": "search_document: ",
+  "dimension": 768,
+  "load_ms": 286.07325,
+  "docs_per_s": 117.91104199471523,
+  "query_ms": 4.894350694444444,
+  "peak_rss_bytes": 639647744,
+  "overall": {
+    "n": 36,
+    "recall_at_1": 0.9444444444444444,
+    "recall_at_3": 1.0,
+    "mrr": 0.9722222222222222
+  },
+  "by_lang": {
+    "de": {
+      "n": 12,
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "mrr": 1.0
+    },
+    "de-en": {
+      "n": 6,
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "mrr": 1.0
+    },
+    "en": {
+      "n": 12,
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "mrr": 1.0
+    },
+    "en-de": {
+      "n": 6,
+      "recall_at_1": 0.6666666666666666,
+      "recall_at_3": 1.0,
+      "mrr": 0.8333333333333334
+    }
+  },
+  "misses": [
+    {
+      "lang": "en-de",
+      "query": "What is the notice period for the flat?",
+      "rank": 2
+    },
+    {
+      "lang": "en-de",
+      "query": "How often do we test restoring a backup?",
+      "rank": 2
+    }
+  ]
+}

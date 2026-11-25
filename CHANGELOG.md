@@ -22,7 +22,12 @@ Only changes people using the app or the `dn` command-line tool can notice are l
 
 ### Changed
 
+- When something fails to load or save, the app now says so, with **Retry** where that helps, instead of quietly carrying on: the chat list, your models, models on this device, a saved Hugging Face token, the AI notice and demios:// links. If its assistant instructions can't load, chats don't start and a message says why ([#164](https://github.com/mimshavandi/demios-desktop/pull/164)).
 - Models on this device now write their prompts with their own chat template, from the model file or from its Hugging Face repository. A model without a chat template can't be used for chat: its row says so, and choosing it gives "This model has no chat template, so it can't be used for chat. Pick another model." ([#150](https://github.com/mimshavandi/demios-desktop/pull/150)).
+
+### Fixed
+
+- The window always opens inside the screen's free area, so its bottom, including the message box, is never hidden behind the Windows taskbar or the macOS Dock. Demios remembers the window's size, position and maximised state for each monitor, and pulls it back on screen if a monitor is gone or its scaling changed ([#180](https://github.com/mimshavandi/demios-desktop/pull/180)).
 
 ## [0.1.0-preview.454e01b] - 2026-11-25
 
