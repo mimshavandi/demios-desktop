@@ -333,7 +333,9 @@ impl AppState {
         models.local = Some(crate::local::LocalModels::open());
         let mut state = Self::new(conn, models, keys);
         state.agent = agent;
-        state.skills = crate::skills::Library::load(skills);
+        // The user's own skills sit next to the database, in the app's data directory.
+        let user_skills = path.parent().map(|d| d.join(crate::skills::USER_DIR));
+        state.skills = crate::skills::Library::load(skills, user_skills);
         state.tools = tools;
         state.executor = Some(Arc::clone(&executor));
         state.tools_settling = settling;
@@ -1280,8 +1282,7 @@ mod tests {
             let ctx = dn_artifacts::OpContext::model(None);
             let html = dn_core::artifact::ArtifactType::Html;
             for conv in [gone.id, kept.id] {
-                arts.create(conv, &html, "Page", "<p>x</p>", None, &ctx)
-                    .unwrap();
+                arts.create(conv, &html, "Page", "<p>x</p>", &ctx).unwrap();
             }
             let l = dn_store::open_connection(&path).unwrap();
             let args = serde_json::json!({});
@@ -1418,7 +1419,6 @@ mod tests {
                 &dn_core::artifact::ArtifactType::Html,
                 "Page",
                 "<p>x</p>",
-                None,
                 &dn_artifacts::OpContext::model(None),
             )
             .unwrap();
