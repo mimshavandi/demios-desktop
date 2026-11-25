@@ -210,11 +210,12 @@ pub fn run() {
             })?;
             install_add_links(app.handle(), &state);
             knowledge::start(&state);
-            // The window starts hidden: fit it to the screen's work area (or put it back
-            // where it was), then show it (#172).
-            window_state::restore(app.handle(), &state);
-            app.manage(state);
+            // The page's first commands need these, so they come before the window.
+            app.manage(state.clone());
             app.manage(artifact_child::ChildState::default());
+            // Create the window hidden, fit it to the screen's work area (or put it back
+            // where it was), then show it (#172, #195).
+            window_state::open(app.handle(), &state)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -496,5 +497,61 @@ mod capability_tests {
             }
         }
         assert!(files > 0, "no capability files found in {dir}");
+    }
+
+    /// The main window is created by `window_state::open`, after setup, hidden until it is
+    /// placed (#195). If Tauri built it from the config, the page would load before it is
+    /// placed and the placement would undo a resize made meanwhile. The platform files
+    /// replace the whole `windows` list, so each one has to say it.
+    #[test]
+    fn main_window_is_created_hidden_by_setup() {
+        let files = [
+            ("tauri.conf.json", include_str!("../tauri.conf.json")),
+            (
+                "tauri.windows.conf.json",
+                include_str!("../tauri.windows.conf.json"),
+            ),
+            (
+                "tauri.macos.conf.json",
+                include_str!("../tauri.macos.conf.json"),
+            ),
+        ];
+        for (name, text) in files {
+            let conf: serde_json::Value = serde_json::from_str(text).unwrap();
+            let windows = conf["app"]["windows"].as_array();
+            let Some(windows) = windows else {
+                continue;
+            };
+            let main = windows
+                .iter()
+                .find(|w| w["label"] == crate::window_state::MAIN)
+                .unwrap_or_else(|| panic!("{name}: no main window"));
+            assert_eq!(
+                main["create"], false,
+                "{name}: Tauri would create the window before setup"
+            );
+            assert_eq!(
+                main["visible"], false,
+                "{name}: the window would show before it is placed"
+            );
+        }
+        // No other config file replaces the windows list unseen.
+        for e in std::fs::read_dir(env!("CARGO_MANIFEST_DIR")).unwrap() {
+            let name = e.unwrap().file_name().into_string().unwrap();
+            if name.starts_with("tauri.")
+                && name.ends_with(".json")
+                && !files.iter().any(|f| f.0 == name)
+            {
+                let text = std::fs::read_to_string(
+                    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(&name),
+                )
+                .unwrap();
+                let conf: serde_json::Value = serde_json::from_str(&text).unwrap();
+                assert!(
+                    conf["app"]["windows"].is_null(),
+                    "{name} sets windows: add it to this test"
+                );
+            }
+        }
     }
 }
