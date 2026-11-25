@@ -499,7 +499,13 @@ export function createMockApi(): Api {
       msgs.set(c.id, []);
       return c;
     },
-    renameConversation: async () => null,
+    renameConversation: async (cid, title) => {
+      const c = convs.find((x) => x.id === cid && !deleted.has(cid));
+      if (c === undefined) throw { code: "not_found", message: "This chat was deleted." };
+      c.title = title.trim();
+      c.updated_at = now();
+      return null;
+    },
     listProjects: async () =>
       projects
         .filter((p) => p.deleted_at === null)
@@ -537,6 +543,15 @@ export function createMockApi(): Api {
       if (p !== undefined) p.deleted_at = null;
       for (const c of convs) if (c.project_id === pid) deleted.delete(c.id);
       return null;
+    },
+    moveConversation: async (cid, pid) => {
+      const c = convs.find((x) => x.id === cid && !deleted.has(cid));
+      if (c === undefined) throw { code: "not_found", message: "This chat was deleted." };
+      if (pid !== null) liveProject(pid);
+      const before = c.project_id;
+      c.project_id = pid;
+      c.updated_at = now();
+      return before;
     },
     listProjectFiles: async (pid) => {
       liveProject(pid);

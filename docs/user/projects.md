@@ -45,6 +45,14 @@ While the model downloads and your files are prepared, Sources show the progress
 
 On the project's page, select **New chat**. The title bar shows the project's name before the chat's title. Like any new chat, it's saved when you send the first message. The project's chats are listed on its page and also under **Recent** in the sidebar.
 
+## Move a chat into or out of a project
+
+In the sidebar, open a chat's **More actions** menu (the … button) and choose **Move to project**. Or, under the message box of the open chat, the **Project** list shows which project the chat is in. Choose another project to move the chat there, or **No project** to take it out. A message lets you **Undo** for 10 seconds. The list is shown once you have a project.
+
+From the next message on, the chat follows the instructions of the project it's in now. Answers it already gave stay as they are. A chat you moved out of a project stays when that project is deleted.
+
+For a new chat, choosing a project before the first message starts the chat in that project.
+
 ## Delete a project
 
 At the bottom of the project's page, select **Delete project**. Its chats and files are deleted with it. A message lets you **Undo** for 10 seconds; until the app restarts, Undo brings back the project, its chats and its files. After that, they're removed for good.
