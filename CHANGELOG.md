@@ -27,6 +27,7 @@ Only changes people using the app or the `dn` command-line tool can notice are l
 ### Fixed
 
 - Settings uses the whole window: the artifact pane is hidden while Settings or a project page is open, and comes back with the chat. If your models can't be loaded, only the Models page says so; General still works ([#185](https://github.com/mimshavandi/demios-desktop/pull/185)).
+- The window always opens inside the screen's free area, so its bottom, including the message box, is never hidden behind the Windows taskbar or the macOS Dock. Demios remembers the window's size, position and maximised state for each monitor, and pulls it back on screen if a monitor is gone or its scaling changed ([#180](https://github.com/mimshavandi/demios-desktop/pull/180)).
 
 ## [0.1.0-preview.454e01b] - 2026-11-25
 

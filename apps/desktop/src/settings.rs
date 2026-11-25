@@ -210,6 +210,29 @@ pub fn save(conn: &Connection, s: &Settings) -> Result<()> {
     Ok(())
 }
 
+const WINDOW_KEY: &str = "window";
+
+/// Where the main window was when the app last closed (#172), if saved and readable.
+pub fn load_window(conn: &Connection) -> Result<Option<crate::window_fit::Saved>> {
+    let raw: Option<String> = conn
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = ?1",
+            [WINDOW_KEY],
+            |r| r.get(0),
+        )
+        .optional()?;
+    Ok(raw.map(|s| serde_json::from_str(&s)).transpose()?)
+}
+
+pub fn save_window(conn: &Connection, w: &crate::window_fit::Saved) -> Result<()> {
+    conn.execute(
+        "INSERT INTO app_settings (key, value, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+        params![WINDOW_KEY, serde_json::to_string(w)?, now_ms()],
+    )?;
+    Ok(())
+}
+
 /// Deletes the saved settings ("Delete all local data").
 pub fn delete_all(conn: &Connection) -> Result<()> {
     conn.execute("DELETE FROM app_settings", [])?;
@@ -308,5 +331,29 @@ mod tests {
         let mut s = Settings::default();
         s.slots.insert("nope".into(), "local:x".into());
         assert!(save(&c, &s).is_err());
+    }
+
+    #[test]
+    fn the_window_state_round_trips_and_goes_with_delete_all() {
+        let c = db();
+        assert_eq!(load_window(&c).unwrap(), None);
+        let w = crate::window_fit::Saved {
+            monitor: Some("DISPLAY1".into()),
+            x: 10.0,
+            y: 20.0,
+            w: 1200.0,
+            h: 800.0,
+            maximized: true,
+            origin: None,
+        };
+        save_window(&c, &w).unwrap();
+        assert_eq!(load_window(&c).unwrap(), Some(w));
+        assert_eq!(
+            load(&c).unwrap(),
+            Settings::default(),
+            "separate from the settings"
+        );
+        delete_all(&c).unwrap();
+        assert_eq!(load_window(&c).unwrap(), None);
     }
 }
