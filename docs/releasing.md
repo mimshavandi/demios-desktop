@@ -18,5 +18,30 @@ If a pull request misses its line, a maintainer adds it in a follow-up pull requ
 2. In `CHANGELOG.md`, rename **Unreleased** to the version and date, for example `## [0.2.0] - 2027-01-15`, and add a new empty **Unreleased** section above it.
 3. Update the links at the bottom of the file: the new version compares against the previous tag, and **Unreleased** compares the new tag against `main`.
 4. Set the same version in the workspace `Cargo.toml`, `apps/desktop/tauri.conf.json` and `apps/desktop/package.json`. Add a `<release>` for it at the top of `packaging/flatpak/io.demios.app.metainfo.xml` (`type="stable"`, same date, a short summary of the CHANGELOG section).
-5. Merge that pull request, then tag the merge commit `v<version>`.
-6. Create the GitHub release from the tag. Its notes are the version's section of `CHANGELOG.md`, copied as written. Add download and install notes when there are installers.
+5. Merge that pull request, then tag the merge commit `v<version>` and push the tag. The release workflow builds, signs and tests the installers and creates a **draft** release (see [Signed releases](#signed-releases)).
+6. Check the draft: the assets, the "-unsigned" labels if any, and the notes. Its notes are the version's section of `CHANGELOG.md`, copied as written. Then select **Publish release**. Publishing makes it the latest release, and installed apps that check for updates are offered it.
+
+## Signed releases
+
+The release workflow (`.github/workflows/release.yml`) runs for a `v*` tag, or by hand from `main`. Its jobs use the GitHub Environment **`release`**, which only `main` and `v*` tags may use. The signing secrets live there, so a pull-request build can't read them.
+
+### Secrets and variables (owner)
+
+Set these in **Settings › Environments › release**, or with `gh secret set <NAME> --env release` and `gh variable set <NAME> --env release`:
+
+| Platform | Secrets | Variables |
+|---|---|---|
+| macOS (Developer ID + notarization) | `APPLE_CERTIFICATE` (base64 `.p12`), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_API_KEY_P8` (contents of the App Store Connect `.p8`), `APPLE_API_KEY` (its Key ID), `APPLE_API_ISSUER` | `APPLE_SIGNING_IDENTITY` (`Developer ID Application: … (TEAMID)`), `APPLE_TEAM_ID` |
+| Windows (Azure Artifact Signing) | `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_CLIENT_SECRET` | `AZURE_SIGNING_ENDPOINT` (`https://<region>.codesigning.azure.net`), `AZURE_SIGNING_ACCOUNT`, `AZURE_SIGNING_PROFILE` |
+| Updater (all platforms) | `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | `DEMIOS_UPDATER_PUBKEY` |
+
+The updater secrets can also stay at repository level; the release jobs read them either way. See [Signed updates](store/updates.md) for how to make the updater key.
+
+### What happens without them
+
+- **A platform with all its secrets** is signed: notarized and stapled on macOS, Authenticode-signed (the exe inside and the installer) on Windows.
+- **A platform with none of its secrets** is built unsigned and labelled so: its file names end in `-unsigned`, the run summary says so, and it isn't listed in `latest.json`, so an installed app is never offered an unsigned update.
+- **A platform with only some of them** fails the run and names the missing ones (never their values). A half-set-up account never ships unsigned by accident.
+- **Without the updater key** no release is built: every release must be able to update itself.
+
+`scripts/release/signing-check.mjs` makes these decisions, and `scripts/release/latest-json.mjs` writes the updater manifest from the signed bundles. Both have tests in CI.
