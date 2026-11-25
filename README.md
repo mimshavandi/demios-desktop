@@ -44,9 +44,33 @@ Screenshots coming with the first release.
 
 ## Install
 
-There are no installers or signed releases yet. To try Demios Desktop, build it from source.
+A **preview build** of Demios Desktop 0.1.0 is available for macOS, Windows and Linux. Download it from [demios.io/download](https://demios.io/download/) or from the [GitHub release](https://github.com/mimshavandi/demios-desktop/releases/tag/v0.1.0-preview.454e01b).
 
-### Prerequisites
+| System | File |
+|---|---|
+| macOS 11 or later, Apple silicon | `…-macos-arm64.dmg` |
+| macOS 11 or later, Intel | `…-macos-x64.dmg` |
+| Windows 10 or 11 (x64) | `…-windows-x64-setup.exe` |
+| Linux (x86_64), any distribution | `…-linux-x86_64.AppImage` |
+| Debian, Ubuntu (amd64) | `…-linux-amd64.deb` |
+| Fedora, openSUSE (x86_64) | `…-linux-x86_64.rpm` |
+
+**The preview builds aren't signed**, so your system warns you the first time you open the app:
+
+- **macOS:** open the `.dmg` and drag **Demios Desktop** to Applications. Open it once and close the warning, then go to **System Settings → Privacy & Security** and select **Open Anyway**.
+- **Windows:** run the `-setup.exe`; it installs for you only, without an administrator. If SmartScreen says "Windows protected your PC", select **More info → Run anyway**.
+- **Linux:**
+  - AppImage: `chmod +x Demios-Desktop-*.AppImage`, then run it. If it says FUSE is missing, install `libfuse2` (`libfuse2t64` on Ubuntu 24.04).
+  - `.deb`: `sudo apt install ./Demios-Desktop-0.1.0-preview-linux-amd64.deb`.
+  - `.rpm`: `sudo dnf install ./Demios-Desktop-0.1.0-preview-linux-x86_64.rpm`. On openSUSE, use `sudo zypper install --allow-unsigned-rpm ./Demios-Desktop-0.1.0-preview-linux-x86_64.rpm`.
+
+The release lists every file's SHA-256 in `SHA256SUMS.txt`, and its notes have the full steps. A preview build doesn't update itself. To get a newer one, install it over the old one; your chats and settings are kept.
+
+### Build from source
+
+To build Demios Desktop yourself instead:
+
+#### Prerequisites
 
 - **Rust** 1.89 or newer (stable toolchain with `rustfmt` and `clippy`; `rust-toolchain.toml` selects it if you use rustup).
 - **Node.js** 22 and npm.
@@ -56,7 +80,7 @@ There are no installers or signed releases yet. To try Demios Desktop, build it 
   - Linux (Debian/Ubuntu): `sudo apt-get install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev`
   - Windows: the WebView2 runtime (included with Windows 10 and 11) and the Visual Studio C++ build tools.
 
-### Build and run
+#### Build and run
 
 ```sh
 git clone https://github.com/mimshavandi/demios-desktop.git
