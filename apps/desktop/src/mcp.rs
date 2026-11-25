@@ -1348,6 +1348,65 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn a_failed_re_list_keeps_the_tools_refused_and_says_so() {
+        let (st, exec, _keys, _rx) = app_with_exec();
+        let _ = st.launch_approver.set(Arc::new(FakeApprover {
+            allow: true,
+            asked: Default::default(),
+        }));
+        st.watch_tool_changes(Arc::clone(&exec));
+        let cfg = McpServerConfig::stdio("fx", fixture_server().to_string_lossy(), vec![]);
+        st.set_mcp_servers(vec![cfg.clone()]).unwrap();
+        st.connect_mcp_server(&exec, cfg, st.mcp_epoch_now()).await;
+        assert_eq!(state_of(&st, "fx").unwrap().state, "connected");
+
+        let ctx = dn_tools::CallContext::new(Some("c".into()), dn_core::Id::new());
+        let call = |id: &str, name: &str| dn_core::chat::ToolCall {
+            id: id.into(),
+            name: name.into(),
+            arguments: serde_json::json!({"text": "hi"}),
+        };
+        exec.execute(&ctx, &call("1", "mcp__fx__change_tools_and_break_listing"))
+            .await
+            .unwrap();
+
+        let mut after = None;
+        for _ in 0..200 {
+            if let Some(s) = state_of(&st, "fx").filter(|s| s.revision == 1) {
+                after = Some(s);
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        let after = after.expect("the change was handled");
+        assert_eq!(after.state, "failed");
+        assert_eq!(after.tools, 0);
+        let msg = after.message.unwrap_or_default();
+        assert!(
+            msg.contains("couldn't be read again") && msg.contains("Reconnect"),
+            "{msg}"
+        );
+        // Fails closed: stale, not offered, every call refused. No fallback to the old list.
+        assert!(exec.is_stale("fx"));
+        assert!(
+            !exec
+                .tool_specs()
+                .iter()
+                .any(|t| t.name.starts_with("mcp__fx__"))
+        );
+        assert!(
+            exec.execute(&ctx, &call("2", "mcp__fx__echo"))
+                .await
+                .is_err()
+        );
+        assert!(
+            !st.tools_settling.contains("fx"),
+            "the hold ended; staleness keeps it off"
+        );
+        exec.remove_server("fx").await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn delete_all_local_data_forgets_launch_approvals() {
         let (st, exec, _keys, _rx) = app_with_exec();
         let approver = Arc::new(FakeApprover {
