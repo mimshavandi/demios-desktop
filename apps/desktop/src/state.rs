@@ -131,6 +131,9 @@ pub struct McpServerStatus {
     pub tools: usize,
     /// Tools that are new or changed since they were reviewed (they always ask meanwhile).
     pub review: usize,
+    /// Bumped each time the server changed its tools mid-session (#178), so the Tools view
+    /// reloads even when the counts stay the same.
+    pub revision: u32,
 }
 
 /// What the UI gets when it subscribes.
@@ -344,6 +347,7 @@ impl AppState {
         }
         let state = Arc::new(state);
         state.start_approval_bridge(approvals);
+        state.watch_tool_changes(Arc::clone(&executor));
         state.connect_mcp_servers(executor);
         Ok(state)
     }
@@ -369,6 +373,7 @@ impl AppState {
                 message: None,
                 tools: 0,
                 review: 0,
+                revision: 0,
             });
         }
         let state = Arc::clone(self);
@@ -875,6 +880,93 @@ impl AppState {
         });
     }
 
+    /// Re-reviews a server's tools whenever it sends `tools/list_changed` (#178). The
+    /// executor has already marked the server stale (its tools left out and refused) when the
+    /// notice arrives. Holds only a weak reference, so it ends with the app state.
+    pub(crate) fn watch_tool_changes(self: &Arc<Self>, executor: Arc<dn_tools::Executor>) {
+        let mut changes = executor.tool_changes();
+        let state = Arc::downgrade(self);
+        tauri::async_runtime::spawn(async move {
+            use tokio::sync::broadcast::error::RecvError;
+            loop {
+                let ids: Vec<String> = match changes.recv().await {
+                    Ok(id) => vec![id],
+                    // Notices were dropped: every server may have changed.
+                    Err(RecvError::Lagged(_)) => executor
+                        .capabilities()
+                        .into_iter()
+                        .map(|c| c.server_id)
+                        .collect::<std::collections::BTreeSet<_>>()
+                        .into_iter()
+                        .collect(),
+                    Err(RecvError::Closed) => return,
+                };
+                let Some(state) = state.upgrade() else {
+                    return;
+                };
+                for id in ids {
+                    state.tools_changed(&executor, &id).await;
+                }
+            }
+        });
+    }
+
+    /// One server changed its tools: list them again, flag new and changed ones (they
+    /// always ask until reviewed, as on connect), and only then offer them again. A failed
+    /// re-list leaves the server stale, with its tools refused, and says so in its status.
+    pub async fn tools_changed(&self, executor: &dn_tools::Executor, id: &str) {
+        if executor.client(id).is_none() {
+            // Removed meanwhile ("Delete all", or the user removed it).
+            executor.settled(id);
+            return;
+        }
+        let _settling = self.tools_settling.hold(id);
+        let previous = lock(&self.mcp_status).get(id).cloned();
+        let name = previous
+            .as_ref()
+            .map_or_else(|| id.to_owned(), |p| p.name.clone());
+        let revision = previous.as_ref().map_or(0, |p| p.revision) + 1;
+        let failed = |message: &str| McpServerStatus {
+            server_id: id.to_owned(),
+            name: name.clone(),
+            state: "failed",
+            message: Some(message.into()),
+            tools: 0,
+            review: 0,
+            revision,
+        };
+        let caps = match executor.refresh(id).await {
+            Ok(caps) => caps,
+            Err(e) => {
+                eprintln!("MCP server `{id}` changed its tools, and listing them failed: {e:?}");
+                self.set_mcp_status(failed(
+                    "It changed its tools, and they couldn't be read again. Use Reconnect.",
+                ));
+                return;
+            }
+        };
+        match self.apply_tool_policy(executor, Some(id)) {
+            Ok(review) => {
+                executor.settled(id);
+                self.set_mcp_status(McpServerStatus {
+                    server_id: id.to_owned(),
+                    name,
+                    state: "connected",
+                    message: None,
+                    tools: caps.len(),
+                    review,
+                    revision,
+                });
+            }
+            Err(e) => {
+                eprintln!("could not apply tool settings for `{id}`: {}", e.message);
+                self.set_mcp_status(failed(
+                    "It changed its tools, and its tool settings couldn't be applied. Use Reconnect.",
+                ));
+            }
+        }
+    }
+
     /// Connects one server (replacing a running client of the same id) and reports its
     /// status. Returns false when "Delete all local data" ran since `epoch`.
     pub async fn connect_mcp_server(
@@ -892,6 +984,7 @@ impl AppState {
             message,
             tools,
             review: 0,
+            revision: 0,
         };
         // Connect only what is saved now: the server may have been removed or edited while
         // this was waiting (a save's background connect, a sign-in).
@@ -948,6 +1041,7 @@ impl AppState {
             Ok(caps) => match self.apply_tool_policy(executor, Some(&id)) {
                 Ok(review) => self.set_mcp_status(McpServerStatus {
                     review,
+                    revision: 0,
                     ..status("connected", None, caps.len())
                 }),
                 Err(e) => {
@@ -1540,6 +1634,7 @@ mod tests {
             message: None,
             tools: 0,
             review: 0,
+            revision: 0,
         });
 
         assert!(st.delete_all_local_data().await.is_empty());

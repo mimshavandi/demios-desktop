@@ -153,8 +153,8 @@ export function createMockApi(): Api {
     },
   ];
   const mcpStatus = new Map<string, McpServerStatus>([
-    ["files", { server_id: "files", name: "Project files", state: "connected", message: null, tools: 4, review: 1 }],
-    ["tracker", { server_id: "tracker", name: "Issue tracker", state: "needs_auth", message: "Sign in to use this server's tools.", tools: 0, review: 0 }],
+    ["files", { server_id: "files", name: "Project files", state: "connected", message: null, tools: 4, review: 1, revision: 0 }],
+    ["tracker", { server_id: "tracker", name: "Issue tracker", state: "needs_auth", message: "Sign in to use this server's tools.", tools: 0, review: 0, revision: 0 }],
   ]);
   // Tools of "files" (T-SHELL-11). `search` changed since it was reviewed, and its new
   // description tries markup and an instruction: the screen shows it as plain text.
@@ -207,7 +207,7 @@ export function createMockApi(): Api {
       state,
       message: state === "needs_auth" ? "Sign in to use this server's tools." : state === "signing_in" ? "Finish signing in in your browser." : null,
       tools: state === "connected" ? 3 : 0,
-      review: state === "connected" ? mcpTools.filter((t) => t.flag !== null).length : 0,
+      review: state === "connected" ? mcpTools.filter((t) => t.flag !== null).length : 0, revision: 0,
     };
     mcpStatus.set(s.id, status);
     approvalSink?.({ type: "mcp_server", status });

@@ -281,7 +281,7 @@ export function McpServersCard({ api, live }: { api: Api; live: McpServerStatus[
                     api={api}
                     serverId={s.id}
                     serverName={s.name}
-                    version={`${st?.state ?? "none"}:${st?.tools ?? 0}:${st?.review ?? 0}`}
+                    version={`${st?.state ?? "none"}:${st?.tools ?? 0}:${st?.review ?? 0}:${st?.revision ?? 0}`}
                   />
                 </div>
               )}

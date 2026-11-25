@@ -38,6 +38,9 @@ pub enum ToolErrorKind {
     Denied,
     /// Policy/override blocks this capability.
     Blocked,
+    /// The server said its tools changed (`tools/list_changed`, #178) and they are being
+    /// listed and reviewed again; its tools are refused until then.
+    Changing,
     /// The executor's state can't be trusted after an internal error (a lock was poisoned):
     /// every tool is refused until restart, so per-tool choices can never be skipped.
     Unavailable,
@@ -89,7 +92,10 @@ impl ToolError {
     pub fn retryable(&self) -> bool {
         matches!(
             self.kind,
-            ToolErrorKind::Connection | ToolErrorKind::Timeout | ToolErrorKind::InFlight
+            ToolErrorKind::Connection
+                | ToolErrorKind::Timeout
+                | ToolErrorKind::InFlight
+                | ToolErrorKind::Changing
         )
     }
 
@@ -114,6 +120,10 @@ impl ToolError {
             ToolErrorKind::InvalidInput => format!("\"{tool}\" was called with missing input."),
             ToolErrorKind::Denied => format!("You declined \"{tool}\"."),
             ToolErrorKind::Blocked => format!("\"{tool}\" is turned off."),
+            ToolErrorKind::Changing => format!(
+                "The tool server for \"{tool}\" changed its tools. They are being checked \
+                 again; try again in a moment."
+            ),
             ToolErrorKind::Unavailable => "Tools are turned off after an internal error, so your \
                                            tool settings can't be skipped. Restart Demios to use \
                                            tools again."
