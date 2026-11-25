@@ -23,6 +23,8 @@ If a pull request misses its line, a maintainer adds it in a follow-up pull requ
 
 ## Signed releases
 
+> The release workflow is being added under [#120](https://github.com/mimshavandi/demios-desktop/issues/120). Until it lands, steps 5 and 6 above describe how releases will work, and the secrets below can already be set up.
+
 The release workflow (`.github/workflows/release.yml`) runs for a `v*` tag, or by hand from `main`. Its jobs use the GitHub Environment **`release`**, which only `main` and `v*` tags may use. The signing secrets live there, so a pull-request build can't read them.
 
 ### Secrets and variables (owner)
