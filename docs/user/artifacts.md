@@ -37,6 +37,8 @@ Artifacts can't use the network. If an artifact tries to, the pane says so and o
 
 The permission is for that one artifact only. Plain http and other artifacts stay blocked. When the model writes a new version of the artifact, network access is turned off again and you have to allow it again.
 
+Artifacts are made through tool calls. If the model you chose doesn't support tool calls, it can't make artifacts, and the pane says "This model can't make artifacts: it doesn't support tool calls."
+
 ## When an artifact has problems
 
 If an artifact's code reports errors while it runs, an error bar shows the first problem, with **Details** for the rest. Select **Ask to fix** to send the errors to the model and ask it for a corrected version. The error text is passed on as data from the artifact, and the model is told not to follow instructions in it.

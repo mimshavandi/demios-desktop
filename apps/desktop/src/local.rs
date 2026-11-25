@@ -205,7 +205,9 @@ impl<B: InferenceBackend> Drop for Resident<B> {
 pub struct LocalModels<B: InferenceBackend = LlamaCppBackend> {
     dir: PathBuf,
     catalog: Catalog,
-    machine: Machine,
+    /// The machine fits are computed for. Starts from RAM alone and gains the GPU once
+    /// [`Self::set_compute`] has run (in the background, off the startup path).
+    machine: Mutex<Machine>,
     state: Mutex<HashMap<String, DownloadState>>,
     fits: Mutex<HashMap<String, FitView>>,
     tasks: Mutex<HashMap<String, Task>>,
@@ -228,6 +230,9 @@ pub struct LocalModels<B: InferenceBackend = LlamaCppBackend> {
     externals: Mutex<Vec<External>>,
     /// The user's Hugging Face cache, read for models to reuse; `None` = don't look (tests).
     hf_cache: Option<PathBuf>,
+    /// Where local models run (graphics card, shared graphics or processor), for the UI;
+    /// `None` when not detected (tests).
+    compute: Mutex<Option<dn_models::compute::Compute>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -399,6 +404,30 @@ fn fit_view(report: &FitReport, estimated: bool) -> FitView {
     }
 }
 
+/// This machine, sized for its GPU if llama.cpp finds one (Metal on macOS, Vulkan on Windows
+/// and Linux builds with the `vulkan` feature), and where local models run (T-INF-24).
+pub fn detect_compute() -> (Machine, dn_models::compute::Compute) {
+    let devs = LlamaCppBackend::devices().unwrap_or_default();
+    let gpus = dn_models::compute::gpus_from(
+        LlamaCppBackend::GPU_BACKEND.unwrap_or("GPU"),
+        devs.iter().map(|d| {
+            (
+                d.name.as_str(),
+                d.description.as_str(),
+                d.kind.as_str(),
+                d.memory_total,
+            )
+        }),
+    );
+    let (machine, compute) = dn_models::compute::plan(
+        dn_models::detect_machine(),
+        &gpus,
+        LlamaCppBackend::GPU_BACKEND.is_some(),
+    );
+    eprintln!("local models: {}", compute.describe());
+    (machine, compute)
+}
+
 /// Load settings for the GGUF at `path` on `machine`. llama.cpp's defaults, unless the fit
 /// estimator splits the model between the GPU and the CPU (MoE experts in RAM, or some of a
 /// dense model's layers on the CPU); then its recommended context, KV type and placement,
@@ -511,6 +540,10 @@ impl LocalModels {
         let lm = Arc::new(lm);
         let bg = Arc::clone(&lm);
         tauri::async_runtime::spawn_blocking(move || {
+            // GPU detection initialises llama.cpp's backends (Metal / Vulkan): up to a few
+            // hundred ms on a cold start, so it runs here rather than before the window opens.
+            let (machine, compute) = detect_compute();
+            bg.set_compute(machine, compute);
             bg.refresh_exact_fits();
             bg.refresh_externals();
         });
@@ -529,7 +562,7 @@ impl<B: InferenceBackend> LocalModels<B> {
         let lm = Self {
             dir,
             catalog,
-            machine,
+            machine: Mutex::new(machine),
             state: Mutex::new(HashMap::new()),
             fits: Mutex::new(HashMap::new()),
             tasks: Mutex::new(HashMap::new()),
@@ -543,6 +576,7 @@ impl<B: InferenceBackend> LocalModels<B> {
             embedding: tokio::sync::Mutex::new(None),
             externals: Mutex::new(Vec::new()),
             hf_cache: None,
+            compute: Mutex::new(None),
         };
         lm.scan();
         lm
@@ -596,7 +630,7 @@ impl<B: InferenceBackend> LocalModels<B> {
                 .as_ref()
                 .map(|g| {
                     fit_view(
-                        &dn_models::fit(&ModelFootprint::from_gguf(g), &self.machine),
+                        &dn_models::fit(&ModelFootprint::from_gguf(g), &self.machine()),
                         false,
                     )
                 })
@@ -696,7 +730,7 @@ impl<B: InferenceBackend> LocalModels<B> {
 
     fn estimated_fit(&self, e: &CatalogEntry) -> FitView {
         fit_view(
-            &dn_models::fit(&estimated_footprint(e), &self.machine),
+            &dn_models::fit(&estimated_footprint(e), &self.machine()),
             true,
         )
     }
@@ -705,7 +739,7 @@ impl<B: InferenceBackend> LocalModels<B> {
     fn exact_fit(&self, e: &CatalogEntry) -> Option<FitView> {
         Gguf::open(&self.path(e)).ok().map(|g| {
             fit_view(
-                &dn_models::fit(&ModelFootprint::from_gguf(&g), &self.machine),
+                &dn_models::fit(&ModelFootprint::from_gguf(&g), &self.machine()),
                 false,
             )
         })
@@ -1002,8 +1036,25 @@ impl<B: InferenceBackend> LocalModels<B> {
     }
 
     /// This computer, for fit checks.
-    pub fn machine(&self) -> &Machine {
-        &self.machine
+    /// Where local models run, for the UI; `None` until detected.
+    pub fn compute(&self) -> Option<dn_models::compute::Compute> {
+        lock(&self.compute).clone()
+    }
+
+    /// Size models for `machine` (with its GPU) from now on, and re-rate the catalogue.
+    pub fn set_compute(&self, machine: Machine, compute: dn_models::compute::Compute) {
+        *lock(&self.machine) = machine;
+        *lock(&self.compute) = Some(compute);
+        for e in &self.catalog.models {
+            if !self.is_ready(&e.id) {
+                lock(&self.fits).insert(e.id.clone(), self.estimated_fit(e));
+                self.emit(e);
+            }
+        }
+    }
+
+    pub fn machine(&self) -> Machine {
+        *lock(&self.machine)
     }
 
     /// Fit in the screen's terms.
@@ -1158,7 +1209,7 @@ impl<B: InferenceBackend> LocalModels<B> {
         }
         let path = self.path(&e);
         let opts = {
-            let (path, machine) = (path.clone(), self.machine);
+            let (path, machine) = (path.clone(), self.machine());
             tauri::async_runtime::spawn_blocking(move || load_options(&path, &machine))
                 .await
                 .unwrap_or_default()
@@ -1384,6 +1435,51 @@ mod tests {
             load_options(Path::new("/nonexistent.gguf"), &Machine::unified(16 * gib)),
             LoadOptions::default()
         );
+    }
+
+    #[test]
+    fn gpu_detection_re_rates_the_catalogue_and_labels_cpu_mode() {
+        use dn_models::compute::{Compute, CpuReason, Gpu, GpuKind, plan};
+        let gib = dn_models::fit::GIB;
+        let dir = Dir(std::env::temp_dir().join(format!("dn-local-gpu-{}", dn_core::Id::new())));
+        std::fs::create_dir_all(&dir.0).unwrap();
+        let mut big = entry("big", 10 * gib, "aa");
+        big.params_b = 14.0;
+        let lm = LocalModels::new(
+            dir.0.clone(),
+            Catalog {
+                version: 1,
+                models: vec![big],
+            },
+            Machine::cpu_only(16 * gib),
+        );
+        assert_eq!(lm.compute(), None);
+        let before = lm.rows()[0].fit.status;
+        // A 24 GB graphics card: the same model now fits better.
+        let gpu = Gpu {
+            name: "NVIDIA GeForce RTX 4090".into(),
+            backend: "Vulkan".into(),
+            kind: GpuKind::Discrete,
+            memory_total: 24 * gib,
+        };
+        let (m, c) = plan(Machine::cpu_only(16 * gib), &[gpu], true);
+        lm.set_compute(m, c);
+        assert_eq!(
+            lm.machine().memory,
+            dn_models::MemoryKind::Discrete { vram: 24 * gib }
+        );
+        assert_eq!(lm.rows()[0].fit.status, FitStatus::Ready);
+        assert_ne!(before, FitStatus::Ready);
+        // No GPU in a Vulkan build: a labelled processor mode.
+        let (m, c) = plan(Machine::cpu_only(16 * gib), &[], true);
+        lm.set_compute(m, c);
+        assert_eq!(
+            lm.compute(),
+            Some(Compute::Cpu {
+                reason: CpuReason::NoGpu
+            })
+        );
+        assert!(lm.compute().unwrap().describe().contains("processor"));
     }
 
     #[test]

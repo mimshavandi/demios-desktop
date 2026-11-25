@@ -420,7 +420,15 @@ export interface ModelCatalog {
   chat_model: string | null;
   /** Whether the chat model makes tool calls; without them it can't make artifacts. */
   chat_model_tools: boolean;
+  /** Where local models run on this computer; null when local models are off. */
+  compute: LocalCompute | null;
 }
+
+/** Where local models run (T-INF-24): a graphics card, shared graphics, or the processor. */
+export type LocalCompute =
+  | { mode: "gpu"; name: string; backend: string; vram: number; description: string }
+  | { mode: "shared_gpu"; name: string; backend: string; description: string }
+  | { mode: "cpu"; reason: "no_gpu" | "no_gpu_support"; description: string };
 
 export interface AppInfo {
   version: string;

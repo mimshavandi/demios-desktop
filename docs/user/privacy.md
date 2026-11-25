@@ -29,11 +29,13 @@ On the project's page, **Delete project** deletes it with its chats and files, a
 **Settings → General → Delete all local data** removes everything Demios stored on this computer:
 
 - The database: every chat (including recently deleted ones) and its artifacts, every project with its instructions, your settings and tool history.
-- The copies of files you added to projects.
+- The copies of files you added to projects, and the search index made from them.
 - Downloaded models, including the ones the `dn` command-line tool uses. Models in your own Hugging Face cache are left alone.
 - The keys and tokens Demios saved in your system keychain, including your Hugging Face token.
 - The app window's own storage.
 
 Before anything is deleted, a confirmation lists what will go, with the number of chats, the size of your models and the keys found. **This can't be undone.** Your accounts with providers aren't affected; to close those, go to the provider.
+
+Your own skills folder is left alone, because you wrote those files. See [Skills](skills.md).
 
 After deleting, the app starts over as if it were new, including the first-run notice.

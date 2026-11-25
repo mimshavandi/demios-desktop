@@ -360,3 +360,45 @@ describe("Add a model dialog (#174)", () => {
     await waitFor(() => expect(closed).toBe(1));
   });
 });
+
+describe("LocalModelsCard says where local models run", () => {
+  const api = { watchLocalModels: async () => [] } as unknown as Api;
+
+  it("labels the processor mode as a notice", async () => {
+    ui(
+      <LocalModelsCard
+        api={api}
+        initial={[]}
+        onReady={() => {}}
+        compute={{
+          mode: "cpu",
+          reason: "no_gpu",
+          description: "Local models run on the processor: no graphics chip Demios can use was found, so replies are slower.",
+        }}
+      />,
+    );
+    const el = await screen.findByTestId("local-compute");
+    expect(el.dataset["mode"]).toBe("cpu");
+    expect(within(el).getByRole("status").textContent).toContain("run on the processor");
+  });
+
+  it("names the graphics card when there is one", async () => {
+    ui(
+      <LocalModelsCard
+        api={api}
+        initial={[]}
+        onReady={() => {}}
+        compute={{
+          mode: "gpu",
+          name: "NVIDIA GeForce RTX 3060",
+          backend: "Vulkan",
+          vram: 12 * 2 ** 30,
+          description: "Local models run on the graphics card: NVIDIA GeForce RTX 3060 (12 GB).",
+        }}
+      />,
+    );
+    const el = await screen.findByTestId("local-compute");
+    expect(el.dataset["mode"]).toBe("gpu");
+    expect(el.textContent).toContain("RTX 3060 (12 GB)");
+  });
+});

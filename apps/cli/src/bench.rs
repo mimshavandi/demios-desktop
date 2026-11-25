@@ -123,14 +123,14 @@ struct Report {
 }
 
 /// Samples a process's RSS on a background thread until finished.
-struct PeakMem {
+pub(crate) struct PeakMem {
     peak: Arc<AtomicU64>,
     stop: Arc<AtomicBool>,
     handle: Option<std::thread::JoinHandle<()>>,
 }
 
 impl PeakMem {
-    fn start(pid: sysinfo::Pid) -> Self {
+    pub(crate) fn start(pid: sysinfo::Pid) -> Self {
         let peak = Arc::new(AtomicU64::new(0));
         let stop = Arc::new(AtomicBool::new(false));
         let (p, s) = (peak.clone(), stop.clone());
@@ -151,7 +151,7 @@ impl PeakMem {
         }
     }
 
-    fn finish(mut self) -> u64 {
+    pub(crate) fn finish(mut self) -> u64 {
         self.stop.store(true, Ordering::Relaxed);
         if let Some(h) = self.handle.take() {
             let _ = h.join();
@@ -264,7 +264,7 @@ async fn chat_runs(
     })
 }
 
-fn machine_json() -> serde_json::Value {
+pub(crate) fn machine_json() -> serde_json::Value {
     let mut sys = sysinfo::System::new();
     sys.refresh_cpu_all();
     let cpu = sys
@@ -283,7 +283,7 @@ fn machine_json() -> serde_json::Value {
     })
 }
 
-fn gguf_json(path: &std::path::Path) -> Result<serde_json::Value, String> {
+pub(crate) fn gguf_json(path: &std::path::Path) -> Result<serde_json::Value, String> {
     let g = Gguf::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let fp = ModelFootprint::from_gguf(&g);
     // The file name only: a full path names the user's home folder, and reports get shared.
@@ -298,7 +298,7 @@ fn gguf_json(path: &std::path::Path) -> Result<serde_json::Value, String> {
     }))
 }
 
-fn now() -> u64 {
+pub(crate) fn now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())

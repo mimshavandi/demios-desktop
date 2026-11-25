@@ -165,6 +165,7 @@ function fakeApi() {
     settings,
     chat_model: null,
     chat_model_tools: true,
+    compute: null,
   });
   const api: Api = {
     // The Windows artifact webview has no browser equivalent.
