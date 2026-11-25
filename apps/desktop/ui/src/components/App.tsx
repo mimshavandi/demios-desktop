@@ -552,6 +552,45 @@ function Shell({ api }: { api: Api }) {
     [open],
   );
 
+  // Move the open chat into a project or out of one (#136). A chat not created yet just
+  // remembers where it will start. Undo moves it back.
+  const moveChat = useCallback(
+    async (projectId: Id | null) => {
+      const id = chat.conversationId;
+      if (id === null) {
+        setNewChatProject(projectId);
+        return;
+      }
+      const nameOf = (pid: Id | null) => projects.find((x) => x.id === pid)?.name ?? "";
+      const move = async (to: Id | null) => {
+        const before = await api.moveConversation(id, to);
+        await Promise.all([refreshConversations(), refreshProjects()]);
+        return before;
+      };
+      let before: Id | null;
+      try {
+        before = await move(projectId);
+      } catch (e) {
+        toast({ tone: "error", title: `Couldn't move the chat. ${errorMessage(e)}` });
+        return;
+      }
+      toast({
+        tone: "info",
+        title: projectId === null ? `Removed from “${nameOf(before)}”` : `Moved to “${nameOf(projectId)}”`,
+        duration: 10_000,
+        action: {
+          label: "Undo",
+          onAction: () => {
+            void move(before).catch((e: unknown) =>
+              toast({ tone: "error", title: `Couldn't move the chat back. ${errorMessage(e)}` }),
+            );
+          },
+        },
+      });
+    },
+    [api, chat.conversationId, projects, refreshConversations, refreshProjects, toast],
+  );
+
   const projectCreated = useCallback(
     (p: Project) => {
       void refreshProjects();
@@ -792,6 +831,9 @@ function Shell({ api }: { api: Api }) {
             skills={skills}
             skill={skill}
             onSkill={(n) => void chooseSkill(n)}
+            projects={projects}
+            projectId={chatProjectId}
+            onProject={(pid) => void moveChat(pid)}
           />
         ) : view.kind === "project" ? (
           view.id === "new" ? (

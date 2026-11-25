@@ -66,6 +66,7 @@ function fakeApi() {
     pick: [] as { name: string; size: number }[],
     skipped: [] as { name: string; reason: string }[],
     updates: [] as [string, string, string][],
+    moves: [] as [string, string | null][],
   };
   let approvalSink: ((e: ToolEvent) => void) | null = null;
   const responses: [string, string][] = [];
@@ -235,6 +236,15 @@ function fakeApi() {
         convs.unshift(c);
       }
       return null;
+    },
+    moveConversation: async (cid, pid) => {
+      project.moves.push([cid, pid]);
+      const c = convs.find((x) => x.id === cid);
+      if (!c) throw { code: "not_found", message: "conversation" };
+      if (pid !== null && !projects.some((x) => x.id === pid)) throw { code: "not_found", message: "This project was deleted." };
+      const before = c.project_id;
+      c.project_id = pid;
+      return before;
     },
     listProjectFiles: async (pid) => files.filter((f) => f.project_id === pid),
     addProjectFiles: async (pid) => {
@@ -1196,5 +1206,72 @@ describe("Projects", () => {
     fireEvent.click(screen.getByRole("button", { name: "Undo" }));
     expect(await screen.findByRole("button", { name: "In project" })).toBeTruthy();
     expect(await screen.findByRole("button", { name: "Thesis" })).toBeTruthy();
+  });
+});
+
+describe("Move a chat into or out of a project (#136)", () => {
+  const setup = () => {
+    const f = fakeApi();
+    f.projects.push({ id: "p1", name: "Thesis", instructions: "", created_at: 0, updated_at: 0 });
+    f.projects.push({ id: "p2", name: "Work", instructions: "", created_at: 0, updated_at: 0 });
+    f.convs.push({ id: "c1", title: "Loose chat", model: null, project_id: null, created_at: 0, updated_at: 0 });
+    return f;
+  };
+  const pick = async (name: string) => {
+    fireEvent.click(await screen.findByRole("combobox", { name: "Project" }));
+    fireEvent.click(await screen.findByRole("option", { name }));
+  };
+
+  it("moves the open chat into a project, shows it there, and Undo moves it back", async () => {
+    const { api, project, convs } = setup();
+    render(<App api={api} />);
+    expect(await screen.findByText("Loose chat", { selector: ".titlebar-title" })).toBeTruthy();
+    await pick("Thesis");
+    expect(await screen.findByText("Moved to “Thesis”")).toBeTruthy();
+    expect(project.moves).toEqual([["c1", "p1"]]);
+    expect(await screen.findByText("Thesis / Loose chat")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(project.moves).toEqual([["c1", "p1"], ["c1", null]]));
+    await waitFor(() => expect(convs[0]?.project_id).toBeNull());
+    expect(await screen.findByText("Loose chat", { selector: ".titlebar-title" })).toBeTruthy();
+  });
+
+  it("moves a chat out of its project", async () => {
+    const { api, project, convs } = setup();
+    convs[0]!.project_id = "p2";
+    render(<App api={api} />);
+    expect(await screen.findByText("Work / Loose chat")).toBeTruthy();
+    await pick("No project");
+    expect(await screen.findByText("Removed from “Work”")).toBeTruthy();
+    expect(project.moves).toEqual([["c1", null]]);
+  });
+
+  it("says so when the project is gone, and the chat stays where it was", async () => {
+    const { api, projects, convs } = setup();
+    render(<App api={api} />);
+    await screen.findByText("Loose chat", { selector: ".titlebar-title" });
+    projects.splice(0, 1); // Thesis deleted elsewhere
+    await pick("Thesis");
+    expect(await screen.findByText(/Couldn't move the chat. This project was deleted./)).toBeTruthy();
+    expect(convs[0]?.project_id).toBeNull();
+  });
+
+  it("a new chat starts in the project picked before the first message", async () => {
+    const { api, created, convs } = setup();
+    convs.length = 0;
+    render(<App api={api} />);
+    await pick("Work");
+    expect(await screen.findByText("Work / New chat")).toBeTruthy();
+    const box = screen.getByLabelText("Message");
+    fireEvent.change(box, { target: { value: "Plan the week" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    await waitFor(() => expect(created).toEqual(["p2"]));
+  });
+
+  it("has no project picker when there are no projects", async () => {
+    const { api } = fakeApi();
+    render(<App api={api} />);
+    await screen.findByLabelText("Message");
+    expect(screen.queryByTestId("project-picker")).toBeNull();
   });
 });

@@ -497,6 +497,15 @@ export function createMockApi(): Api {
       for (const c of convs) if (c.project_id === pid) deleted.delete(c.id);
       return null;
     },
+    moveConversation: async (cid, pid) => {
+      const c = convs.find((x) => x.id === cid && !deleted.has(cid));
+      if (c === undefined) throw { code: "not_found", message: "This chat was deleted." };
+      if (pid !== null) liveProject(pid);
+      const before = c.project_id;
+      c.project_id = pid;
+      c.updated_at = now();
+      return before;
+    },
     listProjectFiles: async (pid) => {
       liveProject(pid);
       return projectFiles.filter((f) => f.project_id === pid && !f.deleted).map(({ deleted: _d, ...f }) => f);
