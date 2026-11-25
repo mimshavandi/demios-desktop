@@ -143,6 +143,16 @@ Actions › **msix** › *Run workflow* builds the unsigned package with the pla
 
 The artifact `msix-test-package` holds the unsigned `.msix`, the rendered manifest and the WACK report. It's kept for 14 days. The job is a test, not a release step.
 
+**Last WACK result (2026-11-25, placeholder identity): overall PASS, 24 tests.** One optional test fails.
+
+- **The test:** "Blocked executables" flags the exe's process-launch APIs (`CreateProcessW`, `ShellExecuteW`/`ShellExecuteExW`) and the strings `cmd.exe`, `bash`, `reg` and `cdb` in it.
+- **Why the app has them:**
+  - it starts the local tool servers (MCP) the user configures, only after a native "start this program?" confirm;
+  - it opens links in the browser after a confirm;
+  - Rust's standard library runs `.cmd`/`.bat` files through `cmd.exe`.
+
+The app never runs `bash`, `reg` or `cdb` itself. Optional tests don't block certification, but explain this in the submission notes together with the `runFullTrust` reason.
+
 ## What the owner has to do
 
 1. **Partner Center account.** Open a Microsoft Store developer account for DigiNote Inc. (company account), and declare the DSA trader status (audit S-25).
