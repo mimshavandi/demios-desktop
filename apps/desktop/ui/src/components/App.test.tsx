@@ -54,6 +54,20 @@ Element.prototype.hasPointerCapture ??= () => false;
 Element.prototype.releasePointerCapture ??= () => {};
 Element.prototype.scrollIntoView ??= () => {};
 
+/** Opens a sidebar chat's menu with the keyboard (Radix opens menus on Enter). */
+async function chatMenu(title: string) {
+  const trigger = await screen.findByRole("button", { name: `More actions for “${title}”` });
+  trigger.focus();
+  fireEvent.keyDown(trigger, { key: "Enter" });
+  await screen.findByRole("menu");
+  return trigger;
+}
+
+async function chatMenuItem(title: string, item: string) {
+  await chatMenu(title);
+  fireEvent.click(await screen.findByRole("menuitem", { name: item }));
+}
+
 /** In-memory stand-in for the Rust commands. */
 function fakeApi() {
   const launch = { result: null as UpdateCheck | null, mode: "off" as UpdateMode };
@@ -69,6 +83,8 @@ function fakeApi() {
     pick: [] as { name: string; size: number }[],
     skipped: [] as { name: string; reason: string }[],
     updates: [] as [string, string, string][],
+    moves: [] as [string, string | null][],
+    renames: [] as [string, string][],
   };
   let approvalSink: ((e: ToolEvent) => void) | null = null;
   const responses: [string, string][] = [];
@@ -205,7 +221,12 @@ function fakeApi() {
       msgs.set(c.id, []);
       return c;
     },
-    renameConversation: async () => null,
+    renameConversation: async (cid, title) => {
+      project.renames.push([cid, title]);
+      const c = convs.find((x) => x.id === cid);
+      if (c) c.title = title;
+      return null;
+    },
     listProjects: async () => {
       if (project.failList) throw { code: "storage", message: "Could not read or write local data." };
       return projects.map((p) => ({
@@ -246,6 +267,15 @@ function fakeApi() {
         convs.unshift(c);
       }
       return null;
+    },
+    moveConversation: async (cid, pid) => {
+      project.moves.push([cid, pid]);
+      const c = convs.find((x) => x.id === cid);
+      if (!c) throw { code: "not_found", message: "conversation" };
+      if (pid !== null && !projects.some((x) => x.id === pid)) throw { code: "not_found", message: "This project was deleted." };
+      const before = c.project_id;
+      c.project_id = pid;
+      return before;
     },
     listProjectFiles: async (pid) => files.filter((f) => f.project_id === pid),
     addProjectFiles: async (pid) => {
@@ -738,12 +768,12 @@ describe("App", () => {
       return res(id);
     };
     render(<App api={api} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Delete “New chat”" }));
+    await chatMenuItem("New chat", "Delete");
     expect(await screen.findByText("Deleted “New chat”")).toBeTruthy();
     expect(deletes).toBe(1);
-    await waitFor(() => expect(screen.queryByRole("button", { name: "Delete “New chat”" })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("button", { name: "More actions for “New chat”" })).toBeNull());
     fireEvent.click(screen.getByRole("button", { name: "Undo" }));
-    expect(await screen.findByRole("button", { name: "Delete “New chat”" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "More actions for “New chat”" })).toBeTruthy();
     expect(restores).toBe(1);
     expect(deletes).toBe(1);
   });
@@ -1304,6 +1334,167 @@ describe("Projects", () => {
   });
 });
 
+describe("Move a chat into or out of a project (#136)", () => {
+  const setup = () => {
+    const f = fakeApi();
+    f.projects.push({ id: "p1", name: "Thesis", instructions: "", created_at: 0, updated_at: 0 });
+    f.projects.push({ id: "p2", name: "Work", instructions: "", created_at: 0, updated_at: 0 });
+    f.convs.push({ id: "c1", title: "Loose chat", model: null, project_id: null, created_at: 0, updated_at: 0 });
+    return f;
+  };
+  const pick = async (name: string) => {
+    fireEvent.click(await screen.findByRole("combobox", { name: "Project" }));
+    fireEvent.click(await screen.findByRole("option", { name }));
+  };
+
+  it("moves the open chat into a project, shows it there, and Undo moves it back", async () => {
+    const { api, project, convs } = setup();
+    render(<App api={api} />);
+    expect(await screen.findByText("Loose chat", { selector: ".titlebar-title" })).toBeTruthy();
+    await pick("Thesis");
+    expect(await screen.findByText("Moved to “Thesis”")).toBeTruthy();
+    expect(project.moves).toEqual([["c1", "p1"]]);
+    expect(await screen.findByText("Thesis / Loose chat")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(project.moves).toEqual([["c1", "p1"], ["c1", null]]));
+    await waitFor(() => expect(convs[0]?.project_id).toBeNull());
+    expect(await screen.findByText("Loose chat", { selector: ".titlebar-title" })).toBeTruthy();
+  });
+
+  it("moves a chat out of its project", async () => {
+    const { api, project, convs } = setup();
+    convs[0]!.project_id = "p2";
+    render(<App api={api} />);
+    expect(await screen.findByText("Work / Loose chat")).toBeTruthy();
+    await pick("No project");
+    expect(await screen.findByText("Removed from “Work”")).toBeTruthy();
+    expect(project.moves).toEqual([["c1", null]]);
+  });
+
+  it("says so when the project is gone, and the chat stays where it was", async () => {
+    const { api, projects, convs } = setup();
+    render(<App api={api} />);
+    await screen.findByText("Loose chat", { selector: ".titlebar-title" });
+    projects.splice(0, 1); // Thesis deleted elsewhere
+    await pick("Thesis");
+    expect(await screen.findByText(/Couldn't move the chat. This project was deleted./)).toBeTruthy();
+    expect(convs[0]?.project_id).toBeNull();
+  });
+
+  it("a new chat starts in the project picked before the first message", async () => {
+    const { api, created, convs } = setup();
+    convs.length = 0;
+    render(<App api={api} />);
+    await pick("Work");
+    expect(await screen.findByText("Work / New chat")).toBeTruthy();
+    const box = screen.getByLabelText("Message");
+    fireEvent.change(box, { target: { value: "Plan the week" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    await waitFor(() => expect(created).toEqual(["p2"]));
+  });
+
+  it("has no project picker when there are no projects", async () => {
+    const { api } = fakeApi();
+    render(<App api={api} />);
+    await screen.findByLabelText("Message");
+    expect(screen.queryByTestId("project-picker")).toBeNull();
+  });
+});
+
+describe("Sidebar chat menu (#166)", () => {
+  const setup = () => {
+    const f = fakeApi();
+    f.projects.push({ id: "p1", name: "Thesis", instructions: "", created_at: 0, updated_at: 0 });
+    f.convs.push({ id: "c1", title: "Draft", model: null, project_id: null, created_at: 0, updated_at: 0 });
+    return f;
+  };
+
+  it("opens from the keyboard, moves with the arrow keys, and Esc returns focus to the trigger", async () => {
+    const { api } = setup();
+    render(<App api={api} />);
+    const trigger = await chatMenu("Draft");
+    const items = screen.getAllByRole("menuitem").map((i) => i.textContent);
+    expect(items).toEqual(["Move to project", "Rename", "Delete"]);
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+  });
+
+  it("moves a chat into a project from the submenu, with Undo", async () => {
+    const { api, project, convs } = setup();
+    render(<App api={api} />);
+    await chatMenu("Draft");
+    const sub = screen.getByRole("menuitem", { name: "Move to project" });
+    sub.focus();
+    fireEvent.keyDown(sub, { key: "ArrowRight" });
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: "Thesis" }));
+    expect(await screen.findByText("Moved to “Thesis”")).toBeTruthy();
+    expect(project.moves).toEqual([["c1", "p1"]]);
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(convs[0]?.project_id).toBeNull());
+  });
+
+  it("renames inline: Enter saves, and focus goes back to the row", async () => {
+    const { api, project } = setup();
+    render(<App api={api} />);
+    await chatMenuItem("Draft", "Rename");
+    const input = (await screen.findByLabelText("Chat name")) as HTMLInputElement;
+    await waitFor(() => expect(document.activeElement).toBe(input));
+    fireEvent.change(input, { target: { value: "Final report" } });
+    fireEvent.submit(input.closest("form")!);
+    expect(await screen.findByRole("button", { name: "Final report" })).toBeTruthy();
+    expect(project.renames).toEqual([["c1", "Final report"]]);
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Final report" })));
+  });
+
+  it("Esc cancels a rename without saving", async () => {
+    const { api, project } = setup();
+    render(<App api={api} />);
+    await chatMenuItem("Draft", "Rename");
+    const input = await screen.findByLabelText("Chat name");
+    fireEvent.change(input, { target: { value: "Something else" } });
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(await screen.findByRole("button", { name: "Draft" })).toBeTruthy();
+    expect(project.renames).toEqual([]);
+  });
+
+  it("keeps the typed name and says why when renaming fails, and refuses an empty name", async () => {
+    const { api } = setup();
+    api.renameConversation = async () => {
+      throw { code: "storage", message: "Could not read or write local data." };
+    };
+    render(<App api={api} />);
+    await chatMenuItem("Draft", "Rename");
+    const input = (await screen.findByLabelText("Chat name")) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "   " } });
+    fireEvent.submit(input.closest("form")!);
+    expect(await screen.findByText("A chat name is 1–200 characters.")).toBeTruthy();
+    fireEvent.change(input, { target: { value: "Final report" } });
+    fireEvent.submit(input.closest("form")!);
+    expect(await screen.findByText(/Couldn't rename the chat. Could not read or write local data./)).toBeTruthy();
+    expect(input.value).toBe("Final report");
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+  });
+
+  it("deletes from the menu with Undo, and focus moves to New chat", async () => {
+    const { api } = setup();
+    render(<App api={api} />);
+    await chatMenuItem("Draft", "Delete");
+    expect(await screen.findByText("Deleted “Draft”")).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId("new-chat")));
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    expect(await screen.findByRole("button", { name: "Draft" })).toBeTruthy();
+  });
+
+  it("has no Move to project entry when there are no projects", async () => {
+    const { api, convs } = fakeApi();
+    convs.push({ id: "c1", title: "Draft", model: null, project_id: null, created_at: 0, updated_at: 0 });
+    render(<App api={api} />);
+    await chatMenu("Draft");
+    expect(screen.getAllByRole("menuitem").map((i) => i.textContent)).toEqual(["Rename", "Delete"]);
+  });
+});
+
 describe("No silent fallbacks (#141)", () => {
   const fail = () => {
     throw { code: "storage", message: "Could not read or write local data." };
@@ -1325,8 +1516,9 @@ describe("No silent fallbacks (#141)", () => {
     convs.push({ id: "c1", title: "Gone", model: null, project_id: null, created_at: 0, updated_at: 0 });
     convs.push({ id: "c2", title: "Kept", model: null, project_id: null, created_at: 0, updated_at: 0 });
     render(<App api={api} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Delete “Gone”" }));
+    await chatMenu("Gone");
     api.listConversations = async () => fail();
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
     expect(await screen.findByText(/Couldn't load chats/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Kept" })).toBeNull();
   });
