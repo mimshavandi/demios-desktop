@@ -64,7 +64,7 @@ Preview build, not signed: installers for macOS, Windows and Linux on the [GitHu
 
 ### Fixed
 
-- The window always opens inside the screen's free area, so its bottom, including the message box, is never hidden behind the Windows taskbar or the macOS Dock. Demios remembers the window's size, position and maximised state for each monitor, and pulls it back on screen if a monitor is gone or its scaling changed ([#PRNUM](https://github.com/mimshavandi/demios-desktop/pull/PRNUM)).
+- The window always opens inside the screen's free area, so its bottom, including the message box, is never hidden behind the Windows taskbar or the macOS Dock. Demios remembers the window's size, position and maximised state for each monitor, and pulls it back on screen if a monitor is gone or its scaling changed ([#180](https://github.com/mimshavandi/demios-desktop/pull/180)).
 
 ### Security
 
