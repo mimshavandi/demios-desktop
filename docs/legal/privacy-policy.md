@@ -1,21 +1,19 @@
 # Demios Desktop privacy policy
 
-> **Pending owner approval.** The owner approves the final text before it is published at demios.io/privacy and linked from the app and from demios.io. Text in [square brackets] is still to be confirmed by the owner. Every statement about the app was checked against the code on `main`.
-
 Last updated: set on publication
 
 ## Who we are
 
 Demios Desktop ("the app") is an open-source desktop app licensed under Apache-2.0. It is published by **DigiNote Inc.**, which is responsible for this policy and is the controller for the processing described in [Data protection (GDPR)](#data-protection-gdpr). DigiNote Inc. is also the provider of the app under the EU AI Act. App id: `io.demios.app`.
 
-DigiNote Inc. [legal entity name and register: to be confirmed by the owner]
+DigiNote Inc.
 Niederkasseler Kirchweg 85
 40547 Düsseldorf
 Germany
 
 Email: mahdi@demios.io
 
-Data protection officer: [DPO: to be confirmed by the owner whether one is required]
+Data protection contact: mahdi@demios.io. No data protection officer is designated. None is required: fewer than 20 people regularly process personal data for us (§ 38(1) BDSG), and our core activities don't involve large-scale monitoring or special categories of data (Art. 37(1) GDPR).
 
 This policy covers the app and the website at demios.io.
 
@@ -132,7 +130,7 @@ This section gives the information required by Articles 13 and 14 of the EU Gene
 
 ### Controller
 
-DigiNote Inc., at the address in [Who we are](#who-we-are). Email: mahdi@demios.io. Data protection officer: [DPO: to be confirmed by the owner whether one is required].
+DigiNote Inc., at the address in [Who we are](#who-we-are). Email: mahdi@demios.io. No data protection officer is designated. None is required: fewer than 20 people regularly process personal data for us (§ 38(1) BDSG), and our core activities don't involve large-scale monitoring or special categories of data (Art. 37(1) GDPR). For data protection questions, write to mahdi@demios.io.
 
 ### What we process, why, and on what legal basis
 
@@ -143,11 +141,11 @@ DigiNote Inc., at the address in [Who we are](#who-we-are). Email: mahdi@demios.
 | Searching for and downloading models | Search text, requested files, your IP address | **No.** Your computer sends it straight to Hugging Face (or the mirror you set). | None needed: we don't process it. |
 | Using tool servers | Tool arguments, which can contain chat text | **No.** Your computer sends it straight to the server you added. | None needed: we don't process it. |
 | Reporting a problem on GitHub | What you write, the app version and your operating system | Only as a public GitHub issue, which we read as the project's maintainers. | Our legitimate interest in fixing problems in the app (Art. 6(1)(f) GDPR). |
-| Emailing us | Your email address, what you write | **Yes.** | Answering you, and taking steps you ask for before a contract (Art. 6(1)(b)); otherwise our legitimate interest in answering questions about the app (Art. 6(1)(f)). |
+| Emailing us | Your email address, what you write | **Yes.** | Where your email relates to a contract or a request before one: Art. 6(1)(b). Otherwise our legitimate interest in answering your questions (Art. 6(1)(f)). |
 | Checking for and installing updates (only in builds with updates turned on, from the first signed release; preview builds don't check) | Your IP address and standard request headers | **No.** Your computer asks GitHub directly, only when you select **Check for updates** or **Install and restart**. | None needed: we don't process it. |
-| Visiting demios.io | Your IP address, the page requested, time, browser details | Our hosting provider receives them in its server logs. [Whether we can see these logs: to be confirmed by the owner] | Our legitimate interest in delivering the website securely (Art. 6(1)(f)). |
+| Visiting demios.io | Your IP address, the page requested, time, browser details | **No.** The site is hosted on GitHub Pages. GitHub processes this data in its server logs to run and secure the service; we receive no access logs. | Our legitimate interest in offering the website and keeping it secure (Art. 6(1)(f)). |
 
-The website demios.io sets no cookies and uses no analytics or tracking. [To be confirmed by the owner for the published site.]
+The website demios.io sets no cookies and uses no analytics or tracking.
 
 **Downloads:** the installers are served by GitHub, not by demios.io. When you download one, your browser connects to `github.com`, which sends it on to `release-assets.githubusercontent.com`. GitHub sees your IP address, the file you ask for, and standard request headers, under [GitHub's privacy statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement). No GitHub account is needed.
 
@@ -159,22 +157,22 @@ You don't have to give us any personal data. The app works without contacting us
 
 ### How long we keep it
 
-- **Emails:** until your question or request is settled, then deleted, unless the law requires us to keep them longer (for example as business letters under German commercial or tax law). [Retention period: to be confirmed by the owner]
+- **Emails:** deleted once the matter is closed. We may keep them for up to 3 years after that, in case of follow-up questions or claims (the standard limitation period, § 195 BGB). Emails that are business letters are kept longer only where commercial or tax law requires it: 6 or 10 years (§ 257 HGB, § 147 AO).
 - **GitHub issues:** they stay public in the repository until you or we delete them. You can edit or delete your own issues and comments on GitHub.
-- **Website server logs:** kept by the hosting provider under its own rules (see below).
+- **Website server logs:** kept by GitHub under its own rules. We don't receive them.
 - **Data on your computer:** until you delete it. See [Your choices and how to delete data](#your-choices-and-how-to-delete-data).
 
 ### Recipients and processors
 
 - **Services you choose in the app** (AI providers, Hugging Face, tool servers) receive data directly from your computer, only when you set them up or start an action. They are not our processors. They act on their own responsibility, under your agreement with them.
-- **GitHub** (GitHub, Inc., USA) hosts the project's repository and issues, and hosts the website demios.io on GitHub Pages. For the website, GitHub processes visitors' IP addresses and request details in its server logs. [Whether GitHub is a processor or a separate controller for this, and the agreement in place: to be confirmed by the owner]
-- **GitHub (release downloads):** GitHub, Inc. serves the app's installers, and updates for builds that have them turned on, from `github.com` and `release-assets.githubusercontent.com`, and processes downloaders' IP addresses and request details. [Whether GitHub is a processor or a separate controller for this, and the agreement in place: to be confirmed by the owner]
-- **Our email provider** stores the emails you send us. [Email provider: to be confirmed by the owner]
+- **GitHub** (GitHub, Inc., USA) hosts the project's repository and issues, and hosts the website demios.io on GitHub Pages. For the website, GitHub processes visitors' IP addresses and request details in its server logs to run and secure the service, under the [GitHub General Privacy Statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement). We receive no access logs.
+- **GitHub (release downloads):** GitHub, Inc. serves the app's installers, and updates for builds that have them turned on, from `github.com` and `release-assets.githubusercontent.com`, and processes downloaders' IP addresses and request details, under the same privacy statement.
+- **Our email hosting provider** stores the emails you send us, acting as our processor (Art. 28 GDPR).
 
 ### Transfers outside the EU
 
 - **Services you choose:** Anthropic, OpenAI, Google and Hugging Face are based in or process data in the USA. Your computer sends data to them because you chose them; we don't transfer it.
-- **GitHub:** GitHub, Inc. is in the USA. Transfers rely on the EU–US Data Privacy Framework, under the European Commission's adequacy decision of 10 July 2023, [GitHub's certification under the Data Privacy Framework: to be confirmed by the owner] and on the EU Standard Contractual Clauses in GitHub's data protection agreement.
+- **GitHub:** GitHub, Inc. is in the USA. Data GitHub processes for the website, the repository and downloads is transferred under the European Commission's standard contractual clauses, as described in GitHub's privacy statement.
 
 ### Your rights
 
@@ -207,6 +205,6 @@ If the app starts sending any data to us (for example optional crash reports), w
 
 DigiNote Inc. · Niederkasseler Kirchweg 85, 40547 Düsseldorf, Germany · mahdi@demios.io · [GitHub issues](https://github.com/mimshavandi/demios-desktop/issues)
 
-Legal notice (Impressum): https://demios.io/impressum [URL: to be confirmed by the owner]
+Legal notice (Impressum): https://demios.io/impressum
 
 For security problems, see [SECURITY.md](../../SECURITY.md).

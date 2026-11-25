@@ -1,7 +1,5 @@
 # Demios Desktop accessibility statement
 
-> **Pending owner approval.** The owner approves the final text before it is published at demios.io/accessibility and linked from the app and from demios.io.
-
 Last reviewed: set on publication · App version: 0.1.0
 
 Demios Desktop is published by DigiNote Inc.
