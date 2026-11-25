@@ -24,7 +24,7 @@ This policy covers the app and the website at demios.io.
 - **We collect nothing.** The app has no account, no analytics, no crash reporting and no Demios server. Nothing you do in the app is sent to us.
 - Your chats, settings and tool history stay on your computer.
 - Your API keys and tokens are kept in your operating system's keychain.
-- When you choose an online AI provider, a model download, a tool server or an update, the app connects **directly** to that service for you. That service's own terms and privacy policy apply.
+- When you choose an online AI provider, a model download, a tool server or, in builds with updates turned on, an update, the app connects **directly** to that service for you. That service's own terms and privacy policy apply.
 
 ## What the app collects
 
@@ -86,7 +86,7 @@ Some models need your Hugging Face token. If you save one, it is kept in your sy
 
 ### Updates (copies downloaded from GitHub)
 
-No version of the app updates itself yet. The builds available today don't include updates, and **Settings → General → About** says so. Signed releases downloaded from GitHub or demios.io will be able to update themselves, as described here. Such a copy checks for a new version only when you select **Check for updates** in **Settings → General → About**. The app then asks GitHub (`github.com`, which sends it on to `release-assets.githubusercontent.com`) for a small file that names the newest version. The address is the same for everyone and carries nothing about you or your copy. GitHub sees your IP address and standard request headers. If a newer version exists, the app shows its release notes, and downloads it from GitHub only after you select **Install and restart**. Nothing else is sent. Demios isn't offered in any app store yet. If it is later, store copies will be updated by their store and won't contact GitHub for updates. [GitHub privacy statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement).
+No build available today checks for updates. Preview builds and builds from source have updates turned off, and **Settings → General → About** says so. Builds with updates turned on, from the first signed release downloaded from GitHub or demios.io, work as described here. Such a copy checks for a new version only when you select **Check for updates** in **Settings → General → About**. The app then asks GitHub (`github.com`, which sends it on to `release-assets.githubusercontent.com`) for a small file that names the newest version. The address is the same for everyone and carries nothing about you or your copy. GitHub sees your IP address and standard request headers. If a newer version exists, the app shows its release notes, and downloads it from GitHub only after you select **Install and restart**. Nothing else is sent. Demios isn't offered in any app store yet. If it is later, store copies will be updated by their store and won't contact GitHub for updates. [GitHub privacy statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement).
 
 ### Tool servers (MCP)
 
@@ -144,7 +144,7 @@ DigiNote Inc., at the address in [Who we are](#who-we-are). Email: mahdi@demios.
 | Using tool servers | Tool arguments, which can contain chat text | **No.** Your computer sends it straight to the server you added. | None needed: we don't process it. |
 | Reporting a problem on GitHub | What you write, the app version and your operating system | Only as a public GitHub issue, which we read as the project's maintainers. | Our legitimate interest in fixing problems in the app (Art. 6(1)(f) GDPR). |
 | Emailing us | Your email address, what you write | **Yes.** | Answering you, and taking steps you ask for before a contract (Art. 6(1)(b)); otherwise our legitimate interest in answering questions about the app (Art. 6(1)(f)). |
-| Checking for and installing updates (signed releases downloaded from GitHub, once available) | Your IP address and standard request headers | **No.** Your computer asks GitHub directly, only when you select **Check for updates** or **Install and restart**. | None needed: we don't process it. |
+| Checking for and installing updates (only in builds with updates turned on, from the first signed release; preview builds don't check) | Your IP address and standard request headers | **No.** Your computer asks GitHub directly, only when you select **Check for updates** or **Install and restart**. | None needed: we don't process it. |
 | Visiting demios.io | Your IP address, the page requested, time, browser details | Our hosting provider receives them in its server logs. [Whether we can see these logs: to be confirmed by the owner] | Our legitimate interest in delivering the website securely (Art. 6(1)(f)). |
 
 The website demios.io sets no cookies and uses no analytics or tracking. [To be confirmed by the owner for the published site.]
@@ -168,7 +168,7 @@ You don't have to give us any personal data. The app works without contacting us
 
 - **Services you choose in the app** (AI providers, Hugging Face, tool servers) receive data directly from your computer, only when you set them up or start an action. They are not our processors. They act on their own responsibility, under your agreement with them.
 - **GitHub** (GitHub, Inc., USA) hosts the project's repository and issues, and hosts the website demios.io on GitHub Pages. For the website, GitHub processes visitors' IP addresses and request details in its server logs. [Whether GitHub is a processor or a separate controller for this, and the agreement in place: to be confirmed by the owner]
-- **GitHub (release downloads):** GitHub, Inc. serves the app's installers and updates from `github.com` and `release-assets.githubusercontent.com`, and processes downloaders' IP addresses and request details. [Whether GitHub is a processor or a separate controller for this, and the agreement in place: to be confirmed by the owner]
+- **GitHub (release downloads):** GitHub, Inc. serves the app's installers, and updates for builds that have them turned on, from `github.com` and `release-assets.githubusercontent.com`, and processes downloaders' IP addresses and request details. [Whether GitHub is a processor or a separate controller for this, and the agreement in place: to be confirmed by the owner]
 - **Our email provider** stores the emails you send us. [Email provider: to be confirmed by the owner]
 
 ### Transfers outside the EU
