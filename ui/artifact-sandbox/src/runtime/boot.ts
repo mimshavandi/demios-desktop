@@ -35,7 +35,30 @@ function stripHostGlobals(): boolean {
   return left.length === 0 && !webview;
 }
 
+/**
+ * The desktop app's artifact webview (Windows: `artifact_child.rs`). Tauri injects its IPC object
+ * there too and it can't be removed, but no capability names that webview, so every call from it
+ * is refused (threat model R8, ADR-0012). Tauri sets this label before any page script runs and
+ * makes it read-only; in the main window it is "main", and then a leftover IPC object still
+ * means "refuse".
+ */
+const ISOLATED_WEBVIEW = "artifact";
+
+function webviewLabel(): string | null {
+  try {
+    const t = (window as unknown as Record<string, unknown>)["__TAURI_INTERNALS__"] as
+      | { metadata?: { currentWebview?: { label?: unknown } } }
+      | undefined;
+    const label = t?.metadata?.currentWebview?.label;
+    return typeof label === "string" ? label : null;
+  } catch {
+    return null;
+  }
+}
+
 (() => {
+  // Read before stripping: on macOS and Linux the object is removed with its label.
+  const isolated = webviewLabel() === ISOLATED_WEBVIEW;
   // Only ever a child of the host: as a top-level page (a link or a stray navigation) it has
   // nobody to render for, so it stays inert.
   if (window.top === window) {
@@ -43,7 +66,7 @@ function stripHostGlobals(): boolean {
     document.documentElement.textContent = "Artifacts open in the Demios artifact pane.";
     return;
   }
-  if (!stripHostGlobals()) {
+  if (!stripHostGlobals() && !isolated) {
     // Never hand artifact code a realm that still reaches the app's IPC.
     document.documentElement.textContent = "This artifact can't be shown safely in this window.";
     window.parent.postMessage({ channel: CHANNEL, type: "shell-refused" }, "*");

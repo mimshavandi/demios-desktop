@@ -1,0 +1,6 @@
+# Local dev signing material and packages: never commit them (README.md).
+*.pfx
+*.cer
+*.p12
+*.msix
+/out/

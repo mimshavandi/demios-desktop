@@ -1,0 +1,7 @@
+{
+  "$comment": "PLACEHOLDERS. There is no Partner Center account yet. Real values come from Partner Center › Apps and games › Demios › Product identity and are set through the MSIX_* environment variables, not committed (packaging/msix/README.md). build-msix.mjs --store refuses these values.",
+  "identityName": "DigiNoteInc.DemiosDesktop.Placeholder",
+  "publisher": "CN=00000000-0000-0000-0000-000000000000",
+  "publisherDisplayName": "DigiNote Inc.",
+  "displayName": "Demios Desktop"
+}

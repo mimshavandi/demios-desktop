@@ -330,7 +330,27 @@ export interface AppInfo {
   data_dir: string | null;
   /** Where downloaded models live (shared with the `dn` CLI). */
   models_dir: string | null;
+  /** How this build gets updates (T-STORE-08). */
+  updates: UpdateMode;
+  /** Commit the build was made from (CI builds only). */
+  commit?: string | null;
+  /** Build channel, e.g. "preview" (CI builds only). */
+  channel?: string | null;
 }
+
+/**
+ * How a build gets updates: `self_update` checks GitHub Releases when asked; Store and
+ * Flathub builds are updated by their store; `no_key` and `off` builds don't update.
+ */
+export type UpdateMode = "self_update" | "no_key" | "microsoft_store" | "flathub" | "off";
+
+/** What "Check for updates" found. Nothing is downloaded by a check. */
+export type UpdateCheck =
+  | { status: "up_to_date"; current: string }
+  | { status: "available"; version: string; current: string; notes: string; date: string | null };
+
+/** Progress of "Install and restart". */
+export type UpdateProgress = { kind: "downloading"; downloaded: number; total: number | null } | { kind: "installing" };
 
 // ---- MCP servers screen (T-SHELL-08). Secret values never come back from the backend.
 
@@ -416,6 +436,11 @@ export function isIpcError(e: unknown): e is IpcError {
     typeof (e as { code?: unknown }).code === "string" &&
     typeof (e as { message?: unknown }).message === "string"
   );
+}
+
+/** The IPC error code, if `e` is one. */
+export function errorCode(e: unknown): string | null {
+  return isIpcError(e) ? e.code : null;
 }
 
 export function errorMessage(e: unknown): string {

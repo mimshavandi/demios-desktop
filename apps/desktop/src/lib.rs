@@ -6,10 +6,12 @@
 compile_error!("the dev fake model must never be in a release build");
 
 pub mod agent;
+pub mod artifact_child;
 pub mod artifacts;
 pub mod chat;
 pub mod commands;
 pub mod deeplink;
+pub mod distribution;
 pub mod error;
 #[cfg(any(fake_model, test))]
 pub mod fake;
@@ -23,6 +25,7 @@ pub mod settings;
 pub mod state;
 pub mod support;
 pub mod tool_review;
+pub mod updates;
 
 use std::path::PathBuf;
 
@@ -58,8 +61,12 @@ pub fn allowed_navigation(url: &tauri::Url) -> bool {
 
 fn navigation_guard<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
     tauri::plugin::Builder::new("navigation-guard")
-        .on_navigation(|_webview, url| {
-            let ok = allowed_navigation(url);
+        .on_navigation(|webview, url| {
+            let ok = if webview.label() == artifact_child::LABEL {
+                artifact_child::allowed_navigation(url)
+            } else {
+                allowed_navigation(url)
+            };
             if !ok {
                 eprintln!("blocked navigation to {url}");
             }
@@ -138,7 +145,7 @@ impl mcp::LaunchApprover for NativeLaunchApprover {
 }
 
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         // First: a second launch (e.g. from a demios:// link) hands over to this one. With
         // the `deep-link` feature the link is forwarded to the deep-link plugin below; the
         // second launch's command line is otherwise ignored.
@@ -153,8 +160,12 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         .plugin(navigation_guard())
         // The artifact frame origin (T-ART-06): serves only the sandbox frame shell.
-        .register_uri_scheme_protocol(artifacts::SCHEME, |_ctx, request| {
-            artifacts::frame_response(&request)
+        // On Windows also the artifact webview's host page (artifact_child.rs, ADR-0012).
+        .register_uri_scheme_protocol(artifacts::SCHEME, |ctx, request| {
+            let label = ctx.webview_label();
+            artifact_child::host_response(ctx.app_handle(), label, &request).unwrap_or_else(|| {
+                artifacts::frame_response(&request, label == artifact_child::LABEL)
+            })
         })
         // Used from Rust only (`commands::report_problem`): no link-click handler is injected
         // into the webview, and none of its JS commands are granted (see capabilities).
@@ -165,7 +176,13 @@ pub fn run() {
         )
         // Native "start this program?" confirm for local MCP servers, shown from Rust only;
         // none of the dialog plugin's JS commands are granted (see capabilities).
-        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_dialog::init());
+    // Signed self-update, direct-download builds only (T-STORE-08). Used from Rust only
+    // (`updates::check_for_update` / `install_update`); none of its JS commands are granted.
+    #[cfg(feature = "updater")]
+    let builder = builder.plugin(updates::plugin());
+    builder
+        .manage(updates::Updates::default())
         .setup(|app| {
             use tauri::Manager;
             let dir = data_dir().ok_or("no home directory to keep app data in")?;
@@ -186,6 +203,7 @@ pub fn run() {
             })?;
             install_add_links(app.handle(), &state);
             app.manage(state);
+            app.manage(artifact_child::ChildState::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -238,7 +256,17 @@ pub fn run() {
             commands::rollback_artifact,
             commands::watch_local_models,
             commands::download_model,
+            artifact_child::artifact_child_open,
+            artifact_child::artifact_child_render,
+            artifact_child::artifact_child_bounds,
+            artifact_child::artifact_child_focus,
+            artifact_child::artifact_child_close,
+            artifact_child::artifact_child_probe,
+            artifact_child::artifact_child_probe_report,
+            artifact_child::artifact_child_state,
             commands::pause_download,
+            updates::check_for_update,
+            updates::install_update,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Demios Desktop")
@@ -365,5 +393,72 @@ mod capability_tests {
             "no remote origin may call app commands"
         );
         assert!(cap.get("local").is_none_or(|l| l == true));
+    }
+
+    /// Tauri's capability patterns: `*` matches any run of characters, `?` one character.
+    fn glob_matches(pattern: &str, name: &str) -> bool {
+        fn go(p: &[u8], n: &[u8]) -> bool {
+            match (p.first(), n.first()) {
+                (None, None) => true,
+                (Some(b'*'), _) => go(&p[1..], n) || (!n.is_empty() && go(p, &n[1..])),
+                (Some(b'?'), Some(_)) => go(&p[1..], &n[1..]),
+                (Some(a), Some(b)) if a == b => go(&p[1..], &n[1..]),
+                _ => false,
+            }
+        }
+        go(pattern.as_bytes(), name.as_bytes())
+    }
+
+    #[test]
+    fn glob_matching_follows_tauri() {
+        assert!(glob_matches("*", "artifact"));
+        assert!(glob_matches("art*", "artifact"));
+        assert!(glob_matches("m?in", "main"));
+        assert!(glob_matches("*a*", "main"));
+        assert!(!glob_matches("main", "artifact"));
+        assert!(!glob_matches("ma", "main"));
+    }
+
+    /// The Windows artifact webview's isolation is that no capability can reach it (ADR-0012):
+    /// in **every** capability file, no `webviews` entry may match `artifact` (by name or
+    /// pattern), and no `windows` entry may match the `main` window, which holds both webviews.
+    #[test]
+    fn no_capability_reaches_the_artifact_webview() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/capabilities");
+        let mut files = 0;
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            files += 1;
+            let text = std::fs::read_to_string(&path).unwrap();
+            let cap: serde_json::Value = serde_json::from_str(&text).unwrap();
+            let names = |key: &str| -> Vec<String> {
+                cap[key]
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .map(|v| v.as_str().expect("capability names are strings").to_owned())
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            };
+            for w in names("webviews") {
+                assert!(
+                    !glob_matches(&w, crate::artifact_child::LABEL),
+                    "{}: webviews entry {w:?} matches the artifact webview",
+                    path.display()
+                );
+            }
+            for w in names("windows") {
+                assert!(
+                    !glob_matches(&w, "main") && !glob_matches(&w, crate::artifact_child::LABEL),
+                    "{}: windows entry {w:?} matches the main window, which holds the artifact webview",
+                    path.display()
+                );
+            }
+        }
+        assert!(files > 0, "no capability files found in {dir}");
     }
 }

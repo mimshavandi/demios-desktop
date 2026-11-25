@@ -2,6 +2,7 @@
 import { expect, test } from "@playwright/test";
 import { FIX_PROMPT_MAX_CHARS, buildFixPrompt } from "../src/fix";
 import { isSeparateOrigin } from "../src/origin";
+import { parseFrameMessage } from "../src/protocol";
 
 test.describe("isSeparateOrigin (custom schemes have URL.origin === 'null')", () => {
   const cases: [string, string, boolean][] = [
@@ -45,4 +46,17 @@ test("fix prompt for a model without tools asks for the whole block again", () =
   const p = buildFixPrompt("art-9", "Page", 2, [{ kind: "error", message: "boom" }], "fenced");
   expect(p).toContain('<artifact id="art-9">');
   expect(p).not.toContain("artifact_update");
+});
+
+test("keys: only Escape and Ctrl/Cmd combinations leave the frame, as validated messages", () => {
+  const k = (key: Record<string, unknown>, nonce = "n") => parseFrameMessage({ channel: "dn-artifact", nonce, type: "key", key }, "n");
+  const press = (key: string, mods: Record<string, boolean> = {}) => ({ key, ctrl: false, meta: false, alt: false, shift: false, ...mods });
+  expect(k(press("Escape"))).toEqual({ type: "key", key: press("Escape") });
+  expect(k(press("n", { ctrl: true }))).toEqual({ type: "key", key: press("n", { ctrl: true }) });
+  expect(k(press("n", { meta: true }))).toMatchObject({ type: "key" });
+  expect(k(press("a"))).toBeNull();
+  expect(k(press("Tab"))).toBeNull();
+  expect(k({ key: "n", ctrl: true })).toBeNull();
+  expect(k(press("x".repeat(40), { ctrl: true }))).toBeNull();
+  expect(k(press("Escape"), "other")).toBeNull();
 });

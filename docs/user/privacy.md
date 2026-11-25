@@ -10,8 +10,11 @@ Demios collects no usage data. There is no Demios account and no Demios server.
 - **Model providers you add a key for.** Messages in chats that use a provider's model are sent to that provider under your account with them, and their terms apply.
 - **Hugging Face.** Searching for and downloading a model contacts Hugging Face. If you save a Hugging Face token for gated models, it's kept in your keychain and sent only to Hugging Face. Your chats are never sent there.
 - **Tool servers (MCP).** A tool server receives what its tools are asked to do, which can include text from your chat. See [Tools and approvals](tools-and-approvals.md).
+- **GitHub, for updates.** If you downloaded Demios from GitHub, **Settings → General → About → Check for updates** asks GitHub for the newest version, only when you select it. **Install and restart** downloads the update from GitHub after you confirm. Nothing else is sent. Copies from the Microsoft Store or Flathub are updated by the store and never contact GitHub.
 
 **Settings → General → About** shows the exact folders for your chats and for downloaded models. The confirmation for **Delete all local data** shows them too.
+
+The full privacy policy is at [demios.io/privacy](https://demios.io/privacy), and the accessibility statement at [demios.io/accessibility](https://demios.io/accessibility). **Settings → General → About** links to both. Demios asks before it opens your browser.
 
 ## Delete one chat
 

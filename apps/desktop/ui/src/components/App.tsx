@@ -21,7 +21,7 @@ import {
 } from "../ipc/types";
 import { markArtifact } from "../artifactMarks";
 import { chatModel, chatModelReady, describeModel, modelName } from "../models";
-import { ARTIFACTS_UNAVAILABLE, artifactFrameUrl, isMac, mod } from "../platform";
+import { artifactFrameUrl, isMac, mod } from "../platform";
 import { chatReducer, initialChat } from "../state/chat";
 import { ArtifactPane } from "./ArtifactPane";
 import { ChatView, type ArtifactCardInfo } from "./ChatView";
@@ -670,7 +670,6 @@ function Shell({ api }: { api: Api }) {
           modelName={(ref) => modelName(ref, catalog)}
           mark={(type, v) => markArtifact(type, v.content, v.model, v.created_at)}
           onClose={toggleArtifacts}
-          unavailable={ARTIFACTS_UNAVAILABLE}
           fixMode={catalog?.chat_model_tools === false ? "fenced" : "tools"}
         />
       )}

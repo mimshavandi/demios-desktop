@@ -64,17 +64,22 @@ pub fn is_frame_path(path: &str) -> bool {
 }
 
 /// Whether the request is for the artifact origin itself: `artifact://localhost` (macOS, Linux)
-/// or `http://artifact.localhost` (Windows).
-fn is_frame_origin(uri: &tauri::http::Uri) -> bool {
+/// or `http://artifact.localhost` (Windows). On Windows wry hands the scheme handler the
+/// `artifact://localhost/…` form (it undoes its `http://artifact.localhost` workaround first), so
+/// both forms can reach a handler.
+pub fn is_frame_origin(uri: &tauri::http::Uri) -> bool {
     matches!(
         (uri.scheme_str(), uri.host()),
         (Some(SCHEME), Some("localhost")) | (Some("http"), Some("artifact.localhost"))
     )
 }
 
-/// Who may embed the frame: the app's own window only.
-fn frame_ancestors() -> &'static str {
-    if cfg!(debug_assertions) {
+/// Who may embed the frame: the app's own window only (on Windows: the artifact webview's host
+/// page, which is on the artifact origin itself).
+fn frame_ancestors(in_child: bool) -> &'static str {
+    if in_child {
+        "frame-ancestors http://artifact.localhost"
+    } else if cfg!(debug_assertions) {
         // `tauri dev` serves the UI from the Vite dev server.
         "frame-ancestors tauri://localhost http://tauri.localhost https://tauri.localhost http://localhost:1420 http://127.0.0.1:1420"
     } else {
@@ -83,8 +88,9 @@ fn frame_ancestors() -> &'static str {
 }
 
 /// Response for a request on the `artifact` scheme: the frame shell at `/frame/` (GET only),
-/// 404 for anything else.
-pub fn frame_response(req: &Request<Vec<u8>>) -> Response<Vec<u8>> {
+/// 404 for anything else. `in_child`: the request comes from the artifact webview
+/// (`artifact_child::LABEL`, Windows only).
+pub fn frame_response(req: &Request<Vec<u8>>, in_child: bool) -> Response<Vec<u8>> {
     let path = req.uri().path();
     if req.method() != tauri::http::Method::GET
         || !is_frame_origin(req.uri())
@@ -99,9 +105,10 @@ pub fn frame_response(req: &Request<Vec<u8>>) -> Response<Vec<u8>> {
             .expect("static response");
     }
     // Windows: WebView2 injects the app's init scripts (Tauri's IPC object) into sub-frames and
-    // they can't be removed, so artifacts are off there (threat model R8; the UI says so). Serve
-    // an inert page with no script at all, in case anything still loads the frame.
-    if cfg!(windows) {
+    // they can't be removed, so artifacts render only in the artifact webview, which no
+    // capability names (artifact_child.rs, threat model R8). Anything else that loads the frame
+    // (an iframe in the main window) gets an inert page with no script at all.
+    if cfg!(windows) && !in_child {
         return Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
@@ -110,7 +117,7 @@ pub fn frame_response(req: &Request<Vec<u8>>) -> Response<Vec<u8>> {
                 "default-src 'none'; sandbox",
             )
             .header("X-Content-Type-Options", "nosniff")
-            .body(b"<!doctype html><p>Artifacts aren't available on Windows yet.</p>".to_vec())
+            .body(b"<!doctype html><p>Artifacts open in the Demios artifact pane.</p>".to_vec())
             .expect("static response");
     }
     let network = req
@@ -128,7 +135,7 @@ pub fn frame_response(req: &Request<Vec<u8>>) -> Response<Vec<u8>> {
             format!(
                 "{}; sandbox allow-scripts; {}",
                 if network { &csp.network } else { &csp.strict },
-                frame_ancestors()
+                frame_ancestors(in_child)
             ),
         )
         .header("X-Content-Type-Options", "nosniff")
@@ -504,7 +511,7 @@ mod tests {
     #[cfg(not(windows))]
     #[test]
     fn serves_only_the_frame_shell() {
-        let ok = frame_response(&req("artifact://localhost/frame/"));
+        let ok = frame_response(&req("artifact://localhost/frame/"), false);
         assert_eq!(ok.status(), StatusCode::OK);
         let h = ok.headers();
         assert_eq!(h["x-content-type-options"], "nosniff");
@@ -520,7 +527,7 @@ mod tests {
         assert!(csp.contains("frame-ancestors tauri://localhost"), "{csp}");
 
         // Windows form of the same origin.
-        let win = frame_response(&req("http://artifact.localhost/frame/index.html"));
+        let win = frame_response(&req("http://artifact.localhost/frame/index.html"), false);
         assert_eq!(win.status(), StatusCode::OK);
 
         for bad in [
@@ -533,7 +540,7 @@ mod tests {
             "http://evil.localhost/frame/",
             "https://artifact.localhost/frame/",
         ] {
-            let r = frame_response(&req(bad));
+            let r = frame_response(&req(bad), false);
             assert_eq!(r.status(), StatusCode::NOT_FOUND, "{bad}");
         }
         let post = Request::builder()
@@ -541,17 +548,26 @@ mod tests {
             .uri("artifact://localhost/frame/")
             .body(vec![])
             .unwrap();
-        assert_eq!(frame_response(&post).status(), StatusCode::NOT_FOUND);
+        assert_eq!(frame_response(&post, false).status(), StatusCode::NOT_FOUND);
     }
 
     #[cfg(windows)]
     #[test]
-    fn windows_serves_an_inert_page() {
-        let r = frame_response(&req("http://artifact.localhost/frame/"));
+    fn windows_serves_the_shell_only_to_the_artifact_webview() {
+        // The main window (or anything but the artifact webview): an inert page, no script.
+        let r = frame_response(&req("http://artifact.localhost/frame/"), false);
         assert_eq!(r.status(), StatusCode::OK);
         let body = String::from_utf8(r.body().clone()).unwrap();
         assert!(!body.contains("<script"), "{body}");
-        assert!(body.contains("aren't available on Windows"));
+        // The artifact webview: the real shell, embeddable only by its host page.
+        let r = frame_response(&req("http://artifact.localhost/frame/"), true);
+        assert_eq!(r.body(), FRAME_HTML.as_bytes());
+        let csp = r.headers()["content-security-policy"].to_str().unwrap();
+        assert!(csp.contains("sandbox allow-scripts"), "{csp}");
+        assert!(
+            csp.ends_with("frame-ancestors http://artifact.localhost"),
+            "{csp}"
+        );
     }
 
     #[cfg(not(windows))]
@@ -559,7 +575,7 @@ mod tests {
     fn network_policy_only_with_net_1() {
         let csp = |uri: &str| {
             // The content policy, without the `sandbox` / `frame-ancestors` tail.
-            frame_response(&req(uri)).headers()["content-security-policy"]
+            frame_response(&req(uri), false).headers()["content-security-policy"]
                 .to_str()
                 .unwrap()
                 .split("; sandbox")

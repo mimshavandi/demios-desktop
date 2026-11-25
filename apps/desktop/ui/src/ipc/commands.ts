@@ -31,10 +31,14 @@ import type {
   HubSort,
   HubPullProgress,
   AddModelLink,
+  UpdateCheck,
+  UpdateProgress,
 } from "./types";
 
 interface Commands {
   app_info: { args: Record<string, never>; ret: AppInfo };
+  check_for_update: { args: Record<string, never>; ret: UpdateCheck };
+  install_update: { args: { version: string; onProgress: Channel<UpdateProgress> }; ret: null };
   delete_all_local_data: { args: Record<string, never>; ret: null };
   local_data_summary: { args: Record<string, never>; ret: LocalDataSummary };
   report_problem: { args: { kind: ReportKind; messageId: Id | null }; ret: null };
@@ -93,7 +97,27 @@ interface Commands {
   watch_local_models: { args: { onEvent: Channel<LocalModelEvent> }; ret: LocalModelRow[] };
   download_model: { args: { modelId: string }; ret: null };
   pause_download: { args: { modelId: string }; ret: null };
+  // Windows artifact webview (artifactWebview.ts, ADR-0012).
+  artifact_child_open: { args: { token: string; background: string | null; events: Channel<ChildEvent> }; ret: null };
+  artifact_child_render: { args: { seq: number; html: string; nonce: string; net: boolean; title: string }; ret: null };
+  artifact_child_bounds: { args: { bounds: ChildBounds | null }; ret: null };
+  artifact_child_focus: { args: Record<string, never>; ret: null };
+  artifact_child_close: { args: Record<string, never>; ret: null };
 }
+
+/** Where the artifact webview goes, in this webview's CSS pixels. */
+export interface ChildBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** From the artifact webview, through Rust (`artifact_child.rs` ChildEvent). */
+export type ChildEvent =
+  | { kind: "frame"; seq: number; data: unknown }
+  | { kind: "refused"; seq: number }
+  | { kind: "focus-out"; dir: "prev" | "next" };
 
 export type CommandName = keyof Commands;
 
@@ -108,7 +132,18 @@ function channel<T>(onEvent: (ev: T) => void): Channel<T> {
 }
 
 export const api = {
+  artifactChildOpen: (token: string, background: string | null, events: Channel<ChildEvent>) =>
+    call("artifact_child_open", { token, background, events }),
+  artifactChildRender: (doc: Commands["artifact_child_render"]["args"]) => call("artifact_child_render", doc),
+  artifactChildBounds: (bounds: ChildBounds | null) => call("artifact_child_bounds", { bounds }),
+  artifactChildFocus: () => call("artifact_child_focus", {}),
+  artifactChildClose: () => call("artifact_child_close", {}),
   appInfo: () => call("app_info", {}),
+  /** Asks GitHub Releases for a newer version; downloads nothing. */
+  checkForUpdate: () => call("check_for_update", {}),
+  /** After the user confirmed `version`: downloads, verifies, installs and restarts. */
+  installUpdate: (version: string, onProgress: (p: UpdateProgress) => void) =>
+    call("install_update", { version, onProgress: channel(onProgress) }),
   /** Deletes chats, settings, tool history, models, keychain entries and window storage. */
   deleteAllLocalData: () => call("delete_all_local_data", {}),
   localDataSummary: () => call("local_data_summary", {}),
