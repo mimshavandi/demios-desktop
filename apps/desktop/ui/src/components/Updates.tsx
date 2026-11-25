@@ -1,10 +1,10 @@
 import { Download, RefreshCw } from "lucide-react";
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { Api } from "../ipc/commands";
 import { errorCode, errorMessage, type UpdateCheck, type UpdateMode, type UpdateProgress } from "../ipc/types";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { formatBytes } from "./LocalModels";
-import { Button, ICON, InlineMessage } from "./primitives";
+import { Button, ICON, InlineMessage, Switch } from "./primitives";
 
 type Available = Extract<UpdateCheck, { status: "available" }>;
 
@@ -37,12 +37,59 @@ function formatDate(iso: string | null): string | null {
  * the user asks; a newer version shows its notes, and "Install and restart" asks first.
  * Nothing downloads in the background. Store and Flathub builds say who updates them.
  */
-export function Updates({ api, mode, online = () => navigator.onLine }: { api: Api; mode: UpdateMode; online?: () => boolean }) {
-  const [state, setState] = useState<State>({ kind: "idle" });
+export function Updates({
+  api,
+  mode,
+  online = () => navigator.onLine,
+  initial = null,
+  reveal = false,
+}: {
+  api: Api;
+  mode: UpdateMode;
+  online?: () => boolean;
+  /** What the launch check found (#95): a newer version opens straight on its notes. */
+  initial?: UpdateCheck | null;
+  /** Scroll the row into view and focus its button (from the launch notice). */
+  reveal?: boolean;
+}) {
+  const [state, setState] = useState<State>(() =>
+    initial?.status === "available" ? { kind: "available", update: initial, error: null } : { kind: "idle" },
+  );
+  // The launch-check setting (#95); null until loaded.
+  const [launch, setLaunch] = useState<{ on: boolean; offered: boolean } | null>(null);
+  const [launchError, setLaunchError] = useState<string | null>(null);
+  // Only a check the user started in this visit can lead to the one-time question.
+  const [checkedNow, setCheckedNow] = useState(false);
+  const rowRef = useRef<HTMLDivElement>(null);
+  const checkRef = useRef<HTMLButtonElement>(null);
   const [confirming, setConfirming] = useState(false);
   const installRef = useRef<HTMLButtonElement>(null);
   const titleId = useId();
   const notesId = useId();
+
+  useEffect(() => {
+    if (mode !== "self_update") return;
+    let alive = true;
+    api
+      .getSettings()
+      .then((s) => {
+        if (alive) setLaunch({ on: s.check_updates_at_launch === true, offered: s.launch_check_offered === true });
+      })
+      .catch(() => {
+        // The switch stays hidden; checking by hand still works.
+      });
+    return () => {
+      alive = false;
+    };
+  }, [api, mode]);
+
+  useEffect(() => {
+    if (!reveal) return;
+    rowRef.current?.scrollIntoView?.({ block: "center" });
+    // After Settings has focused its heading.
+    const t = window.setTimeout(() => (installRef.current ?? checkRef.current)?.focus(), 0);
+    return () => window.clearTimeout(t);
+  }, [reveal]);
 
   if (mode !== "self_update") {
     return (
@@ -68,6 +115,7 @@ export function Updates({ api, mode, online = () => navigator.onLine }: { api: A
           ? { kind: "available", update: r, error: null }
           : { kind: "up_to_date", current: r.current, at: new Date() },
       );
+      setCheckedNow(true);
     } catch (e) {
       const offline = errorCode(e) === "update_offline" || !online();
       setState({ kind: "error", offline, message: offline ? OFFLINE : errorMessage(e) });
@@ -95,17 +143,32 @@ export function Updates({ api, mode, online = () => navigator.onLine }: { api: A
     }
   };
 
+  /** Saves the launch-check choice; any answer also settles the one-time question. */
+  const saveLaunch = async (on: boolean) => {
+    setLaunchError(null);
+    try {
+      const current = await api.getSettings();
+      const saved = await api.updateSettings({ ...current, check_updates_at_launch: on, launch_check_offered: true });
+      setLaunch({ on: saved.check_updates_at_launch === true, offered: true });
+    } catch (e) {
+      setLaunchError(errorMessage(e));
+    }
+  };
+
+  const offer =
+    launch !== null && !launch.offered && checkedNow && (state.kind === "up_to_date" || state.kind === "available");
+
   const update = state.kind === "available" || state.kind === "installing" ? state.update : null;
   const date = formatDate(update?.date ?? null);
 
   return (
-    <div className="row update-row" data-testid="updates" data-state={state.kind}>
+    <div className="row update-row" data-testid="updates" data-state={state.kind} ref={rowRef}>
       <div className="row-main">
         <span className="row-title" id={titleId}>
           Updates
         </span>
         <span className="dn-help">
-          Checks GitHub for a newer version only when you ask. Nothing downloads until you choose to install it.
+          Checks GitHub for a newer version when you ask. Nothing downloads until you choose to install it.
         </span>
         <div role="status" aria-live="polite" className="update-status">
           {state.kind === "checking" && <span className="dn-help">Checking for updates…</span>}
@@ -129,6 +192,34 @@ export function Updates({ api, mode, online = () => navigator.onLine }: { api: A
         )}
         {state.kind === "available" && state.error !== null && (
           <InlineMessage tone="error">Couldn't install the update. {state.error}</InlineMessage>
+        )}
+        {offer && (
+          <InlineMessage
+            tone="info"
+            action={
+              <span className="update-offer-actions">
+                <Button size="sm" variant="primary" onClick={() => void saveLaunch(true)}>
+                  Turn on
+                </Button>
+                <Button size="sm" onClick={() => void saveLaunch(false)}>
+                  Not now
+                </Button>
+              </span>
+            }
+          >
+            Check for updates when Demios starts? It asks GitHub once per launch.
+          </InlineMessage>
+        )}
+        {launch !== null && !offer && (
+          <Switch
+            label="Check for updates when Demios starts"
+            description="Asks GitHub once per launch and tells you when a new version is out. Nothing downloads until you install it."
+            checked={launch.on}
+            onCheckedChange={(v) => void saveLaunch(v)}
+          />
+        )}
+        {launchError !== null && (
+          <InlineMessage tone="error">Couldn't save the setting. {launchError}</InlineMessage>
         )}
         {update !== null && (
           <>
@@ -156,6 +247,7 @@ export function Updates({ api, mode, online = () => navigator.onLine }: { api: A
           </Button>
         ) : (
           <Button
+            ref={checkRef}
             icon={<RefreshCw {...ICON} aria-hidden="true" />}
             loading={state.kind === "checking"}
             disabled={state.kind === "checking"}

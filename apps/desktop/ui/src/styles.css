@@ -561,3 +561,5 @@ pre.code .code-copy { position: absolute; top: var(--dn-space-1); right: var(--d
 @media (prefers-reduced-motion: reduce) {
   .caret, .dn-skeleton, .dn-spin, .dn-toast, .dn-dialog, .dn-dialog-overlay { animation: none !important; }
 }
+
+.update-offer-actions { display: flex; gap: var(--dn-space-2); flex-wrap: wrap; }

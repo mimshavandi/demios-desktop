@@ -163,6 +163,10 @@ export interface Settings {
   telemetry_enabled: boolean;
   /** First-run AI notice dismissed (T-STORE-09). Missing in older saves = not seen. */
   ai_notice_seen?: boolean;
+  /** Check for updates once when Demios starts (#95). Off by default. */
+  check_updates_at_launch?: boolean;
+  /** The one-time question about the launch check was answered. */
+  launch_check_offered?: boolean;
   /** Passed through untouched (no screen edits MCP servers yet). */
   mcp_servers?: unknown[];
 }
