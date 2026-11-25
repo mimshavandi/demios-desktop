@@ -3,7 +3,7 @@
 // boundary: artifact code shares this realm and can forge or suppress any of these messages. The
 // boundary is the iframe sandbox (opaque origin) plus CSP; see docs/security/artifact-sandbox.md.
 
-import { CHANNEL, type FrameMessage } from "../protocol";
+import { CHANNEL, isForwardedKey, type FrameMessage } from "../protocol";
 import type { SandboxIssue } from "../types";
 
 (() => {
@@ -193,6 +193,19 @@ import type { SandboxIssue } from "../types";
     requestAnimationFrame(sendSize);
   };
   new ResizeObserver(schedule).observe(document.documentElement);
+  // Escape and app shortcuts (Ctrl/⌘ combinations) go to the host, which closes the pane or runs
+  // the shortcut: a focused frame would otherwise swallow them. Only real key presses: artifact
+  // code can also post these messages itself, which the host allows for (protocol.ts).
+  window.addEventListener(
+    "keydown",
+    (e: KeyboardEvent) => {
+      if (!e.isTrusted) return;
+      const key = { key: e.key, ctrl: e.ctrlKey, meta: e.metaKey, alt: e.altKey, shift: e.shiftKey };
+      if (isForwardedKey(key)) post({ type: "key", key });
+    },
+    true,
+  );
+
   window.addEventListener("load", () => {
     if (document.body) new ResizeObserver(schedule).observe(document.body);
     schedule();

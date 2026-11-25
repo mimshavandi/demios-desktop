@@ -402,6 +402,14 @@ pre.code .code-copy { position: absolute; top: var(--dn-space-1); right: var(--d
 .artifact-tab.selected { color: var(--dn-color-text); border-color: var(--dn-color-accent); }
 .artifact-tab:focus-visible { outline: 2px solid var(--dn-color-focus); outline-offset: 2px; }
 .artifact-host { min-width: 0; }
+/* Windows (ADR-0012): the frame is a separate webview drawn over .dn-artifact-webview, so the
+   frame area fills the pane instead of growing with the artifact (the artifact scrolls inside). */
+.artifact-pane-body:has(.artifact-host--webview:not([hidden])) { overflow: hidden; }
+.artifact-host--webview:not([hidden]) { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.artifact-host--webview .dn-av { flex: 1 1 auto; min-height: 0; }
+.artifact-host--webview .dn-av-body { flex: 1 1 auto; min-height: 240px; }
+.dn-artifact-webview { position: absolute; inset: 0; background: var(--dn-color-surface); }
+.dn-artifact-webview:focus-visible { outline: 2px solid var(--dn-color-focus); outline-offset: -2px; }
 .artifact-card {
   display: flex; align-items: center; gap: var(--dn-space-3); margin-top: var(--dn-space-2);
   padding: var(--dn-space-2) var(--dn-space-3); max-width: 28rem;

@@ -51,6 +51,16 @@ const COMMANDS: &[&str] = &[
     "watch_local_models",
     "download_model",
     "pause_download",
+    // Windows artifact webview (artifact_child.rs, ADR-0012); main webview only.
+    "artifact_child_open",
+    "artifact_child_render",
+    "artifact_child_bounds",
+    "artifact_child_focus",
+    "artifact_child_close",
+    // Dev fake-model builds only (they refuse otherwise): the e2e isolation checks.
+    "artifact_child_probe",
+    "artifact_child_probe_report",
+    "artifact_child_state",
 ];
 
 /// Copies the artifact frame shell (`ui/artifact-sandbox/dist/frame/`) into OUT_DIR for
@@ -88,6 +98,32 @@ fn artifact_frame() {
     };
     std::fs::write(out.join("artifact-frame.html"), h).expect("write frame shell");
     std::fs::write(out.join("artifact-frame-csp.json"), c).expect("write frame csp");
+
+    // Host page of the Windows artifact webview (`dist/host/`, artifact_child.rs).
+    let host = manifest.join("../../ui/artifact-sandbox/dist/host");
+    let (host_html, host_js) = (host.join("index.html"), host.join("host.js"));
+    println!("cargo::rerun-if-changed={}", host_html.display());
+    println!("cargo::rerun-if-changed={}", host_js.display());
+    let (hh, hj) = match (
+        std::fs::read_to_string(&host_html),
+        std::fs::read_to_string(&host_js),
+    ) {
+        (Ok(h), Ok(j)) => (h, j),
+        _ => {
+            if std::env::var_os("CARGO_FEATURE_CUSTOM_PROTOCOL").is_some() {
+                panic!(
+                    "the artifact sandbox is not built ({} missing): run `npm run sandbox` in apps/desktop",
+                    host_html.display()
+                );
+            }
+            (
+                "<!-- placeholder --><!doctype html><meta charset=\"utf-8\"><p>The artifact renderer is not built.</p>\n".to_string(),
+                String::new(),
+            )
+        }
+    };
+    std::fs::write(out.join("artifact-host.html"), hh).expect("write host page");
+    std::fs::write(out.join("artifact-host.js"), hj).expect("write host script");
 }
 
 fn main() {

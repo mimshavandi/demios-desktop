@@ -6,7 +6,8 @@
 // stylesheet, so the host CSP needs no 'unsafe-inline'.
 
 import { buildFixPrompt, type FixMode } from "./fix";
-import { ArtifactFrame } from "./frame";
+import { ArtifactFrame, type ArtifactFrameOptions, type FrameLike } from "./frame";
+import type { KeyPress } from "./protocol";
 import { latest, type Artifact, type ArtifactVersion, type SandboxIssue } from "./types";
 
 export interface FixRequest {
@@ -41,6 +42,10 @@ export interface ArtifactViewOptions {
   mark?: (artifact: Artifact, v: ArtifactVersion) => string;
   /** How the current chat model changes artifacts, for the "Ask to fix" wording (default `tools`). */
   fixMode?: () => FixMode;
+  /** Escape or an app shortcut pressed inside the frame (untrusted: act only on an allowlist). */
+  onKey?: (key: KeyPress) => void;
+  /** Makes the frame (default: an `ArtifactFrame` iframe in this document). */
+  createFrame?: (container: HTMLElement, opts: ArtifactFrameOptions) => FrameLike;
 }
 
 const CSS = `
@@ -116,7 +121,7 @@ export class ArtifactView {
   private networkBlocked = false;
   private confirming = false;
   private confirmTimer = 0;
-  private readonly frame: ArtifactFrame;
+  private readonly frame: FrameLike;
   private readonly opts: ArtifactViewOptions;
   private readonly ui: {
     title: HTMLElement;
@@ -194,7 +199,7 @@ export class ArtifactView {
     this.element.append(bar, old, net, body, error);
     container.appendChild(this.element);
 
-    this.frame = new ArtifactFrame(body, {
+    const frameOpts: ArtifactFrameOptions = {
       frameUrl: opts.frameUrl,
       maxHeight: opts.maxHeight ?? 1200,
       onIssue: (i) => this.addIssue(i),
@@ -202,7 +207,9 @@ export class ArtifactView {
         skeleton.hidden = true;
         body.removeAttribute("aria-busy");
       },
-    });
+      onKey: (k) => this.opts.onKey?.(k),
+    };
+    this.frame = opts.createFrame ? opts.createFrame(body, frameOpts) : new ArtifactFrame(body, frameOpts);
     body.appendChild(skeleton);
     this.ui = { title, kind, by, prev, next, select, old, oldText, restore, net, allowNet, netText, confirmNet, cancelNet, skeleton, error, errorFirst, errorMore, issueList, fix };
 

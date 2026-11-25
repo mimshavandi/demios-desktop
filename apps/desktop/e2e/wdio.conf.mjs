@@ -34,7 +34,7 @@ let driver;
 export const config = {
   runner: "local",
   // Explicit order: the chat scenario counts conversations from an empty data dir.
-  specs: ["./specs/chat.e2e.mjs", "./specs/artifacts.e2e.mjs"],
+  specs: ["./specs/chat.e2e.mjs", "./specs/window.e2e.mjs", "./specs/artifacts.e2e.mjs", "./specs/artifact-child.e2e.mjs"],
   maxInstances: 1,
   hostname: "127.0.0.1",
   port: 4444,

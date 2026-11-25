@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-artifact-child-render"
+description = "Enables the artifact_child_render command without any pre-configured scope."
+commands.allow = ["artifact_child_render"]
+
+[[permission]]
+identifier = "deny-artifact-child-render"
+description = "Denies the artifact_child_render command without any pre-configured scope."
+commands.deny = ["artifact_child_render"]

@@ -353,6 +353,14 @@ export function createMockApi(): Api {
   };
 
   const api: Api = {
+    // The Windows artifact webview has no browser equivalent.
+    artifactChildOpen: async () => {
+      throw { code: "invalid", message: "the artifact webview is only used on Windows" };
+    },
+    artifactChildRender: async () => null,
+    artifactChildBounds: async () => null,
+    artifactChildFocus: async () => null,
+    artifactChildClose: async () => null,
     appInfo: async () => ({ version: "0.1.0 (browser mock)", dev_fake_model: true, data_dir: null, models_dir: null }),
     openLink: async (url) => {
       console.info("mock: would confirm and open", url);

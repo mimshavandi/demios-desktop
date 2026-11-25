@@ -11,8 +11,28 @@ import http from "node:http";
 const byTestId = (id) => $(`[data-testid="${id}"]`);
 const textOf = (el) => browser.execute((e) => e.textContent ?? "", el);
 const FRAME_ORIGIN = "artifact://localhost";
-// Artifacts are off on Windows for now (threat model R8): the pane says so and renders nothing.
+// Windows renders artifacts in a separate webview (ADR-0012), out of WebDriver's reach: the
+// Windows flow below checks it through the pane and the app; artifact-child.e2e.mjs checks its
+// isolation. The in-frame escape cases here are for macOS and Linux (iframe in the main webview).
 const WINDOWS = process.platform === "win32";
+
+/** e2e-only command (dev fake-model builds): the artifact webview's state. */
+function childState() {
+  return browser.executeAsync((done) => {
+    window.__TAURI_INTERNALS__
+      .invoke("artifact_child_state")
+      .then(done)
+      .catch((e) => done({ error: String(e) }));
+  });
+}
+
+/** Waits until the pane's frame has rendered (the frame's "ready" got through and was accepted). */
+async function frameReady() {
+  await browser.waitUntil(
+    async () => browser.execute(() => document.querySelector('[data-testid="artifact-loading"]')?.hidden === true),
+    { timeout: 30_000, timeoutMsg: "the artifact never reported ready" },
+  );
+}
 
 /** Conversations as the app's own window sees them, through its IPC (main frame only). */
 function conversationCount() {
@@ -94,7 +114,7 @@ describe("artifacts", () => {
   });
   after(() => spy?.server.close());
 
-  it("Windows: the artifact is saved, and the pane says artifacts aren't available", async function () {
+  it("Windows: creates, renders (in the artifact webview), updates and restores an artifact", async function () {
     if (!WINDOWS) this.skip();
     await (await byTestId("new-chat")).waitForExist({ timeout: 60_000 });
     await (await byTestId("new-chat")).click();
@@ -102,11 +122,36 @@ describe("artifacts", () => {
     await lastAnswerDone(1);
     const card = await byTestId("artifact-card");
     await card.waitForExist({ timeout: 30_000, timeoutMsg: "no artifact card in the answer" });
-    await (await byTestId("artifact-card-open")).click();
-    const gate = await byTestId("artifacts-unavailable");
-    await gate.waitForExist({ timeout: 20_000, timeoutMsg: "no Windows gate message in the pane" });
-    expect(await textOf(gate)).toContain("aren't available on Windows");
+    expect(await textOf(card)).toContain("Fake artifact");
+    await frameReady();
+    expect(await versionLabel()).toMatch(/^v1 · model/);
+    expect(await textOf(await byTestId("artifact-made-by"))).toMatch(/^AI-generated · Made by /);
+    // No iframe in the main webview: the frame lives in the artifact webview, shown over the
+    // pane's frame area.
     expect((await $$('[data-testid="artifact-frame"]')).length).toBe(0);
+    const slot = await byTestId("artifact-webview-slot");
+    await browser.waitUntil(async () => (await childState()).shown != null, {
+      timeout: 20_000,
+      timeoutMsg: "the artifact webview was never shown",
+    });
+    const st = await childState();
+    console.log("artifact webview:", JSON.stringify(st));
+    expect(st.url).toMatch(/^http:\/\/artifact\.localhost\/host\//);
+    const r = await browser.execute((e) => e.getBoundingClientRect().toJSON(), slot);
+    expect(Math.abs(st.shown.x - r.x)).toBeLessThan(2);
+    expect(Math.abs(st.shown.y - r.y)).toBeLessThan(2);
+
+    await send("Please update the artifact");
+    await lastAnswerDone(2);
+    await browser.waitUntil(async () => /^v2 · model/.test(await versionLabel()), { timeout: 20_000 });
+    await frameReady();
+    await (await byTestId("version-prev")).click();
+    await (await byTestId("version-restore")).click();
+    await browser.waitUntil(async () => /^v3 — restored from v1 · you/.test(await versionLabel()), {
+      timeout: 20_000,
+      timeoutMsg: "restore did not create v3",
+    });
+    await frameReady();
   });
 
   it("creates, renders, updates and restores an artifact", async function () {

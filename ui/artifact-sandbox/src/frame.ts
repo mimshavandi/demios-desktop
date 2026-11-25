@@ -11,7 +11,7 @@
 //   are treated as untrusted data (parseFrameMessage).
 
 import { isSeparateOrigin } from "./origin";
-import { CHANNEL, parseFrameMessage } from "./protocol";
+import { CHANNEL, parseFrameMessage, type KeyPress } from "./protocol";
 import { runtimesFor } from "./runtimes";
 import { buildDocument, rendererFor } from "./document";
 import type { ArtifactType, SandboxIssue } from "./types";
@@ -32,9 +32,35 @@ export interface ArtifactFrameOptions {
   onIssue?: (issue: SandboxIssue) => void;
   onReady?: () => void;
   onSize?: (size: { width: number; height: number }) => void;
+  /** Escape or an app shortcut pressed inside the frame (untrusted: see protocol.ts KeyPress). */
+  onKey?: (key: KeyPress) => void;
 }
 
-export class ArtifactFrame {
+/**
+ * What ArtifactView needs from a frame. `ArtifactFrame` is the iframe in the host's own page; a
+ * host can supply another one (`ArtifactViewOptions.createFrame`), e.g. the desktop app on
+ * Windows, which shows the iframe in a separate webview.
+ */
+export interface FrameLike {
+  readonly element: HTMLElement;
+  render(type: ArtifactType, content: string, opts?: { allowNetwork?: boolean; title?: string }): Promise<void>;
+  /** The iframe, when it is in this document. */
+  readonly frame: HTMLIFrameElement | null;
+  destroy(): void;
+}
+
+/** The document for one render, and the nonce its frame must use in every message. */
+export async function prepareDocument(
+  type: ArtifactType,
+  content: string,
+  opts: { allowNetwork?: boolean } = {},
+): Promise<{ html: string; nonce: string }> {
+  const runtimes = await runtimesFor(rendererFor(type));
+  const nonce = randomNonce();
+  return { html: buildDocument(type, content, runtimes, { nonce, allowNetwork: opts.allowNetwork === true }), nonce };
+}
+
+export class ArtifactFrame implements FrameLike {
   readonly element: HTMLDivElement;
   private iframe: HTMLIFrameElement | null = null;
   private nonce = "";
@@ -58,11 +84,9 @@ export class ArtifactFrame {
   /** Render content in a brand-new frame. Resolves once the content has been posted to it. */
   async render(type: ArtifactType, content: string, opts: { allowNetwork?: boolean; title?: string } = {}): Promise<void> {
     const seq = ++this.renderSeq;
-    const runtimes = await runtimesFor(rendererFor(type));
-    if (seq !== this.renderSeq) return; // superseded while loading
-    const nonce = randomNonce();
     const allowNetwork = opts.allowNetwork === true;
-    const html = buildDocument(type, content, runtimes, { nonce, allowNetwork });
+    const { html, nonce } = await prepareDocument(type, content, { allowNetwork });
+    if (seq !== this.renderSeq) return; // superseded while loading
 
     const url = new URL(this.opts.frameUrl, location.href);
     if (allowNetwork) url.searchParams.set("net", "1");
@@ -148,6 +172,9 @@ export class ArtifactFrame {
       }
       case "issue":
         this.opts.onIssue?.(msg.issue);
+        break;
+      case "key":
+        this.opts.onKey?.(msg.key);
         break;
     }
   }

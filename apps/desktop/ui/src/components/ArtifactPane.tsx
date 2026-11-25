@@ -5,7 +5,9 @@
 
 import { Code2, FileText, Image, LayoutTemplate, Network, Sparkles } from "lucide-react";
 import { useEffect, useRef, useState, type ReactElement } from "react";
-import type { ArtifactView as SandboxView, Artifact as SandboxArtifact } from "@dn-artifacts";
+import type { ArtifactView as SandboxView, Artifact as SandboxArtifact, KeyPress } from "@dn-artifacts";
+import { ArtifactWebviewFrame } from "../artifactWebview";
+import { isMac, usesArtifactWebview } from "../platform";
 import type { ArtifactDetail, ArtifactSummary, ArtifactType, ArtifactVersionView, Id } from "../ipc/types";
 import { Button, ICON, InlineMessage } from "./primitives";
 
@@ -24,8 +26,6 @@ export interface ArtifactPaneProps {
   /** Content as rendered, with the AI-generated marker; stored versions stay unchanged. */
   mark?: (type: ArtifactType, version: ArtifactVersionView) => string;
   onClose: () => void;
-  /** Set when artifacts can't be shown on this platform: the message replaces the viewer. */
-  unavailable?: string | null;
   /** How the chat model changes artifacts, for the "Ask to fix" wording. */
   fixMode?: "tools" | "fenced";
 }
@@ -61,6 +61,20 @@ export function TypeIcon({ type }: { type: ArtifactType }): ReactElement {
   return <Icon {...ICON} aria-hidden="true" />;
 }
 
+/**
+ * App shortcuts (App.tsx, design-system §7) that still work while the artifact has focus. The
+ * frame reports them, but artifact code can fake that report, so only these are passed on, as
+ * if pressed in the app: none of them deletes or sends anything.
+ */
+export const FRAME_SHORTCUTS: ReadonlySet<string> = new Set(["n", ",", ".", "\\", "c"]);
+
+/** What a key pressed in the frame does: close the pane, run an app shortcut, or nothing. */
+export function frameKeyAction(k: KeyPress, mac = isMac): "close" | "shortcut" | null {
+  if (k.key === "Escape" && !k.ctrl && !k.meta && !k.alt) return "close";
+  const mod = mac ? k.meta : k.ctrl;
+  return mod && !k.alt && FRAME_SHORTCUTS.has(k.key.toLowerCase()) ? "shortcut" : null;
+}
+
 type Sandbox = typeof import("@dn-artifacts");
 let sandbox: Promise<Sandbox> | null = null;
 function loadSandbox(): Promise<Sandbox> {
@@ -78,7 +92,7 @@ export function ArtifactPane(p: ArtifactPaneProps) {
   // The view keeps the callbacks it was built with; route them through a ref.
   const latest = useRef(p);
   latest.current = p;
-  const hasDetail = p.detail !== null && !p.unavailable;
+  const hasDetail = p.detail !== null;
 
   useEffect(() => {
     if (!hasDetail) return;
@@ -103,6 +117,17 @@ export function ArtifactPane(p: ArtifactPaneProps) {
             v.author === "model"
               ? (latest.current.mark?.(a.artifact_type, v as ArtifactVersionView) ?? v.content)
               : v.content,
+          onKey: (k) => {
+            const action = frameKeyAction(k);
+            if (action === "close") latest.current.onClose();
+            else if (action === "shortcut") {
+              window.dispatchEvent(
+                new KeyboardEvent("keydown", { key: k.key, ctrlKey: k.ctrl, metaKey: k.meta, altKey: k.alt, shiftKey: k.shift, bubbles: true, cancelable: true }),
+              );
+            }
+          },
+          // Windows: the frame is in a separate webview (ADR-0012).
+          ...(usesArtifactWebview && { createFrame: (container, opts) => new ArtifactWebviewFrame(m, container, opts) }),
         });
         viewRef.current = view;
         setLoadError(null);
@@ -174,13 +199,13 @@ export function ArtifactPane(p: ArtifactPaneProps) {
               ))}
             </nav>
           )}
-          {p.unavailable ? (
-            <div data-testid="artifacts-unavailable">
-              <InlineMessage tone="info">{p.unavailable}</InlineMessage>
-            </div>
-          ) : null}
           {loadError !== null && <InlineMessage tone="error">{loadError}</InlineMessage>}
-          <div ref={hostRef} className="artifact-host" hidden={!hasDetail} data-testid="artifact-host" />
+          <div
+            ref={hostRef}
+            className={`artifact-host${usesArtifactWebview ? " artifact-host--webview" : ""}`}
+            hidden={!hasDetail}
+            data-testid="artifact-host"
+          />
         </div>
       )}
     </aside>

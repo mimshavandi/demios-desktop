@@ -111,6 +111,14 @@ function fakeApi() {
     chat_model_tools: true,
   });
   const api: Api = {
+    // The Windows artifact webview has no browser equivalent.
+    artifactChildOpen: async () => {
+      throw { code: "invalid", message: "the artifact webview is only used on Windows" };
+    },
+    artifactChildRender: async () => null,
+    artifactChildBounds: async () => null,
+    artifactChildFocus: async () => null,
+    artifactChildClose: async () => null,
     appInfo: async () => ({ version: "0.1.0", dev_fake_model: true, data_dir: "/tmp", models_dir: "/tmp/models" }),
     hubSearch: async () => ({ items: [], next: null }),
     hubRepo: async () => {

@@ -15,8 +15,11 @@ serde_json = "1"
 thiserror = "2"
 uuid = { version = "1", features = ["v7", "serde"] }
 futures-core = "0.3"
-tauri = { version = "2", features = [] }
-tauri-build = { version = "2", features = [] }
+# Pinned to the 2.11 minor: the app uses Tauri's `unstable` multiwebview API (no semver
+# promise) for the Windows artifact webview (ADR-0012). Every Tauri upgrade must pass the
+# e2e-windows artifact isolation spec (apps/desktop/e2e/specs/artifact-child.e2e.mjs).
+tauri = { version = "~2.11", features = [] }
+tauri-build = { version = "~2.6", features = [] }
 # rustls (aws-lc-rs) + platform verifier; no OpenSSL.
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2", "charset"] }
 zeroize = "1"

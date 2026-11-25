@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-artifact-child-focus"
+description = "Enables the artifact_child_focus command without any pre-configured scope."
+commands.allow = ["artifact_child_focus"]
+
+[[permission]]
+identifier = "deny-artifact-child-focus"
+description = "Denies the artifact_child_focus command without any pre-configured scope."
+commands.deny = ["artifact_child_focus"]

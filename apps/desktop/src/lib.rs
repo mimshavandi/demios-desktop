@@ -6,6 +6,7 @@
 compile_error!("the dev fake model must never be in a release build");
 
 pub mod agent;
+pub mod artifact_child;
 pub mod artifacts;
 pub mod chat;
 pub mod commands;
@@ -58,8 +59,12 @@ pub fn allowed_navigation(url: &tauri::Url) -> bool {
 
 fn navigation_guard<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
     tauri::plugin::Builder::new("navigation-guard")
-        .on_navigation(|_webview, url| {
-            let ok = allowed_navigation(url);
+        .on_navigation(|webview, url| {
+            let ok = if webview.label() == artifact_child::LABEL {
+                artifact_child::allowed_navigation(url)
+            } else {
+                allowed_navigation(url)
+            };
             if !ok {
                 eprintln!("blocked navigation to {url}");
             }
@@ -153,8 +158,12 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         .plugin(navigation_guard())
         // The artifact frame origin (T-ART-06): serves only the sandbox frame shell.
-        .register_uri_scheme_protocol(artifacts::SCHEME, |_ctx, request| {
-            artifacts::frame_response(&request)
+        // On Windows also the artifact webview's host page (artifact_child.rs, ADR-0012).
+        .register_uri_scheme_protocol(artifacts::SCHEME, |ctx, request| {
+            let label = ctx.webview_label();
+            artifact_child::host_response(ctx.app_handle(), label, &request).unwrap_or_else(|| {
+                artifacts::frame_response(&request, label == artifact_child::LABEL)
+            })
         })
         // Used from Rust only (`commands::report_problem`): no link-click handler is injected
         // into the webview, and none of its JS commands are granted (see capabilities).
@@ -186,6 +195,7 @@ pub fn run() {
             })?;
             install_add_links(app.handle(), &state);
             app.manage(state);
+            app.manage(artifact_child::ChildState::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -238,6 +248,14 @@ pub fn run() {
             commands::rollback_artifact,
             commands::watch_local_models,
             commands::download_model,
+            artifact_child::artifact_child_open,
+            artifact_child::artifact_child_render,
+            artifact_child::artifact_child_bounds,
+            artifact_child::artifact_child_focus,
+            artifact_child::artifact_child_close,
+            artifact_child::artifact_child_probe,
+            artifact_child::artifact_child_probe_report,
+            artifact_child::artifact_child_state,
             commands::pause_download,
         ])
         .build(tauri::generate_context!())
@@ -365,5 +383,26 @@ mod capability_tests {
             "no remote origin may call app commands"
         );
         assert!(cap.get("local").is_none_or(|l| l == true));
+    }
+
+    /// The Windows artifact webview's isolation is that no capability names it (ADR-0012).
+    #[test]
+    fn no_capability_names_the_artifact_webview() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/capabilities");
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            let text = std::fs::read_to_string(&path).unwrap();
+            let cap: serde_json::Value = serde_json::from_str(&text).unwrap();
+            for key in ["webviews", "windows"] {
+                let names = cap[key].as_array().cloned().unwrap_or_default();
+                assert!(
+                    !names
+                        .iter()
+                        .any(|n| n == crate::artifact_child::LABEL || n == "*"),
+                    "{} grants the artifact webview",
+                    path.display()
+                );
+            }
+        }
     }
 }
