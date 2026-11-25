@@ -1233,21 +1233,24 @@ impl<B: InferenceBackend> LocalModels<B> {
         {
             eprintln!("could not unload the embedding model: {err}");
         }
-        let path = self.path(&e);
-        let opts = {
-            let (path, machine) = (path.clone(), self.machine);
-            tauri::async_runtime::spawn_blocking(move || load_options(&path, &machine))
-                .await
-                .unwrap_or_default()
+        // nomic-embed-text v1.5's training context; longer chunks are cut at the batch size
+        // anyway. A small embedding model needs no GPU/CPU split (`load_options`).
+        let opts = LoadOptions {
+            n_ctx: Some(2048),
+            ..Default::default()
         };
-        let m = LoadedModel::load(Arc::clone(&self.backend), &ModelSpec::gguf(path), &opts)
-            .await
-            .map_err(|err| {
-                unavailable(
-                    format!("{} couldn't be loaded.", e.name),
-                    format!("load {id}: {err}"),
-                )
-            })?;
+        let m = LoadedModel::load(
+            Arc::clone(&self.backend),
+            &ModelSpec::gguf(self.path(&e)),
+            &opts,
+        )
+        .await
+        .map_err(|err| {
+            unavailable(
+                format!("{} couldn't be loaded.", e.name),
+                format!("load {id}: {err}"),
+            )
+        })?;
         let m = Arc::new(m);
         *slot = Some((id.to_string(), Arc::clone(&m)));
         Ok(m)
@@ -1750,6 +1753,52 @@ mod tests {
             Arc::clone(&rec),
         );
         (dir, rec, lm)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_embedding_model_has_its_own_slot_and_never_unloads_the_chat_model() {
+        let dir = Dir(std::env::temp_dir().join(format!("dn-local-embed-{}", dn_core::Id::new())));
+        std::fs::create_dir_all(&dir.0).unwrap();
+        for id in ["a", "e", "f"] {
+            std::fs::write(dir.0.join(format!("{id}.gguf")), b"12345").unwrap();
+            std::fs::write(dir.0.join(format!("{id}.gguf.sha256")), "aa").unwrap();
+        }
+        let embedding = |id: &str| {
+            let mut x = entry(id, 5, "aa");
+            x.capabilities = vec![Capability::Embedding];
+            x
+        };
+        let rec = Arc::new(Recorder::default());
+        let lm = LocalModels::with_parts(
+            dir.0.clone(),
+            Catalog {
+                version: 1,
+                models: vec![entry("a", 5, "aa"), embedding("e"), embedding("f")],
+            },
+            Machine::cpu_only(16 << 30),
+            pull_fetch(),
+            Arc::clone(&rec),
+        );
+        let chat = lm.chat_model("a").await.unwrap();
+        let emb = lm.embedding_model("e").await.unwrap();
+        // Loaded once, then reused; the chat model stays loaded.
+        let again = lm.embedding_model("e").await.unwrap();
+        assert!(Arc::ptr_eq(&emb, &again));
+        assert_eq!(*lock(&rec.0), ["load a", "load e"]);
+        // Switching embedding models unloads the idle old one, still not the chat model.
+        drop((emb, again));
+        drop(lm.embedding_model("f").await.unwrap());
+        assert_eq!(*lock(&rec.0), ["load a", "load e", "unload e", "load f"]);
+        // A chat model isn't an embedding model (and the other way round).
+        let Err(err) = lm.embedding_model("a").await else {
+            panic!("a chat model loaded as an embedding model");
+        };
+        assert!(
+            format!("{err:?}").contains("isn't an embedding model"),
+            "{err:?}"
+        );
+        assert!(lm.chat_model("e").await.is_err());
+        drop(chat);
     }
 
     #[tokio::test(flavor = "multi_thread")]

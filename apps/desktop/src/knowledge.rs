@@ -215,16 +215,21 @@ fn embed_pending(state: &AppState, source: Option<&str>) -> Result<(), String> {
     }
 }
 
-/// Task prefixes a retrieval model expects (nomic-embed-text: `search_document: ` /
-/// `search_query: `); none for other models.
+/// Task prefixes per embedding model family: (id fragment, document prefix, query prefix).
+/// One table, so a model added for #128 (e5: `passage: ` / `query: `, Qwen3-Embedding: an
+/// instruction on queries) is one row. Models not listed get none.
+const PREFIXES: &[(&str, &str, &str)] =
+    &[("nomic-embed-text", "search_document: ", "search_query: ")];
+
+/// The task prefix `model_id` expects for `kind`.
 pub fn prefix(model_id: &str, kind: EmbedKind) -> &'static str {
-    if !model_id.contains("nomic-embed-text") {
-        return "";
-    }
-    match kind {
-        EmbedKind::Document => "search_document: ",
-        EmbedKind::Query => "search_query: ",
-    }
+    PREFIXES
+        .iter()
+        .find(|(fragment, _, _)| model_id.contains(fragment))
+        .map_or("", |(_, doc, query)| match kind {
+            EmbedKind::Document => doc,
+            EmbedKind::Query => query,
+        })
 }
 
 /// The local embedding model, loaded: its id and vector size, and a blocking `embed`.
