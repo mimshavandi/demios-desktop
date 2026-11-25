@@ -471,10 +471,10 @@ pre.code .code-copy { position: absolute; top: var(--dn-space-1); right: var(--d
   border: 1px solid var(--dn-color-border); border-radius: var(--dn-radius-lg); box-shadow: var(--dn-shadow-1);
 }
 .card h2 { font-size: var(--dn-text-base); line-height: var(--dn-leading-base); font-weight: var(--dn-weight-semibold); }
-.row { display: flex; align-items: center; justify-content: space-between; gap: var(--dn-space-4); padding: var(--dn-space-3) 0; border-top: 1px solid var(--dn-color-border); }
+.row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--dn-space-2) var(--dn-space-4); padding: var(--dn-space-3) 0; border-top: 1px solid var(--dn-color-border); }
 .card h2 + .row, .card .dn-help + .row { border-top: 0; }
 .row-form { align-items: flex-start; }
-.row-main { flex: 1; min-width: 0; display: grid; gap: calc(var(--dn-space-1) / 2); }
+.row-main { flex: 1 1 calc(var(--dn-space-16) * 4); min-width: 0; display: grid; gap: calc(var(--dn-space-1) / 2); }
 .row-title { font-weight: var(--dn-weight-medium); }
 .row-actions { display: flex; gap: var(--dn-space-2); padding-top: calc(var(--dn-space-6) - var(--dn-space-1)); }
 .row:not(.row-form) > .row-actions { padding-top: 0; }
@@ -633,3 +633,36 @@ pre.code .code-copy { position: absolute; top: var(--dn-space-1); right: var(--d
 .conv-rename { flex: 1; min-width: 0; padding: var(--dn-space-1) var(--dn-space-2); }
 .conv-rename input { width: 100%; min-height: calc(var(--dn-space-8) - var(--dn-space-1)); padding: 0 var(--dn-space-2); border: 1px solid var(--dn-color-border-strong); border-radius: var(--dn-radius-md); background: var(--dn-color-surface); color: var(--dn-color-text); }
 .dn-field-error.conv-rename-error { padding: 0 var(--dn-space-2) var(--dn-space-1); }
+
+/* ---------- Settings layout (#174) ---------- */
+.settings { container-type: inline-size; }
+.settings-layout { display: grid; grid-template-columns: calc(var(--dn-space-16) * 3) minmax(0, 1fr); gap: var(--dn-space-6); max-width: calc(var(--dn-chat-max-width) + var(--dn-space-16) * 3 + var(--dn-space-6)); margin: 0 auto; align-items: start; }
+.settings-layout .settings-column { margin: 0; width: 100%; }
+.settings-nav { position: sticky; top: 0; }
+.settings-nav ul { list-style: none; margin: 0; padding: 0; display: grid; gap: calc(var(--dn-space-1) / 2); }
+.settings-select { display: none; }
+.dn-native-select { appearance: auto; width: 100%; }
+@container (max-width: 640px) {
+  .settings-layout { grid-template-columns: minmax(0, 1fr); gap: var(--dn-space-3); }
+  .settings-nav { display: none; }
+  .settings-select { display: block; }
+}
+.settings-note { padding: 0 var(--dn-space-1); }
+.link-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--dn-space-3); }
+.link-list li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--dn-space-2) var(--dn-space-3); }
+.link-list li > .dn-btn { flex: none; }
+.link-list li > .dn-help { flex: 1 1 calc(var(--dn-space-16) * 4); }
+.card-danger { border-color: var(--dn-color-danger-soft); }
+.card-danger .row { border-top: 0; padding-top: 0; }
+@container (max-width: 560px) {
+  .mcp-value-row { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ---------- Dialog (#174): large work dialogs; full screen on narrow windows ---------- */
+.dn-dialog-large { width: min(calc(var(--dn-space-16) * 14), calc(100vw - var(--dn-space-8))); max-width: none; height: min(calc(var(--dn-space-16) * 11), calc(100vh - var(--dn-space-8))); grid-template-rows: auto auto minmax(0, 1fr); }
+.dn-dialog-medium { width: min(calc(var(--dn-space-16) * 9), calc(100vw - var(--dn-space-8))); max-width: none; }
+.dn-dialog-head { display: flex; align-items: center; justify-content: space-between; gap: var(--dn-space-3); }
+.dn-dialog-large .dn-dialog-body { overflow-y: auto; min-height: 0; color: var(--dn-color-text); align-content: start; }
+@media (max-width: 720px) {
+  .dn-dialog-large, .dn-dialog-medium { inset: 0; transform: none; width: 100vw; height: 100vh; max-height: none; border-radius: 0; }
+}

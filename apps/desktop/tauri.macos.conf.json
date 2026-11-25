@@ -4,11 +4,13 @@
     "windows": [
       {
         "label": "main",
+        "create": false,
         "title": "Demios",
         "width": 1280,
         "height": 820,
-        "minWidth": 900,
-        "minHeight": 560,
+        "minWidth": 720,
+        "minHeight": 480,
+        "visible": false,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
         "trafficLightPosition": {

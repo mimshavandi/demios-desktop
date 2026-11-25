@@ -263,6 +263,7 @@ export function Updates({
         ) : (
           <Button
             ref={checkRef}
+            variant="primary"
             icon={<RefreshCw {...ICON} aria-hidden="true" />}
             loading={state.kind === "checking"}
             disabled={state.kind === "checking"}

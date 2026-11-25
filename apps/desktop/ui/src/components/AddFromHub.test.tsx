@@ -2,12 +2,28 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, describe, expect, it } from "vitest";
 import type { Api } from "../ipc/commands";
 import type { HubPullEvent, HubRepoView, LocalModelEvent, LocalModelRow } from "../ipc/types";
-import { AddFromHub } from "./AddFromHub";
+import { AddFromHub, forgetHubSearch } from "./AddFromHub";
+import { resetHubDownloads, type HubDownload } from "../hubDownloads";
 import { LocalModelsCard } from "./LocalModels";
 import { TooltipProvider } from "./primitives";
 import { ToastProvider } from "./toast";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  resetHubDownloads();
+  forgetHubSearch();
+});
+
+/** AddFromHub on its own, recording what it asks to download. */
+const hubUi = (api: Api, wanted: HubDownload[] = [], downloading: string[] = []) =>
+  ui(
+    <AddFromHub
+      api={api}
+      onClose={() => {}}
+      onDownload={(d) => wanted.push(d)}
+      isDownloading={(k) => downloading.includes(k)}
+    />,
+  );
 
 const fit = (status: "ready" | "memory_blocked", estimated: boolean) => ({
   status,
@@ -91,7 +107,7 @@ const ui = (el: React.ReactElement) =>
 describe("AddFromHub", () => {
   it("searches with retry, empty results and paging", async () => {
     const f = fake();
-    ui(<AddFromHub api={f.api} onClose={() => {}} />);
+    hubUi(f.api);
     fireEvent.change(screen.getByLabelText("Search models"), { target: { value: "tiny" } });
     fireEvent.click(screen.getByRole("button", { name: "Search" }));
     expect(await screen.findByText(/Couldn't reach Hugging Face/)).toBeTruthy();
@@ -106,16 +122,17 @@ describe("AddFromHub", () => {
     expect(await screen.findByText("No GGUF models match “none”.")).toBeTruthy();
   });
 
-  it("shows fit, licence and card first; downloads with progress; unverifiable can't download", async () => {
+  it("shows fit, licence and card first; Download hands the version over; unverifiable can't download", async () => {
     const f = fake();
-    ui(<AddFromHub api={f.api} onClose={() => {}} />);
+    const wanted: HubDownload[] = [];
+    hubUi(f.api, wanted);
     fireEvent.click(screen.getByRole("button", { name: "Search" }));
     fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
     fireEvent.click(await screen.findByRole("button", { name: /org\/Tiny-GGUF/ }));
     expect(screen.getByText(/Checking model…/)).toBeTruthy();
 
     const [q4, f16] = await screen.findAllByTestId("hub-variant");
-    expect(q4!.textContent).toContain("Ready");
+    expect(q4!.textContent).toContain("Fits");
     expect(q4!.textContent).not.toContain("(estimate)");
     expect(f16!.textContent).toContain("Won't fit (estimate)");
     expect(f16!.textContent).toContain("No published checksum");
@@ -124,31 +141,29 @@ describe("AddFromHub", () => {
     expect(screen.getByText("huggingface.co/org/Tiny-GGUF")).toBeTruthy();
 
     fireEvent.click(within(q4!).getByRole("button", { name: "Download" }));
-    act(() => f.progress(250e6, 1e9));
-    const bar = await within(q4!).findByRole("progressbar");
-    expect(bar.getAttribute("aria-valuenow")).toBe("250000000");
-    fireEvent.click(within(q4!).getByRole("button", { name: "Pause" }));
-    expect(f.calls).toContainEqual(["cancel", "org/Tiny-GGUF", "c".repeat(40), "Tiny-Q4_K_M"]);
-    act(() => f.finish("local:hf/org/Tiny-GGUF/Tiny-Q4_K_M"));
-    expect(await within(q4!).findByText("Downloaded")).toBeTruthy();
+    expect(wanted).toEqual([
+      { repo: "org/Tiny-GGUF", sha: "c".repeat(40), variant: "Tiny-Q4_K_M", label: "Tiny-GGUF Q4_K_M", total: 1e9 },
+    ]);
+    // The dialog doesn't download itself: the On this device list does.
+    expect(f.calls.some((c) => c[0] === "pull")).toBe(false);
   });
 
-  it("a failed download says why and offers Retry", async () => {
-    const f = fake();
-    ui(<AddFromHub api={f.api} onClose={() => {}} />);
+  it("a version already downloading says where to see it", async () => {
+    const view = repoView();
+    view.variants[0] = { ...view.variants[0]!, progress: { part: 0, parts: 1, done_bytes: 100e6, total_bytes: 1e9 } };
+    const f = fake(view);
+    hubUi(f.api, [], [`org/Tiny-GGUF@${"c".repeat(40)}:Tiny-F16`]);
     fireEvent.click(screen.getByRole("button", { name: "Search" }));
     fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
     fireEvent.click(await screen.findByRole("button", { name: /org\/Tiny-GGUF/ }));
-    const [q4] = await screen.findAllByTestId("hub-variant");
-    fireEvent.click(within(q4!).getByRole("button", { name: "Download" }));
-    act(() => f.fail({ code: "capability", message: "Not enough disk space." }));
-    expect(await within(q4!).findByText("Not enough disk space.")).toBeTruthy();
-    expect(within(q4!).getByRole("button", { name: "Retry" })).toBeTruthy();
+    const [q4, f16] = await screen.findAllByTestId("hub-variant");
+    expect(q4!.textContent).toContain("Downloading, see On this device");
+    expect(f16!.textContent).toContain("Downloading, see On this device");
   });
 
   it("gated models ask for a token and warn about the licence", async () => {
     const f = fake(repoView({ gated: true, license: { id: "cc-by-nc-4.0", name: null, link: null, warning: "non_commercial" } }));
-    ui(<AddFromHub api={f.api} onClose={() => {}} />);
+    hubUi(f.api);
     fireEvent.click(screen.getByRole("button", { name: "Search" }));
     fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
     fireEvent.click(await screen.findByRole("button", { name: /org\/Tiny-GGUF/ }));
@@ -168,7 +183,7 @@ describe("AddFromHub, review fixes", () => {
     f.api.hfTokenStatus = async () => {
       throw { code: "key_store", message: "Couldn't use your system keychain. Try again." };
     };
-    ui(<AddFromHub api={f.api} onClose={() => {}} />);
+    hubUi(f.api);
     fireEvent.click(screen.getByRole("button", { name: "Search" }));
     fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
     fireEvent.click(await screen.findByRole("button", { name: /org\/Tiny-GGUF/ }));
@@ -176,41 +191,11 @@ describe("AddFromHub, review fixes", () => {
   });
 
   const open = async (f: ReturnType<typeof fake>) => {
-    ui(<AddFromHub api={f.api} onClose={() => {}} />);
+    hubUi(f.api);
     fireEvent.click(screen.getByRole("button", { name: "Search" }));
     fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
     fireEvent.click(await screen.findByRole("button", { name: /org\/Tiny-GGUF/ }));
   };
-
-  it("pausing shows Paused with Resume, not an error", async () => {
-    const f = fake();
-    await open(f);
-    const [q4] = await screen.findAllByTestId("hub-variant");
-    fireEvent.click(within(q4!).getByRole("button", { name: "Download" }));
-    act(() => f.progress(300e6, 1e9));
-    fireEvent.click(await within(q4!).findByRole("button", { name: "Pause" }));
-    act(() => f.fail({ code: "cancelled", message: "Paused. Resume to continue where it stopped." }));
-    expect(await within(q4!).findByText(/Paused at 300 MB of 1.0 GB/)).toBeTruthy();
-    expect(within(q4!).getByRole("button", { name: "Resume" })).toBeTruthy();
-    expect(within(q4!).queryByRole("alert")).toBeNull();
-  });
-
-  it("follows a download started earlier and shows it done when it ends", async () => {
-    const view = repoView();
-    view.variants[0] = { ...view.variants[0]!, progress: { part: 0, parts: 1, done_bytes: 100e6, total_bytes: 1e9 } };
-    const f = fake(view);
-    f.setStatus({ "Tiny-Q4_K_M": { part: 0, parts: 1, done_bytes: 600e6, total_bytes: 1e9 } });
-    await open(f);
-    const [q4] = await screen.findAllByTestId("hub-variant");
-    expect(within(q4!).getByRole("progressbar").getAttribute("aria-valuenow")).toBe("100000000");
-    await waitFor(() => expect(within(q4!).getByRole("progressbar").getAttribute("aria-valuenow")).toBe("600000000"), {
-      timeout: 2500,
-    });
-    // It ends: the repo is read again and shows it downloaded.
-    view.variants[0] = { ...view.variants[0]!, progress: null, downloaded: "local:hf/org/Tiny-GGUF/Tiny-Q4_K_M" };
-    f.setStatus({});
-    await waitFor(() => expect(screen.getAllByTestId("hub-variant")[0]!.textContent).toContain("Downloaded"), { timeout: 2500 });
-  });
 
   it("saving a token reads the repo again", async () => {
     const f = fake(repoView({ gated: true }));
@@ -230,7 +215,7 @@ describe("AddFromHub, review fixes", () => {
           throw { code: "capability", message };
         },
       } as unknown as Api;
-      ui(<AddFromHub api={api} onClose={() => {}} />);
+      hubUi(api);
       fireEvent.click(screen.getByRole("button", { name: "Search" }));
       expect(await screen.findByText(message)).toBeTruthy();
       expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
@@ -272,6 +257,110 @@ describe("LocalModelsCard with Hub and cache models", () => {
     expect(screen.getByText(row.location!)).toBeTruthy();
     act(() => sink?.({ type: "removed", id: row.id }));
     await waitFor(() => expect(screen.queryByText(/From your Hugging Face cache/)).toBeNull());
+  });
+});
+
+describe("Add a model dialog (#174)", () => {
+  const card = (f: ReturnType<typeof fake>) => {
+    (f.api as unknown as { watchLocalModels: unknown }).watchLocalModels = async () => [];
+    return ui(<LocalModelsCard api={f.api} initial={[]} onReady={() => {}} />);
+  };
+  const pickQ4 = async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+    fireEvent.click(await screen.findByRole("button", { name: /org\/Tiny-GGUF/ }));
+    const [q4] = await screen.findAllByTestId("hub-variant");
+    fireEvent.click(within(q4!).getByRole("button", { name: "Download" }));
+  };
+
+  it("opens from Add a model, and Esc closes it with focus back on the button", async () => {
+    const f = fake();
+    card(f);
+    const add = screen.getByRole("button", { name: "Add a model" });
+    fireEvent.click(add);
+    const dialog = await screen.findByRole("dialog", { name: "Add a model" });
+    expect(within(dialog).getByLabelText("Search models")).toBeTruthy();
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(add));
+  });
+
+  it("Download closes the dialog; the list shows progress, Pause and completion", async () => {
+    const f = fake();
+    card(f);
+    fireEvent.click(screen.getByRole("button", { name: "Add a model" }));
+    await screen.findByRole("dialog", { name: "Add a model" });
+    await pickQ4();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(f.calls).toContainEqual(["pull", "org/Tiny-GGUF", "c".repeat(40), "Tiny-Q4_K_M"]);
+    const row = await screen.findByTestId("hub-download");
+    expect(row.textContent).toContain("Tiny-GGUF Q4_K_M");
+    act(() => f.progress(250e6, 1e9));
+    await waitFor(() => expect(within(row).getByRole("progressbar").getAttribute("aria-valuenow")).toBe("250000000"));
+    fireEvent.click(within(row).getByRole("button", { name: "Pause" }));
+    expect(f.calls).toContainEqual(["cancel", "org/Tiny-GGUF", "c".repeat(40), "Tiny-Q4_K_M"]);
+    act(() => f.fail({ code: "cancelled", message: "Paused. Resume to continue where it stopped." }));
+    expect(await within(row).findByText(/Paused at 250 MB of 1.0 GB/)).toBeTruthy();
+    expect(within(row).queryByRole("alert")).toBeNull();
+    fireEvent.click(within(row).getByRole("button", { name: "Resume" }));
+    await waitFor(() => expect(f.calls.filter((c) => c[0] === "pull").length).toBe(2));
+    act(() => f.finish("local:hf/org/Tiny-GGUF/Tiny-Q4_K_M"));
+    await waitFor(() => expect(screen.queryByTestId("hub-download")).toBeNull());
+  });
+
+  it("a failed download says why and offers Retry", async () => {
+    const f = fake();
+    card(f);
+    fireEvent.click(screen.getByRole("button", { name: "Add a model" }));
+    await pickQ4();
+    act(() => f.fail({ code: "capability", message: "Not enough disk space." }));
+    const row = await screen.findByTestId("hub-download");
+    expect(await within(row).findByText("Not enough disk space.")).toBeTruthy();
+    fireEvent.click(within(row).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(f.calls.filter((c) => c[0] === "pull").length).toBe(2));
+  });
+
+  it("a download keeps going and shows again after the list closes and opens", async () => {
+    const f = fake();
+    const { unmount } = card(f);
+    fireEvent.click(screen.getByRole("button", { name: "Add a model" }));
+    await pickQ4();
+    act(() => f.progress(400e6, 1e9));
+    unmount();
+    card(f);
+    const row = await screen.findByTestId("hub-download");
+    expect(within(row).getByRole("progressbar").getAttribute("aria-valuenow")).toBe("400000000");
+  });
+
+  it("keeps the search text when the dialog closes and opens again", async () => {
+    const f = fake();
+    card(f);
+    fireEvent.click(screen.getByRole("button", { name: "Add a model" }));
+    fireEvent.change(await screen.findByLabelText("Search models"), { target: { value: "qwen coder" } });
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "Add a model" }));
+    expect(((await screen.findByLabelText("Search models")) as HTMLInputElement).value).toBe("qwen coder");
+  });
+
+  it("a demios:// link opens the dialog on that model", async () => {
+    const f = fake();
+    (f.api as unknown as { hubResolveLink: unknown }).hubResolveLink = async () => repoView({ selected: "Tiny-Q4_K_M" });
+    (f.api as unknown as { watchLocalModels: unknown }).watchLocalModels = async () => [];
+    let closed = 0;
+    ui(
+      <LocalModelsCard
+        api={f.api}
+        initial={[]}
+        onReady={() => {}}
+        link={{ repo: "org/Tiny-GGUF", file: null, quant: "Q4_K_M", revision: null }}
+        onLinkClosed={() => closed++}
+      />,
+    );
+    const dialog = await screen.findByRole("dialog", { name: "Add a model" });
+    expect(await within(dialog).findByText("Chosen by the link")).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Not now" }));
+    await waitFor(() => expect(closed).toBe(1));
   });
 });
 

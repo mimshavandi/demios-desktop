@@ -1,4 +1,4 @@
-import { ChevronRight, LogIn, LogOut, Pencil, Plus, RotateCcw, Trash2, X } from "lucide-react";
+import { ChevronRight, LogIn, LogOut, MoreHorizontal, Pencil, Plus, RotateCcw, Trash2, X } from "lucide-react";
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import type { Api } from "../ipc/commands";
 import {
@@ -10,12 +10,13 @@ import {
   type McpValueView,
 } from "../ipc/types";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { DropdownMenu } from "./DropdownMenu";
 import { McpToolsPanel } from "./McpTools";
 import { Badge, Button, EmptyState, ICON, IconButton, InlineMessage, Skeleton, Switch, TextField } from "./primitives";
 import { useToast } from "./toast";
 
 /**
- * Settings › Models › Tool servers (T-SHELL-08, issue #49): add, edit and remove MCP servers,
+ * Settings › Tools (#174) (T-SHELL-08, issue #49): add, edit and remove MCP servers,
  * sign in and out, and per-server status. Secret values are never shown: a saved secret reads
  * "Saved"; typing a new value replaces it.
  */
@@ -70,6 +71,20 @@ export function McpServersCard({ api, live }: { api: Api; live: McpServerStatus[
 
   const status = (s: McpServerView): McpServerStatus | null =>
     live.find((l) => l.server_id === s.id) ?? s.status;
+
+  // One live region for the card (not one per row, which reads every row out on load): it
+  // says when a server's state changes after the list is shown.
+  const [announce, setAnnounce] = useState("");
+  const seen = useRef<Map<string, string> | null>(null);
+  useEffect(() => {
+    const now = new Map(live.map((l) => [l.server_id, l.state] as const));
+    const before = seen.current;
+    seen.current = now;
+    if (before === null) return;
+    const changed = live.filter((l) => before.has(l.server_id) && before.get(l.server_id) !== l.state);
+    if (changed.length === 0) return;
+    setAnnounce(changed.map((l) => `${l.name}: ${statusText(l)}`).join(". "));
+  }, [live]);
 
   const run = async (key: string, what: string, f: () => Promise<McpServersView | null>) => {
     setBusy(key);
@@ -126,13 +141,14 @@ export function McpServersCard({ api, live }: { api: Api; live: McpServerStatus[
           <Button
             ref={addRef}
             size="sm"
+            variant="primary"
             icon={<Plus {...ICON} aria-hidden="true" />}
             onClick={() => {
               returnFocus.current = null;
               setEditing({ server: null });
             }}
           >
-            Add server
+            Add tool server
           </Button>
         )}
       </div>
@@ -164,13 +180,14 @@ export function McpServersCard({ api, live }: { api: Api; live: McpServerStatus[
           action={
             <Button
               ref={addRef}
+              variant="primary"
               icon={<Plus {...ICON} aria-hidden="true" />}
               onClick={() => {
                 returnFocus.current = null;
                 setEditing({ server: null });
               }}
             >
-              Add server
+              Add tool server
             </Button>
           }
         >
@@ -196,9 +213,7 @@ export function McpServersCard({ api, live }: { api: Api; live: McpServerStatus[
                       ? [s.transport.command, ...s.transport.args].join(" ")
                       : s.transport.url}
                   </span>
-                  <span className="dn-help" aria-live="polite">
-                    {statusText(st)}
-                  </span>
+                  <span className="dn-help">{statusText(st)}</span>
                 </div>
                 <div className="row-actions mcp-actions">
                   <StatusBadge status={st} />
@@ -225,54 +240,65 @@ export function McpServersCard({ api, live }: { api: Api; live: McpServerStatus[
                       Sign in
                     </Button>
                   )}
-                  {oauth !== null && signedIn && (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      loading={busy === `signout:${s.id}`}
-                      icon={<LogOut {...ICON} aria-hidden="true" />}
-                      onClick={() =>
-                        void run(`signout:${s.id}`, "Couldn't sign out.", async () => {
-                          const v = await api.signOutMcpServer(s.id);
-                          toast({ tone: "info", title: `Signed out of ${s.name}` });
-                          return v;
-                        })
-                      }
-                    >
-                      Sign out
-                    </Button>
-                  )}
-                  {st?.state === "failed" && (
-                    <IconButton
-                      size="sm"
-                      label={`Reconnect ${s.name}`}
-                      aria-busy={busy === `reconnect:${s.id}` || undefined}
-                      onClick={() => void run(`reconnect:${s.id}`, "Couldn't reconnect.", async () => (await api.reconnectMcpServer(s.id), null))}
-                    >
-                      <RotateCcw {...ICON} aria-hidden="true" />
-                    </IconButton>
-                  )}
-                  <IconButton
-                    size="sm"
-                    label={`Edit ${s.name}`}
-                    onClick={() => {
-                      returnFocus.current = `Edit ${s.name}`;
-                      setEditing({ server: s });
-                    }}
-                  >
-                    <Pencil {...ICON} aria-hidden="true" />
-                  </IconButton>
-                  <IconButton
-                    size="sm"
-                    label={`Remove ${s.name}`}
-                    onClick={(e) => {
-                      removeTrigger.current = e.currentTarget;
-                      setRemoveError(null);
-                      setRemoving(s);
-                    }}
-                  >
-                    <Trash2 {...ICON} aria-hidden="true" />
-                  </IconButton>
+                  <DropdownMenu
+                    label={`More actions for ${s.name}`}
+                    trigger={<MoreHorizontal {...ICON} aria-hidden="true" />}
+                    entries={[
+                      ...(st?.state === "failed"
+                        ? [
+                            {
+                              kind: "item" as const,
+                              label: "Reconnect",
+                              icon: <RotateCcw {...ICON} aria-hidden="true" />,
+                              failure: "Couldn't reconnect",
+                              run: () => run(`reconnect:${s.id}`, "Couldn't reconnect.", async () => (await api.reconnectMcpServer(s.id), null)),
+                            },
+                          ]
+                        : []),
+                      ...(oauth !== null && signedIn
+                        ? [
+                            {
+                              kind: "item" as const,
+                              label: "Sign out",
+                              icon: <LogOut {...ICON} aria-hidden="true" />,
+                              failure: "Couldn't sign out",
+                              run: () =>
+                                run(`signout:${s.id}`, "Couldn't sign out.", async () => {
+                                  const v = await api.signOutMcpServer(s.id);
+                                  toast({ tone: "info", title: `Signed out of ${s.name}` });
+                                  return v;
+                                }),
+                            },
+                          ]
+                        : []),
+                      {
+                        kind: "item",
+                        label: "Edit",
+                        icon: <Pencil {...ICON} aria-hidden="true" />,
+                        failure: "Couldn't open the server",
+                        run: () => {
+                          returnFocus.current = `More actions for ${s.name}`;
+                          setEditing({ server: s });
+                        },
+                      },
+                      { kind: "separator" },
+                      {
+                        kind: "item",
+                        label: "Remove",
+                        icon: <Trash2 {...ICON} aria-hidden="true" />,
+                        danger: true,
+                        failure: "Couldn't remove the server",
+                        run: () => {
+                          removeTrigger.current =
+                            cardRef.current?.querySelector<HTMLButtonElement>(
+                              `button[aria-label="${CSS.escape(`More actions for ${s.name}`)}"]`,
+                            ) ?? null;
+                          setRemoveError(null);
+                          setRemoving(s);
+                        },
+                      },
+                    ]}
+                  />
                 </div>
               </div>
               {toolsOpen && (
@@ -288,6 +314,9 @@ export function McpServersCard({ api, live }: { api: Api; live: McpServerStatus[
               </Fragment>
             );
           })}
+      <div className="dn-visually-hidden" role="status" aria-live="polite">
+        {announce}
+      </div>
       <ConfirmDialog
         open={removing !== null}
         onOpenChange={(o) => {
@@ -610,7 +639,7 @@ function ServerForm({
           Cancel
         </Button>
         <Button type="submit" variant="primary" loading={saving}>
-          {server === null ? "Add server" : "Save changes"}
+          {server === null ? "Add tool server" : "Save changes"}
         </Button>
       </div>
     </form>
