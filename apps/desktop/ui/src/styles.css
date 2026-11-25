@@ -330,6 +330,10 @@ pre.code .code-copy { position: absolute; top: var(--dn-space-1); right: var(--d
 .composer textarea::placeholder { color: var(--dn-color-text-subtle); }
 .composer-bar { display: flex; align-items: center; gap: var(--dn-space-2); }
 .composer-disclosure { margin: 0 auto var(--dn-space-3); width: calc(100% - var(--dn-space-12)); max-width: var(--dn-chat-max-width); text-align: center; font-size: var(--dn-text-xs); line-height: var(--dn-leading-xs); color: var(--dn-color-text-subtle); }
+/* Project and skill pickers in the composer: compact, so the hint keeps its line. */
+.composer-skill { min-width: 0; }
+.composer-skill .dn-select { width: auto; min-width: calc(var(--dn-space-16) * 2); max-width: calc(var(--dn-space-16) * 3); }
+.composer-skill .dn-select > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .composer-hint { flex: 1; font-size: var(--dn-text-xs); line-height: var(--dn-leading-xs); color: var(--dn-color-text-subtle); }
 .composer-send { background: var(--dn-color-accent); color: var(--dn-color-text-on-accent); }
 .composer-send:hover { background: var(--dn-color-accent-hover); color: var(--dn-color-text-on-accent); }
