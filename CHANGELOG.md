@@ -6,7 +6,23 @@ Only changes people using the app or the `dn` command-line tool can notice are l
 
 ## [Unreleased]
 
-Nothing has been released yet. This section lists what is on `main` now.
+### Added
+
+#### Desktop app
+
+- Projects: group chats with standing instructions that are sent with each chat in the project, and add files, which Demios copies into its data folder. Deleting a project, or a file in it, can be undone for 10 seconds ([#135](https://github.com/mimshavandi/demios-desktop/pull/135)).
+
+#### `dn` command-line tool
+
+- `dn bench --quality` runs a short set of prompts with answers it can check, to catch a broken chat template or quantisation. `dn bench` also measures time to first token and speed through the chat path, can benchmark an OpenAI-compatible server with `--endpoint`, and `dn bench-report <folder>` turns saved reports into a table. Reports record a model's file name, never its full path ([#138](https://github.com/mimshavandi/demios-desktop/pull/138)).
+
+### Changed
+
+- Models on this device now write their prompts with their own chat template, from the model file or from its Hugging Face repository. A model without a chat template can't be used for chat: its row says so, and choosing it gives "This model has no chat template, so it can't be used for chat. Pick another model." ([#150](https://github.com/mimshavandi/demios-desktop/pull/150)).
+
+## [0.1.0-preview.454e01b] - 2026-11-25
+
+Preview build, not signed: installers for macOS, Windows and Linux on the [GitHub release](https://github.com/mimshavandi/demios-desktop/releases/tag/v0.1.0-preview.454e01b) and [demios.io/download](https://demios.io/download/). It doesn't update itself. Everything below is in this preview.
 
 ### Added
 
@@ -15,7 +31,6 @@ Nothing has been released yet. This section lists what is on `main` now.
 - Chat with a model, with answers streamed as they are written, Markdown formatting and highlighted code blocks ([#14](https://github.com/mimshavandi/demios-desktop/pull/14)).
 - Stop an answer with ⌘. (Ctrl+. on Windows and Linux), retry the last answer, and copy any answer. ⌘⇧C copies the last answer ([#14](https://github.com/mimshavandi/demios-desktop/pull/14)).
 - Chats are kept on your computer between launches. Deleting a chat can be undone for 10 seconds ([#1](https://github.com/mimshavandi/demios-desktop/pull/1), [#14](https://github.com/mimshavandi/demios-desktop/pull/14)).
-- Projects: group chats with standing instructions that are sent with each chat in the project, and add files, which Demios copies into its data folder. Deleting a project, or a file in it, can be undone for 10 seconds ([#135](https://github.com/mimshavandi/demios-desktop/pull/135)).
 - Keyboard shortcuts: ⌘N for a new chat, ⌘, for Settings, ⌘\ to show or hide the sidebar. On Windows and Linux, use Ctrl instead of ⌘ ([#14](https://github.com/mimshavandi/demios-desktop/pull/14)).
 - Light and dark appearance that follows your system setting ([#3](https://github.com/mimshavandi/demios-desktop/pull/3), [#14](https://github.com/mimshavandi/demios-desktop/pull/14)).
 - Use your own API key for Anthropic, OpenAI or Google Gemini. The key is stored in your system keychain, and removing it can be undone ([#4](https://github.com/mimshavandi/demios-desktop/pull/4), [#8](https://github.com/mimshavandi/demios-desktop/pull/8), [#14](https://github.com/mimshavandi/demios-desktop/pull/14)).
@@ -32,6 +47,7 @@ Nothing has been released yet. This section lists what is on `main` now.
 - Artifacts: web pages, small apps (HTML or React), SVG images, diagrams, documents and code that the model makes open in a side pane. Each change is a new version; you can view older ones and restore them, ask the model to fix reported errors, and allow network access for one artifact after a confirmation. Versions the model made are labelled AI-generated with the model's name ([#11](https://github.com/mimshavandi/demios-desktop/pull/11), [#16](https://github.com/mimshavandi/demios-desktop/pull/16), [#41](https://github.com/mimshavandi/demios-desktop/pull/41)).
 - Artifacts open on Windows too ([#98](https://github.com/mimshavandi/demios-desktop/pull/98)).
 - In the artifact pane, Esc closes the pane even when the artifact has focus, and the new chat, Settings and sidebar shortcuts work from inside an artifact ([#98](https://github.com/mimshavandi/demios-desktop/pull/98)).
+- Choose a skill for a chat in the message box: six starter skills (compare, critique, design review, outline, summarize, write an email) add instructions for that chat. A skill can only narrow which tools the model may use, and never skips a tool approval ([#132](https://github.com/mimshavandi/demios-desktop/pull/132)).
 - Links in answers open in your browser after a system dialog shows the full address ([#74](https://github.com/mimshavandi/demios-desktop/pull/74)).
 - **Settings → General → About → Updates**: a copy downloaded from GitHub checks for a new version only when you select **Check for updates**, shows its release notes, and installs it after you confirm with **Install and restart**. Copies from the Microsoft Store or Flathub say that their store updates them. Builds that don't update themselves, like preview builds and builds from source, say where to get new versions ([#94](https://github.com/mimshavandi/demios-desktop/pull/94)).
 - **Settings → General → About** links to the privacy policy and the accessibility statement on demios.io. Demios asks before it opens your browser ([#97](https://github.com/mimshavandi/demios-desktop/pull/97)).
@@ -52,6 +68,7 @@ Nothing has been released yet. This section lists what is on `main` now.
 
 - When something fails to load or save, the app now says so, with **Retry** where that helps, instead of quietly carrying on: the chat list, your models, models on this device, a saved Hugging Face token, the AI notice and demios:// links. If its assistant instructions can't load, chats don't start and a message says why ([#164](https://github.com/mimshavandi/demios-desktop/pull/164)).
 - An answer from a provider or server that stops sending now ends with a message you can retry: after 5 minutes with no first response, or 60 seconds of silence once the answer has started ([#44](https://github.com/mimshavandi/demios-desktop/pull/44)).
+- Larger models that don't fully fit on the graphics chip can now run with part of the model in regular memory. The fit check picks this for mixture-of-experts models such as Qwen3 30B-A3B, says replies will be a little slower, and the app loads the model that way. `dn fit` shows the chosen preset ([#129](https://github.com/mimshavandi/demios-desktop/pull/129)).
 
 ### Security
 
@@ -66,4 +83,5 @@ Nothing has been released yet. This section lists what is on `main` now.
 - The app's commands are available only to the app's own page, not to any other view in its window ([#85](https://github.com/mimshavandi/demios-desktop/pull/85)).
 - Problem and answer reports carry only the app version, your operating system and, for an answer, the model's name. No chat content is sent; you add what you choose in the form ([#42](https://github.com/mimshavandi/demios-desktop/pull/42)).
 
-[Unreleased]: https://github.com/mimshavandi/demios-desktop/commits/main
+[Unreleased]: https://github.com/mimshavandi/demios-desktop/compare/v0.1.0-preview.454e01b...main
+[0.1.0-preview.454e01b]: https://github.com/mimshavandi/demios-desktop/releases/tag/v0.1.0-preview.454e01b

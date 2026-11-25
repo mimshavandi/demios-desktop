@@ -9,17 +9,8 @@ export const FIX_PROMPT_MAX_CHARS = 8000;
 const BEGIN = "<<<ARTIFACT_REPORT";
 const END = "ARTIFACT_REPORT>>>";
 
-/**
- * How the model changes artifacts: `tools` (artifact_update / artifact_rewrite) or `fenced`
- * (it writes the whole block again with the same id; models without tool calling).
- */
-export type FixMode = "tools" | "fenced";
-
-export function buildFixPrompt(artifactId: string, title: string, version: number, issues: SandboxIssue[], mode: FixMode = "tools"): string {
-  const how =
-    mode === "tools"
-      ? `Fix them with artifact_update or artifact_rewrite.\n`
-      : `Fix them by writing the whole artifact again in an <artifact id="${artifactId}"> block with the same type.\n`;
+export function buildFixPrompt(artifactId: string, title: string, version: number, issues: SandboxIssue[]): string {
+  const how = `Fix them with artifact_update or artifact_rewrite.\n`;
   const head =
     `Artifact ${artifactId} (version ${version}) reported problems while running. ` +
     how +

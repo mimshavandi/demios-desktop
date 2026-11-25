@@ -19,6 +19,10 @@ The error under the answer says what happened. Select **Retry** to try again.
 - **The provider stopped responding.** If a provider sends nothing for 5 minutes, or goes silent for 60 seconds in the middle of an answer, the answer stops with an error. Retry, or check the provider's status page.
 - **A key problem.** Check that the key is still valid in your account with the provider, then paste it again in **Settings → Models → Provider keys**.
 
+## "This model has no chat template"
+
+The model file doesn't say how to write a chat prompt for it, so Demios can't use it for chat. Choose another model, or another version of the same model from Hugging Face. See [Chat templates](models.md#chat-templates).
+
 ## macOS asks for keychain access
 
 Provider keys are stored in your system keychain. macOS may ask whether Demios can use it. Allow it, or the app can't read your saved keys.

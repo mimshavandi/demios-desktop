@@ -16,6 +16,7 @@ mod index;
 
 pub use context::{Citation, MAX_CONTEXT_CHARS, context_block};
 pub use index::{
-    Counts, EmbedKind, Embedder, Hit, Index, KnowledgeError, MAX_RESULTS, Result, SourceFile,
-    SyncReport, delete_all, fts_query, migrations,
+    Counts, EmbedKind, Embedder, Hit, Index, KnowledgeError, MAX_RESULTS, QueryVector, Result,
+    SearchMode, SourceFile, Sources, SyncReport, conversations_with_sources, delete_all, fts_query,
+    migrations, record_sources, remove_conversation_sources, sources_for,
 };

@@ -16,3 +16,4 @@ Format: Context → Decision → Options (table) → Trade-offs → Consequences
 | [0010](0010-design-system.md) | One design system: tokens + headless primitives | Accepted |
 | [0011](0011-model-sources.md) | Model sources: Hugging Face Hub first, no in-house registry | Accepted |
 | [0012](0012-windows-artifact-webview.md) | Artifacts on Windows render in a separate, capability-less webview | Accepted |
+| [0013](0013-plugin-api.md) | Plugin API: in-process add-ons behind host services, same approvals, offline licences | Proposed |

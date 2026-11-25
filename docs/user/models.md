@@ -9,7 +9,7 @@ You can do both and switch between them.
 
 ## On this device
 
-The **On this device** card lists 12 open models in a built-in catalogue, from small ones to large ones, including one embedding model.
+The **On this device** card lists 13 open models in a built-in catalogue, from small ones to large ones: 11 for chat and 2 embedding models.
 
 Each row shows:
 
@@ -65,6 +65,10 @@ The token is kept in your system keychain and is sent only to Hugging Face. Sele
 If you've used Hugging Face tools before, the app also lists GGUF models it finds in your Hugging Face cache. Their row says "From your Hugging Face cache, used where it is". The app uses the file in place and never changes or deletes it, not even with **Delete all local data**.
 
 Models you downloaded from Hugging Face with the `dn` command-line tool show up here too.
+
+### Chat templates
+
+Each model on this device writes its prompts with its own chat template. The template comes from the model file. If the file has none, Demios uses the template from the model's Hugging Face repository, saved when you downloaded the model. A model without a chat template can't be used for chat: its row says "This model has no chat template, so it can't be used for chat." Choose another model, or another version of the same one.
 
 ## Your own key
 

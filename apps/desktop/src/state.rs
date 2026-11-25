@@ -93,6 +93,7 @@ pub fn migration_sets() -> Vec<MigrationSet> {
         MigrationSet::new("app_skills", crate::skills::migrations()),
         MigrationSet::new("tool_ledger", dn_tools::migrations()),
         MigrationSet::new("artifact", dn_artifacts::migrations()),
+        MigrationSet::new("knowledge", dn_knowledge::migrations()),
     ]
 }
 
@@ -332,7 +333,9 @@ impl AppState {
         models.local = Some(crate::local::LocalModels::open());
         let mut state = Self::new(conn, models, keys);
         state.agent = agent;
-        state.skills = crate::skills::Library::load(skills);
+        // The user's own skills sit next to the database, in the app's data directory.
+        let user_skills = path.parent().map(|d| d.join(crate::skills::USER_DIR));
+        state.skills = crate::skills::Library::load(skills, user_skills);
         state.tools = tools;
         state.executor = Some(Arc::clone(&executor));
         state.tools_settling = settling;
@@ -683,6 +686,10 @@ impl AppState {
                 if let Err(e) = &artifacts {
                     eprintln!("could not delete artifacts: {e}");
                     failed.push("artifacts");
+                }
+                if let Err(e) = dn_knowledge::delete_all(&db) {
+                    eprintln!("could not delete the knowledge index: {e}");
+                    failed.push("knowledge index");
                 }
                 if let Some(root) = &self.project_files {
                     match std::fs::remove_dir_all(root) {
@@ -1275,8 +1282,7 @@ mod tests {
             let ctx = dn_artifacts::OpContext::model(None);
             let html = dn_core::artifact::ArtifactType::Html;
             for conv in [gone.id, kept.id] {
-                arts.create(conv, &html, "Page", "<p>x</p>", None, &ctx)
-                    .unwrap();
+                arts.create(conv, &html, "Page", "<p>x</p>", &ctx).unwrap();
             }
             let l = dn_store::open_connection(&path).unwrap();
             let args = serde_json::json!({});
@@ -1413,7 +1419,6 @@ mod tests {
                 &dn_core::artifact::ArtifactType::Html,
                 "Page",
                 "<p>x</p>",
-                None,
                 &dn_artifacts::OpContext::model(None),
             )
             .unwrap();
@@ -1452,7 +1457,40 @@ mod tests {
                 "1 tool-server secret or sign-in"
             ]
         );
+        {
+            let db = st.db().unwrap();
+            dn_knowledge::Index::new(&db)
+                .sync_source(
+                    "project",
+                    &[dn_knowledge::SourceFile {
+                        file_id: "f".into(),
+                        display_path: "notes.md".into(),
+                        content: b"private project notes".to_vec(),
+                    }],
+                    None,
+                )
+                .unwrap();
+            dn_knowledge::record_sources(
+                &db,
+                "m",
+                &c.id.to_string(),
+                &dn_knowledge::Sources {
+                    mode: dn_knowledge::SearchMode::Keyword,
+                    citations: vec![],
+                },
+            )
+            .unwrap();
+        }
         assert!(st.wipe_local_data().is_empty());
+        {
+            let db = st.db().unwrap();
+            assert_eq!(
+                dn_knowledge::Index::new(&db).counts().unwrap(),
+                dn_knowledge::Counts::default(),
+                "the knowledge index is deleted too"
+            );
+            assert!(dn_knowledge::sources_for(&db, "m").unwrap().is_none());
+        }
         assert!(st.keychain_entries().is_empty());
         assert!(
             store::list_conversations(&st.db().unwrap())

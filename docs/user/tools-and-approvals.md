@@ -17,7 +17,7 @@ Select **Add server** to save. The server connects, and its row shows **Connecte
 
 Before Demios starts a program for the first time, a system dialog, **Start a tool server?**, shows the exact command, every argument and the environment variables (secret values are hidden). Select **Allow and start** or **Don't start**. Your answer is remembered for that exact command; if the command changes, you're asked again.
 
-Some versions of Demios, such as the Flatpak, can't start programs on your computer. They offer remote servers only.
+A Flatpak build of Demios can't start programs on your computer and offers remote servers only. There is no published Flatpak yet.
 
 ### Signing in to a remote server
 
