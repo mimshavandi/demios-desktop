@@ -243,20 +243,20 @@ jobs:
               $p.Refresh()
               if ($p.MainWindowHandle -eq 0) { continue }
               $win = [System.Windows.Automation.AutomationElement]::FromHandle($p.MainWindowHandle)
-              $cond = New-Object System.Windows.Automation.AndCondition(
-                (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty, 'New chat')),
-                (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button)))
-              $button = $win.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $cond)
+              # The button's accessible name may carry its shortcut ("New chat Ctrl+N").
+              $cond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button)
+              $names = @($win.FindAll([System.Windows.Automation.TreeScope]::Descendants, $cond) | ForEach-Object { $_.Current.Name })
+              $button = $names | Where-Object { $_ -match '^New chat' } | Select-Object -First 1
             }
             $shot = "out/smoke-windows-$tag.png"
             $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
             $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
             [System.Drawing.Graphics]::FromImage($bmp).CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
             $bmp.Save($shot)
-            if (-not $button) { throw "main UI did not render ($tag): no 'New chat' button after 90 s" }
+            if (-not $button) { throw "main UI did not render ($tag): no 'New chat' button after 90 s. Buttons seen: $($names -join ' | ')" }
             Start-Sleep 3
             if ($p.HasExited) { throw "app exited after rendering ($tag)" }
-            $script:log += "${tag}: pid $($p.Id) alive, window '$($p.MainWindowTitle)', 'New chat' button rendered"
+            $script:log += "${tag}: pid $($p.Id) alive, window '$($p.MainWindowTitle)', UI rendered (button '$button', $($names.Count) buttons)"
             Stop-Process -Id $p.Id -Force
             Start-Sleep 2
           }
@@ -375,8 +375,13 @@ jobs:
           # Reinstall: run the installed app once on the real data dir, then reinstall the deb.
           data="${XDG_DATA_HOME:-$HOME/.local/share}/io.demios.app"
           rm -rf "$data"
-          timeout 20 xvfb-run -a demios-desktop > app.log 2>&1 || true
-          test -f "$data/demios.sqlite3" || { echo "::error::no database in $data"; cat app.log; exit 1; }
+          # Startup under xvfb takes ~30 s (AT-SPI bus timeout), so wait for the database.
+          xvfb-run -a demios-desktop > app.log 2>&1 &
+          run=$!
+          for i in $(seq 1 45); do [ -f "$data/demios.sqlite3" ] && break; sleep 2; done
+          sleep 3
+          kill "$run" 2>/dev/null || true; pkill -f /usr/bin/demios-desktop || true; wait "$run" 2>/dev/null || true
+          test -f "$data/demios.sqlite3" || { echo "::error::no database in $data"; cat app.log; ls -la "$data" || true; exit 1; }
           echo keep > "$data/reinstall-check.txt"
           before="$(sha256sum "$data/demios.sqlite3")"
           sudo apt-get install -y --reinstall "$deb"
