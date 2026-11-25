@@ -55,6 +55,7 @@ Other things stored locally:
 
 - **Interface preferences**, for example whether the sidebar is open, in the app window's own storage.
 - **Project files:** a copy of each file you add to a project, in the `project-files` folder inside the same app-data folder.
+- **Skills you write**, if any: in the `skills` folder inside the same app-data folder.
 - **Model files** you download: `demios/models/` in your user data folder (`~/Library/Application Support` on macOS, `%LOCALAPPDATA%` on Windows, `~/.local/share` on Linux), or the folder set in `DN_MODELS_DIR`. **Settings → General → About** shows it. The `dn` command-line tool uses the same folder. GGUF models the app finds in your own Hugging Face cache are used where they are; the app never changes or deletes them.
 
 Nothing in these folders is uploaded anywhere by the app.
@@ -128,7 +129,7 @@ Because your data is on your own computer, you control it:
 - **Delete a project or a project file:** on the project's page, select **Delete project**, or the remove button next to a file. You can undo this for 10 seconds. At the next start of the app, the project with its chats, or the file, is removed for good, including the file copies and their passages in the search index.
 - **Remove a tool server:** go to **Settings → Models → Tool servers** and select the remove button next to it. After a confirmation, this deletes its settings, the secrets and sign-in saved for it in your keychain, and the "Allow in this chat" approvals for its tools. Chats that used its tools keep their history.
 - **Remove an API key:** go to **Settings → Models → Provider keys** and select **Remove key**. The key is removed from the keychain straight away and held in memory for a few seconds, so you can undo.
-- **Delete everything:** go to **Settings → General** and select **Delete all local data**. After a confirmation that lists what will go, it deletes the database (every chat, including recently deleted ones and their deletion records, every artifact, every project with its instructions, the skill chosen for each chat, the project search index and answer sources, your settings and tool history), the copies of files you added to projects, downloaded models, the keys, tokens and sign-ins Demios saved in your keychain (including your Hugging Face token), and the app window's own storage. This can't be undone.
+- **Delete everything:** go to **Settings → General** and select **Delete all local data**. After a confirmation that lists what will go, it deletes the database (every chat, including recently deleted ones and their deletion records, every artifact, every project with its instructions, the skill chosen for each chat, the project search index and answer sources, your settings and tool history), the copies of files you added to projects, downloaded models, the keys, tokens and sign-ins Demios saved in your keychain (including your Hugging Face token), and the app window's own storage. This can't be undone. Delete all doesn't remove skills you wrote yourself in the skills folder; delete that folder to remove them.
 - **Uninstalling** removes the app but not your data folder, your models or your keychain entries. Use **Delete all local data** first, or delete them yourself.
 - **Data held by providers, Hugging Face, tool servers or GitHub** is controlled by them. Use their tools or contact them.
 
