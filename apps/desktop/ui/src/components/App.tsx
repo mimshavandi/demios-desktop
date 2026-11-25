@@ -791,7 +791,8 @@ function Shell({ api }: { api: Api }) {
             </InlineMessage>
           </div>
         )}
-        {catalogError !== null && (
+        {/* Over the chat only: Settings › Models shows its own error with Retry. */}
+        {catalogError !== null && view.kind === "chat" && (
           <div className="approval-elsewhere" data-testid="catalog-error">
             <InlineMessage
               tone="error"
