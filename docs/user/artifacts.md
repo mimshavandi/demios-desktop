@@ -2,8 +2,6 @@
 
 When you ask for something you'd keep or use, like a web page, a small app, a diagram or a document, the model can make it as an **artifact**. Artifacts open in a pane next to the chat, where you can see them, run them and go back to earlier versions.
 
-**Windows:** artifacts aren't available on Windows yet. They're still saved, and will open in a later version. Everything else on this page applies to macOS and Linux.
-
 ## Kinds of artifact
 
 | Kind | What you see |
@@ -19,8 +17,11 @@ When you ask for something you'd keep or use, like a web page, a small app, a di
 
 When the model makes or changes an artifact, a card appears in its answer with the artifact's title, kind and version, for example "HTML · v2". The pane opens on its own. To open an artifact later, select **Open** on its card. If the chat has several artifacts, the pane lists them.
 
-- **Esc** closes the pane.
+- **Esc** closes the pane, also while the artifact has focus.
 - The button at the top right of the window shows or hides the pane.
+- While the artifact has focus, the shortcuts for a new chat, Settings and the sidebar still work. Stop and copy last answer don't: click into the chat first. This stops an artifact from pretending you pressed them.
+
+**On Windows**, the artifact is shown in a separate view on top of the pane. While a dialog, menu, message or tooltip is over the pane, the artifact goes blank, and comes back when it closes. Tab moves from the artifact back into the app.
 
 Each artifact runs in a sealed-off frame: it can't reach your files, the rest of the app or the internet, unless you allow network access for it (see below).
 

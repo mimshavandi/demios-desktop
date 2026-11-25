@@ -12,7 +12,7 @@ An open-source desktop app for chatting with AI models you choose: one running o
 ## What it does today
 
 - Chat with streamed answers, with Markdown and highlighted code blocks. Links in answers open in your browser after a system dialog shows the full address.
-- Artifacts: web pages, small apps, diagrams and documents the model makes open in a side pane, where they run sealed off from your files, the app and the network. Go back to earlier versions, ask the model to fix errors, and allow network access per artifact if you need it. macOS and Linux only for now.
+- Artifacts: web pages, small apps, diagrams and documents the model makes open in a side pane, where they run sealed off from your files, the app and the network. Go back to earlier versions, ask the model to fix errors, and allow network access per artifact if you need it.
 - Stop an answer mid-way (Ctrl+. or ⌘.) and retry it.
 - Keep conversations between launches, and delete them with Undo.
 - Run models on your computer: download from a built-in catalogue of 12 open models. Each row shows whether the model fits your machine ("Won't fit" when it doesn't), its licence, and download progress. Downloads can be paused, resume after an interruption, and are checked against their SHA-256.
@@ -31,7 +31,6 @@ An open-source desktop app for chatting with AI models you choose: one running o
 
 Not available yet:
 
-- Artifacts on Windows. They're saved there, but can't be shown yet.
 - Connecting the app to an OpenAI-compatible server (such as Ollama). The `dn` CLI can already do this.
 - Signed installers for macOS, Windows and Linux.
 
