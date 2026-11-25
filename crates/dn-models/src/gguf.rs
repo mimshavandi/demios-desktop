@@ -205,6 +205,14 @@ impl<T: Read> R<T> {
 }
 
 impl Gguf {
+    /// The model's Jinja chat template (`tokenizer.chat_template`), if the file has one.
+    pub fn chat_template(&self) -> Option<&str> {
+        match self.get("tokenizer.chat_template") {
+            Some(MetaValue::Str(s)) if !s.trim().is_empty() => Some(s),
+            _ => None,
+        }
+    }
+
     pub fn open(path: &Path) -> Result<Self, GgufError> {
         let f = std::fs::File::open(path)?;
         let size = f.metadata()?.len();

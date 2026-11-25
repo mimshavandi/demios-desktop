@@ -119,6 +119,40 @@ mod tests {
         assert_eq!(r.suggested_quant, None);
     }
 
+    /// Every chat model in the catalogue carries its own chat template in the GGUF, so it
+    /// renders with its own template (T-INF-23). Reads each file's header from the Hub with
+    /// range requests (a few MB per model).
+    #[tokio::test]
+    #[ignore = "network: reads GGUF headers from huggingface.co"]
+    async fn every_chat_model_has_a_chat_template() {
+        let hub = crate::hub::HubClient::new(crate::hub::HubConfig::from_env()).unwrap();
+        let mut missing = vec![];
+        for m in Catalog::builtin().models {
+            if !m.capabilities.contains(&Capability::Chat) {
+                continue;
+            }
+            let file = crate::hub::RepoFile {
+                path: m.file.clone(),
+                size: m.size,
+                sha256: Some(m.sha256.clone()),
+            };
+            let g = hub.gguf_header(&m.repo, &m.revision, &file).await.unwrap();
+            match g.chat_template() {
+                Some(t) => {
+                    eprintln!("ok  {} ({} bytes)", m.id, t.len());
+                    // DN_TEMPLATES_OUT=<dir> saves them, for dn-inference's
+                    // `real_templates_render` test (DN_TEST_TEMPLATES).
+                    if let Some(dir) = std::env::var_os("DN_TEMPLATES_OUT") {
+                        let p = std::path::Path::new(&dir).join(format!("{}.jinja", m.id));
+                        std::fs::write(p, t).unwrap();
+                    }
+                }
+                None => missing.push(m.id),
+            }
+        }
+        assert!(missing.is_empty(), "no chat template in: {missing:?}");
+    }
+
     #[test]
     fn path_like_file_names_rejected() {
         let mut m = Catalog::builtin().models[0].clone();

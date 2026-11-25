@@ -194,6 +194,18 @@ pub fn flag(settings: &Settings, cap: &McpCapability, fp: &str) -> Option<ToolFl
     }
 }
 
+/// Tools are refused after an internal error in the executor (a poisoned lock, #145).
+fn check_available(exec: &dn_tools::Executor) -> IpcResult<()> {
+    if exec.is_unavailable() {
+        return Err(IpcError::new(
+            "unavailable",
+            "Tools are turned off after an internal error, so your tool settings can't be \
+             skipped. Restart Demios to use tools again.",
+        ));
+    }
+    Ok(())
+}
+
 /// Records every tool of `server_id` as reviewed if the server has no record yet (its
 /// first connect). Returns whether `settings` changed.
 pub fn record_first(settings: &mut Settings, server_id: &str, caps: &[McpCapability]) -> bool {
@@ -323,9 +335,12 @@ pub struct Reviewed {
 
 impl crate::state::AppState {
     fn tools_executor(&self) -> IpcResult<&dn_tools::Executor> {
-        self.executor
+        let exec = self
+            .executor
             .as_deref()
-            .ok_or_else(|| IpcError::new("unavailable", "Tools are not available."))
+            .ok_or_else(|| IpcError::new("unavailable", "Tools are not available."))?;
+        check_available(exec)?;
+        Ok(exec)
     }
 
     /// Records a first connect of `connected` and hands the executor the user's choices
@@ -336,6 +351,9 @@ impl crate::state::AppState {
         exec: &dn_tools::Executor,
         connected: Option<&str>,
     ) -> IpcResult<usize> {
+        // An unavailable executor lists no tools: recording that as the server's first
+        // review would save a wrong, empty record. Refuse instead (#145).
+        check_available(exec)?;
         let mut settings = self.settings()?;
         let caps = exec.capabilities();
         if let Some(id) = connected
