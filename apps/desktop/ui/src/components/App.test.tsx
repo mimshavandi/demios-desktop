@@ -461,6 +461,27 @@ describe("App", () => {
     expect(back.value).toBe("half-written question");
   });
 
+  it("About opens the privacy policy and accessibility statement through the link confirm", async () => {
+    const { api, links } = fakeApi();
+    let fail = false;
+    api.openLink = async (url) => {
+      links.push(url);
+      if (fail) throw { code: "unavailable", message: "Couldn't open your browser." };
+      return false; // the user cancelled the native confirm
+    };
+    render(<App api={api} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Models" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "General" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Privacy policy" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Accessibility statement" }));
+    await waitFor(() => expect(links).toEqual(["https://demios.io/privacy", "https://demios.io/accessibility"]));
+    expect(screen.queryByText(/Couldn't open the page/)).toBeNull();
+    expect(screen.queryByRole("button", { name: /Impressum|Imprint|Legal notice/ })).toBeNull();
+    fail = true;
+    fireEvent.click(screen.getByRole("button", { name: "Privacy policy" }));
+    expect(await screen.findByText("Couldn't open the page. Couldn't open your browser.")).toBeTruthy();
+  });
+
   it("links in answers go to the backend to confirm and open, never navigate the app", async () => {
     const { api, emit, msgs, links } = fakeApi();
     let refuse = false;
