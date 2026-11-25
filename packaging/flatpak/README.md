@@ -66,6 +66,15 @@ flatpak run --command=flatpak-builder-lint org.flatpak.Builder manifest packagin
 flatpak run --command=appstreamcli org.flatpak.Builder validate packaging/flatpak/io.demios.app.metainfo.xml
 ```
 
+After a build, lint the repo too: `flatpak run --command=flatpak-builder-lint org.flatpak.Builder repo repo`.
+
+**Resolved at submission:** two repo-lint errors appear in any build outside Flathub, because only Flathub's build infrastructure mirrors screenshots and icons to `https://dl.flathub.org/media`:
+
+- `appstream-external-screenshot-url`
+- `appstream-remote-icon-not-mirrored`
+
+CI reports them as a warning and fails on any other repo-lint error. The build, appstreamcli, desktop-file-validate and the manifest lint all block.
+
 CI does the same in [`.github/workflows/flatpak.yml`](../../.github/workflows/flatpak.yml). It runs on manual dispatch and on changes under `packaging/flatpak/`, it is not a required check, and it uploads the `.flatpak` bundle.
 
 ## Before each release

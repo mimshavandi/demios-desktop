@@ -63,9 +63,24 @@ jobs:
       - name: Commit mirrored media
         working-directory: packaging/flatpak
         run: ostree commit --repo=repo --canonical-permissions --branch=screenshots/$(uname -m) build-dir/files/share/app-info/media
+      # Two repo-lint errors can only be cleared by Flathub's own build infrastructure, which
+      # mirrors screenshots and icons to dl.flathub.org/media: appstream-external-screenshot-url
+      # and appstream-remote-icon-not-mirrored (packaging/flatpak/README.md, "resolved at
+      # submission"). They are reported but allowed; any other error fails this step.
       - name: Lint build
         working-directory: packaging/flatpak
-        run: flatpak run --command=flatpak-builder-lint org.flatpak.Builder repo repo
+        run: |
+          flatpak run --command=flatpak-builder-lint org.flatpak.Builder repo repo > lint.json || true
+          cat lint.json
+          other=$(jq -r '(.errors // [])[] | select(. != "appstream-external-screenshot-url" and . != "appstream-remote-icon-not-mirrored")' lint.json)
+          if [ -n "$other" ]; then
+            echo "::error::flatpak-builder-lint repo errors: $other"
+            exit 1
+          fi
+          allowed=$(jq -r '(.errors // []) | join(", ")' lint.json)
+          if [ -n "$allowed" ]; then
+            echo "::warning::resolved at submission (Flathub mirrors media): $allowed"
+          fi
       - name: Bundle
         working-directory: packaging/flatpak
         run: flatpak build-bundle repo io.demios.app.flatpak io.demios.app
