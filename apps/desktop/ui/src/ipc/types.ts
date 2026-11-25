@@ -130,6 +130,15 @@ export interface TurnStarted {
   user_message: StoredMessage | null;
   assistant_message: StoredMessage;
   title: string | null;
+  /** Label of the skill this answer is written with, if any. */
+  skill: string | null;
+}
+
+/** An answer written with a skill (skills.rs `AnswerSkill`). */
+export interface AnswerSkill {
+  message_id: Id;
+  name: string;
+  label: string;
 }
 
 // ---- tools (dn-tools via the app)

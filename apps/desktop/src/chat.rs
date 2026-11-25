@@ -84,6 +84,8 @@ pub struct TurnStarted {
     pub assistant_message: StoredMessage,
     /// Set when the conversation title changed (first message).
     pub title: Option<String>,
+    /// The label of the skill this answer is written with, if any (T-SKL-03).
+    pub skill: Option<String>,
 }
 
 pub trait EventSink: Send + Sync + 'static {
@@ -189,6 +191,9 @@ pub fn send(
             NewMessage::assistant_placeholder(Some(model.to_string())),
         )?;
         let skill = turn_skill(state, &db, conversation_id)?;
+        if let Some(s) = &skill {
+            crate::skills::record_answer_skill(&db, conversation_id, assistant.id, s)?;
+        }
         let history = history(
             state,
             &db,
@@ -199,6 +204,7 @@ pub fn send(
         )?;
         (user, assistant, title, history, skill)
     };
+    let label = skill.as_ref().map(|s| s.skill.label());
     start(
         state,
         reservation,
@@ -214,6 +220,7 @@ pub fn send(
         user_message: Some(user),
         assistant_message: assistant,
         title,
+        skill: label,
     })
 }
 
@@ -246,6 +253,9 @@ pub fn regenerate(
             NewMessage::assistant_placeholder(Some(model.to_string())),
         )?;
         let skill = turn_skill(state, &db, conversation_id)?;
+        if let Some(s) = &skill {
+            crate::skills::record_answer_skill(&db, conversation_id, assistant.id, s)?;
+        }
         let history = history(
             state,
             &db,
@@ -256,6 +266,7 @@ pub fn regenerate(
         )?;
         (assistant, history, skill)
     };
+    let label = skill.as_ref().map(|s| s.skill.label());
     start(
         state,
         reservation,
@@ -271,6 +282,7 @@ pub fn regenerate(
         user_message: None,
         assistant_message: assistant,
         title: None,
+        skill: label,
     })
 }
 
@@ -1407,6 +1419,48 @@ mod tests {
             .find(|m| m.role == Role::Tool)
             .expect("tool row");
         assert!(tool.text().contains("isn't available"), "{}", tool.text());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn each_answer_remembers_the_skill_it_was_written_with() {
+        let rec = Arc::new(Recorder::default());
+        let (st, conv) = skill_state(rec, true, &["calc"]);
+        let (first, _) = turn(&st, conv, "one").await;
+        assert_eq!(first.skill.as_deref(), Some("Notes"));
+
+        // No skill for the next answer: it has none, and the first keeps its own.
+        crate::skills::set_chat_skill(&st.db().unwrap(), conv, None).unwrap();
+        let (second, _) = turn(&st, conv, "two").await;
+        assert_eq!(second.skill, None);
+        let answers = crate::skills::answer_skills(&st.db().unwrap(), conv).unwrap();
+        assert_eq!(answers.len(), 1);
+        assert_eq!(answers[0].message_id, first.assistant_message.id);
+        assert_eq!(
+            (answers[0].name.as_str(), answers[0].label.as_str()),
+            ("notes", "Notes")
+        );
+
+        // Regenerating with the skill back on records the new answer.
+        crate::skills::set_chat_skill(&st.db().unwrap(), conv, Some("notes")).unwrap();
+        let (events, s) = sink();
+        let again = regenerate(&st, conv, s).unwrap();
+        wait_idle(&st, conv).await;
+        drop(events);
+        assert_eq!(again.skill.as_deref(), Some("Notes"));
+        let ids: Vec<Id> = crate::skills::answer_skills(&st.db().unwrap(), conv)
+            .unwrap()
+            .into_iter()
+            .map(|a| a.message_id)
+            .collect();
+        assert!(ids.contains(&again.assistant_message.id));
+
+        // Deleting the chat's data forgets them.
+        crate::skills::forget_chat(&st.db().unwrap(), conv).unwrap();
+        assert!(
+            crate::skills::answer_skills(&st.db().unwrap(), conv)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

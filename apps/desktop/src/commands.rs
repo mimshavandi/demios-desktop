@@ -249,6 +249,18 @@ pub async fn open_skills_folder(app: tauri::AppHandle, state: AppStateRef<'_>) -
         })
 }
 
+/// The answers of a chat that were written with a skill, with the skill's label then.
+#[tauri::command]
+pub async fn list_answer_skills(
+    state: AppStateRef<'_>,
+    conversation_id: Id,
+) -> IpcResult<Vec<crate::skills::AnswerSkill>> {
+    blocking(&state, move |s| {
+        Ok(crate::skills::answer_skills(&*s.db()?, conversation_id)?)
+    })
+    .await
+}
+
 /// The skill a chat uses, or `null`. A saved skill that is no longer in the library reads
 /// as `null`.
 #[tauri::command]

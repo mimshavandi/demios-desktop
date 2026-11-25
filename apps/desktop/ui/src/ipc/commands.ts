@@ -14,6 +14,7 @@ import type {
   UnknownOutcome,
   ChatEvent,
   Conversation,
+  AnswerSkill,
   SkillInfo,
   SkillsOverview,
   Id,
@@ -74,6 +75,7 @@ interface Commands {
   delete_conversation: { args: { conversationId: Id }; ret: null };
   restore_conversation: { args: { conversationId: Id }; ret: null };
   list_skills: { args: Record<string, never>; ret: SkillInfo[] };
+  list_answer_skills: { args: { conversationId: Id }; ret: AnswerSkill[] };
   skills_overview: { args: Record<string, never>; ret: SkillsOverview };
   reload_skills: { args: Record<string, never>; ret: SkillsOverview };
   open_skills_folder: { args: Record<string, never>; ret: null };
@@ -206,6 +208,8 @@ export const api = {
   restoreConversation: (conversationId: Id) => call("restore_conversation", { conversationId }),
   listMessages: (conversationId: Id) => call("list_messages", { conversationId }),
   listSkills: () => call("list_skills", {}),
+  /** Which answers of a chat were written with a skill, with its label then. */
+  listAnswerSkills: (conversationId: Id) => call("list_answer_skills", { conversationId }),
   skillsOverview: () => call("skills_overview", {}),
   /** Reads the skills folders again. */
   reloadSkills: () => call("reload_skills", {}),

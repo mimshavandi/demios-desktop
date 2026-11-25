@@ -259,13 +259,78 @@ fn problem(dir: &Path, e: &ManifestError) -> SkillProblem {
     SkillProblem { file, message }
 }
 
-/// App-owned table: the skill each chat uses (no row = no skill).
+/// App-owned tables: the skill each chat uses (no row = no skill), and the skill each
+/// answer was written with (T-SKL-03; kept with its label so it still reads after the skill
+/// is renamed or removed).
 pub fn migrations() -> &'static [&'static str] {
-    &["CREATE TABLE app_conversation_skills (
+    &[
+        "CREATE TABLE app_conversation_skills (
         conversation_id TEXT    PRIMARY KEY NOT NULL,
         skill           TEXT    NOT NULL,
         updated_at      INTEGER NOT NULL
-    );"]
+    );",
+        "CREATE TABLE app_answer_skills (
+        message_id      TEXT    PRIMARY KEY NOT NULL,
+        conversation_id TEXT    NOT NULL,
+        skill           TEXT    NOT NULL,
+        label           TEXT    NOT NULL,
+        created_at      INTEGER NOT NULL
+    );
+    CREATE INDEX app_answer_skills_conversation ON app_answer_skills (conversation_id);",
+    ]
+}
+
+/// The skill an answer was written with.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct AnswerSkill {
+    pub message_id: Id,
+    pub name: String,
+    pub label: String,
+}
+
+/// Remembers that `message_id` (an assistant answer) is written with `skill`.
+pub fn record_answer_skill(
+    conn: &Connection,
+    conversation_id: Id,
+    message_id: Id,
+    skill: &Skill,
+) -> Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO app_answer_skills
+         (message_id, conversation_id, skill, label, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![
+            message_id.to_string(),
+            conversation_id.to_string(),
+            skill.skill.name,
+            skill.skill.label(),
+            dn_store::now_ms()
+        ],
+    )?;
+    Ok(())
+}
+
+/// The answers of a chat that were written with a skill, oldest first.
+pub fn answer_skills(conn: &Connection, conversation_id: Id) -> Result<Vec<AnswerSkill>> {
+    let mut stmt = conn.prepare(
+        "SELECT message_id, skill, label FROM app_answer_skills
+         WHERE conversation_id = ?1 ORDER BY created_at, message_id",
+    )?;
+    let rows = stmt
+        .query_map([conversation_id.to_string()], |r| {
+            Ok((r.get::<_, String>(0)?, r.get(1)?, r.get(2)?))
+        })?
+        .collect::<rusqlite::Result<Vec<(String, String, String)>>>()?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|(id, name, label)| {
+            Some(AnswerSkill {
+                // `Id` is a transparent UUID: parse it the way serde reads it.
+                message_id: serde_json::from_value(serde_json::Value::String(id)).ok()?,
+                name,
+                label,
+            })
+        })
+        .collect())
 }
 
 /// The skill name saved for a chat, if any.
@@ -288,20 +353,32 @@ pub fn set_chat_skill(conn: &Connection, conversation_id: Id, skill: Option<&str
              ON CONFLICT(conversation_id) DO UPDATE SET skill = ?2, updated_at = ?3",
             params![conversation_id.to_string(), s, dn_store::now_ms()],
         )?,
-        None => forget_chat(conn, conversation_id)?,
+        // Only the choice: answers keep the skill they were written with.
+        None => conn.execute(
+            "DELETE FROM app_conversation_skills WHERE conversation_id = ?1",
+            [conversation_id.to_string()],
+        )?,
     };
     Ok(())
 }
 
+/// Forgets a chat's skill and its answers' skills (the chat was deleted).
 pub fn forget_chat(conn: &Connection, conversation_id: Id) -> Result<usize> {
-    Ok(conn.execute(
+    let id = conversation_id.to_string();
+    let n = conn.execute(
         "DELETE FROM app_conversation_skills WHERE conversation_id = ?1",
-        [conversation_id.to_string()],
-    )?)
+        [&id],
+    )?;
+    conn.execute(
+        "DELETE FROM app_answer_skills WHERE conversation_id = ?1",
+        [&id],
+    )?;
+    Ok(n)
 }
 
 pub fn delete_all(conn: &Connection) -> Result<()> {
     conn.execute("DELETE FROM app_conversation_skills", [])?;
+    conn.execute("DELETE FROM app_answer_skills", [])?;
     Ok(())
 }
 

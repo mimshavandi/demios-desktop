@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Api } from "../ipc/commands";
 import type {
@@ -62,6 +62,7 @@ function fakeApi() {
   const downloads: string[] = [];
   const pauses: string[] = [];
   const chatSkills = new Map<string, string | null>();
+  const answerSkills: { message_id: string; name: string; label: string }[] = [];
   const localRows: LocalModelRow[] = [
     {
       id: "m1",
@@ -198,6 +199,7 @@ function fakeApi() {
       { name: "explain-code", label: "Explain code", description: "Explains code.", allowed_tools: [], source: "builtin" },
     ],
     getChatSkill: async (cid) => chatSkills.get(cid) ?? null,
+    listAnswerSkills: async (cid) => answerSkills.filter((a) => msgs.get(cid)?.some((x) => x.id === a.message_id)),
     skillsOverview: async () => ({ skills: [], problems: [], folder: "/tmp/skills" }),
     reloadSkills: async () => ({ skills: [], problems: [], folder: "/tmp/skills" }),
     openSkillsFolder: async () => null,
@@ -212,7 +214,8 @@ function fakeApi() {
       msgs.get(cid)?.push(u, a);
       const c = convs.find((x) => x.id === cid);
       if (c) c.title = text;
-      return { user_message: u, assistant_message: a, title: text };
+      const sk = chatSkills.get(cid);
+      return { user_message: u, assistant_message: a, title: text, skill: sk === "proofread" ? "Proofread" : null };
     },
     regenerate: async () => {
       throw { code: "invalid_input", message: "Nothing to regenerate." };
@@ -286,6 +289,7 @@ function fakeApi() {
     reports,
     links,
     chatSkills,
+    answerSkills,
   };
 }
 
@@ -378,6 +382,7 @@ describe("App", () => {
     fireEvent.change(box, { target: { value: "Check this" } });
     fireEvent.keyDown(box, { key: "Enter" });
     await waitFor(() => expect(chatSkills.get("id-1")).toBe("proofread"));
+
 
     // Switching back to no skill saves at once for an existing chat.
     fireEvent.keyDown(screen.getByRole("combobox", { name: "Skill" }), { key: "ArrowDown" });
@@ -815,6 +820,34 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "It didn't happen" }));
     await waitFor(() => expect(f.resolved).toEqual([["k1", false]]));
     await waitFor(() => expect(screen.queryByText("Did this go through?")).toBeNull());
+  });
+
+  it("shows the skill each answer was written with, also after the chat's skill changed", async () => {
+    const f = fakeApi();
+    const c = await f.api.createConversation();
+    const base = {
+      conversation_id: c.id,
+      tool_call_id: null,
+      model: "local:dev-fake",
+      status: "complete" as const,
+      error: null,
+      tool_calls: [],
+      created_at: 1,
+      updated_at: 1,
+    };
+    f.msgs.set(c.id, [
+      { ...base, id: "u1", role: "user", content: [{ type: "text", text: "check this" }], finish_reason: null },
+      { ...base, id: "a1", role: "assistant", content: [{ type: "text", text: "Checked." }], finish_reason: "stop" },
+      { ...base, id: "u2", role: "user", content: [{ type: "text", text: "and this" }], finish_reason: null },
+      { ...base, id: "a2", role: "assistant", content: [{ type: "text", text: "Done." }], finish_reason: "stop" },
+    ]);
+    // Only the first answer used a skill; the chat has none now.
+    f.answerSkills.push({ message_id: "a1", name: "proofread", label: "Proofread" });
+    render(<App api={f.api} />);
+    const answers = await screen.findAllByTestId("message-assistant");
+    await waitFor(() => expect(within(answers[0]!).getByTestId("answer-skill").textContent).toBe("Skill: Proofread"));
+    expect(within(answers[1]!).queryByTestId("answer-skill")).toBeNull();
+    expect(screen.getByRole("combobox", { name: "Skill" }).textContent).toContain("No skill");
   });
 
   it("renders stored tool calls as cards with their results", async () => {

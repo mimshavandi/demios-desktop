@@ -12,6 +12,7 @@ import {
   type ChatEvent,
   type Conversation,
   type SkillInfo,
+  type TurnStarted,
   type Id,
   type McpServerStatus,
   type ModelCatalog,
@@ -71,6 +72,8 @@ function Shell({ api }: { api: Api }) {
   // choice here until its first message creates the conversation.
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [skill, setSkill] = useState<string | null>(null);
+  // Which answers of the open chat were written with a skill (message id → label).
+  const [answerSkills, setAnswerSkills] = useState<Record<Id, string>>({});
   const [listState, setListState] = useState<ListState>({ kind: "loading" });
   const [view, setView] = useState<View>({ kind: "chat" });
   const [chat, dispatch] = useReducer(chatReducer, initialChat);
@@ -258,11 +261,20 @@ function Shell({ api }: { api: Api }) {
       setOpenArtifact(null);
       void refreshArtifacts(id);
       setSkill(null);
+      setAnswerSkills({});
       if (id !== null) {
         void api
           .getChatSkill(id)
           .then((s) => {
             if (openIdRef.current === id) setSkill(s);
+          })
+          .catch(() => {});
+        void api
+          .listAnswerSkills(id)
+          .then((list) => {
+            if (openIdRef.current === id) {
+              setAnswerSkills(Object.fromEntries(list.map((a) => [a.message_id, a.label])));
+            }
           })
           .catch(() => {});
       }
@@ -435,6 +447,11 @@ function Shell({ api }: { api: Api }) {
     void open(null);
   }, [open]);
 
+  const noteAnswerSkill = useCallback((turn: TurnStarted) => {
+    const label = turn.skill;
+    if (label !== null) setAnswerSkills((m) => ({ ...m, [turn.assistant_message.id]: label }));
+  }, []);
+
   const send = useCallback(
     async (text: string): Promise<boolean> => {
       setError(null);
@@ -450,6 +467,7 @@ function Shell({ api }: { api: Api }) {
         }
         const turn = await api.sendMessage(id, text, onEvent);
         dispatch({ kind: "turn_started", conversationId: id, turn });
+        noteAnswerSkill(turn);
         void refreshConversations();
         return true;
       } catch (e) {
@@ -458,7 +476,7 @@ function Shell({ api }: { api: Api }) {
         return false;
       }
     },
-    [api, chat.conversationId, onEvent, refreshConversations, skill],
+    [api, chat.conversationId, onEvent, refreshConversations, skill, noteAnswerSkill],
   );
 
   const chooseSkill = useCallback(
@@ -485,11 +503,12 @@ function Shell({ api }: { api: Api }) {
     try {
       const turn = await api.regenerate(id, onEvent);
       dispatch({ kind: "turn_started", conversationId: id, turn });
+      noteAnswerSkill(turn);
     } catch (e) {
       dispatch({ kind: "turn_failed" });
       setError(errorMessage(e));
     }
-  }, [api, chat.conversationId, onEvent]);
+  }, [api, chat.conversationId, onEvent, noteAnswerSkill]);
 
   // Stop by conversation, so ⌘. also works between Send and the reply that names the
   // assistant message.
@@ -692,6 +711,7 @@ function Shell({ api }: { api: Api }) {
             onDismissAiNotice={() => void dismissAiNotice()}
             skills={skills}
             skill={skill}
+            answerSkills={answerSkills}
             onSkill={(n) => void chooseSkill(n)}
           />
         ) : (
