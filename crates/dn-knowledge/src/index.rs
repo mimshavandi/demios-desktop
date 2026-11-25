@@ -24,8 +24,10 @@ CREATE TABLE knowledge_chunks (
     text        TEXT NOT NULL,
     -- little-endian f32 vector, L2-normalised; NULL until embedded
     embedding   BLOB,
-    -- the Embedder::model_id that made `embedding`
-    embed_model TEXT
+    -- the Embedder::model_id and dimension that made `embedding`: a vector is only ever
+    -- compared with vectors of the same model and size; another model re-embeds
+    embed_model TEXT,
+    embed_dim   INTEGER
 );
 CREATE INDEX knowledge_chunks_by_file ON knowledge_chunks (source_id, file_id);
 CREATE VIRTUAL TABLE knowledge_fts USING fts5(
@@ -51,12 +53,28 @@ pub enum KnowledgeError {
 
 pub type Result<T> = std::result::Result<T, KnowledgeError>;
 
-/// Makes embeddings with a local model. The app adapts `dn_inference`'s `embed` to this; vectors
-/// must be L2-normalised (dot product = cosine similarity) and all of the same length.
+/// What a text is embedded as. Retrieval models like nomic-embed-text need a different task
+/// prefix for each ("search_document: " / "search_query: "); the [`Embedder`] applies it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmbedKind {
+    /// A chunk being indexed.
+    Document,
+    /// A search query.
+    Query,
+}
+
+/// Makes embeddings with a local model. The app adapts `dn_inference`'s `embed` to this. Vectors
+/// must be L2-normalised (dot product = cosine similarity) and [`Embedder::dimension`] long.
 pub trait Embedder {
     /// Identifies the model; chunks embedded by another model are re-embedded.
     fn model_id(&self) -> &str;
-    fn embed(&self, texts: &[String]) -> std::result::Result<Vec<Vec<f32>>, String>;
+    /// Length of every vector this model makes.
+    fn dimension(&self) -> usize;
+    fn embed(
+        &self,
+        texts: &[String],
+        kind: EmbedKind,
+    ) -> std::result::Result<Vec<Vec<f32>>, String>;
 }
 
 /// A file of a source, as the app hands it over. dn-knowledge never opens paths itself.
@@ -219,23 +237,29 @@ impl<'c> Index<'c> {
         Ok(report)
     }
 
-    /// Embeds the source's chunks that have no embedding from `embedder`'s model.
+    /// Embeds the source's chunks that have no embedding from `embedder`'s model and dimension.
     fn embed_missing(&self, source_id: &str, embedder: &dyn Embedder) -> Result<usize> {
         let model = embedder.model_id().to_owned();
+        let dim = i64::try_from(embedder.dimension()).unwrap_or(i64::MAX);
         let todo: Vec<(i64, String)> = {
             let mut st = self.conn.prepare(
-                "SELECT id, text FROM knowledge_chunks WHERE source_id = ?1 AND (embed_model IS NULL OR embed_model != ?2) ORDER BY id",
+                "SELECT id, text FROM knowledge_chunks WHERE source_id = ?1 \
+                 AND (embed_model IS NULL OR embed_model != ?2 OR embed_dim IS NULL OR embed_dim != ?3) ORDER BY id",
             )?;
-            st.query_map(params![source_id, model], |r| Ok((r.get(0)?, r.get(1)?)))?
-                .collect::<std::result::Result<_, _>>()?
+            st.query_map(params![source_id, model, dim], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })?
+            .collect::<std::result::Result<_, _>>()?
         };
         let mut done = 0;
         for batch in todo.chunks(EMBED_BATCH) {
             let texts: Vec<String> = batch.iter().map(|(_, t)| t.clone()).collect();
-            let vecs = embedder.embed(&texts).map_err(KnowledgeError::Embed)?;
-            if vecs.len() != batch.len() {
+            let vecs = embedder
+                .embed(&texts, EmbedKind::Document)
+                .map_err(KnowledgeError::Embed)?;
+            if vecs.len() != batch.len() || vecs.iter().any(|v| v.len() != embedder.dimension()) {
                 return Err(KnowledgeError::Embed(format!(
-                    "{} vectors for {} texts",
+                    "the model returned {} vectors for {} texts, or vectors of the wrong size",
                     vecs.len(),
                     batch.len()
                 )));
@@ -243,8 +267,8 @@ impl<'c> Index<'c> {
             let tx = self.conn.unchecked_transaction()?;
             for ((id, _), v) in batch.iter().zip(vecs) {
                 tx.execute(
-                    "UPDATE knowledge_chunks SET embedding = ?2, embed_model = ?3 WHERE id = ?1",
-                    params![id, to_blob(&v), model],
+                    "UPDATE knowledge_chunks SET embedding = ?2, embed_model = ?3, embed_dim = ?4 WHERE id = ?1",
+                    params![id, to_blob(&v), model, dim],
                 )?;
             }
             tx.commit()?;
@@ -320,14 +344,18 @@ impl<'c> Index<'c> {
             && !query.trim().is_empty()
         {
             let qv = e
-                .embed(&[query.to_owned()])
+                .embed(&[query.to_owned()], EmbedKind::Query)
                 .map_err(KnowledgeError::Embed)?
                 .into_iter()
                 .next()
-                .ok_or_else(|| KnowledgeError::Embed("no vector for the query".into()))?;
-            let model = e.model_id().to_owned();
+                .filter(|v| v.len() == e.dimension())
+                .ok_or_else(|| {
+                    KnowledgeError::Embed("no vector of the right size for the query".into())
+                })?;
+            let model = format!("{}\u{0}{}", e.model_id(), e.dimension());
             let sql = format!(
-                "SELECT c.id, c.embedding FROM knowledge_chunks c WHERE c.embed_model = ?1 AND c.embedding IS NOT NULL AND {in_sources}"
+                "SELECT c.id, c.embedding FROM knowledge_chunks c \
+                 WHERE c.embed_model || char(0) || c.embed_dim = ?1 AND c.embedding IS NOT NULL AND {in_sources}"
             );
             let mut st = self.conn.prepare(&sql)?;
             let mut args: Vec<&dyn rusqlite::ToSql> = vec![&model];
@@ -380,6 +408,17 @@ impl<'c> Index<'c> {
                 .optional()?;
             out.extend(hit);
         }
+        Ok(out)
+    }
+
+    /// Every source that has something indexed (for a full reconcile).
+    pub fn sources(&self) -> Result<Vec<String>> {
+        let mut st = self
+            .conn
+            .prepare("SELECT DISTINCT source_id FROM knowledge_files ORDER BY source_id")?;
+        let out = st
+            .query_map([], |r| r.get(0))?
+            .collect::<std::result::Result<_, _>>()?;
         Ok(out)
     }
 

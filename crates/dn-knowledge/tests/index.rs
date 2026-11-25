@@ -1,5 +1,5 @@
 use dn_knowledge::{
-    Embedder, Index, SourceFile, chunk::Skip, context_block, delete_all, migrations,
+    EmbedKind, Embedder, Index, SourceFile, chunk::Skip, context_block, delete_all, migrations,
 };
 use rusqlite::Connection;
 use std::cell::Cell;
@@ -24,14 +24,21 @@ fn file(id: &str, path: &str, text: &str) -> SourceFile {
 /// vector side can find what BM25 can't (no shared words).
 struct FakeEmbedder {
     model: &'static str,
+    dim: usize,
     calls: Cell<usize>,
+    kinds: std::cell::RefCell<Vec<EmbedKind>>,
 }
 
 impl FakeEmbedder {
     fn new(model: &'static str) -> Self {
+        Self::with_dim(model, 64)
+    }
+    fn with_dim(model: &'static str, dim: usize) -> Self {
         Self {
             model,
+            dim,
             calls: Cell::new(0),
+            kinds: Default::default(),
         }
     }
 }
@@ -40,12 +47,16 @@ impl Embedder for FakeEmbedder {
     fn model_id(&self) -> &str {
         self.model
     }
-    fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
+    fn dimension(&self) -> usize {
+        self.dim
+    }
+    fn embed(&self, texts: &[String], kind: EmbedKind) -> Result<Vec<Vec<f32>>, String> {
         self.calls.set(self.calls.get() + 1);
+        self.kinds.borrow_mut().push(kind);
         Ok(texts
             .iter()
             .map(|t| {
-                let mut v = vec![0f32; 64];
+                let mut v = vec![0f32; self.dim];
                 for w in t.to_lowercase().split(|c: char| !c.is_alphanumeric()) {
                     let w = match w {
                         "automobile" | "vehicle" => "car",
@@ -57,7 +68,7 @@ impl Embedder for FakeEmbedder {
                     let h = w
                         .bytes()
                         .fold(7u32, |a, b| a.wrapping_mul(31).wrapping_add(b as u32));
-                    v[(h % 64) as usize] += 1.0;
+                    v[h as usize % self.dim] += 1.0;
                 }
                 let n = v.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-6);
                 v.iter().map(|x| x / n).collect()
@@ -288,4 +299,91 @@ fn removing_a_source_leaves_none_of_its_text_in_the_fts_index() {
     assert_eq!(fts_has(&conn, "quokka"), 0);
     assert!(fts_has(&conn, "wombat") > 0);
     assert_eq!(idx.search(&["kept"], "wombat", 5, None).unwrap().len(), 1);
+}
+
+#[test]
+fn documents_and_queries_are_embedded_as_such() {
+    let conn = db();
+    let idx = Index::new(&conn);
+    let e = FakeEmbedder::new("m");
+    idx.sync_source("p", &[file("f", "a.md", "hello world")], Some(&e))
+        .unwrap();
+    assert_eq!(*e.kinds.borrow(), vec![EmbedKind::Document]);
+    idx.search(&["p"], "hello", 3, Some(&e)).unwrap();
+    assert_eq!(e.kinds.borrow().last(), Some(&EmbedKind::Query));
+}
+
+#[test]
+fn vectors_of_another_size_are_never_mixed_but_re_embedded() {
+    let conn = db();
+    let idx = Index::new(&conn);
+    let small = FakeEmbedder::with_dim("m", 32);
+    idx.sync_source(
+        "p",
+        &[file("f", "garage.md", "my car needs tyres")],
+        Some(&small),
+    )
+    .unwrap();
+    // Same model id, other size: nothing to compare against yet (no mixed vectors)...
+    let big = FakeEmbedder::with_dim("m", 64);
+    assert!(
+        idx.search(&["p"], "automobile", 3, Some(&big))
+            .unwrap()
+            .is_empty()
+    );
+    // ...until a sync re-embeds with it.
+    let r = idx
+        .sync_source(
+            "p",
+            &[file("f", "garage.md", "my car needs tyres")],
+            Some(&big),
+        )
+        .unwrap();
+    assert_eq!(r.embedded, 1);
+    assert_eq!(
+        idx.search(&["p"], "automobile", 3, Some(&big))
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn a_model_returning_the_wrong_size_is_an_error() {
+    struct Liar;
+    impl Embedder for Liar {
+        fn model_id(&self) -> &str {
+            "liar"
+        }
+        fn dimension(&self) -> usize {
+            8
+        }
+        fn embed(&self, texts: &[String], _: EmbedKind) -> Result<Vec<Vec<f32>>, String> {
+            Ok(texts.iter().map(|_| vec![0.5; 4]).collect())
+        }
+    }
+    let conn = db();
+    let idx = Index::new(&conn);
+    assert!(
+        idx.sync_source("p", &[file("f", "a.md", "text")], Some(&Liar))
+            .is_err()
+    );
+    // The text is still indexed for keyword search.
+    assert_eq!(idx.search(&["p"], "text", 3, None).unwrap().len(), 1);
+}
+
+#[test]
+fn sources_lists_what_is_indexed() {
+    let conn = db();
+    let idx = Index::new(&conn);
+    idx.sync_source("b", &[file("f", "x.md", "x")], None)
+        .unwrap();
+    idx.sync_source("a", &[file("f", "y.md", "y")], None)
+        .unwrap();
+    assert_eq!(
+        idx.sources().unwrap(),
+        vec!["a".to_string(), "b".to_string()]
+    );
+    idx.remove_source("a").unwrap();
+    assert_eq!(idx.sources().unwrap(), vec!["b".to_string()]);
 }
