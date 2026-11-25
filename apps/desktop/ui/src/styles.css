@@ -242,6 +242,12 @@ kbd { font-family: var(--dn-font-sans); font-size: var(--dn-text-xs); color: var
 .conv.active .conv-open { color: var(--dn-color-text); }
 .conv-delete { opacity: 0; }
 .conv:hover .conv-delete, .conv:focus-within .conv-delete { opacity: 1; }
+.group-head { display: flex; align-items: center; justify-content: space-between; padding-right: var(--dn-space-1); }
+.group-head .group { padding-right: 0; }
+.group-empty { padding: 0 var(--dn-space-2) var(--dn-space-2); }
+.project-open { display: flex; align-items: center; gap: var(--dn-space-2); }
+.project-open svg { flex: none; }
+.project-open-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .sidebar-foot { display: grid; gap: calc(var(--dn-space-1) / 2); padding-top: var(--dn-space-2); border-top: 1px solid var(--dn-color-border); }
 
 /* ---------- chat ---------- */
@@ -272,6 +278,13 @@ kbd { font-family: var(--dn-font-sans); font-size: var(--dn-text-xs); color: var
 }
 .msg-assistant { display: grid; gap: var(--dn-space-2); }
 .msg-body { overflow-wrap: anywhere; }
+/* Sources under an answer in a project chat (Sources.tsx, #116). */
+.sources { margin-top: var(--dn-space-2); font-size: var(--dn-text-sm); line-height: var(--dn-leading-sm); color: var(--dn-color-text-muted); }
+.sources-loading { font-style: italic; }
+.sources-list { margin: 0; padding-left: 0; list-style: none; display: grid; gap: var(--dn-space-1); }
+.sources-label { font-family: var(--dn-font-mono); color: var(--dn-color-text); }
+.sources-file { color: var(--dn-color-text); font-weight: var(--dn-weight-medium); overflow-wrap: anywhere; }
+.sources-empty, .sources-mode { margin: var(--dn-space-1) 0 0; }
 .thinking { color: var(--dn-color-text-subtle); font-size: var(--dn-text-sm); }
 .caret {
   display: inline-block; width: var(--dn-space-2); height: var(--dn-space-4);
@@ -324,6 +337,7 @@ pre.code .code-copy { position: absolute; top: var(--dn-space-1); right: var(--d
 .composer textarea::placeholder { color: var(--dn-color-text-subtle); }
 .composer-bar { display: flex; align-items: center; gap: var(--dn-space-2); }
 .composer-disclosure { margin: 0 auto var(--dn-space-3); width: calc(100% - var(--dn-space-12)); max-width: var(--dn-chat-max-width); text-align: center; font-size: var(--dn-text-xs); line-height: var(--dn-leading-xs); color: var(--dn-color-text-subtle); }
+.composer-skill-missing { font-size: var(--dn-text-xs); line-height: var(--dn-leading-xs); color: var(--dn-color-warning); }
 .composer-hint { flex: 1; font-size: var(--dn-text-xs); line-height: var(--dn-leading-xs); color: var(--dn-color-text-subtle); }
 .composer-send { background: var(--dn-color-accent); color: var(--dn-color-text-on-accent); }
 .composer-send:hover { background: var(--dn-color-accent-hover); color: var(--dn-color-text-on-accent); }
@@ -561,3 +575,34 @@ pre.code .code-copy { position: absolute; top: var(--dn-space-1); right: var(--d
 @media (prefers-reduced-motion: reduce) {
   .caret, .dn-skeleton, .dn-spin, .dn-toast, .dn-dialog, .dn-dialog-overlay { animation: none !important; }
 }
+
+.update-offer-actions { display: flex; gap: var(--dn-space-2); flex-wrap: wrap; }
+/* ---------- projects (T-PRJ-01) ---------- */
+.project-head { display: flex; align-items: center; justify-content: space-between; gap: var(--dn-space-3); }
+.project-title { min-width: 0; overflow-wrap: anywhere; }
+.project-title:focus { outline: none; }
+.project-title:focus-visible { outline: 2px solid var(--dn-color-focus); outline-offset: 2px; }
+.project-form { gap: var(--dn-space-3); }
+.project-form-actions { display: flex; align-items: center; justify-content: flex-end; gap: var(--dn-space-3); }
+.project-instructions {
+  width: 100%; min-height: 8rem; padding: var(--dn-space-2) var(--dn-space-3); resize: vertical;
+  border: 1px solid var(--dn-color-border-strong); border-radius: var(--dn-radius-md);
+  background: var(--dn-color-surface); color: var(--dn-color-text);
+}
+.project-instructions::placeholder { color: var(--dn-color-text-subtle); }
+.dn-field.is-invalid .project-instructions { border-color: var(--dn-color-danger); }
+.project-section-head { display: flex; align-items: center; justify-content: space-between; gap: var(--dn-space-3); }
+.project-list { list-style: none; margin: var(--dn-space-2) 0 0; padding: 0; display: grid; }
+.project-file { display: flex; align-items: center; gap: var(--dn-space-3); padding: var(--dn-space-2) 0; border-top: 1px solid var(--dn-color-border); }
+.project-file:first-child { border-top: 0; }
+.project-file > svg { flex: none; color: var(--dn-color-text-subtle); }
+.project-file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-chat {
+  width: 100%; min-height: var(--dn-space-8); padding: 0 var(--dn-space-2); border: 0; border-radius: var(--dn-radius-md);
+  background: none; cursor: pointer; text-align: left; color: var(--dn-color-text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.project-chat:hover { background: var(--dn-color-surface-sunken); }
+.project-empty { padding: var(--dn-space-2) 0; }
+.project-skipped { margin: var(--dn-space-1) 0 0; padding-left: var(--dn-space-4); }
+.project-danger .row { border-top: 0; padding: 0; }

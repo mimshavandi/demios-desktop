@@ -102,19 +102,25 @@ pub struct ServerToolsView {
     pub tools: Vec<ToolView>,
 }
 
-/// Server ids whose tools are hidden from the model while they connect.
+/// Server ids whose tools are hidden from the model while they connect or re-list after
+/// a change (#178). Counted, so overlapping holds (a reconnect during a re-list) keep the
+/// server hidden until the last one ends.
 #[derive(Debug, Default)]
-pub struct Settling(Mutex<HashSet<String>>);
+pub struct Settling(Mutex<HashMap<String, usize>>);
 
 impl Settling {
+    /// The counts stay valid after a panic elsewhere: a poisoned lock is read, never treated
+    /// as "nothing settling" (which would show the tools).
+    fn counts(&self) -> std::sync::MutexGuard<'_, HashMap<String, usize>> {
+        self.0.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
     pub fn contains(&self, server_id: &str) -> bool {
-        self.0.lock().is_ok_and(|s| s.contains(server_id))
+        self.counts().contains_key(server_id)
     }
     /// Hides `server_id` until the returned guard is dropped.
     pub fn hold(self: &std::sync::Arc<Self>, server_id: &str) -> SettlingGuard {
-        if let Ok(mut s) = self.0.lock() {
-            s.insert(server_id.to_owned());
-        }
+        *self.counts().entry(server_id.to_owned()).or_insert(0) += 1;
         SettlingGuard {
             settling: std::sync::Arc::clone(self),
             server_id: server_id.to_owned(),
@@ -129,8 +135,12 @@ pub struct SettlingGuard {
 
 impl Drop for SettlingGuard {
     fn drop(&mut self) {
-        if let Ok(mut s) = self.settling.0.lock() {
-            s.remove(&self.server_id);
+        let mut counts = self.settling.counts();
+        if let Some(n) = counts.get_mut(&self.server_id) {
+            *n -= 1;
+            if *n == 0 {
+                counts.remove(&self.server_id);
+            }
         }
     }
 }
@@ -192,6 +202,18 @@ pub fn flag(settings: &Settings, cap: &McpCapability, fp: &str) -> Option<ToolFl
         Some(seen) if seen != fp => Some(ToolFlag::Changed),
         Some(_) => None,
     }
+}
+
+/// Tools are refused after an internal error in the executor (a poisoned lock, #145).
+fn check_available(exec: &dn_tools::Executor) -> IpcResult<()> {
+    if exec.is_unavailable() {
+        return Err(IpcError::new(
+            "unavailable",
+            "Tools are turned off after an internal error, so your tool settings can't be \
+             skipped. Restart Demios to use tools again.",
+        ));
+    }
+    Ok(())
 }
 
 /// Records every tool of `server_id` as reviewed if the server has no record yet (its
@@ -323,9 +345,12 @@ pub struct Reviewed {
 
 impl crate::state::AppState {
     fn tools_executor(&self) -> IpcResult<&dn_tools::Executor> {
-        self.executor
+        let exec = self
+            .executor
             .as_deref()
-            .ok_or_else(|| IpcError::new("unavailable", "Tools are not available."))
+            .ok_or_else(|| IpcError::new("unavailable", "Tools are not available."))?;
+        check_available(exec)?;
+        Ok(exec)
     }
 
     /// Records a first connect of `connected` and hands the executor the user's choices
@@ -336,6 +361,9 @@ impl crate::state::AppState {
         exec: &dn_tools::Executor,
         connected: Option<&str>,
     ) -> IpcResult<usize> {
+        // An unavailable executor lists no tools: recording that as the server's first
+        // review would save a wrong, empty record. Refuse instead (#145).
+        check_available(exec)?;
         let mut settings = self.settings()?;
         let caps = exec.capabilities();
         if let Some(id) = connected
@@ -648,6 +676,34 @@ mod tests {
             assert!(!s.contains("work"));
         }
         assert!(!s.contains("files"));
+    }
+
+    #[test]
+    fn overlapping_holds_keep_the_server_hidden_until_the_last_ends() {
+        let s: std::sync::Arc<Settling> = Default::default();
+        let first = s.hold("files");
+        let second = s.hold("files");
+        drop(first);
+        assert!(
+            s.contains("files"),
+            "a reconnect during a re-list still hides it"
+        );
+        drop(second);
+        assert!(!s.contains("files"));
+    }
+
+    #[test]
+    fn a_poisoned_settling_lock_still_hides_the_server() {
+        let s: std::sync::Arc<Settling> = Default::default();
+        let _g = s.hold("files");
+        let s2 = std::sync::Arc::clone(&s);
+        let _ = std::thread::spawn(move || {
+            let _lock = s2.0.lock().unwrap();
+            panic!("poison the lock (test)");
+        })
+        .join();
+        assert!(s.0.is_poisoned());
+        assert!(s.contains("files"));
     }
 
     #[test]

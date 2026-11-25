@@ -15,13 +15,14 @@ use dn_core::Id;
 use dn_store::chat::{self as store, Conversation, StoredMessage};
 use dn_tools::ApprovalDecision;
 use serde::Serialize;
+use std::path::Path;
 use std::sync::Arc;
 use tauri::State;
 use tauri::ipc::Channel;
 
 type AppStateRef<'a> = State<'a, Arc<AppState>>;
 
-async fn blocking<T: Send + 'static>(
+pub(crate) async fn blocking<T: Send + 'static>(
     state: &AppStateRef<'_>,
     f: impl FnOnce(&Arc<AppState>) -> IpcResult<T> + Send + 'static,
 ) -> IpcResult<T> {
@@ -107,6 +108,7 @@ pub async fn report_problem(
 #[derive(Debug, Serialize)]
 pub struct LocalDataSummary {
     pub conversations: usize,
+    pub projects: usize,
     /// Artifacts in the database (all versions go with them).
     pub artifacts: u64,
     pub data_dir: Option<String>,
@@ -119,9 +121,10 @@ pub struct LocalDataSummary {
 #[tauri::command]
 pub async fn local_data_summary(state: AppStateRef<'_>) -> IpcResult<LocalDataSummary> {
     blocking(&state, |s| {
-        let (conversations, artifacts) = {
+        let (conversations, projects, artifacts) = {
             let db = s.db()?;
             let n = store::list_conversations(&db)?.len();
+            let p = dn_store::project::list_projects(&db)?.len();
             let a = dn_artifacts::ArtifactStore::new(&db)
                 .counts()
                 .map(|(a, _)| a)
@@ -129,11 +132,12 @@ pub async fn local_data_summary(state: AppStateRef<'_>) -> IpcResult<LocalDataSu
                     eprintln!("could not count artifacts: {e}");
                     IpcError::new("storage", "Could not read local data.")
                 })?;
-            (n, a)
+            (n, p, a)
         };
         let local = s.models.local.as_ref();
         Ok(LocalDataSummary {
             conversations,
+            projects,
             artifacts,
             data_dir: crate::data_dir().map(|p| p.display().to_string()),
             models_dir: local.map(|l| l.dir().display().to_string()),
@@ -176,8 +180,11 @@ pub async fn list_conversations(state: AppStateRef<'_>) -> IpcResult<Vec<Convers
 }
 
 #[tauri::command]
-pub async fn create_conversation(state: AppStateRef<'_>) -> IpcResult<Conversation> {
-    blocking(&state, |s| s.create_conversation()).await
+pub async fn create_conversation(
+    state: AppStateRef<'_>,
+    project_id: Option<Id>,
+) -> IpcResult<Conversation> {
+    blocking(&state, move |s| s.create_conversation_in(project_id)).await
 }
 
 #[tauri::command]
@@ -206,16 +213,69 @@ pub async fn list_skills(state: AppStateRef<'_>) -> IpcResult<Vec<crate::skills:
     Ok(state.skills.list())
 }
 
-/// The skill a chat uses, or `null`. A saved skill that is no longer in the library reads
-/// as `null`.
+/// Settings › Skills: every skill, the user's files that didn't load and why, and the
+/// user's skills folder.
+#[tauri::command]
+pub async fn skills_overview(state: AppStateRef<'_>) -> IpcResult<crate::skills::SkillsOverview> {
+    Ok(state.skills.overview())
+}
+
+/// Reads the skills folders again. Chats keep their choice; one whose skill is gone uses
+/// none until the user picks another.
+#[tauri::command]
+pub async fn reload_skills(state: AppStateRef<'_>) -> IpcResult<crate::skills::SkillsOverview> {
+    let st = Arc::clone(&*state);
+    tauri::async_runtime::spawn_blocking(move || {
+        st.skills.reload();
+        st.skills.overview()
+    })
+    .await
+    .map_err(|_| IpcError::new("internal", "Couldn't reload the skills."))
+}
+
+/// Opens the user's skills folder in the file manager, creating it first. The path is the
+/// app's own; the webview can't pass one.
+#[tauri::command]
+pub async fn open_skills_folder(app: tauri::AppHandle, state: AppStateRef<'_>) -> IpcResult<()> {
+    use tauri_plugin_opener::OpenerExt;
+    let dir = state
+        .skills
+        .user_dir()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| IpcError::new("unavailable", "There is no skills folder in this build."))?;
+    std::fs::create_dir_all(&dir).map_err(|e| {
+        eprintln!("could not create the skills folder: {e}");
+        IpcError::new("unavailable", "Couldn't create the skills folder.")
+    })?;
+    app.opener()
+        .open_path(dir.to_string_lossy(), None::<&str>)
+        .map_err(|e| {
+            eprintln!("could not open the skills folder: {e}");
+            IpcError::new("unavailable", "Couldn't open the skills folder.")
+        })
+}
+
+/// The answers of a chat that were written with a skill, with the skill's label then.
+#[tauri::command]
+pub async fn list_answer_skills(
+    state: AppStateRef<'_>,
+    conversation_id: Id,
+) -> IpcResult<Vec<crate::skills::AnswerSkill>> {
+    blocking(&state, move |s| {
+        Ok(crate::skills::answer_skills(&*s.db()?, conversation_id)?)
+    })
+    .await
+}
+
+/// The skill a chat uses, or `null`. A saved skill that is no longer in the library is
+/// still returned, so the composer can say it is missing (sending then fails clearly).
 #[tauri::command]
 pub async fn get_chat_skill(
     state: AppStateRef<'_>,
     conversation_id: Id,
 ) -> IpcResult<Option<String>> {
     blocking(&state, move |s| {
-        let name = crate::skills::chat_skill(&*s.db()?, conversation_id)?;
-        Ok(name.filter(|n| s.skills.get(n).is_some()))
+        Ok(crate::skills::chat_skill(&*s.db()?, conversation_id)?)
     })
     .await
 }
@@ -676,6 +736,7 @@ pub async fn sign_out_mcp_server(
         message: Some("Signed out. Sign in to use this server's tools.".into()),
         tools: 0,
         review: 0,
+        revision: 0,
     });
     blocking(&state, |s| s.mcp_servers_view()).await
 }
@@ -708,6 +769,7 @@ pub async fn sign_in_mcp_server(
             message,
             tools: 0,
             review: 0,
+            revision: 0,
         })
     };
     set(

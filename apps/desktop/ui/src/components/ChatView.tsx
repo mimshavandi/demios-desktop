@@ -14,12 +14,12 @@ import {
 import { AI_DISCLOSURE, AI_FIRST_RUN_NOTICE } from "../ai";
 import { describeModel } from "../models";
 import { mod } from "../platform";
-import { withoutArtifactBlocks } from "../fenced";
 import { canRegenerate, type ChatState, type LiveToolCall } from "../state/chat";
 import { ArtifactCard } from "./ArtifactPane";
+import { Sources } from "./Sources";
 import { Markdown } from "./Markdown";
 import { ModelBadge } from "./ModelBadge";
-import { Button, ICON, IconButton, InlineMessage, Select, Skeleton } from "./primitives";
+import { Badge, Button, ICON, IconButton, InlineMessage, Select, Skeleton } from "./primitives";
 import { ApprovalCard, ToolCallCard, UnknownOutcomeCard } from "./ToolCards";
 import { useToast } from "./toast";
 
@@ -62,6 +62,8 @@ interface Props {
   skills?: SkillInfo[];
   /** The skill this chat uses, or `null`. */
   skill?: string | null;
+  /** Answers written with a skill: message id → the skill's label (T-SKL-03). */
+  answerSkills?: Record<Id, string>;
   onSkill?: (name: string | null) => void;
 }
 
@@ -213,6 +215,7 @@ export function ChatView(p: Props) {
                   live={p.state.tools[m.id] ?? []}
                   results={results}
                   artifacts={p.artifactCards[m.id] ?? []}
+                  skill={p.answerSkills?.[m.id]}
                   onOpenArtifact={p.onOpenArtifact}
                 />
               ))}
@@ -332,8 +335,15 @@ function SkillPicker({
         ]}
         onValueChange={(v) => onChange(v === "" ? null : v)}
       />
+      {value !== null && chosen === undefined && (
+        <span className="composer-skill-missing" role="status" data-testid="skill-missing">
+          “{value}” isn't available
+        </span>
+      )}
       <span id="composer-skill-d" className="dn-visually-hidden">
-        {chosen === undefined
+        {value !== null && chosen === undefined
+          ? `The skill “${value}” chosen for this chat was removed or didn't load. Choose another skill or No skill.`
+          : chosen === undefined
           ? "Skills change how the assistant works in this chat. They never skip a tool approval."
           : `${chosen.description} Applies from the next answer. It never skips a tool approval.`}
       </span>
@@ -354,7 +364,10 @@ function Message({
   results,
   artifacts,
   onOpenArtifact,
+  skill,
 }: {
+  /** Label of the skill this answer was written with. */
+  skill?: string | undefined;
   m: StoredMessage;
   catalog: ModelCatalog | null;
   streaming: boolean;
@@ -385,9 +398,7 @@ function Message({
       : live;
   // Artifact tool calls that worked are shown as artifact cards instead of tool cards.
   const shownCalls = calls.filter((c) => !(c.name.startsWith("artifact_") && c.status === "done"));
-  const usedArtifactTools = calls.some((c) => c.name.startsWith("artifact_"));
-  // A tool-less model's saved `<artifact>` blocks are shown as cards, not as raw text.
-  const text = artifacts.length > 0 && !usedArtifactTools ? withoutArtifactBlocks(raw) : raw;
+  const text = raw;
   if (m.role === "user") {
     return (
       <article className="msg msg-user" aria-label="You" data-testid="message-user">
@@ -416,6 +427,7 @@ function Message({
           </div>
         )
       )}
+      <Sources messageId={m.id} />
       {artifacts.map((a) => (
         <ArtifactCard key={a.id} title={a.title} type={a.type} version={a.version} onOpen={() => onOpenArtifact(a.id)} />
       ))}
@@ -484,6 +496,11 @@ function Message({
             <IconButton size="sm" label="Report this answer" onClick={() => onReport(m.id)}>
               <Flag {...ICON} aria-hidden="true" />
             </IconButton>
+          )}
+          {skill !== undefined && (
+            <span data-testid="answer-skill">
+              <Badge>Skill: {skill}</Badge>
+            </span>
           )}
           <ModelBadge info={describeModel(m.model, catalog)} />
         </footer>

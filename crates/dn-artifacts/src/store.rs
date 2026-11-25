@@ -16,7 +16,8 @@ CREATE TABLE artifact_artifacts (
     -- JSON of dn_core::artifact::ArtifactType, e.g. {"kind":"code","language":"rust"}
     artifact_type   TEXT NOT NULL,
     title           TEXT NOT NULL,
-    -- Model-chosen identifier from the fenced fallback (`<artifact id="todo-app">`), if any.
+    -- Unused since the fenced text format was removed (ADR-0004 amendment); always NULL.
+    -- Kept so existing databases need no migration.
     alias           TEXT,
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL
@@ -207,7 +208,7 @@ impl<'c> ArtifactStore<'c> {
                 artifact_type,
                 title,
                 content,
-            } => self.create(conversation_id, artifact_type, title, content, None, ctx),
+            } => self.create(conversation_id, artifact_type, title, content, ctx),
             ArtifactOp::Update {
                 id,
                 old_str,
@@ -217,15 +218,13 @@ impl<'c> ArtifactStore<'c> {
         }
     }
 
-    /// Create an artifact with version 1. `alias` is the model's own identifier from the
-    /// fenced fallback; it must be unique within the conversation.
+    /// Create an artifact with version 1.
     pub fn create(
         &self,
         conversation_id: Id,
         artifact_type: &ArtifactType,
         title: &str,
         content: &str,
-        alias: Option<&str>,
         ctx: &OpContext,
     ) -> Result<Applied> {
         check_title(title)?;
@@ -249,15 +248,14 @@ impl<'c> ArtifactStore<'c> {
         tx.conn.execute(
             &format!(
                 "INSERT INTO artifact_artifacts
-                    (id, conversation_id, artifact_type, title, alias, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, {NOW}, {NOW})"
+                    (id, conversation_id, artifact_type, title, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, {NOW}, {NOW})"
             ),
             params![
                 id.to_string(),
                 conversation_id.to_string(),
                 type_json,
-                title,
-                alias
+                title
             ],
         )?;
         let version = insert_version(tx.conn, id, 1, &content, None, ctx)?;
@@ -444,19 +442,6 @@ impl<'c> ArtifactStore<'c> {
                 })
             })
             .collect()
-    }
-
-    /// Find an artifact of the conversation by its fenced-fallback alias.
-    pub fn find_by_alias(&self, conversation_id: Id, alias: &str) -> Result<Option<Id>> {
-        self.conn
-            .query_row(
-                "SELECT id FROM artifact_artifacts WHERE conversation_id = ?1 AND alias = ?2",
-                params![conversation_id.to_string(), alias],
-                |r| r.get::<_, String>(0),
-            )
-            .optional()?
-            .map(|s| parse_id(&s))
-            .transpose()
     }
 
     /// Permanently deletes every artifact of `conversation_id` with all its versions (when the
@@ -1028,14 +1013,7 @@ pub(crate) mod tests {
         let store = ArtifactStore::new(&writer);
         let conv = Id::new();
         let err = store
-            .create(
-                conv,
-                &ArtifactType::Html,
-                "t",
-                "x",
-                None,
-                &OpContext::user(),
-            )
+            .create(conv, &ArtifactType::Html, "t", "x", &OpContext::user())
             .unwrap_err();
         assert!(err.to_string().contains("locked"), "{err}");
         assert!(
@@ -1046,14 +1024,7 @@ pub(crate) mod tests {
         assert!(store.list(conv).unwrap().is_empty());
         // The connection is usable again.
         store
-            .create(
-                conv,
-                &ArtifactType::Html,
-                "t",
-                "x",
-                None,
-                &OpContext::user(),
-            )
+            .create(conv, &ArtifactType::Html, "t", "x", &OpContext::user())
             .unwrap();
     }
 
@@ -1155,7 +1126,7 @@ pub(crate) mod tests {
             create(&store, conv, "x");
         }
         let err = store
-            .create(conv, &ArtifactType::Html, "one more", "y", None, &ctx)
+            .create(conv, &ArtifactType::Html, "one more", "y", &ctx)
             .unwrap_err();
         assert!(
             matches!(
@@ -1194,14 +1165,14 @@ pub(crate) mod tests {
         let ctx = OpContext::model(None);
         let big = "x".repeat(MAX_CONTENT_BYTES + 1);
         let err = store
-            .create(conv, &ArtifactType::Html, "t", &big, None, &ctx)
+            .create(conv, &ArtifactType::Html, "t", &big, &ctx)
             .unwrap_err();
         assert!(matches!(err, ArtifactError::TooLarge { .. }));
         assert!(err.to_string().contains("limited to"));
         let long_title = "t".repeat(MAX_TITLE_CHARS + 1);
         assert!(matches!(
             store
-                .create(conv, &ArtifactType::Html, &long_title, "x", None, &ctx)
+                .create(conv, &ArtifactType::Html, &long_title, "x", &ctx)
                 .unwrap_err(),
             ArtifactError::TitleTooLong { .. }
         ));
@@ -1226,51 +1197,6 @@ pub(crate) mod tests {
         let v = update(&store, conv, id, "a\r\nb", "c\r\nd").unwrap();
         assert_eq!(v.version.content, "c\nd\n");
     }
-
-    #[test]
-    fn aliases_are_unique_per_conversation() {
-        let conn = db();
-        let store = ArtifactStore::new(&conn);
-        let (conv, other) = (Id::new(), Id::new());
-        let ctx = OpContext::model(None);
-        let a = store
-            .create(
-                conv,
-                &ArtifactType::Svg,
-                "Logo",
-                "<svg/>",
-                Some("logo"),
-                &ctx,
-            )
-            .unwrap();
-        assert!(
-            store
-                .create(
-                    conv,
-                    &ArtifactType::Svg,
-                    "Logo",
-                    "<svg/>",
-                    Some("logo"),
-                    &ctx
-                )
-                .is_err()
-        );
-        store
-            .create(
-                other,
-                &ArtifactType::Svg,
-                "Logo",
-                "<svg/>",
-                Some("logo"),
-                &ctx,
-            )
-            .unwrap();
-        assert_eq!(
-            store.find_by_alias(conv, "logo").unwrap(),
-            Some(a.artifact_id)
-        );
-        assert_eq!(store.find_by_alias(conv, "nope").unwrap(), None);
-    }
 }
 
 #[cfg(test)]
@@ -1294,7 +1220,6 @@ mod vector_tests {
                     &ArtifactType::Markdown,
                     name,
                     case["content"].as_str().unwrap(),
-                    None,
                     &OpContext::user(),
                 )
                 .unwrap();

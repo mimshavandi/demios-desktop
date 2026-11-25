@@ -16,6 +16,12 @@ pub enum InferenceError {
     ContextOverflow { prompt: usize, n_ctx: u32 },
     #[error("model is busy with another request")]
     Busy,
+    /// The model has no chat template (neither in the GGUF nor next to it), so it can't chat.
+    #[error("this model has no chat template")]
+    NoChatTemplate,
+    /// The model's chat template doesn't compile or failed to render this chat.
+    #[error("chat template: {0}")]
+    ChatTemplate(String),
     #[error("inference failed: {0}")]
     Runtime(String),
     #[error("http error: {0}")]
@@ -47,6 +53,18 @@ impl From<InferenceError> for CoreError {
                 vec![RecoveryAction::Retry {
                     after_seconds: Some(2),
                 }],
+            ),
+            InferenceError::NoChatTemplate => (
+                "This model has no chat template, so it can't be used for chat. Pick another \
+                 model."
+                    .to_string(),
+                vec![],
+            ),
+            InferenceError::ChatTemplate(_) => (
+                "This model's chat template doesn't work with this conversation. Pick another \
+                 model."
+                    .to_string(),
+                vec![],
             ),
             _ => ("The model could not answer.".to_string(), vec![]),
         };

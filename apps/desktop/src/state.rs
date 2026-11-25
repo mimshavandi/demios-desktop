@@ -93,6 +93,7 @@ pub fn migration_sets() -> Vec<MigrationSet> {
         MigrationSet::new("app_skills", crate::skills::migrations()),
         MigrationSet::new("tool_ledger", dn_tools::migrations()),
         MigrationSet::new("artifact", dn_artifacts::migrations()),
+        MigrationSet::new("knowledge", dn_knowledge::migrations()),
     ]
 }
 
@@ -131,6 +132,9 @@ pub struct McpServerStatus {
     pub tools: usize,
     /// Tools that are new or changed since they were reviewed (they always ask meanwhile).
     pub review: usize,
+    /// Bumped each time the server changed its tools mid-session (#178), so the Tools view
+    /// reloads even when the counts stay the same.
+    pub revision: u32,
 }
 
 /// What the UI gets when it subscribes.
@@ -197,6 +201,9 @@ pub struct AppState {
     pub launch_approver: std::sync::OnceLock<Arc<dyn crate::mcp::LaunchApprover>>,
     /// Servers whose tools are hidden from the model while they connect (T-SHELL-11).
     pub tools_settling: Arc<crate::tool_review::Settling>,
+    /// Local copies of project files (`<data dir>/project-files`). `None` in tests that
+    /// don't use them.
+    pub project_files: Option<std::path::PathBuf>,
 }
 
 /// A reserved generation slot. Dropping it without [`Reservation::into_parts`] releases
@@ -254,6 +261,7 @@ impl AppState {
             add_links: Default::default(),
             launch_approver: std::sync::OnceLock::new(),
             tools_settling: Default::default(),
+            project_files: None,
         }
     }
 
@@ -281,6 +289,11 @@ impl AppState {
             eprintln!("marked {n} interrupted answer(s) as cancelled");
         }
         store::purge_deleted(&conn, dn_store::now_ms())?;
+        // Then projects and project files deleted earlier (their chats went just above).
+        let project_files = path.parent().map(|d| d.join(crate::projects::FILES_DIR));
+        if let Some(root) = &project_files {
+            crate::projects::purge_on_start(&conn, root)?;
+        }
         // Every purged chat, including ones purged by older builds that kept ledger rows.
         let tombstones = store::list_tombstones(&conn)?;
         // A purged chat keeps no artifacts either (idempotent: runs on every start).
@@ -323,15 +336,19 @@ impl AppState {
         models.local = Some(crate::local::LocalModels::open());
         let mut state = Self::new(conn, models, keys);
         state.agent = agent;
-        state.skills = crate::skills::Library::load(skills);
+        // The user's own skills sit next to the database, in the app's data directory.
+        let user_skills = path.parent().map(|d| d.join(crate::skills::USER_DIR));
+        state.skills = crate::skills::Library::load(skills, user_skills);
         state.tools = tools;
         state.executor = Some(Arc::clone(&executor));
         state.tools_settling = settling;
+        state.project_files = project_files;
         if let Some(a) = launch_approver {
             let _ = state.launch_approver.set(a);
         }
         let state = Arc::new(state);
         state.start_approval_bridge(approvals);
+        state.watch_tool_changes(Arc::clone(&executor));
         state.connect_mcp_servers(executor);
         Ok(state)
     }
@@ -357,6 +374,7 @@ impl AppState {
                 message: None,
                 tools: 0,
                 review: 0,
+                revision: 0,
             });
         }
         let state = Arc::clone(self);
@@ -378,6 +396,12 @@ impl AppState {
         ))
     }
 
+    /// Folder of the project files' local copies (`<data dir>/project-files`), if this
+    /// state has one. Read-only for everything but [`crate::projects`].
+    pub fn project_files_root(&self) -> Option<&std::path::Path> {
+        self.project_files.as_deref()
+    }
+
     pub fn db(&self) -> IpcResult<MutexGuard<'_, Connection>> {
         self.db
             .lock()
@@ -394,7 +418,16 @@ impl AppState {
     }
 
     pub fn create_conversation(&self) -> IpcResult<store::Conversation> {
-        Ok(store::create_conversation(&*self.db()?, "New chat")?)
+        self.create_conversation_in(None)
+    }
+
+    /// A new chat, in `project_id` when given.
+    pub fn create_conversation_in(&self, project_id: Option<Id>) -> IpcResult<store::Conversation> {
+        Ok(store::create_conversation_in(
+            &*self.db()?,
+            "New chat",
+            project_id,
+        )?)
     }
 
     // ---- generations
@@ -659,6 +692,20 @@ impl AppState {
                     eprintln!("could not delete artifacts: {e}");
                     failed.push("artifacts");
                 }
+                if let Err(e) = dn_knowledge::delete_all(&db) {
+                    eprintln!("could not delete the knowledge index: {e}");
+                    failed.push("knowledge index");
+                }
+                if let Some(root) = &self.project_files {
+                    match std::fs::remove_dir_all(root) {
+                        Ok(()) => {}
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(e) => {
+                            eprintln!("could not delete project files: {e}");
+                            failed.push("project files");
+                        }
+                    }
+                }
                 if let Err(e) = r {
                     eprintln!("could not clear the database: {e}");
                     failed.push("chats and settings");
@@ -838,6 +885,89 @@ impl AppState {
         });
     }
 
+    /// Re-reviews a server's tools whenever it sends `tools/list_changed` (#178). The
+    /// executor has already marked the server stale (its tools left out and refused) when the
+    /// notice arrives. Holds only a weak reference, so it ends with the app state.
+    pub(crate) fn watch_tool_changes(self: &Arc<Self>, executor: Arc<dn_tools::Executor>) {
+        let mut changes = executor.tool_changes();
+        let state = Arc::downgrade(self);
+        tauri::async_runtime::spawn(async move {
+            use tokio::sync::broadcast::error::RecvError;
+            loop {
+                let ids: Vec<String> = match changes.recv().await {
+                    Ok(id) => vec![id],
+                    // Notices were dropped: every server marked stale is reviewed again.
+                    Err(RecvError::Lagged(_)) => executor.stale_servers(),
+                    Err(RecvError::Closed) => return,
+                };
+                let Some(state) = state.upgrade() else {
+                    return;
+                };
+                for id in ids {
+                    state.tools_changed(&executor, &id).await;
+                }
+            }
+        });
+    }
+
+    /// One server changed its tools: list them again, flag new and changed ones (they
+    /// always ask until reviewed, as on connect), and only then offer them again. A failed
+    /// re-list leaves the server stale, with its tools refused, and says so in its status.
+    pub async fn tools_changed(&self, executor: &dn_tools::Executor, id: &str) {
+        if executor.client(id).is_none() {
+            // Removed meanwhile ("Delete all", or the user removed it); removal cleared it.
+            return;
+        }
+        let _settling = self.tools_settling.hold(id);
+        // Before listing: a change that arrives during this review bumps it, and `settled`
+        // then leaves the server stale for the next review.
+        let generation = executor.tool_list_generation(id);
+        let previous = lock(&self.mcp_status).get(id).cloned();
+        let name = previous
+            .as_ref()
+            .map_or_else(|| id.to_owned(), |p| p.name.clone());
+        let revision = previous.as_ref().map_or(0, |p| p.revision) + 1;
+        let failed = |message: &str| McpServerStatus {
+            server_id: id.to_owned(),
+            name: name.clone(),
+            state: "failed",
+            message: Some(message.into()),
+            tools: 0,
+            review: 0,
+            revision,
+        };
+        let caps = match executor.refresh(id).await {
+            Ok(caps) => caps,
+            Err(e) => {
+                eprintln!("MCP server `{id}` changed its tools, and listing them failed: {e:?}");
+                self.set_mcp_status(failed(
+                    "It changed its tools, and they couldn't be read again. Use Reconnect.",
+                ));
+                return;
+            }
+        };
+        match self.apply_tool_policy(executor, Some(id)) {
+            Ok(review) => {
+                executor.settled(id, generation);
+                self.set_mcp_status(McpServerStatus {
+                    server_id: id.to_owned(),
+                    name,
+                    state: "connected",
+                    message: None,
+                    tools: caps.len(),
+                    review,
+                    revision,
+                });
+            }
+            Err(e) => {
+                eprintln!("could not apply tool settings for `{id}`: {}", e.message);
+                self.set_mcp_status(failed(
+                    "It changed its tools, and its tool settings couldn't be applied. Use Reconnect.",
+                ));
+            }
+        }
+    }
+
     /// Connects one server (replacing a running client of the same id) and reports its
     /// status. Returns false when "Delete all local data" ran since `epoch`.
     pub async fn connect_mcp_server(
@@ -855,6 +985,7 @@ impl AppState {
             message,
             tools,
             review: 0,
+            revision: 0,
         };
         // Connect only what is saved now: the server may have been removed or edited while
         // this was waiting (a save's background connect, a sign-in).
@@ -911,6 +1042,7 @@ impl AppState {
             Ok(caps) => match self.apply_tool_policy(executor, Some(&id)) {
                 Ok(review) => self.set_mcp_status(McpServerStatus {
                     review,
+                    revision: 0,
                     ..status("connected", None, caps.len())
                 }),
                 Err(e) => {
@@ -1240,8 +1372,7 @@ mod tests {
             let ctx = dn_artifacts::OpContext::model(None);
             let html = dn_core::artifact::ArtifactType::Html;
             for conv in [gone.id, kept.id] {
-                arts.create(conv, &html, "Page", "<p>x</p>", None, &ctx)
-                    .unwrap();
+                arts.create(conv, &html, "Page", "<p>x</p>", &ctx).unwrap();
             }
             let l = dn_store::open_connection(&path).unwrap();
             let args = serde_json::json!({});
@@ -1298,6 +1429,65 @@ mod tests {
     }
 
     #[test]
+    fn open_purges_deleted_projects_with_their_chats_and_file_copies() {
+        use dn_store::project;
+        let dir = std::env::temp_dir().join(format!("dn-app-projects-{}", Id::new()));
+        let path = dir.join("db.sqlite3");
+        let root = dir.join(crate::projects::FILES_DIR);
+        let src = dir.join("notes.md");
+        let (gone, kept, gone_chat, gone_file, kept_file) = {
+            let c = dn_store::open(&path, &migration_sets()).unwrap();
+            std::fs::write(&src, b"secret notes").unwrap();
+            let gone = project::create_project(&c, "private project").unwrap();
+            let kept = project::create_project(&c, "kept").unwrap();
+            let chat = store::create_conversation_in(&c, "in project", Some(gone.id)).unwrap();
+            let gf = crate::projects::import(&c, &root, gone.id, &src).unwrap();
+            let kf = crate::projects::import(&c, &root, kept.id, &src).unwrap();
+            project::delete_project(&c, gone.id).unwrap();
+            (gone, kept, chat, gf, kf)
+        };
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let st = AppState::open(&path, None).unwrap();
+            assert_eq!(st.project_files_root(), Some(root.as_path()));
+            let db = st.db().unwrap();
+            assert!(store::is_purged(&db, &gone_chat.id.to_string()).unwrap());
+            assert_eq!(project::project_tombstones(&db).unwrap()[0].0, gone.id);
+            assert_eq!(project::file_tombstones(&db).unwrap()[0].0, gone_file.id);
+            assert_eq!(project::list_projects(&db).unwrap()[0].project.id, kept.id);
+            assert!(!project::file_path(&root, &gone_file).exists());
+            assert!(project::file_path(&root, &kept_file).exists());
+        });
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn wipe_local_data_removes_projects_and_their_files() {
+        use dn_store::project;
+        let dir = std::env::temp_dir().join(format!("dn-app-wipe-projects-{}", Id::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("a.txt");
+        std::fs::write(&src, b"a").unwrap();
+        let root = dir.join(crate::projects::FILES_DIR);
+        let conn = dn_store::open_in_memory(&migration_sets()).unwrap();
+        let mut st = AppState::new(conn, ModelRegistry::default(), Keys::memory());
+        st.project_files = Some(root.clone());
+        {
+            let db = st.db().unwrap();
+            let p = project::create_project(&db, "p").unwrap();
+            crate::projects::import(&db, &root, p.id, &src).unwrap();
+        }
+        assert!(st.wipe_local_data().is_empty());
+        assert!(!root.exists());
+        assert!(
+            project::list_projects(&st.db().unwrap())
+                .unwrap()
+                .is_empty()
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn wipe_local_data_clears_chats_settings_ledger_and_keys() {
         let conn = dn_store::open_in_memory(&migration_sets()).unwrap();
         let keys = Keys::memory();
@@ -1319,7 +1509,6 @@ mod tests {
                 &dn_core::artifact::ArtifactType::Html,
                 "Page",
                 "<p>x</p>",
-                None,
                 &dn_artifacts::OpContext::model(None),
             )
             .unwrap();
@@ -1358,7 +1547,40 @@ mod tests {
                 "1 tool-server secret or sign-in"
             ]
         );
+        {
+            let db = st.db().unwrap();
+            dn_knowledge::Index::new(&db)
+                .sync_source(
+                    "project",
+                    &[dn_knowledge::SourceFile {
+                        file_id: "f".into(),
+                        display_path: "notes.md".into(),
+                        content: b"private project notes".to_vec(),
+                    }],
+                    None,
+                )
+                .unwrap();
+            dn_knowledge::record_sources(
+                &db,
+                "m",
+                &c.id.to_string(),
+                &dn_knowledge::Sources {
+                    mode: dn_knowledge::SearchMode::Keyword,
+                    citations: vec![],
+                },
+            )
+            .unwrap();
+        }
         assert!(st.wipe_local_data().is_empty());
+        {
+            let db = st.db().unwrap();
+            assert_eq!(
+                dn_knowledge::Index::new(&db).counts().unwrap(),
+                dn_knowledge::Counts::default(),
+                "the knowledge index is deleted too"
+            );
+            assert!(dn_knowledge::sources_for(&db, "m").unwrap().is_none());
+        }
         assert!(st.keychain_entries().is_empty());
         assert!(
             store::list_conversations(&st.db().unwrap())
@@ -1446,6 +1668,7 @@ mod tests {
             message: None,
             tools: 0,
             review: 0,
+            revision: 0,
         });
 
         assert!(st.delete_all_local_data().await.is_empty());

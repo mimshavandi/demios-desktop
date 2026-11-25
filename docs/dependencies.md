@@ -23,6 +23,7 @@ Every direct dependency is listed here with why and its licence (ADR-0009). Anyt
 | process-wrap 10 (tokio1, process-group, job-object) | dn-tools | stdio MCP servers run in their own process group (Unix) / job object (Windows) so shutdown also stops grandchildren (e.g. npx → node); same major version rmcp already uses | Apache-2.0 OR MIT | T-CON-01 |
 | tokio | dn-inference, dn-models, dn | async runtime, channels, fs for downloads | MIT | T-INF-01 |
 | llama-cpp-2 (+ llama-cpp-sys-2, builds llama.cpp) | dn-inference | in-process llama.cpp backend; `metal` on macOS, `cuda`/`vulkan` features | MIT/Apache-2.0 (llama.cpp: MIT) | T-INF-02 |
+| minijinja 3.1 (`builtins`, `serde`, `json`, `fuel`, `macros`; no default features), minijinja-contrib 3.1 (`pycompat`) | dn-inference (`llamacpp`) | renders a GGUF's own Jinja chat template (llama-cpp-2 doesn't expose llama.cpp's). Templates are untrusted: no loader (no includes or file access), a fuel budget, a recursion limit and an output cap | Apache-2.0 | T-INF-23 |
 | reqwest 0.13 (rustls) | dn-models, dn-inference | resumable model downloads (HTTPS only, read timeout); `/v1/embeddings` for OpenAI-compatible servers (chat goes through dn-providers) | MIT/Apache-2.0 | T-INF-05, T-INF-06 |
 | sha2 | dn-models, demios-desktop, dn-knowledge | SHA-256 verification of downloads; fingerprints of MCP tools; knowledge index: skip unchanged files | MIT/Apache-2.0 | T-INF-05 |
 | sysinfo (`system`; `disk` in dn-models) | dn-models, dn | RAM detection for the fit estimator; free disk space before a model download; peak RSS in `dn bench` | MIT | T-INF-03 |
@@ -30,7 +31,7 @@ Every direct dependency is listed here with why and its licence (ADR-0009). Anyt
 | tauri 2, tauri-build 2 | apps/desktop | desktop shell, typed IPC, capabilities (ADR-0002). Pinned to `tauri ~2.11` / `tauri-build ~2.6` with the `unstable` feature (multiwebview) for the Windows artifact webview (ADR-0012, owner approved); every upgrade must pass `e2e-windows` | MIT/Apache-2.0 | T-SHELL-01, #75 |
 | tokio (`sync`, `macros`, `time`, `rt`) | apps/desktop | cancel a streaming answer (`select!` + `oneshot`); timer for the dev fake model | MIT | T-SHELL-01 |
 | tauri-plugin-opener 2 | apps/desktop | open the "Report a problem" form in the system browser; called from Rust only, its JS commands are not granted (lead approved 2026-11-24); links in answers also open through it, from the `open_link` command after a native confirm (T-SHELL-09) | MIT/Apache-2.0 | T-STORE-14 |
-| tauri-plugin-dialog 2 | apps/desktop | native confirms shown from Rust only: "start this program?" before a local MCP server is launched, and "open this link?" with the full URL for links in answers (T-SHELL-09); its JS commands are not granted (lead approved) | MIT/Apache-2.0 | T-SHELL-08 |
+| tauri-plugin-dialog 2 | apps/desktop | native confirms shown from Rust only: "start this program?" before a local MCP server is launched, "open this link?" with the full URL for links in answers (T-SHELL-09), and the file picker for **Add files** in a project (T-PRJ-01); its JS commands are not granted (lead approved) | MIT/Apache-2.0 | T-SHELL-08 |
 | url 2 | apps/desktop | parse the MCP OAuth sign-in URL (scheme, host, no userinfo) before opening it; already in the tree via reqwest (lead approved) | MIT/Apache-2.0 | T-SHELL-08 |
 | tauri-plugin-deep-link 2 | apps/desktop | the OS hands `demios://models/add` links to the app; handled in Rust only (`AddModelLink::parse` as data, opens the confirmation, never downloads); its JS commands are not granted (lead approved) | MIT/Apache-2.0 | T-INF-12 |
 | tauri-plugin-updater 2 (optional, `updater` feature; `rustls-tls` + `system-proxy`, no `zip`) | apps/desktop | signed self-update for direct downloads only ([docs/store/updates.md](store/updates.md)); minisign signature check, `requireSignedVersion`; MSIX and Flatpak builds leave the feature off (build.rs refuses it). Its `zip` feature is off: it only reads v1 update archives, and `zip` 4 has open advisories (RUSTSEC-2026-0367/0368/0369/0429). Called from Rust only, its JS commands are not granted (owner asked for it, lead approved) | MIT/Apache-2.0 | T-STORE-08 |
@@ -59,6 +60,13 @@ Every direct dependency is listed here with why and its licence (ADR-0009). Anyt
 
 Release builds (`tauri build` without `--debug`, i.e. `TAURI_ENV_DEBUG=false`, or `DEMIOS_REQUIRE_LICENSES=1`) fail if cargo-about is missing. Dev, test and debug builds skip the list with a warning.
 
+### Release signing (T-REL-02, #120; CI tools only, lead approved 2026-11-25)
+
+| Tool | Where | Why | Licence |
+|---|---|---|---|
+| trusted-signing-cli 0.11.0 ([levminer/trusted-signing-cli](https://github.com/levminer/trusted-signing-cli)), `cargo install --locked --version 0.11.0` | Windows job of the release workflow only; not a crate dependency, never in PR builds | Tauri's `bundle.windows.signCommand`: signs the exe and the NSIS installer with Azure Artifact Signing (formerly Trusted Signing), reading `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_CLIENT_SECRET` from the `release` environment | MIT |
+| `scripts/release/signing-check.mjs`, `latest-json.mjs` | our code, zero dependencies | which platforms are signed (labelled `-unsigned` otherwise; a half-set-up account fails); the updater's `latest.json` from signed bundles only | Apache-2.0 (this repo) |
+
 ### Flatpak packaging (T-STORE-06; build tools only, not dependencies of any crate)
 
 | Tool | Where | Why | Licence |
@@ -75,6 +83,8 @@ Release builds (`tauri build` without `--debug`, i.e. `TAURI_ENV_DEBUG=false`, o
 | axe-core 4.14.1 | accessibility check on the chat screen (injected via WebDriver) | MPL-2.0 | T-SHELL-05 |
 | tauri-driver 2.0.6 (CI tool, `cargo install --locked`, not a dependency of any crate) | WebDriver server that launches the Tauri app | Apache-2.0 OR MIT | T-SHELL-05 |
 | msedgedriver (CI tool, Windows; runner's copy or Microsoft's download matching WebView2) | native WebDriver for WebView2 | Microsoft | T-SHELL-05 |
+| Khronos Vulkan-Loader v1.4.368 (commit `f61c41f6b4c0a2fa3d2b900ab690febbf3235172`; **shipped**: `vulkan-1.dll` next to the exe in the Windows installer, `libvulkan.so.1` in the AppImage) | lets the Vulkan build start on machines without a Vulkan runtime and use the GPU where a driver is installed (T-INF-24). Built from source by `packaging/vulkan-loader/build.sh`, which refuses a tag that doesn't resolve to the pinned commit and records the built file's SHA-256 (release job summary, `target/vulkan-loader/SOURCE.txt`); the installer smoke tests check the installed copy against it. Windows loads it from the app's own folder only (an exe's linked DLLs are searched there first). deb and rpm depend on the system loader instead (`libvulkan1`, `vulkan-loader`). Listed on the licences screen | Apache-2.0 | T-INF-24 |
+| LunarG Vulkan SDK 1.4.363.1 (CI tool, Windows and Linux; installer/tarball SHA-256 pinned in `vulkan.yml` and `release-preview.yml`) | builds llama.cpp's Vulkan backend (`glslc`, headers); not shipped | Apache-2.0 and others (build tools) | T-INF-24 |
 
 Pre-approved, add a row when first used: tauri 2, tokio, serde_yaml (or a maintained successor), llama-cpp-2, rmcp, rusqlite (chosen over sqlx: sync, SQLCipher + sqlite-vec support), keyring, reqwest, axum (team server).
 

@@ -11,13 +11,16 @@ import {
   type ProviderInfo,
   type Settings,
   type SlotInfo,
+  type UpdateCheck,
 } from "../ipc/types";
 import { Badge, Button, ICON, InlineMessage, Select, Skeleton, TextField, type SelectGroup } from "./primitives";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Licences } from "./Licences";
 import { McpServersCard } from "./McpServers";
+import { SkillsCard } from "./Skills";
 import { Updates } from "./Updates";
 import { LocalModelsCard, formatBytes } from "./LocalModels";
+import { BetterSearchSetting } from "./BetterSearch";
 import { useToast } from "./toast";
 
 export type SettingsSection = "models" | "general";
@@ -38,11 +41,26 @@ interface Props {
   /** A demios:// link waiting for confirmation (T-INF-12). */
   addLink?: AddModelLink | null;
   onAddLinkClosed?: () => void;
+  /** A newer version the launch check found (#95), shown in About › Updates. */
+  launchUpdate?: UpdateCheck | null;
+  /** Bring About › Updates into view (opened from the launch notice). */
+  revealUpdates?: boolean;
 }
 
 type Load = { kind: "loading" } | { kind: "error"; message: string } | { kind: "ready"; catalog: ModelCatalog };
 
-export function SettingsView({ api, info, section, onSection, onCatalog, servers, addLink = null, onAddLinkClosed }: Props) {
+export function SettingsView({
+  api,
+  info,
+  section,
+  onSection,
+  onCatalog,
+  servers,
+  addLink = null,
+  onAddLinkClosed,
+  launchUpdate = null,
+  revealUpdates = false,
+}: Props) {
   const toast = useToast();
   const [load, setLoad] = useState<Load>({ kind: "loading" });
   const headingRef = useRef<HTMLHeadingElement>(null);
@@ -152,7 +170,7 @@ export function SettingsView({ api, info, section, onSection, onCatalog, servers
           />
         )}
         {load.kind === "ready" && section === "general" && (
-          <GeneralPage api={api} info={info} />
+          <GeneralPage api={api} info={info} launchUpdate={launchUpdate} revealUpdates={revealUpdates} />
         )}
         </div>
       </div>
@@ -228,10 +246,12 @@ function ModelsPage({
       <LocalModelsCard
         api={api}
         initial={catalog.local_models}
+        compute={catalog.compute}
         onReady={refreshCatalog}
         link={addLink}
         {...(onAddLinkClosed !== undefined ? { onLinkClosed: onAddLinkClosed } : {})}
       />
+      <BetterSearchSetting api={api} />
 
       <McpServersCard api={api} live={servers} />
 
@@ -414,7 +434,17 @@ function ProviderRow({
   );
 }
 
-function GeneralPage({ api, info }: { api: Api; info: AppInfo | null }) {
+function GeneralPage({
+  api,
+  info,
+  launchUpdate,
+  revealUpdates,
+}: {
+  api: Api;
+  info: AppInfo | null;
+  launchUpdate: UpdateCheck | null;
+  revealUpdates: boolean;
+}) {
   const toast = useToast();
   const [confirming, setConfirming] = useState(false);
   const [summary, setSummary] = useState<LocalDataSummary | null>(null);
@@ -472,6 +502,7 @@ function GeneralPage({ api, info }: { api: Api; info: AppInfo | null }) {
 
   return (
     <>
+      <SkillsCard api={api} />
       <section className="card" aria-labelledby="privacy-h">
         <h2 id="privacy-h">Privacy</h2>
         <p className="dn-help">Demios collects no usage data. There is no Demios account and no Demios server.</p>
@@ -509,7 +540,8 @@ function GeneralPage({ api, info }: { api: Api; info: AppInfo | null }) {
             <li>
               <span className="row-title">GitHub, for updates</span>
               <span className="dn-help">
-                Only when you select Check for updates, and the download after you confirm an update. Nothing else is sent.
+                When you select Check for updates, once when Demios starts if you turned that on, and the download after
+                you confirm an update. Nothing else is sent.
               </span>
             </li>
           )}
@@ -553,7 +585,9 @@ function GeneralPage({ api, info }: { api: Api; info: AppInfo | null }) {
             {info?.models_dir != null && <span className="dn-help">Downloaded models are stored in {info.models_dir}</span>}
           </div>
         </div>
-        {info !== null && <Updates api={api} mode={info.updates} />}
+        {info !== null && (
+          <Updates api={api} mode={info.updates} initial={launchUpdate} reveal={revealUpdates} />
+        )}
         <div className="row">
           <div className="row-main">
             <span className="row-title">Report a problem</span>
@@ -619,6 +653,12 @@ function GeneralPage({ api, info }: { api: Api; info: AppInfo | null }) {
             , settings and tool history
           </li>
           <li>
+            {summary === null
+              ? "Projects"
+              : `${summary.projects} ${summary.projects === 1 ? "project" : "projects"}`}
+            , with their instructions and the copies of their files
+          </li>
+          <li>
             Downloaded models{modelsDir !== null ? ` in ${modelsDir}` : ""}
             {summary !== null && (summary.models_bytes > 0 ? ` (${formatBytes(summary.models_bytes)})` : " (none)")}, also
             the ones the <code>dn</code> command-line tool uses
@@ -630,7 +670,8 @@ function GeneralPage({ api, info }: { api: Api; info: AppInfo | null }) {
           <li>App storage of this window</li>
         </ul>
         <p>
-          <strong>This can't be undone.</strong> Your accounts with providers are not affected.
+          <strong>This can't be undone.</strong> Your accounts with providers are not affected. Skills you wrote
+          yourself stay in your skills folder.
         </p>
       </ConfirmDialog>
     </>

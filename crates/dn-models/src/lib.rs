@@ -8,11 +8,13 @@
 
 pub mod cache;
 pub mod catalog;
+pub mod compute;
 pub mod download;
 pub mod fit;
 pub mod gguf;
 pub mod hub;
 pub mod link;
+pub mod template;
 #[cfg(test)]
 mod testserver;
 

@@ -16,10 +16,12 @@ pub mod error;
 #[cfg(any(fake_model, test))]
 pub mod fake;
 pub mod hub;
+pub mod knowledge;
 pub mod links;
 pub mod local;
 pub mod mcp;
 pub mod models;
+pub mod projects;
 pub mod secrets;
 pub mod settings;
 pub mod skills;
@@ -27,6 +29,8 @@ pub mod state;
 pub mod support;
 pub mod tool_review;
 pub mod updates;
+pub mod window_fit;
+pub mod window_state;
 
 use std::path::PathBuf;
 
@@ -184,6 +188,8 @@ pub fn run() {
     let builder = builder.plugin(updates::plugin());
     builder
         .manage(updates::Updates::default())
+        .manage(window_state::Tracker::default())
+        .on_window_event(window_state::on_event)
         .setup(|app| {
             use tauri::Manager;
             let dir = data_dir().ok_or("no home directory to keep app data in")?;
@@ -203,6 +209,10 @@ pub fn run() {
                 )
             })?;
             install_add_links(app.handle(), &state);
+            knowledge::start(&state);
+            // The window starts hidden: fit it to the screen's work area (or put it back
+            // where it was), then show it (#172).
+            window_state::restore(app.handle(), &state);
             app.manage(state);
             app.manage(artifact_child::ChildState::default());
             Ok(())
@@ -238,9 +248,22 @@ pub fn run() {
             commands::rename_conversation,
             commands::delete_conversation,
             commands::list_skills,
+            commands::list_answer_skills,
+            commands::skills_overview,
+            commands::reload_skills,
+            commands::open_skills_folder,
             commands::get_chat_skill,
             commands::set_chat_skill,
             commands::restore_conversation,
+            projects::list_projects,
+            projects::create_project,
+            projects::update_project,
+            projects::delete_project,
+            projects::restore_project,
+            projects::list_project_files,
+            projects::add_project_files,
+            projects::remove_project_file,
+            projects::restore_project_file,
             commands::list_messages,
             commands::send_message,
             commands::regenerate,
@@ -260,6 +283,9 @@ pub fn run() {
             commands::rollback_artifact,
             commands::watch_local_models,
             commands::download_model,
+            knowledge::message_sources,
+            knowledge::knowledge_status,
+            knowledge::knowledge_offer,
             artifact_child::artifact_child_open,
             artifact_child::artifact_child_render,
             artifact_child::artifact_child_bounds,
@@ -271,14 +297,20 @@ pub fn run() {
             commands::pause_download,
             updates::check_for_update,
             updates::install_update,
+            updates::launch_update_check,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Demios Desktop")
         .run(|app, event| {
             // Tauri exits without dropping managed state: stop MCP servers (and their
             // process trees) explicitly, with a bound so a stuck server can't hang quit.
+            // Save the window while it still exists (⌘Q on macOS closes it before Exit).
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                window_state::persist(app);
+            }
             if let tauri::RunEvent::Exit = event {
                 use tauri::Manager;
+                window_state::persist(app);
                 // Downloads stop; their partial files resume next time.
                 if let Some(local) = app
                     .try_state::<std::sync::Arc<state::AppState>>()

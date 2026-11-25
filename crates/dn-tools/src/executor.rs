@@ -14,7 +14,8 @@ use dn_core::capability::{Preflight, RiskTier};
 use dn_core::chat::{ToolCall, ToolSpec};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 /// Per-call context from the agent loop.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -79,7 +80,32 @@ pub struct Executor {
     ledger: Arc<Mutex<rusqlite::Connection>>,
     retry: RetryPolicy,
     diagnostics: Mutex<std::collections::VecDeque<ToolDiagnostic>>,
+    /// Set for good when a lock is found poisoned (#145): the maps behind it, and with them
+    /// the user's per-tool choices, can't be trusted, so every tool is refused until
+    /// restart. Never read as "no overrides" or "no tools" and carry on.
+    unavailable: AtomicBool,
+    /// Per server, how many times it sent `tools/list_changed`, and whether the latest
+    /// change isn't reviewed yet (#178). A stale server's tools are left out of the model's
+    /// list and refused until the app calls [`Executor::settled`] for that change. Simple
+    /// values only, so a poisoned lock keeps valid data and is read, never treated as empty.
+    changes: Arc<Mutex<HashMap<String, ToolListState>>>,
+    /// Source of generations, shared by all servers and only ever increasing, so a
+    /// server's generation never comes back to an earlier value (not after removal either).
+    generations: Arc<std::sync::atomic::AtomicU64>,
+    /// Server ids, sent when a server's tool list changes.
+    tool_changes: tokio::sync::broadcast::Sender<String>,
 }
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct ToolListState {
+    /// Bumped on every `tools/list_changed`.
+    generation: u64,
+    stale: bool,
+}
+
+/// How many unread change notices the app may fall behind by before it re-reads every
+/// server (a lagged receiver means "something changed").
+const TOOL_CHANGES_BUFFER: usize = 64;
 
 /// Developer detail of a failed call, kept locally (not sent to the model).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -139,6 +165,132 @@ impl Executor {
             ledger,
             retry: RetryPolicy::default(),
             diagnostics: Mutex::default(),
+            unavailable: AtomicBool::new(false),
+            changes: Arc::default(),
+            generations: Arc::default(),
+            tool_changes: tokio::sync::broadcast::channel(TOOL_CHANGES_BUFFER).0,
+        }
+    }
+
+    /// Server ids, one per `tools/list_changed` (#178). Its tools are already stale (left
+    /// out and refused) when the id arrives. The receiver re-lists, re-reviews and then calls
+    /// [`Self::settled`]. A `Lagged` error means notices were dropped: re-read every server.
+    pub fn tool_changes(&self) -> tokio::sync::broadcast::Receiver<String> {
+        self.tool_changes.subscribe()
+    }
+
+    fn list_state(&self, server_id: &str) -> ToolListState {
+        self.changes
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(server_id)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    /// Whether `server_id` changed its tools and they aren't reviewed again yet.
+    pub fn is_stale(&self, server_id: &str) -> bool {
+        self.list_state(server_id).stale
+    }
+
+    /// Servers whose tools changed and aren't reviewed again yet.
+    pub fn stale_servers(&self) -> Vec<String> {
+        let mut v: Vec<String> = self
+            .changes
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+            .filter(|(_, st)| st.stale)
+            .map(|(id, _)| id.clone())
+            .collect();
+        v.sort();
+        v
+    }
+
+    fn generations_snapshot(&self) -> HashMap<String, u64> {
+        self.changes
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+            .map(|(id, st)| (id.clone(), st.generation))
+            .collect()
+    }
+
+    /// The server's change generation (increasing, shared counter). Read it **before** listing them
+    /// again, and pass it to [`Self::settled`].
+    pub fn tool_list_generation(&self, server_id: &str) -> u64 {
+        self.list_state(server_id).generation
+    }
+
+    /// The server's changed tools were listed and reviewed again, as of `generation` (read
+    /// before the re-list): offer them again. If the server changed them again since, it
+    /// stays stale until that change is reviewed too.
+    pub fn settled(&self, server_id: &str, generation: u64) {
+        let mut all = self.changes.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(st) = all.get_mut(server_id)
+            && st.generation == generation
+        {
+            st.stale = false;
+        }
+    }
+
+    /// Refuses a call when the server changed its tools since `seen` (the generation when
+    /// the call resolved the tool), or the change isn't reviewed yet.
+    fn check_fresh(&self, server_id: &str, id: &str, seen: u64) -> Result<(), ToolError> {
+        let now = self.list_state(server_id);
+        if now.stale || now.generation != seen {
+            Err(ToolError::new(
+                id,
+                ToolErrorKind::Changing,
+                "server sent tools/list_changed; the tool may not be what was resolved or approved",
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Whether tools are refused after an internal error (a poisoned lock).
+    pub fn is_unavailable(&self) -> bool {
+        self.unavailable.load(Ordering::SeqCst)
+    }
+
+    fn unavailable_error(&self, id: &str) -> ToolError {
+        ToolError::new(id, ToolErrorKind::Unavailable, "executor lock poisoned")
+    }
+
+    /// Latches [`Self::is_unavailable`] and logs once.
+    fn mark_unavailable(&self) {
+        if !self.unavailable.swap(true, Ordering::SeqCst) {
+            eprintln!("dn-tools: a lock was poisoned; every tool is refused until restart");
+        }
+    }
+
+    /// Fails closed once unavailable.
+    fn check_available(&self, id: &str) -> Result<(), ToolError> {
+        if self.is_unavailable() {
+            Err(self.unavailable_error(id))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn rd<'a, T>(&self, lock: &'a RwLock<T>) -> Option<RwLockReadGuard<'a, T>> {
+        match lock.read() {
+            Ok(g) => Some(g),
+            Err(_) => {
+                self.mark_unavailable();
+                None
+            }
+        }
+    }
+
+    fn wr<'a, T>(&self, lock: &'a RwLock<T>) -> Option<RwLockWriteGuard<'a, T>> {
+        match lock.write() {
+            Ok(g) => Some(g),
+            Err(_) => {
+                self.mark_unavailable();
+                None
+            }
         }
     }
 
@@ -152,7 +304,7 @@ impl Executor {
     }
 
     pub fn client(&self, server_id: &str) -> Option<Arc<McpClient>> {
-        self.clients.read().ok()?.get(server_id).cloned()
+        self.rd(&self.clients)?.get(server_id).cloned()
     }
 
     fn trusts(&self, server_id: &str) -> bool {
@@ -163,20 +315,22 @@ impl Executor {
     /// Set user overrides (risk, approval, idempotency field, disabled), keyed by capability id.
     /// Re-applied to known capabilities now and on every [`Self::refresh`].
     pub fn set_overrides(&self, overrides: HashMap<String, CapabilityOverride>) {
-        if let Ok(mut o) = self.overrides.write() {
-            *o = overrides;
-        }
-        let ov = self.overrides.read().map(|o| o.clone()).unwrap_or_default();
-        let trust: HashMap<String, bool> = self
-            .clients
-            .read()
-            .map(|c| {
-                c.iter()
-                    .map(|(id, c)| (id.clone(), c.config().trusts_annotations()))
-                    .collect()
-            })
-            .unwrap_or_default();
-        if let Ok(mut caps) = self.capabilities.write() {
+        // On a poisoned lock nothing is rebuilt: capabilities are never re-derived without
+        // the user's overrides. The executor refuses every tool instead.
+        let Some(mut o) = self.wr(&self.overrides) else {
+            return;
+        };
+        *o = overrides;
+        let ov = o.clone();
+        drop(o);
+        let Some(trust) = self.rd(&self.clients).map(|c| {
+            c.iter()
+                .map(|(id, c)| (id.clone(), c.config().trusts_annotations()))
+                .collect::<HashMap<String, bool>>()
+        }) else {
+            return;
+        };
+        if let Some(mut caps) = self.wr(&self.capabilities) {
             for cap in caps.values_mut() {
                 if let Some(trusted) = trust.get(&cap.server_id) {
                     let tool = crate::client::McpTool {
@@ -202,23 +356,54 @@ impl Executor {
     /// Register a server and load its tools.
     pub async fn add_server(&self, client: McpClient) -> Result<Vec<McpCapability>, CoreError> {
         let id = client.server_id().to_owned();
-        if let Ok(mut c) = self.clients.write() {
-            c.insert(id.clone(), Arc::new(client));
+        self.check_available(&format!("mcp.{id}"))?;
+        // Mark stale and bump the generation first, then tell the app: no call runs on the
+        // old list in between, and no approval given before the change carries over.
+        let list_states = Arc::clone(&self.changes);
+        let generations = Arc::clone(&self.generations);
+        let notices = self.tool_changes.clone();
+        client.set_tools_changed(Arc::new(move |server_id: &str| {
+            {
+                let mut all = list_states.lock().unwrap_or_else(|p| p.into_inner());
+                let st = all.entry(server_id.to_owned()).or_default();
+                st.generation = generations.fetch_add(1, Ordering::SeqCst) + 1;
+                st.stale = true;
+            }
+            // No receiver yet (tests, start-up): the server stays stale, which is safe.
+            let _ = notices.send(server_id.to_owned());
+        }));
+        match self.wr(&self.clients) {
+            Some(mut c) => {
+                c.insert(id.clone(), Arc::new(client));
+            }
+            None => return Err(self.unavailable_error(&format!("mcp.{id}")).into()),
         }
         self.refresh(&id).await
     }
 
     pub async fn remove_server(&self, server_id: &str) {
-        let client = self
-            .clients
-            .write()
-            .ok()
-            .and_then(|mut c| c.remove(server_id));
+        // Removing and stopping must work even after a poisoned lock (the user is turning a
+        // server off), so these recover the data; the executor stays unavailable.
+        let client = self.recovering_write(&self.clients).remove(server_id);
         if let Some(c) = client {
             c.shutdown().await;
         }
-        if let Ok(mut caps) = self.capabilities.write() {
-            caps.retain(|_, c| c.server_id != server_id);
+        self.recovering_write(&self.capabilities)
+            .retain(|_, c| c.server_id != server_id);
+        // Not stale any more, but a new generation: a call resolved before the removal (an
+        // approval card open during a reconnect) can't pass its check afterwards.
+        {
+            let next = self.generations.fetch_add(1, Ordering::SeqCst) + 1;
+            self.changes
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .insert(
+                    server_id.to_owned(),
+                    ToolListState {
+                        generation: next,
+                        stale: false,
+                    },
+                );
         }
         self.reindex_names();
     }
@@ -228,13 +413,11 @@ impl Executor {
     /// many did not stop in time (they are removed either way).
     pub async fn remove_all_servers(&self, per_server: std::time::Duration) -> usize {
         let clients: Vec<Arc<McpClient>> = self
-            .clients
-            .write()
-            .map(|mut c| c.drain().map(|(_, v)| v).collect())
-            .unwrap_or_default();
-        if let Ok(mut caps) = self.capabilities.write() {
-            caps.clear();
-        }
+            .recovering_write(&self.clients)
+            .drain()
+            .map(|(_, v)| v)
+            .collect();
+        self.recovering_write(&self.capabilities).clear();
         self.reindex_names();
         shutdown_concurrently(
             clients
@@ -250,11 +433,13 @@ impl Executor {
     /// stuck server can't keep the others (and their process trees) alive. Returns how
     /// many servers did not stop in time.
     pub async fn shutdown_all(&self, per_server: std::time::Duration) -> usize {
-        let clients: Vec<Arc<McpClient>> = self
-            .clients
-            .read()
-            .map(|c| c.values().cloned().collect())
-            .unwrap_or_default();
+        let clients: Vec<Arc<McpClient>> = match self.clients.read() {
+            Ok(c) => c.values().cloned().collect(),
+            Err(p) => {
+                self.mark_unavailable();
+                p.into_inner().values().cloned().collect()
+            }
+        };
         shutdown_concurrently(
             clients
                 .into_iter()
@@ -267,6 +452,7 @@ impl Executor {
 
     /// Re-list a server's tools (after connect, restart or `tools/list_changed`).
     pub async fn refresh(&self, server_id: &str) -> Result<Vec<McpCapability>, CoreError> {
+        self.check_available(&format!("mcp.{server_id}"))?;
         let client = self.client(server_id).ok_or_else(|| {
             CoreError::from(ToolError::new(
                 format!("mcp.{server_id}"),
@@ -276,8 +462,11 @@ impl Executor {
         })?;
         let tools = client.list_tools().await?;
         let trusted = self.trusts(server_id);
-        let ov = self.overrides.read().map(|o| o.clone()).unwrap_or_default();
-        if let Ok(mut all) = self.capabilities.write() {
+        // Never rebuild a server's tools without the user's overrides.
+        let unavailable = || CoreError::from(self.unavailable_error(&format!("mcp.{server_id}")));
+        let ov = self.rd(&self.overrides).ok_or_else(unavailable)?.clone();
+        {
+            let mut all = self.wr(&self.capabilities).ok_or_else(unavailable)?;
             all.retain(|_, c| c.server_id != server_id);
             for t in &tools {
                 let id = crate::capability::capability_id(server_id, &t.name);
@@ -297,7 +486,8 @@ impl Executor {
     /// (a tool is never renamed mid-conversation); newcomers are visited in id order and get a
     /// hash suffix of their capability id when their name is taken.
     fn reindex_names(&self) {
-        let (Ok(mut all), Ok(mut names)) = (self.capabilities.write(), self.llm_names.write())
+        let (Some(mut all), Some(mut names)) =
+            (self.wr(&self.capabilities), self.wr(&self.llm_names))
         else {
             return;
         };
@@ -335,12 +525,17 @@ impl Executor {
         }
     }
 
+    /// Every capability, sorted by id. Empty once [`Self::is_unavailable`]: no tool is
+    /// offered, and every call is refused with a clear error.
     pub fn capabilities(&self) -> Vec<McpCapability> {
-        let mut v: Vec<_> = self
-            .capabilities
-            .read()
-            .map(|c| c.values().cloned().collect())
-            .unwrap_or_default();
+        if self.is_unavailable() {
+            return vec![];
+        }
+        let Some(caps) = self.rd(&self.capabilities) else {
+            return vec![];
+        };
+        let mut v: Vec<_> = caps.values().cloned().collect();
+        drop(caps);
         v.sort_by(|a, b| a.spec.id.cmp(&b.spec.id));
         v
     }
@@ -350,7 +545,7 @@ impl Executor {
     pub fn tool_specs(&self) -> Vec<ToolSpec> {
         self.capabilities()
             .into_iter()
-            .filter(|c| !c.disabled)
+            .filter(|c| !c.disabled && !self.is_stale(&c.server_id))
             .map(|c| ToolSpec {
                 name: c.llm_name.clone(),
                 description: c.spec.description.clone(),
@@ -361,12 +556,24 @@ impl Executor {
 
     /// Find a capability by id (`mcp.fs.read_file`) or LLM name (`mcp__fs__read_file`).
     pub fn resolve(&self, name: &str) -> Option<McpCapability> {
-        let caps = self.capabilities.read().ok()?;
+        if self.is_unavailable() {
+            return None;
+        }
+        let caps = self.rd(&self.capabilities)?;
         if let Some(c) = caps.get(name) {
             return Some(c.clone());
         }
-        let id = self.llm_names.read().ok()?.get(name).cloned()?;
+        let id = self.rd(&self.llm_names)?.get(name).cloned()?;
         caps.get(&id).cloned()
+    }
+
+    /// A write guard even on a poisoned lock (removing or stopping servers must always
+    /// work). Marks the executor unavailable.
+    fn recovering_write<'a, T>(&self, lock: &'a RwLock<T>) -> RwLockWriteGuard<'a, T> {
+        lock.write().unwrap_or_else(|p| {
+            self.mark_unavailable();
+            p.into_inner()
+        })
     }
 
     fn not_found(name: &str) -> ToolError {
@@ -379,9 +586,12 @@ impl Executor {
 
     /// Preflight a call without running it.
     pub fn preflight(&self, ctx: &CallContext, call: &ToolCall) -> Result<Preflight, CoreError> {
+        self.check_available(&call.name)?;
         let cap = self
             .resolve(&call.name)
             .ok_or_else(|| Self::not_found(&call.name))?;
+        let seen = self.tool_list_generation(&cap.server_id);
+        self.check_fresh(&cap.server_id, &cap.spec.id, seen)?;
         let status = self
             .client(&cap.server_id)
             .map(|c| c.status())
@@ -499,9 +709,19 @@ impl Executor {
         call: &ToolCall,
         mut cancel: std::pin::Pin<&mut (impl std::future::Future<Output = ()> + Send)>,
     ) -> Result<ToolOutcome, ToolError> {
+        self.check_available(&call.name)?;
+        // Read before resolving, so the capability is never older than the generation it is
+        // checked against.
+        let before = self.generations_snapshot();
         let cap = self
             .resolve(&call.name)
             .ok_or_else(|| Self::not_found(&call.name))?;
+        // Resolved, then the lock poisoned before use: still refuse.
+        self.check_available(&call.name)?;
+        // The server changed its tools and they aren't reviewed again yet: this call would
+        // run on the old definition and approval (#178).
+        let seen = before.get(&cap.server_id).copied().unwrap_or(0);
+        self.check_fresh(&cap.server_id, &cap.spec.id, seen)?;
         let id = cap.spec.id.clone();
         let scope = ctx.scope();
         let client = self
@@ -633,6 +853,10 @@ impl Executor {
                 ));
             }
         }
+        // The user approved what the card showed. If the server changed its tools while
+        // the card was open (even if the change was already reviewed again), that may no
+        // longer be what runs: refuse, and a retry shows a new card.
+        self.check_fresh(&cap.server_id, &id, seen)?;
 
         let mut guard = None;
         let attempt_base = match &key {
@@ -849,6 +1073,168 @@ mod shutdown_tests {
         assert!(
             started.elapsed() < std::time::Duration::from_secs(1),
             "concurrent, not sequential"
+        );
+    }
+}
+
+/// #145: a poisoned lock fails closed. The user's per-tool choices are never dropped by
+/// reading the lock as empty; every tool is refused with a clear error instead.
+#[cfg(test)]
+mod poison_tests {
+    use super::*;
+
+    fn executor() -> Executor {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        for m in ledger::migrations() {
+            conn.execute_batch(m).unwrap();
+        }
+        let (gate, _rx) = ApprovalGate::new(4);
+        Executor::new(Arc::new(gate), Arc::new(Mutex::new(conn)))
+    }
+
+    fn tool(name: &str) -> crate::client::McpTool {
+        crate::client::McpTool {
+            name: name.into(),
+            title: None,
+            description: format!("{name} tool"),
+            input_schema: serde_json::json!({"type": "object"}),
+            output_schema: None,
+            hints: Default::default(),
+        }
+    }
+
+    /// `fs.delete_all` turned off by the user, `fs.read` left on.
+    fn with_tools(ex: &Executor) {
+        let off = CapabilityOverride {
+            disabled: true,
+            ..Default::default()
+        };
+        ex.set_overrides(HashMap::from([(
+            "mcp.fs.delete_all".to_string(),
+            off.clone(),
+        )]));
+        let mut caps = ex.capabilities.write().unwrap();
+        caps.insert(
+            "mcp.fs.delete_all".into(),
+            McpCapability::from_tool("fs", &tool("delete_all"), Some(&off), true),
+        );
+        caps.insert(
+            "mcp.fs.read".into(),
+            McpCapability::from_tool("fs", &tool("read"), None, true),
+        );
+        drop(caps);
+        ex.reindex_names();
+    }
+
+    fn poison<T: Send + Sync>(lock: &RwLock<T>) {
+        std::thread::scope(|s| {
+            let _ = s
+                .spawn(|| {
+                    let _g = lock.write().unwrap();
+                    panic!("poison the lock (test)");
+                })
+                .join();
+        });
+        assert!(lock.is_poisoned());
+    }
+
+    fn call(name: &str) -> ToolCall {
+        ToolCall {
+            id: "c1".into(),
+            name: name.into(),
+            arguments: serde_json::json!({}),
+        }
+    }
+
+    fn ctx() -> CallContext {
+        CallContext::new(Some("conv".into()), Id::new())
+    }
+
+    #[tokio::test]
+    async fn a_disabled_tool_stays_refused_after_a_poisoned_overrides_lock() {
+        let ex = executor();
+        with_tools(&ex);
+        // Before: the disabled tool is hidden and blocked; the other is offered.
+        let names: Vec<String> = ex.tool_specs().into_iter().map(|t| t.name).collect();
+        assert_eq!(names, ["mcp__fs__read"]);
+        assert!(matches!(
+            ex.preflight(&ctx(), &call("mcp__fs__delete_all")).unwrap(),
+            Preflight::Blocked { .. }
+        ));
+
+        poison(&ex.overrides);
+        // Applying overrides again (as Settings or a refresh does) must not rebuild the
+        // capabilities without them.
+        ex.set_overrides(HashMap::new());
+        assert!(ex.is_unavailable());
+        assert!(
+            ex.capabilities.read().unwrap()["mcp.fs.delete_all"].disabled,
+            "the user's choice was not dropped"
+        );
+
+        // Fail closed: nothing offered, every call refused with the clear error.
+        assert!(ex.tool_specs().is_empty());
+        assert!(ex.capabilities().is_empty());
+        for name in ["mcp__fs__delete_all", "mcp__fs__read", "mcp.fs.delete_all"] {
+            let e = ex
+                .execute_tool_error(&ctx(), &call(name), std::future::pending())
+                .await
+                .unwrap_err();
+            assert_eq!(e.kind, ToolErrorKind::Unavailable, "{name}");
+            assert!(
+                e.user_message().contains("Restart Demios"),
+                "{}",
+                e.user_message()
+            );
+            match ex.preflight(&ctx(), &call(name)).unwrap_err() {
+                CoreError::Capability { user_message, .. } => {
+                    assert!(user_message.contains("turned off after an internal error"));
+                }
+                other => panic!("{other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn any_poisoned_executor_lock_turns_every_tool_off() {
+        for which in ["capabilities", "llm_names", "clients"] {
+            let ex = executor();
+            with_tools(&ex);
+            match which {
+                "capabilities" => poison(&ex.capabilities),
+                "llm_names" => poison(&ex.llm_names),
+                _ => poison(&ex.clients),
+            }
+            // The first access that meets the poisoned lock latches "unavailable".
+            let _ = ex.resolve("mcp__fs__read");
+            let _ = ex.client("fs");
+            let _ = ex.tool_specs();
+            assert!(ex.is_unavailable(), "{which}");
+            let e = ex
+                .execute_tool_error(&ctx(), &call("mcp__fs__read"), std::future::pending())
+                .await
+                .unwrap_err();
+            assert_eq!(e.kind, ToolErrorKind::Unavailable, "{which}");
+            assert!(ex.refresh("fs").await.is_err(), "{which}");
+        }
+    }
+
+    #[tokio::test]
+    async fn removing_servers_still_works_after_a_poisoned_lock() {
+        let ex = executor();
+        with_tools(&ex);
+        poison(&ex.capabilities);
+        assert_eq!(
+            ex.remove_all_servers(std::time::Duration::from_millis(50))
+                .await,
+            0
+        );
+        assert!(ex.is_unavailable());
+        assert!(
+            ex.capabilities
+                .read()
+                .unwrap_or_else(|p| p.into_inner())
+                .is_empty()
         );
     }
 }

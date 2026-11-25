@@ -40,9 +40,53 @@ export interface Conversation {
   id: Id;
   title: string;
   model: string | null;
+  /** The project this chat belongs to, if any. */
+  project_id: Id | null;
   created_at: number;
   updated_at: number;
 }
+
+/** A project: chats, files and standing instructions grouped together (T-PRJ-01). */
+export interface Project {
+  id: Id;
+  name: string;
+  /** Sent with every chat of the project; "" for none. */
+  instructions: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface ProjectSummary extends Project {
+  /** Live chats in the project. */
+  chats: number;
+  files: number;
+}
+
+/** A file added to a project: a copy kept in the app data folder. */
+export interface ProjectFile {
+  id: Id;
+  project_id: Id;
+  /** Display name, plain text. */
+  name: string;
+  media_type: string;
+  size: number;
+  sha256: string;
+  /** Where it was added from (shown only). */
+  source_path: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface AddedFiles {
+  /** The file picker was closed without a choice. */
+  cancelled: boolean;
+  added: ProjectFile[];
+  skipped: { name: string; reason: string }[];
+}
+
+/** Limits the backend enforces (apps/desktop/src/projects.rs, dn_store::project). */
+export const PROJECT_NAME_MAX = 100;
+export const PROJECT_INSTRUCTIONS_MAX = 8000;
 
 /** A chat skill from the library (apps/desktop/src/skills.rs `SkillInfo`). */
 export interface SkillInfo {
@@ -51,6 +95,24 @@ export interface SkillInfo {
   description: string;
   /** Tool patterns it allows; `[]` means no tools. It never changes approvals. */
   allowed_tools: string[];
+  /** Shipped with the app, or a file in the user's skills folder. */
+  source: "builtin" | "user";
+}
+
+/** A skill file that didn't load (skills.rs `SkillProblem`). */
+export interface SkillProblem {
+  /** Relative to its skills folder, e.g. `my-skill/SKILL.md`. */
+  file: string;
+  message: string;
+  /** `builtin`: a file shipped with the app is broken (report it); `user`: the user's own. */
+  source: "builtin" | "user";
+}
+
+/** Settings › Skills (skills.rs `SkillsOverview`). */
+export interface SkillsOverview {
+  skills: SkillInfo[];
+  problems: SkillProblem[];
+  folder: string | null;
 }
 
 export type MessageStatus = "streaming" | "complete" | "cancelled" | "error";
@@ -98,8 +160,6 @@ export type ChatEvent =
       stop?: "completed" | "length" | "step_limit" | "cancelled";
     }
   | { type: "error"; message_id: Id; message: string; recovery: RecoveryAction[] }
-  /** A fenced artifact block (model without tool calling) wasn't saved; `reason` says why. */
-  | { type: "artifact_not_saved"; message_id: Id; conversation_id: Id; title: string; reason: string }
   /** An artifact was created or got a new version in this turn. */
   | {
       type: "artifact_changed";
@@ -114,6 +174,15 @@ export interface TurnStarted {
   user_message: StoredMessage | null;
   assistant_message: StoredMessage;
   title: string | null;
+  /** Label of the skill this answer is written with, if any. */
+  skill: string | null;
+}
+
+/** An answer written with a skill (skills.rs `AnswerSkill`). */
+export interface AnswerSkill {
+  message_id: Id;
+  name: string;
+  label: string;
 }
 
 // ---- tools (dn-tools via the app)
@@ -141,6 +210,8 @@ export interface McpServerStatus {
   tools: number;
   /** Tools that are new or changed since they were reviewed; they always ask meanwhile. */
   review: number;
+  /** Bumped when the server changed its tools mid-session, so the Tools view reloads. */
+  revision: number;
 }
 
 /** Tool-runtime events (`watch_tools`). */
@@ -172,6 +243,10 @@ export interface Settings {
   telemetry_enabled: boolean;
   /** First-run AI notice dismissed (T-STORE-09). Missing in older saves = not seen. */
   ai_notice_seen?: boolean;
+  /** Check for updates once when Demios starts (#95). Off by default. */
+  check_updates_at_launch?: boolean;
+  /** The one-time question about the launch check was answered. */
+  launch_check_offered?: boolean;
   /** Passed through untouched (no screen edits MCP servers yet). */
   mcp_servers?: unknown[];
 }
@@ -329,9 +404,17 @@ export interface ModelCatalog {
   settings: Settings;
   /** The model chat uses now (chosen or picked automatically); null if none is usable. */
   chat_model: string | null;
-  /** Whether the chat model makes tool calls (artifact tools) or uses the fenced format. */
+  /** Whether the chat model makes tool calls; without them it can't make artifacts. */
   chat_model_tools: boolean;
+  /** Where local models run on this computer; null when local models are off. */
+  compute: LocalCompute | null;
 }
+
+/** Where local models run (T-INF-24): a graphics card, shared graphics, or the processor. */
+export type LocalCompute =
+  | { mode: "gpu"; name: string; backend: string; vram: number; description: string }
+  | { mode: "shared_gpu"; name: string; backend: string; description: string }
+  | { mode: "cpu"; reason: "no_gpu" | "no_gpu_support"; description: string };
 
 export interface AppInfo {
   version: string;
@@ -423,6 +506,7 @@ export type ReportKind = "problem" | "answer";
 /** What "Delete all local data" removes (confirm dialog). */
 export interface LocalDataSummary {
   conversations: number;
+  projects: number;
   /** Artifacts in the database. */
   artifacts: number;
   data_dir: string | null;
@@ -494,6 +578,35 @@ export interface McpServerToolsView {
 // ---- artifacts (apps/desktop/src/artifacts.rs, dn-artifacts)
 
 /** `dn_artifacts::ArtifactSummary`. */
+/** How a project search ranked (knowledge.rs): both ways, or keywords only (no embedding model). */
+export type SearchMode = "hybrid" | "keyword";
+
+/** One excerpt an answer was given: where it is in the project's files. */
+export interface Citation {
+  label: string;
+  chunk_id: number;
+  file_id: string;
+  display_path: string;
+  start_line: number;
+  end_line: number;
+}
+
+/** The embedding-model offer (knowledge.rs, #171). */
+export interface KnowledgeStatus {
+  /** `ask`: not answered yet (the project view may ask once); `declined`: "Not now". */
+  offer: "ask" | "declined" | "accepted";
+  /** The offered model; null when this build has no local models. */
+  model: { id: string; name: string; size: number; state: DownloadState } | null;
+  /** While the installed model hasn't embedded every passage yet. */
+  embedding: { done: number; total: number } | null;
+}
+
+/** What an answer in a project chat was given (`message_sources`). */
+export interface MessageSources {
+  mode: SearchMode;
+  citations: Citation[];
+}
+
 export interface ArtifactSummary {
   id: Id;
   conversation_id: Id;

@@ -32,6 +32,11 @@ custom-protocol = ["tauri/custom-protocol"]
 # T-STORE-08: the signed self-updater. Only direct-download builds (macOS DMG, Windows
 # MSI/NSIS, AppImage) turn it on; MSIX and Flatpak builds must not (stores update the app).
 updater = ["dep:tauri-plugin-updater"]
+# T-INF-24: local models on the GPU through Vulkan (NVIDIA, AMD, Intel) on Windows and Linux.
+# Release installers turn it on (with tauri.vulkan-*.conf.json, which ship the Khronos loader
+# or depend on the system one); without a usable GPU the app runs models on the processor and
+# says so. macOS always uses Metal.
+vulkan = ["dn-inference/vulkan"]
 
 [build-dependencies]
 tauri-build.workspace = true
@@ -45,6 +50,7 @@ dn-providers = { path = "../../crates/dn-providers", version = "0.1.0" }
 dn-tools = { path = "../../crates/dn-tools", version = "0.1.0" }
 dn-artifacts = { path = "../../crates/dn-artifacts", version = "0.1.0" }
 dn-inference = { path = "../../crates/dn-inference", version = "0.1.0" }
+dn-knowledge = { path = "../../crates/dn-knowledge", version = "0.1.0" }
 dn-models = { path = "../../crates/dn-models", version = "0.1.0" }
 futures-core.workspace = true
 rusqlite.workspace = true

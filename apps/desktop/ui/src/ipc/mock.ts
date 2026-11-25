@@ -4,10 +4,12 @@
 
 import type { Api } from "./commands";
 import type {
+  DownloadState,
   ApprovalDecision,
   ApprovalPrompt,
   ArtifactDetail,
   ChatEvent,
+  AnswerSkill,
   Conversation,
   SkillInfo,
   ModelCatalog,
@@ -25,6 +27,8 @@ import type {
   McpValueInput,
   HubRepoView,
   HubSearchPage,
+  Project,
+  ProjectFile,
 } from "./types";
 
 const REPLY = (q: string, turn: number) =>
@@ -36,20 +40,30 @@ const REPLY = (q: string, turn: number) =>
 
 export function createMockApi(): Api {
   const convs: Conversation[] = [];
+  const projects: (Project & { deleted_at: number | null })[] = [];
+  const projectFiles: (ProjectFile & { deleted: boolean })[] = [];
+  const liveProject = (pid: string) => {
+    const p = projects.find((x) => x.id === pid && x.deleted_at === null);
+    if (p === undefined) throw { code: "not_found", message: "This project was deleted." };
+    return p;
+  };
   const msgs = new Map<string, StoredMessage[]>();
   const chatSkills = new Map<string, string>();
+  const answerSkills: AnswerSkill[] = [];
   const skills: SkillInfo[] = [
     {
       name: "proofread",
       label: "Proofread",
       description: "Fixes spelling, grammar and punctuation without changing the meaning or tone.",
       allowed_tools: [],
+      source: "builtin",
     },
     {
       name: "explain-code",
       label: "Explain code",
       description: "Explains what a piece of code does, step by step.",
       allowed_tools: ["artifact.*"],
+      source: "user",
     },
   ];
   const keys = new Set<string>();
@@ -142,8 +156,8 @@ export function createMockApi(): Api {
     },
   ];
   const mcpStatus = new Map<string, McpServerStatus>([
-    ["files", { server_id: "files", name: "Project files", state: "connected", message: null, tools: 4, review: 1 }],
-    ["tracker", { server_id: "tracker", name: "Issue tracker", state: "needs_auth", message: "Sign in to use this server's tools.", tools: 0, review: 0 }],
+    ["files", { server_id: "files", name: "Project files", state: "connected", message: null, tools: 4, review: 1, revision: 0 }],
+    ["tracker", { server_id: "tracker", name: "Issue tracker", state: "needs_auth", message: "Sign in to use this server's tools.", tools: 0, review: 0, revision: 0 }],
   ]);
   // Tools of "files" (T-SHELL-11). `search` changed since it was reviewed, and its new
   // description tries markup and an instruction: the screen shows it as plain text.
@@ -196,7 +210,7 @@ export function createMockApi(): Api {
       state,
       message: state === "needs_auth" ? "Sign in to use this server's tools." : state === "signing_in" ? "Finish signing in in your browser." : null,
       tools: state === "connected" ? 3 : 0,
-      review: state === "connected" ? mcpTools.filter((t) => t.flag !== null).length : 0,
+      review: state === "connected" ? mcpTools.filter((t) => t.flag !== null).length : 0, revision: 0,
     };
     mcpStatus.set(s.id, status);
     approvalSink?.({ type: "mcp_server", status });
@@ -235,7 +249,7 @@ export function createMockApi(): Api {
   const catalog = (): ModelCatalog => ({
     slots: [
       { slot_id: "chat", label: "Chat", description: "Answers in conversations.", capability: "chat" },
-      { slot_id: "embed", label: "Embeddings", description: "Knowledge search (arrives with dn-knowledge).", capability: "embedding" },
+      { slot_id: "embed", label: "Embeddings", description: "Knowledge search in projects. Without one, it searches by keywords only.", capability: "embedding" },
     ],
     models: [
       { model_ref: "local:dev-fake", label: "Dev fake model (canned replies)", source: "dev", capabilities: ["chat"], available: true, note: null },
@@ -260,6 +274,12 @@ export function createMockApi(): Api {
     settings,
     chat_model: settings.slots["chat"] ?? "local:dev-fake",
     chat_model_tools: true,
+    compute: {
+      mode: "shared_gpu",
+      name: "Apple M3",
+      backend: "Metal",
+      description: "Local models run on the built-in graphics (Apple M3), which share this computer's memory.",
+    },
   });
 
   const stream = (cid: string, a: StoredMessage, q: string, onEvent: (e: ChatEvent) => void) => {
@@ -368,6 +388,11 @@ export function createMockApi(): Api {
     return x;
   };
 
+  const knowledge: { offer: "ask" | "declined" | "accepted"; started: number | null; state: DownloadState } = {
+    offer: "ask",
+    started: null,
+    state: { state: "not_downloaded" },
+  };
   const api: Api = {
     // The Windows artifact webview has no browser equivalent.
     artifactChildOpen: async () => {
@@ -377,6 +402,26 @@ export function createMockApi(): Api {
     artifactChildBounds: async () => null,
     artifactChildFocus: async () => null,
     artifactChildClose: async () => null,
+    messageSources: async () => null,
+    // The embedding-model offer: a simulated download, then "improving search".
+    knowledgeStatus: async () => {
+      const k = knowledge;
+      if (k.started !== null) {
+        const t = Date.now() - k.started;
+        k.state =
+          t < 3000
+            ? { state: "downloading", done: Math.round((84_000_000 * t) / 3000), total: 84_000_000, bytes_per_sec: 28_000_000 }
+            : { state: "ready" };
+      }
+      const t = k.started === null ? 0 : Date.now() - k.started - 3000;
+      const embedding = k.state.state === "ready" && t < 3000 ? { done: Math.max(0, Math.round((48 * t) / 3000)), total: 48 } : null;
+      return { offer: k.offer, model: { id: "nomic-embed-text-v1.5-q4_k_m", name: "nomic-embed-text v1.5", size: 84_000_000, state: k.state }, embedding };
+    },
+    knowledgeOffer: async (accept) => {
+      knowledge.offer = accept ? "accepted" : "declined";
+      if (accept && knowledge.started === null) knowledge.started = Date.now();
+      return null;
+    },
     appInfo: async () => ({
       version: "0.1.0 (browser mock)",
       dev_fake_model: true,
@@ -396,6 +441,7 @@ export function createMockApi(): Api {
         date: "2027-01-15T10:00:00Z",
       };
     },
+    launchUpdateCheck: async () => null,
     installUpdate: async (version, onProgress) => {
       const total = 40 * 1024 * 1024;
       for (let done = 0; done <= total; done += total / 8) {
@@ -416,6 +462,7 @@ export function createMockApi(): Api {
     },
     localDataSummary: async () => ({
       conversations: convs.filter((c) => !deleted.has(c.id)).length,
+      projects: projects.filter((p) => p.deleted_at === null).length,
       artifacts: artifacts.length,
       data_dir: null,
       models_dir: null,
@@ -426,6 +473,8 @@ export function createMockApi(): Api {
     }),
     deleteAllLocalData: async () => {
       convs.length = 0;
+      projects.length = 0;
+      projectFiles.length = 0;
       msgs.clear();
       deleted.clear();
       keys.clear();
@@ -439,13 +488,92 @@ export function createMockApi(): Api {
     },
     listConversations: async () =>
       convs.filter((c) => !deleted.has(c.id)).sort((x, y) => y.updated_at - x.updated_at),
-    createConversation: async () => {
-      const c = { id: id(), title: "New chat", model: null, created_at: now(), updated_at: now() };
+    createConversation: async (projectId = null) => {
+      if (projectId !== null) liveProject(projectId);
+      const c = { id: id(), title: "New chat", model: null, project_id: projectId, created_at: now(), updated_at: now() };
       convs.push(c);
       msgs.set(c.id, []);
       return c;
     },
     renameConversation: async () => null,
+    listProjects: async () =>
+      projects
+        .filter((p) => p.deleted_at === null)
+        .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }))
+        .map(({ deleted_at: _d, ...p }) => ({
+          ...p,
+          chats: convs.filter((c) => c.project_id === p.id && !deleted.has(c.id)).length,
+          files: projectFiles.filter((f) => f.project_id === p.id && !f.deleted).length,
+        })),
+    createProject: async (name) => {
+      const p = { id: id(), name: name.trim(), instructions: "", created_at: now(), updated_at: now(), deleted_at: null };
+      if (p.name === "") throw { code: "invalid_input", message: "Project name must be 1–100 characters." };
+      projects.push(p);
+      const { deleted_at: _d, ...out } = p;
+      return out;
+    },
+    updateProject: async (pid, name, instructions) => {
+      const p = liveProject(pid);
+      if (name.trim() === "") throw { code: "invalid_input", message: "Project name must be 1–100 characters." };
+      p.name = name.trim();
+      p.instructions = instructions.trim();
+      p.updated_at = now();
+      const { deleted_at: _d, ...out } = p;
+      return out;
+    },
+    deleteProject: async (pid) => {
+      const p = liveProject(pid);
+      p.deleted_at = now();
+      const chats = convs.filter((c) => c.project_id === pid && !deleted.has(c.id));
+      for (const c of chats) deleted.add(c.id);
+      return chats.length;
+    },
+    restoreProject: async (pid) => {
+      const p = projects.find((x) => x.id === pid);
+      if (p !== undefined) p.deleted_at = null;
+      for (const c of convs) if (c.project_id === pid) deleted.delete(c.id);
+      return null;
+    },
+    listProjectFiles: async (pid) => {
+      liveProject(pid);
+      return projectFiles.filter((f) => f.project_id === pid && !f.deleted).map(({ deleted: _d, ...f }) => f);
+    },
+    addProjectFiles: async (pid) => {
+      liveProject(pid);
+      await new Promise((r) => setTimeout(r, 400));
+      const picked = [
+        { name: "Literature review.md", size: 18_432 },
+        { name: "Interview notes.pdf", size: 2_304_000 },
+      ];
+      const added = picked.map((x) => {
+        const f = {
+          id: id(),
+          project_id: pid,
+          name: x.name,
+          media_type: x.name.endsWith(".pdf") ? "application/pdf" : "text/markdown",
+          size: x.size,
+          sha256: "0".repeat(64),
+          source_path: `/Users/you/Documents/${x.name}`,
+          created_at: now(),
+          updated_at: now(),
+          deleted: false,
+        };
+        projectFiles.push(f);
+        const { deleted: _d, ...out } = f;
+        return out;
+      });
+      return { cancelled: false, added, skipped: [{ name: "Recording.mov", reason: "It's larger than 50 MB." }] };
+    },
+    removeProjectFile: async (pid, fid) => {
+      const f = projectFiles.find((x) => x.id === fid && x.project_id === pid);
+      if (f !== undefined) f.deleted = true;
+      return null;
+    },
+    restoreProjectFile: async (pid, fid) => {
+      const f = projectFiles.find((x) => x.id === fid && x.project_id === pid);
+      if (f !== undefined) f.deleted = false;
+      return null;
+    },
     deleteConversation: async (cid) => {
       deleted.add(cid);
       return null;
@@ -457,6 +585,15 @@ export function createMockApi(): Api {
     listMessages: async (cid) => structuredClone(msgs.get(cid) ?? []),
     listSkills: async () => structuredClone(skills),
     getChatSkill: async (cid) => chatSkills.get(cid) ?? null,
+    listAnswerSkills: async (cid) =>
+      structuredClone(answerSkills.filter((a) => msgs.get(cid)?.some((m) => m.id === a.message_id))),
+    skillsOverview: async () => ({
+      skills: structuredClone(skills),
+      problems: [{ file: "my-skill/SKILL.md", message: "name: `My Skill` must be lowercase letters, digits and single hyphens", source: "user" }],
+      folder: "~/.local/share/demios/skills",
+    }),
+    reloadSkills: async () => ({ skills: structuredClone(skills), problems: [], folder: "~/.local/share/demios/skills" }),
+    openSkillsFolder: async () => null,
     setChatSkill: async (cid, skill) => {
       if (skill === null) chatSkills.delete(cid);
       else if (skills.some((s) => s.name === skill)) chatSkills.set(cid, skill);
@@ -477,7 +614,9 @@ export function createMockApi(): Api {
       else if (/html artifact|update the artifact/i.test(text)) artifactTurn(cid, a, text, onEvent);
       else stops.set(cid, stream(cid, a, text, onEvent));
       // IPC serialises; hand out copies so the UI never shares objects with the mock.
-      return structuredClone({ user_message: u, assistant_message: a, title });
+      const skill = skills.find((s) => s.name === chatSkills.get(cid)) ?? null;
+      if (skill !== null) answerSkills.push({ message_id: a.id, name: skill.name, label: skill.label });
+      return structuredClone({ user_message: u, assistant_message: a, title, skill: skill?.label ?? null });
     },
     regenerate: async (cid, onEvent) => {
       const list = msgs.get(cid) ?? [];
@@ -486,7 +625,7 @@ export function createMockApi(): Api {
       const a = message(cid, "assistant", "", "streaming");
       list.push(a);
       stops.set(cid, stream(cid, a, list[lastUser] ? (list[lastUser].content[0] as { text: string }).text : "", onEvent));
-      return structuredClone({ user_message: null, assistant_message: a, title: null });
+      return structuredClone({ user_message: null, assistant_message: a, title: null, skill: null });
     },
     stopGeneration: async (cid) => {
       const s = stops.get(cid);

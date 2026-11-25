@@ -31,6 +31,15 @@ const COMMANDS: &[&str] = &[
     "rename_conversation",
     "delete_conversation",
     "restore_conversation",
+    "list_projects",
+    "create_project",
+    "update_project",
+    "delete_project",
+    "restore_project",
+    "list_project_files",
+    "add_project_files",
+    "remove_project_file",
+    "restore_project_file",
     "list_messages",
     "send_message",
     "regenerate",
@@ -53,6 +62,12 @@ const COMMANDS: &[&str] = &[
     "pause_download",
     "check_for_update",
     "install_update",
+    "launch_update_check",
+    // Knowledge search (knowledge.rs, #116): what an answer was given.
+    "message_sources",
+    // The embedding-model offer (#171).
+    "knowledge_status",
+    "knowledge_offer",
     // Windows artifact webview (artifact_child.rs, ADR-0012); main webview only.
     "artifact_child_open",
     "artifact_child_render",

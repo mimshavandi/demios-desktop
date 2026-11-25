@@ -4,9 +4,9 @@ Last updated: set on publication
 
 ## Who we are
 
-Demios Desktop ("the app") is an open-source desktop app licensed under Apache-2.0. It is published by **DigiNote Inc.**, which is responsible for this policy and is the controller for the processing described in [Data protection (GDPR)](#data-protection-gdpr). DigiNote Inc. is also the provider of the app under the EU AI Act. App id: `io.demios.app`.
+Demios Desktop ("the app") is an open-source desktop app licensed under Apache-2.0. It is published by **DigiNote, Inc.**, which is responsible for this policy and is the controller for the processing described in [Data protection (GDPR)](#data-protection-gdpr). DigiNote, Inc. is also the provider of the app under the EU AI Act. App id: `io.demios.app`.
 
-DigiNote Inc.
+DigiNote, Inc.
 Niederkasseler Kirchweg 85
 40547 Düsseldorf
 Germany
@@ -84,7 +84,7 @@ Some models need your Hugging Face token. If you save one, it is kept in your sy
 
 ### Updates (copies downloaded from GitHub)
 
-No build available today checks for updates. Preview builds and builds from source have updates turned off, and **Settings → General → About** says so. Builds with updates turned on, from the first signed release downloaded from GitHub or demios.io, work as described here. Such a copy checks for a new version only when you select **Check for updates** in **Settings → General → About**. The app then asks GitHub (`github.com`, which sends it on to `release-assets.githubusercontent.com`) for a small file that names the newest version. The address is the same for everyone and carries nothing about you or your copy. GitHub sees your IP address and standard request headers. If a newer version exists, the app shows its release notes, and downloads it from GitHub only after you select **Install and restart**. Nothing else is sent. Demios isn't offered in any app store yet. If it is later, store copies will be updated by their store and won't contact GitHub for updates. [GitHub privacy statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement).
+No build available today checks for updates. Preview builds and builds from source have updates turned off, and **Settings → General → About** says so. Builds with updates turned on, from the first signed release downloaded from GitHub or demios.io, work as described here. Such a copy checks for a new version when you select **Check for updates** in **Settings → General → About**, and also once each time the app starts if you turn on **Check for updates when Demios starts** there (it's off unless you do). The app then asks GitHub (`github.com`, which sends it on to `release-assets.githubusercontent.com`) for a small file that names the newest version. The address is the same for everyone and carries nothing about you or your copy. GitHub sees your IP address and standard request headers. If a newer version exists, the app shows its release notes, and downloads it from GitHub only after you select **Install and restart**. Nothing else is sent. Demios isn't offered in any app store yet. If it is later, store copies will be updated by their store and won't contact GitHub for updates. [GitHub privacy statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement).
 
 ### Tool servers (MCP)
 
@@ -130,7 +130,7 @@ This section gives the information required by Articles 13 and 14 of the EU Gene
 
 ### Controller
 
-DigiNote Inc., at the address in [Who we are](#who-we-are). Email: mahdi@demios.io. No data protection officer is designated. None is required: fewer than 20 people regularly process personal data for us (§ 38(1) BDSG), and our core activities don't involve large-scale monitoring or special categories of data (Art. 37(1) GDPR). For data protection questions, write to mahdi@demios.io.
+DigiNote, Inc., at the address in [Who we are](#who-we-are). Email: mahdi@demios.io. No data protection officer is designated. None is required: fewer than 20 people regularly process personal data for us (§ 38(1) BDSG), and our core activities don't involve large-scale monitoring or special categories of data (Art. 37(1) GDPR). For data protection questions, write to mahdi@demios.io.
 
 ### What we process, why, and on what legal basis
 
@@ -142,7 +142,7 @@ DigiNote Inc., at the address in [Who we are](#who-we-are). Email: mahdi@demios.
 | Using tool servers | Tool arguments, which can contain chat text | **No.** Your computer sends it straight to the server you added. | None needed: we don't process it. |
 | Reporting a problem on GitHub | What you write, the app version and your operating system | Only as a public GitHub issue, which we read as the project's maintainers. | Our legitimate interest in fixing problems in the app (Art. 6(1)(f) GDPR). |
 | Emailing us | Your email address, what you write | **Yes.** | Where your email relates to a contract or a request before one: Art. 6(1)(b). Otherwise our legitimate interest in answering your questions (Art. 6(1)(f)). |
-| Checking for and installing updates (only in builds with updates turned on, from the first signed release; preview builds don't check) | Your IP address and standard request headers | **No.** Your computer asks GitHub directly, only when you select **Check for updates** or **Install and restart**. | None needed: we don't process it. |
+| Checking for and installing updates (only in builds with updates turned on, from the first signed release; preview builds don't check) | Your IP address and standard request headers | **No.** Your computer asks GitHub directly, only when you select **Check for updates** or **Install and restart**, or once at launch if you turned on **Check for updates when Demios starts**. | None needed: we don't process it. |
 | Visiting demios.io | Your IP address, the page requested, time, browser details | **No.** The site is hosted on GitHub Pages. GitHub processes this data in its server logs to run and secure the service; we receive no access logs. | Our legitimate interest in offering the website and keeping it secure (Art. 6(1)(f)). |
 
 The website demios.io sets no cookies and uses no analytics or tracking.
@@ -203,7 +203,7 @@ If the app starts sending any data to us (for example optional crash reports), w
 
 ## Contact
 
-DigiNote Inc. · Niederkasseler Kirchweg 85, 40547 Düsseldorf, Germany · mahdi@demios.io · [GitHub issues](https://github.com/mimshavandi/demios-desktop/issues)
+DigiNote, Inc. · Niederkasseler Kirchweg 85, 40547 Düsseldorf, Germany · mahdi@demios.io · [GitHub issues](https://github.com/mimshavandi/demios-desktop/issues)
 
 Legal notice (Impressum): https://demios.io/impressum
 

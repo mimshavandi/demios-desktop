@@ -3,6 +3,8 @@
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
+  KnowledgeStatus,
+  MessageSources,
   AppInfo,
   ApprovalDecision,
   ArtifactDetail,
@@ -14,8 +16,14 @@ import type {
   UnknownOutcome,
   ChatEvent,
   Conversation,
+  AnswerSkill,
   SkillInfo,
+  SkillsOverview,
   Id,
+  AddedFiles,
+  Project,
+  ProjectFile,
+  ProjectSummary,
   ModelCatalog,
   Settings,
   StoredMessage,
@@ -40,6 +48,7 @@ interface Commands {
   app_info: { args: Record<string, never>; ret: AppInfo };
   check_for_update: { args: Record<string, never>; ret: UpdateCheck };
   install_update: { args: { version: string; onProgress: Channel<UpdateProgress> }; ret: null };
+  launch_update_check: { args: Record<string, never>; ret: UpdateCheck | null };
   delete_all_local_data: { args: Record<string, never>; ret: null };
   local_data_summary: { args: Record<string, never>; ret: LocalDataSummary };
   report_problem: { args: { kind: ReportKind; messageId: Id | null }; ret: null };
@@ -68,11 +77,24 @@ interface Commands {
   set_hf_token: { args: { token: string }; ret: boolean };
   delete_hf_token: { args: Record<string, never>; ret: boolean };
   list_conversations: { args: Record<string, never>; ret: Conversation[] };
-  create_conversation: { args: Record<string, never>; ret: Conversation };
+  create_conversation: { args: { projectId: Id | null }; ret: Conversation };
+  list_projects: { args: Record<string, never>; ret: ProjectSummary[] };
+  create_project: { args: { name: string }; ret: Project };
+  update_project: { args: { projectId: Id; name: string; instructions: string }; ret: Project };
+  delete_project: { args: { projectId: Id }; ret: number };
+  restore_project: { args: { projectId: Id }; ret: null };
+  list_project_files: { args: { projectId: Id }; ret: ProjectFile[] };
+  add_project_files: { args: { projectId: Id }; ret: AddedFiles };
+  remove_project_file: { args: { projectId: Id; fileId: Id }; ret: null };
+  restore_project_file: { args: { projectId: Id; fileId: Id }; ret: null };
   rename_conversation: { args: { conversationId: Id; title: string }; ret: null };
   delete_conversation: { args: { conversationId: Id }; ret: null };
   restore_conversation: { args: { conversationId: Id }; ret: null };
   list_skills: { args: Record<string, never>; ret: SkillInfo[] };
+  list_answer_skills: { args: { conversationId: Id }; ret: AnswerSkill[] };
+  skills_overview: { args: Record<string, never>; ret: SkillsOverview };
+  reload_skills: { args: Record<string, never>; ret: SkillsOverview };
+  open_skills_folder: { args: Record<string, never>; ret: null };
   get_chat_skill: { args: { conversationId: Id }; ret: string | null };
   set_chat_skill: { args: { conversationId: Id; skill: string | null }; ret: null };
   list_messages: { args: { conversationId: Id }; ret: StoredMessage[] };
@@ -107,6 +129,10 @@ interface Commands {
   artifact_child_bounds: { args: { bounds: ChildBounds | null }; ret: null };
   artifact_child_focus: { args: Record<string, never>; ret: null };
   artifact_child_close: { args: Record<string, never>; ret: null };
+  // Knowledge search (knowledge.rs, #116).
+  message_sources: { args: { messageId: Id }; ret: MessageSources | null };
+  knowledge_status: { args: Record<string, never>; ret: KnowledgeStatus };
+  knowledge_offer: { args: { accept: boolean }; ret: null };
 }
 
 /** Where the artifact webview goes, in this webview's CSS pixels. */
@@ -142,9 +168,20 @@ export const api = {
   artifactChildBounds: (bounds: ChildBounds | null) => call("artifact_child_bounds", { bounds }),
   artifactChildFocus: () => call("artifact_child_focus", {}),
   artifactChildClose: () => call("artifact_child_close", {}),
+  /** What an answer in a project chat was given from the project's files (null: not a project chat). */
+  messageSources: (messageId: Id) => call("message_sources", { messageId }),
+  /** The embedding-model offer and the progress of improving search (#171). */
+  knowledgeStatus: () => call("knowledge_status", {}),
+  /** "Download" (true) or "Not now" (false); remembered. */
+  knowledgeOffer: (accept: boolean) => call("knowledge_offer", { accept }),
   appInfo: () => call("app_info", {}),
   /** Asks GitHub Releases for a newer version; downloads nothing. */
   checkForUpdate: () => call("check_for_update", {}),
+  /**
+   * The opt-in check at launch: null unless this build updates itself, the setting is on and
+   * it hasn't run in this process yet. Failures are silent (null).
+   */
+  launchUpdateCheck: () => call("launch_update_check", {}),
   /** After the user confirmed `version`: downloads, verifies, installs and restarts. */
   installUpdate: (version: string, onProgress: (p: UpdateProgress) => void) =>
     call("install_update", { version, onProgress: channel(onProgress) }),
@@ -195,13 +232,33 @@ export const api = {
   /** Asks to open a link from an answer; the backend confirms with the full URL first. */
   openLink: (url: string) => call("open_link", { url }),
   listConversations: () => call("list_conversations", {}),
-  createConversation: () => call("create_conversation", {}),
+  /** A new chat, in `projectId` when given. */
+  createConversation: (projectId: Id | null = null) => call("create_conversation", { projectId }),
+  listProjects: () => call("list_projects", {}),
+  createProject: (name: string) => call("create_project", { name }),
+  updateProject: (projectId: Id, name: string, instructions: string) =>
+    call("update_project", { projectId, name, instructions }),
+  /** Soft delete with its chats and files; returns how many chats went with it. */
+  deleteProject: (projectId: Id) => call("delete_project", { projectId }),
+  restoreProject: (projectId: Id) => call("restore_project", { projectId }),
+  listProjectFiles: (projectId: Id) => call("list_project_files", { projectId }),
+  /** Opens the system file picker (shown by the backend) and copies the picked files in. */
+  addProjectFiles: (projectId: Id) => call("add_project_files", { projectId }),
+  removeProjectFile: (projectId: Id, fileId: Id) => call("remove_project_file", { projectId, fileId }),
+  restoreProjectFile: (projectId: Id, fileId: Id) => call("restore_project_file", { projectId, fileId }),
   renameConversation: (conversationId: Id, title: string) =>
     call("rename_conversation", { conversationId, title }),
   deleteConversation: (conversationId: Id) => call("delete_conversation", { conversationId }),
   restoreConversation: (conversationId: Id) => call("restore_conversation", { conversationId }),
   listMessages: (conversationId: Id) => call("list_messages", { conversationId }),
   listSkills: () => call("list_skills", {}),
+  /** Which answers of a chat were written with a skill, with its label then. */
+  listAnswerSkills: (conversationId: Id) => call("list_answer_skills", { conversationId }),
+  skillsOverview: () => call("skills_overview", {}),
+  /** Reads the skills folders again. */
+  reloadSkills: () => call("reload_skills", {}),
+  /** Opens the user's skills folder (created if missing) in the file manager. */
+  openSkillsFolder: () => call("open_skills_folder", {}),
   getChatSkill: (conversationId: Id) => call("get_chat_skill", { conversationId }),
   /** Applies from the chat's next answer on; `null` = no skill. */
   setChatSkill: (conversationId: Id, skill: string | null) =>

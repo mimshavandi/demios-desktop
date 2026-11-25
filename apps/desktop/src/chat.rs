@@ -4,7 +4,7 @@
 //! in order. Independent of Tauri so it can be tested with a plain event sink.
 
 use crate::agent::model_error;
-use crate::artifacts::{ArtifactMode, ArtifactTools, FencedRun, RunTools};
+use crate::artifacts::{ArtifactMode, ArtifactTools, RunTools};
 use crate::error::{IpcError, IpcResult};
 use crate::skills::Skill;
 use crate::state::AppState;
@@ -59,14 +59,6 @@ pub enum ChatEvent {
         message: String,
         recovery: Vec<RecoveryAction>,
     },
-    /// A fenced `<artifact>` block from a model without tool calling wasn't saved (cut off,
-    /// rejected, or refused by the store); `reason` says why.
-    ArtifactNotSaved {
-        message_id: Id,
-        conversation_id: Id,
-        title: String,
-        reason: String,
-    },
     /// An artifact was created or got a new version in this turn (T-ART-06).
     ArtifactChanged {
         message_id: Id,
@@ -84,6 +76,8 @@ pub struct TurnStarted {
     pub assistant_message: StoredMessage,
     /// Set when the conversation title changed (first message).
     pub title: Option<String>,
+    /// The label of the skill this answer is written with, if any (T-SKL-03).
+    pub skill: Option<String>,
 }
 
 pub trait EventSink: Send + Sync + 'static {
@@ -177,6 +171,8 @@ pub fn send(
     let (user, assistant, title, history, skill) = {
         let db = state.db()?;
         let conv = store::get_conversation(&db, conversation_id)?;
+        // Before any write: a chat whose skill is gone stops here with a clear message.
+        let skill = turn_skill(state, &db, conversation_id)?;
         let title = (conv.title == DEFAULT_TITLE).then(|| title_from(&text));
         if let Some(t) = &title {
             store::rename_conversation(&db, conversation_id, t)?;
@@ -188,17 +184,13 @@ pub fn send(
             conversation_id,
             NewMessage::assistant_placeholder(Some(model.to_string())),
         )?;
-        let skill = turn_skill(state, &db, conversation_id)?;
-        let history = history(
-            state,
-            &db,
-            conversation_id,
-            assistant.id,
-            mode,
-            skill.as_deref(),
-        )?;
+        if let Some(s) = &skill {
+            crate::skills::record_answer_skill(&db, conversation_id, assistant.id, s)?;
+        }
+        let history = history(state, &db, conversation_id, assistant.id, skill.as_deref())?;
         (user, assistant, title, history, skill)
     };
+    let label = skill.as_ref().map(|s| s.skill.label());
     start(
         state,
         reservation,
@@ -214,6 +206,7 @@ pub fn send(
         user_message: Some(user),
         assistant_message: assistant,
         title,
+        skill: label,
     })
 }
 
@@ -236,6 +229,7 @@ pub fn regenerate(
             .iter()
             .rposition(|m| m.role == Role::User)
             .ok_or_else(|| IpcError::invalid("Nothing to regenerate."))?;
+        let skill = turn_skill(state, &db, conversation_id)?;
         if let Some(after) = msgs.get(last_user + 1) {
             store::truncate_from(&db, conversation_id, after.id)?;
         }
@@ -245,17 +239,13 @@ pub fn regenerate(
             conversation_id,
             NewMessage::assistant_placeholder(Some(model.to_string())),
         )?;
-        let skill = turn_skill(state, &db, conversation_id)?;
-        let history = history(
-            state,
-            &db,
-            conversation_id,
-            assistant.id,
-            mode,
-            skill.as_deref(),
-        )?;
+        if let Some(s) = &skill {
+            crate::skills::record_answer_skill(&db, conversation_id, assistant.id, s)?;
+        }
+        let history = history(state, &db, conversation_id, assistant.id, skill.as_deref())?;
         (assistant, history, skill)
     };
+    let label = skill.as_ref().map(|s| s.skill.label());
     start(
         state,
         reservation,
@@ -271,6 +261,7 @@ pub fn regenerate(
         user_message: None,
         assistant_message: assistant,
         title: None,
+        skill: label,
     })
 }
 
@@ -285,55 +276,63 @@ fn turn_skill(
     db: &dn_store::Connection,
     conversation_id: Id,
 ) -> IpcResult<Option<Arc<Skill>>> {
-    Ok(crate::skills::chat_skill(db, conversation_id)?.and_then(|n| state.skills.get(&n)))
-}
-
-/// Whether this turn may make artifacts: the agent manifest allows it and so does the
-/// chat's skill, if any.
-fn artifacts_allowed(state: &AppState, skill: Option<&Skill>) -> bool {
-    state.agent.manifest.allows_tool("artifact.create")
-        && skill.is_none_or(|s| s.allows("artifact.create"))
+    let Some(name) = crate::skills::chat_skill(db, conversation_id)? else {
+        return Ok(None);
+    };
+    // A skill that was removed or stopped loading never silently turns into "no skill".
+    state.skills.get(&name).map(Some).ok_or_else(|| {
+        IpcError::new(
+            "skill_unavailable",
+            format!(
+                "The skill \"{name}\" chosen for this chat isn't available any more. Choose \
+                 another skill, or No skill, in the message box."
+            ),
+        )
+    })
 }
 
 /// Model-facing tool name → capability id: artifact tools by name, MCP tools through the
-/// executor (read live). Without an executor (tests) the name is the id.
+/// executor (read live). A name neither knows resolves to nothing, so `Narrowed` refuses it.
 fn tool_resolver(state: &AppState) -> CapabilityResolver {
     let mcp = state.executor.as_ref().map(|e| e.capability_resolver());
     Arc::new(move |name: &str| {
-        crate::artifacts::capability_id(name).or_else(|| match &mcp {
-            Some(resolve) => resolve(name),
-            None => Some(name.to_owned()),
-        })
+        crate::artifacts::capability_id(name).or_else(|| mcp.as_ref().and_then(|r| r(name)))
     })
 }
 
 /// System prompt + stored conversation, minus the new placeholder and failed empty turns.
-/// Models without tool calling get the fenced artifact format in the system prompt; the
-/// chat's skill adds its instructions.
+/// The chat's project and skill add their instructions.
 fn history(
     state: &AppState,
     db: &dn_store::Connection,
     conversation_id: Id,
     exclude: Id,
-    mode: ArtifactMode,
     skill: Option<&Skill>,
 ) -> IpcResult<Vec<ChatMessage>> {
     let mut out = vec![];
-    let fenced = (mode == ArtifactMode::Fenced && artifacts_allowed(state, skill))
-        .then(|| dn_artifacts::protocol::FENCED_INSTRUCTIONS.to_owned());
+    let project = crate::projects::instructions_for(db, conversation_id)?;
+    let messages = store::list_messages(db, conversation_id)?;
+    let question = messages
+        .iter()
+        .rev()
+        .find(|m| m.role == Role::User)
+        .map(|m| m.text())
+        .unwrap_or_default();
+    let knowledge = crate::knowledge::context_for(state, db, conversation_id, exclude, &question)?;
     let system: Vec<String> = state
         .agent
         .system_prompt()
         .map(str::to_owned)
         .into_iter()
+        .chain(project)
+        .chain(knowledge)
         .chain(skill.map(Skill::system_text))
-        .chain(fenced)
         .collect();
     if !system.is_empty() {
         out.push(ChatMessage::text(Role::System, system.join("\n\n")));
     }
     out.extend(
-        store::list_messages(db, conversation_id)?
+        messages
             .into_iter()
             .filter(|m| m.id != exclude)
             .filter(|m| m.status == MessageStatus::Complete || !m.content.is_empty())
@@ -362,8 +361,7 @@ fn start(
     let message_id = assistant.id;
     let model_ref = model.to_string();
     let sink: Arc<dyn EventSink> = Arc::new(sink);
-    // Exactly one artifact protocol per run (ADR-0004): tools for tool-capable models, the
-    // fenced parser for the rest.
+    // Artifacts only through tool calls (ADR-0004): a model without tool calling gets none.
     let tools: Arc<dyn ToolExecutor> = Arc::new(RunTools {
         base: Arc::clone(&state.tools),
         artifacts: (mode == ArtifactMode::Tools).then(|| ArtifactTools {
@@ -378,18 +376,9 @@ fn start(
         Some(s) => crate::skills::narrow(tools, s, tool_resolver(&state)),
         None => tools,
     };
-    let fenced = (mode == ArtifactMode::Fenced && artifacts_allowed(&state, skill.as_deref()))
-        .then(|| {
-            FencedRun::start(
-                Arc::clone(&state),
-                conversation_id,
-                message_id,
-                Arc::clone(&sink),
-            )
-        });
     tauri::async_runtime::spawn(async move {
         let (result, failed_calls) = run(
-            &*backend, &*tools, fenced, &cfg, history, &cancel, &state, message_id, &*sink,
+            &*backend, &*tools, &cfg, history, &cancel, &state, message_id, &*sink,
         )
         .await;
         let st = Arc::clone(&state);
@@ -426,13 +415,11 @@ fn start(
     });
 }
 
-/// Runs the agent loop and streams its events. With `fenced`, the model's text also goes
-/// through the fenced artifact parser (models without tool calling only).
+/// Runs the agent loop and streams its events.
 #[allow(clippy::too_many_arguments)]
 async fn run(
     model: &dyn ChatModel,
     tools: &dyn ToolExecutor,
-    mut fenced: Option<FencedRun>,
     cfg: &LoopConfig,
     history: Vec<ChatMessage>,
     cancel: &CancelToken,
@@ -457,9 +444,6 @@ async fn run(
             });
         }
         AgentEvent::TextDelta { text, .. } => {
-            if let Some(f) = fenced.as_mut() {
-                f.push(&text);
-            }
             let offset = state.append_live(message_id, &text);
             sink.send(ChatEvent::TextDelta {
                 message_id,
@@ -492,9 +476,6 @@ async fn run(
         AgentEvent::StepStarted { .. } | AgentEvent::StepFinished { .. } => {}
     };
     let result = dn_agent::run_loop(model, tools, cfg, history, cancel, &mut on_event).await;
-    if let Some(f) = fenced {
-        f.finish().await;
-    }
     (result, failed)
 }
 
@@ -1250,9 +1231,10 @@ mod tests {
         assert_eq!(crate::artifacts::list(&st, conv.id).unwrap().len(), 1);
     }
 
-    const FENCED_REPLY: &str = "Here it is:\n<artifact id=\"page\" type=\"html\" title=\"Fenced page\">\n<p>fenced</p>\n</artifact>\nDone.";
+    /// An answer with `<artifact>` text in it: it must never create anything (no text format).
+    const ARTIFACT_TEXT_REPLY: &str = "Here it is:\n<artifact id=\"page\" type=\"html\" title=\"Text page\">\n<p>text</p>\n</artifact>\nDone.";
 
-    /// Answers with `FENCED_REPLY` and records what it was sent.
+    /// Answers with `ARTIFACT_TEXT_REPLY` and records what it was sent.
     #[derive(Default)]
     struct Recorder {
         requests: Mutex<Vec<dn_core::chat::ChatRequest>>,
@@ -1266,7 +1248,7 @@ mod tests {
             let answered = req.messages.iter().any(|m| m.role == Role::Tool);
             self.requests.lock().unwrap().push(req);
             let mut events = vec![Ok(StreamEvent::TextDelta {
-                text: FENCED_REPLY.into(),
+                text: ARTIFACT_TEXT_REPLY.into(),
             })];
             if self.call_tool && !answered {
                 events.push(Ok(StreamEvent::ToolCall {
@@ -1304,7 +1286,28 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn tool_capable_models_never_get_the_fenced_parser() {
+    async fn project_instructions_are_sent_with_each_chat_of_the_project() {
+        let rec = Arc::new(Recorder::default());
+        let st = artifact_state("local:scripted", rec.clone(), true);
+        let (inside, outside) = {
+            let db = st.db().unwrap();
+            let p = dn_store::project::create_project(&db, "Thesis").unwrap();
+            dn_store::project::update_project(&db, p.id, "Thesis", "Answer in British English.")
+                .unwrap();
+            (
+                store::create_conversation_in(&db, "New chat", Some(p.id)).unwrap(),
+                store::create_conversation(&db, "New chat").unwrap(),
+            )
+        };
+        turn(&st, inside.id, "hi").await;
+        turn(&st, outside.id, "hi").await;
+        let reqs = rec.requests.lock().unwrap();
+        assert!(system_text(&reqs[0]).contains("Answer in British English."));
+        assert!(!system_text(&reqs[1]).contains("British"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn artifact_text_in_an_answer_never_creates_anything() {
         let rec = Arc::new(Recorder::default());
         let st = artifact_state("local:scripted", rec.clone(), true);
         let conv = st.create_conversation().unwrap();
@@ -1321,40 +1324,6 @@ mod tests {
             assert!(names.contains(&t), "{names:?}");
         }
         assert!(!system_text(&reqs[0]).contains("<artifact id="));
-    }
-
-    /// Writes an `<artifact>` block that never closes.
-    struct CutOff;
-    impl ChatModel for CutOff {
-        fn chat(&self, _req: dn_core::chat::ChatRequest) -> dn_core::chat::EventStream {
-            use dn_core::chat::StreamEvent;
-            Box::pin(Iter(
-                vec![
-                    Ok(StreamEvent::TextDelta {
-                        text: "<artifact id=\"p\" type=\"html\" title=\"Cut\">\n<p>half".into(),
-                    }),
-                    Ok(StreamEvent::Done {
-                        finish_reason: FinishReason::Length,
-                        usage: Usage::default(),
-                    }),
-                ]
-                .into_iter(),
-            ))
-        }
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn unsaved_fenced_blocks_are_reported() {
-        let st = artifact_state("local:plain", Arc::new(CutOff), false);
-        let conv = st.create_conversation().unwrap();
-        let (_, evs) = turn(&st, conv.id, "make a page").await;
-        assert!(
-            evs.iter().any(|e| matches!(e,
-                ChatEvent::ArtifactNotSaved { title, reason, .. }
-                    if title == "Cut" && reason.contains("not closed"))),
-            "{evs:?}"
-        );
-        assert!(crate::artifacts::list(&st, conv.id).unwrap().is_empty());
     }
 
     /// A tool-capable model in a chat with the skill `notes`, which allows only `calc`.
@@ -1393,13 +1362,27 @@ mod tests {
             call_tool: true,
             ..Default::default()
         });
-        let (st, conv) = skill_state(rec.clone(), true, &["calc"]);
+        let (st, conv) = skill_state(rec.clone(), true, &["artifact.create"]);
         turn(&st, conv, "make a page").await;
         let reqs = rec.requests.lock().unwrap();
         let names: Vec<&str> = reqs[0].tools.iter().map(|t| t.name.as_str()).collect();
-        assert_eq!(names, ["calc"], "artifact tools are outside the skill");
+        // Only the listed tool: not the other artifact tools, not `calc`.
+        assert_eq!(names, ["artifact_create"]);
         assert!(system_text(&reqs[0]).contains("Answer in bullet points."));
-        // The model's call to a tool outside the skill was refused, not run.
+        // The listed tool ran.
+        assert_eq!(crate::artifacts::list(&st, conv).unwrap().len(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_call_outside_the_skill_is_refused_not_run() {
+        let rec = Arc::new(Recorder {
+            call_tool: true,
+            ..Default::default()
+        });
+        // `calc` isn't a tool the app can resolve: listing it doesn't make it available.
+        let (st, conv) = skill_state(rec.clone(), true, &["calc"]);
+        turn(&st, conv, "make a page").await;
+        assert!(rec.requests.lock().unwrap()[0].tools.is_empty());
         assert!(crate::artifacts::list(&st, conv).unwrap().is_empty());
         let msgs = store::list_messages(&st.db().unwrap(), conv).unwrap();
         let tool = msgs
@@ -1410,14 +1393,66 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_skill_without_artifacts_drops_the_fenced_format_too() {
+    async fn a_chat_whose_skill_is_gone_fails_clearly_and_writes_nothing() {
         let rec = Arc::new(Recorder::default());
-        let (st, conv) = skill_state(rec.clone(), false, &[]);
-        turn(&st, conv, "make a page").await;
-        let reqs = rec.requests.lock().unwrap();
-        assert!(reqs[0].tools.is_empty());
-        assert!(!system_text(&reqs[0]).contains(dn_artifacts::protocol::FENCED_INSTRUCTIONS));
-        assert!(crate::artifacts::list(&st, conv).unwrap().is_empty());
+        let (st, conv) = skill_state(rec.clone(), true, &[]);
+        crate::skills::set_chat_skill(&st.db().unwrap(), conv, Some("removed")).unwrap();
+        let (_e, s) = sink();
+        let err = send(&st, conv, "hi".into(), s).unwrap_err();
+        assert_eq!(err.code, "skill_unavailable");
+        assert!(err.message.contains("\"removed\""), "{}", err.message);
+        assert!(
+            store::list_messages(&st.db().unwrap(), conv)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(rec.requests.lock().unwrap().is_empty());
+        // The chat isn't stuck: choosing no skill sends normally.
+        crate::skills::set_chat_skill(&st.db().unwrap(), conv, None).unwrap();
+        turn(&st, conv, "hi").await;
+        assert_eq!(rec.requests.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn each_answer_remembers_the_skill_it_was_written_with() {
+        let rec = Arc::new(Recorder::default());
+        let (st, conv) = skill_state(rec, true, &["calc"]);
+        let (first, _) = turn(&st, conv, "one").await;
+        assert_eq!(first.skill.as_deref(), Some("Notes"));
+
+        // No skill for the next answer: it has none, and the first keeps its own.
+        crate::skills::set_chat_skill(&st.db().unwrap(), conv, None).unwrap();
+        let (second, _) = turn(&st, conv, "two").await;
+        assert_eq!(second.skill, None);
+        let answers = crate::skills::answer_skills(&st.db().unwrap(), conv).unwrap();
+        assert_eq!(answers.len(), 1);
+        assert_eq!(answers[0].message_id, first.assistant_message.id);
+        assert_eq!(
+            (answers[0].name.as_str(), answers[0].label.as_str()),
+            ("notes", "Notes")
+        );
+
+        // Regenerating with the skill back on records the new answer.
+        crate::skills::set_chat_skill(&st.db().unwrap(), conv, Some("notes")).unwrap();
+        let (events, s) = sink();
+        let again = regenerate(&st, conv, s).unwrap();
+        wait_idle(&st, conv).await;
+        drop(events);
+        assert_eq!(again.skill.as_deref(), Some("Notes"));
+        let ids: Vec<Id> = crate::skills::answer_skills(&st.db().unwrap(), conv)
+            .unwrap()
+            .into_iter()
+            .map(|a| a.message_id)
+            .collect();
+        assert!(ids.contains(&again.assistant_message.id));
+
+        // Deleting the chat's data forgets them.
+        crate::skills::forget_chat(&st.db().unwrap(), conv).unwrap();
+        assert!(
+            crate::skills::answer_skills(&st.db().unwrap(), conv)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1436,28 +1471,22 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn tool_less_models_use_the_fenced_format_only() {
+    async fn tool_less_models_get_no_artifacts() {
         let rec = Arc::new(Recorder {
             call_tool: true,
             ..Default::default()
         });
         let st = artifact_state("local:plain", rec.clone(), false);
         let conv = st.create_conversation().unwrap();
-        let (started, evs) = turn(&st, conv.id, "make a page").await;
+        let (_, evs) = turn(&st, conv.id, "make a page").await;
+        // No text format: the `<artifact>` text in the answer creates nothing...
         assert!(
-            evs.iter().any(
-                |e| matches!(e, ChatEvent::ArtifactChanged { title, .. } if title == "Fenced page")
-            ),
+            !evs.iter()
+                .any(|e| matches!(e, ChatEvent::ArtifactChanged { .. })),
             "{evs:?}"
         );
-        let list = crate::artifacts::list(&st, conv.id).unwrap();
-        assert_eq!(list.len(), 1, "only the fenced block, not the tool call");
-        let a = crate::artifacts::get(&st, conv.id, list[0].id).unwrap();
-        assert_eq!(a.versions[0].version.content, "<p>fenced</p>");
-        assert_eq!(
-            a.versions[0].version.message_id,
-            Some(started.assistant_message.id)
-        );
+        assert!(crate::artifacts::list(&st, conv.id).unwrap().is_empty());
+        // ...no artifact tools are offered, and no artifact instructions sent...
         let reqs = rec.requests.lock().unwrap();
         assert!(
             !reqs[0]
@@ -1466,8 +1495,8 @@ mod tests {
                 .any(|t| t.name.starts_with("artifact_")),
             "no artifact tools for a tool-less model"
         );
-        assert!(system_text(&reqs[0]).contains(dn_artifacts::protocol::FENCED_INSTRUCTIONS));
-        // The stray tool call was refused, not run.
+        assert!(!system_text(&reqs[0]).contains("<artifact"));
+        // ...and a stray artifact tool call is refused, not run.
         let msgs = store::list_messages(&st.db().unwrap(), conv.id).unwrap();
         let tool = msgs
             .iter()

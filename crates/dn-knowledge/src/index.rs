@@ -7,7 +7,8 @@ use sha2::{Digest, Sha256};
 
 /// This crate's tables (run by dn-store with the other crates' migrations).
 pub fn migrations() -> &'static [&'static str] {
-    &[r#"
+    &[
+        r#"
 CREATE TABLE knowledge_files (
     source_id    TEXT NOT NULL,
     file_id      TEXT NOT NULL,
@@ -39,7 +40,60 @@ END;
 CREATE TRIGGER knowledge_chunks_ad AFTER DELETE ON knowledge_chunks BEGIN
     INSERT INTO knowledge_fts(knowledge_fts, rowid, text) VALUES ('delete', old.id, old.text);
 END;
-"#]
+"#,
+        r#"
+-- The excerpts an answer was given, so the app can show them with it (file and lines only, no
+-- text). One row per assistant message; removed with the conversation and by delete_all.
+CREATE TABLE knowledge_sources (
+    message_id      TEXT PRIMARY KEY NOT NULL,
+    conversation_id TEXT NOT NULL,
+    -- 'hybrid' (keywords + embeddings) or 'keyword' (no embedding model)
+    mode            TEXT NOT NULL,
+    -- JSON array of Citation
+    citations       TEXT NOT NULL
+);
+CREATE INDEX knowledge_sources_by_conversation ON knowledge_sources (conversation_id);
+"#,
+        r#"
+-- Small preferences of knowledge search (e.g. the answer to the embedding-model offer).
+-- Removed by delete_all.
+CREATE TABLE knowledge_prefs (
+    key   TEXT PRIMARY KEY NOT NULL,
+    value TEXT NOT NULL
+);
+"#,
+    ]
+}
+
+/// How a search ranked: both ways, or keywords only (no embedding model installed).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchMode {
+    Hybrid,
+    Keyword,
+}
+
+impl SearchMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Hybrid => "hybrid",
+            Self::Keyword => "keyword",
+        }
+    }
+}
+
+/// What an answer was given: how it was searched and which excerpts (see [`crate::context_block`]).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Sources {
+    pub mode: SearchMode,
+    pub citations: Vec<crate::Citation>,
+}
+
+/// A query's embedding, made by the caller (so it needn't hold the database while the model runs).
+#[derive(Debug, Clone)]
+pub struct QueryVector {
+    pub model_id: String,
+    pub values: Vec<f32>,
 }
 
 /// Errors from the index.
@@ -181,6 +235,8 @@ impl<'c> Index<'c> {
         embedder: Option<&dyn Embedder>,
     ) -> Result<SyncReport> {
         let mut report = SyncReport::default();
+        // Chunks deleted (files removed or re-indexed): their text must leave the FTS index too.
+        let mut dropped = 0;
         let tx = self.conn.unchecked_transaction()?;
         let listed: std::collections::HashSet<&str> =
             files.iter().map(|f| f.file_id.as_str()).collect();
@@ -192,7 +248,7 @@ impl<'c> Index<'c> {
         };
         for (file_id, _) in &known {
             if !listed.contains(file_id.as_str()) {
-                remove_file(&tx, source_id, file_id)?;
+                dropped += remove_file(&tx, source_id, file_id)?;
                 report.removed += 1;
             }
         }
@@ -201,7 +257,7 @@ impl<'c> Index<'c> {
                 Ok(t) => t,
                 Err(skip) => {
                     if known.iter().any(|(id, _)| id == &f.file_id) {
-                        remove_file(&tx, source_id, &f.file_id)?;
+                        dropped += remove_file(&tx, source_id, &f.file_id)?;
                     }
                     report.skipped.push((f.display_path.clone(), skip));
                     continue;
@@ -216,7 +272,7 @@ impl<'c> Index<'c> {
                 report.unchanged += 1;
                 continue;
             }
-            remove_file(&tx, source_id, &f.file_id)?;
+            dropped += remove_file(&tx, source_id, &f.file_id)?;
             tx.execute(
                 "INSERT INTO knowledge_files (source_id, file_id, display_path, sha256) VALUES (?1, ?2, ?3, ?4)",
                 params![source_id, f.file_id, f.display_path, sha],
@@ -230,6 +286,9 @@ impl<'c> Index<'c> {
             }
             report.indexed += 1;
         }
+        if dropped > 0 {
+            optimize(&tx)?;
+        }
         tx.commit()?;
         if let Some(e) = embedder {
             report.embedded = self.embed_missing(source_id, e)?;
@@ -239,42 +298,84 @@ impl<'c> Index<'c> {
 
     /// Embeds the source's chunks that have no embedding from `embedder`'s model and dimension.
     fn embed_missing(&self, source_id: &str, embedder: &dyn Embedder) -> Result<usize> {
-        let model = embedder.model_id().to_owned();
-        let dim = i64::try_from(embedder.dimension()).unwrap_or(i64::MAX);
-        let todo: Vec<(i64, String)> = {
-            let mut st = self.conn.prepare(
-                "SELECT id, text FROM knowledge_chunks WHERE source_id = ?1 \
-                 AND (embed_model IS NULL OR embed_model != ?2 OR embed_dim IS NULL OR embed_dim != ?3) ORDER BY id",
-            )?;
-            st.query_map(params![source_id, model, dim], |r| {
-                Ok((r.get(0)?, r.get(1)?))
-            })?
-            .collect::<std::result::Result<_, _>>()?
-        };
         let mut done = 0;
-        for batch in todo.chunks(EMBED_BATCH) {
+        loop {
+            let batch = self.pending_embeddings(
+                Some(source_id),
+                embedder.model_id(),
+                embedder.dimension(),
+                EMBED_BATCH,
+            )?;
+            if batch.is_empty() {
+                return Ok(done);
+            }
             let texts: Vec<String> = batch.iter().map(|(_, t)| t.clone()).collect();
             let vecs = embedder
                 .embed(&texts, EmbedKind::Document)
                 .map_err(KnowledgeError::Embed)?;
-            if vecs.len() != batch.len() || vecs.iter().any(|v| v.len() != embedder.dimension()) {
+            if vecs.len() != batch.len() {
                 return Err(KnowledgeError::Embed(format!(
-                    "the model returned {} vectors for {} texts, or vectors of the wrong size",
+                    "the model returned {} vectors for {} texts",
                     vecs.len(),
                     batch.len()
                 )));
             }
-            let tx = self.conn.unchecked_transaction()?;
-            for ((id, _), v) in batch.iter().zip(vecs) {
-                tx.execute(
-                    "UPDATE knowledge_chunks SET embedding = ?2, embed_model = ?3, embed_dim = ?4 WHERE id = ?1",
-                    params![id, to_blob(&v), model, dim],
-                )?;
-            }
-            tx.commit()?;
-            done += batch.len();
+            let items: Vec<(i64, Vec<f32>)> = batch.iter().map(|(id, _)| *id).zip(vecs).collect();
+            done += self.store_embeddings(embedder.model_id(), embedder.dimension(), &items)?;
         }
-        Ok(done)
+    }
+
+    /// Up to `limit` chunks (id, text) that have no embedding from this model and dimension, in
+    /// one source or all. With [`Index::store_embeddings`], lets the caller run the model
+    /// without holding the database.
+    pub fn pending_embeddings(
+        &self,
+        source_id: Option<&str>,
+        model_id: &str,
+        dim: usize,
+        limit: usize,
+    ) -> Result<Vec<(i64, String)>> {
+        let dim = i64::try_from(dim).unwrap_or(i64::MAX);
+        let limit = i64::try_from(limit.max(1)).unwrap_or(i64::MAX);
+        let mut st = self.conn.prepare(
+            "SELECT id, text FROM knowledge_chunks WHERE (?1 IS NULL OR source_id = ?1) \
+             AND (embed_model IS NULL OR embed_model != ?2 OR embed_dim IS NULL OR embed_dim != ?3) \
+             ORDER BY id LIMIT ?4",
+        )?;
+        let rows = st
+            .query_map(params![source_id, model_id, dim, limit], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })?
+            .collect::<std::result::Result<_, _>>()?;
+        Ok(rows)
+    }
+
+    /// Stores embeddings made by `model_id` for chunk ids (from [`Index::pending_embeddings`]).
+    /// Every vector must be `dim` long; chunks removed meanwhile are skipped. Returns how many
+    /// were stored.
+    pub fn store_embeddings(
+        &self,
+        model_id: &str,
+        dim: usize,
+        items: &[(i64, Vec<f32>)],
+    ) -> Result<usize> {
+        if let Some((_, v)) = items.iter().find(|(_, v)| v.len() != dim) {
+            return Err(KnowledgeError::Embed(format!(
+                "a vector of size {} from a model of size {dim}",
+                v.len()
+            )));
+        }
+        let d = i64::try_from(dim).unwrap_or(i64::MAX);
+        let tx = self.conn.unchecked_transaction()?;
+        let mut n = 0;
+        for (id, v) in items {
+            n += tx.execute(
+                "UPDATE knowledge_chunks SET embedding = ?2, embed_model = ?3, embed_dim = ?4 WHERE id = ?1",
+                params![id, to_blob(v), model_id, d],
+            )?;
+        }
+        tx.commit()?;
+        Ok(n)
     }
 
     /// Removes everything indexed for a source (e.g. a deleted project). The FTS index is
@@ -290,10 +391,7 @@ impl<'c> Index<'c> {
             "DELETE FROM knowledge_files WHERE source_id = ?1",
             [source_id],
         )?;
-        tx.execute(
-            "INSERT INTO knowledge_fts(knowledge_fts) VALUES ('optimize')",
-            [],
-        )?;
+        optimize(&tx)?;
         tx.commit()?;
         Ok(())
     }
@@ -307,6 +405,33 @@ impl<'c> Index<'c> {
         query: &str,
         k: usize,
         embedder: Option<&dyn Embedder>,
+    ) -> Result<Vec<Hit>> {
+        let qv = match embedder {
+            Some(e) if !query.trim().is_empty() => Some(QueryVector {
+                model_id: e.model_id().to_owned(),
+                values: e
+                    .embed(&[query.to_owned()], EmbedKind::Query)
+                    .map_err(KnowledgeError::Embed)?
+                    .into_iter()
+                    .next()
+                    .filter(|v| v.len() == e.dimension())
+                    .ok_or_else(|| {
+                        KnowledgeError::Embed("no vector of the right size for the query".into())
+                    })?,
+            }),
+            _ => None,
+        };
+        self.search_with(sources, query, k, qv.as_ref())
+    }
+
+    /// [`Index::search`] with the query's embedding made by the caller (`None`: BM25 only).
+    /// Only chunks embedded by the same model with the same dimension take part.
+    pub fn search_with(
+        &self,
+        sources: &[&str],
+        query: &str,
+        k: usize,
+        query_vector: Option<&QueryVector>,
     ) -> Result<Vec<Hit>> {
         let k = k.clamp(1, MAX_RESULTS);
         if sources.is_empty() {
@@ -340,19 +465,8 @@ impl<'c> Index<'c> {
             }
         }
 
-        if let Some(e) = embedder
-            && !query.trim().is_empty()
-        {
-            let qv = e
-                .embed(&[query.to_owned()], EmbedKind::Query)
-                .map_err(KnowledgeError::Embed)?
-                .into_iter()
-                .next()
-                .filter(|v| v.len() == e.dimension())
-                .ok_or_else(|| {
-                    KnowledgeError::Embed("no vector of the right size for the query".into())
-                })?;
-            let model = format!("{}\u{0}{}", e.model_id(), e.dimension());
+        if let Some(qv) = query_vector {
+            let model = format!("{}\u{0}{}", qv.model_id, qv.values.len());
             let sql = format!(
                 "SELECT c.id, c.embedding FROM knowledge_chunks c \
                  WHERE c.embed_model || char(0) || c.embed_dim = ?1 AND c.embedding IS NOT NULL AND {in_sources}"
@@ -371,7 +485,7 @@ impl<'c> Index<'c> {
                 .filter_map(|r| r.ok())
                 .filter_map(|(id, blob)| {
                     let v = from_blob(&blob);
-                    (v.len() == qv.len()).then(|| (id, dot(&qv, &v)))
+                    (v.len() == qv.values.len()).then(|| (id, dot(&qv.values, &v)))
                 })
                 .collect();
             scored.sort_by(|a, b| b.1.total_cmp(&a.1));
@@ -440,14 +554,117 @@ impl<'c> Index<'c> {
     }
 }
 
-fn remove_file(conn: &Connection, source_id: &str, file_id: &str) -> Result<()> {
-    conn.execute(
+/// Deletes a file's rows; returns how many chunks went.
+fn remove_file(conn: &Connection, source_id: &str, file_id: &str) -> Result<usize> {
+    let chunks = conn.execute(
         "DELETE FROM knowledge_chunks WHERE source_id = ?1 AND file_id = ?2",
         params![source_id, file_id],
     )?;
     conn.execute(
         "DELETE FROM knowledge_files WHERE source_id = ?1 AND file_id = ?2",
         params![source_id, file_id],
+    )?;
+    Ok(chunks)
+}
+
+/// Merges the FTS index so deleted rows' text leaves its shadow tables now (FTS5 only marks
+/// deletions until segments merge). With `secure_delete` (dn-store sets it on every app
+/// connection) the freed pages are zeroed as well.
+fn optimize(conn: &Connection) -> Result<()> {
+    conn.execute(
+        "INSERT INTO knowledge_fts(knowledge_fts) VALUES ('optimize')",
+        [],
+    )?;
+    Ok(())
+}
+
+/// Records what the answer `message_id` was given (replaces an earlier record, e.g. regenerate).
+pub fn record_sources(
+    conn: &Connection,
+    message_id: &str,
+    conversation_id: &str,
+    sources: &Sources,
+) -> Result<()> {
+    let json = serde_json::to_string(&sources.citations)
+        .map_err(|e| KnowledgeError::Embed(format!("citations: {e}")))?;
+    conn.execute(
+        "INSERT INTO knowledge_sources (message_id, conversation_id, mode, citations) VALUES (?1, ?2, ?3, ?4) \
+         ON CONFLICT(message_id) DO UPDATE SET conversation_id = ?2, mode = ?3, citations = ?4",
+        params![message_id, conversation_id, sources.mode.as_str(), json],
+    )?;
+    Ok(())
+}
+
+/// What the answer `message_id` was given, if it was given project excerpts.
+pub fn sources_for(conn: &Connection, message_id: &str) -> Result<Option<Sources>> {
+    let row: Option<(String, String)> = conn
+        .query_row(
+            "SELECT mode, citations FROM knowledge_sources WHERE message_id = ?1",
+            [message_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    let Some((mode, json)) = row else {
+        return Ok(None);
+    };
+    let mode = if mode == "hybrid" {
+        SearchMode::Hybrid
+    } else {
+        SearchMode::Keyword
+    };
+    let citations = serde_json::from_str(&json)
+        .map_err(|e| KnowledgeError::Embed(format!("stored citations: {e}")))?;
+    Ok(Some(Sources { mode, citations }))
+}
+
+/// How many chunks are embedded by `model_id`, out of all chunks (progress of embedding the
+/// index after a model is added or changed).
+pub fn embedding_counts(conn: &Connection, model_id: &str) -> Result<(u64, u64)> {
+    let (done, total): (i64, i64) = conn.query_row(
+        "SELECT COALESCE(SUM(embed_model = ?1 AND embedding IS NOT NULL), 0), COUNT(*) FROM knowledge_chunks",
+        [model_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    Ok((
+        u64::try_from(done).unwrap_or(0),
+        u64::try_from(total).unwrap_or(0),
+    ))
+}
+
+/// A stored preference, if set.
+pub fn get_pref(conn: &Connection, key: &str) -> Result<Option<String>> {
+    Ok(conn
+        .query_row(
+            "SELECT value FROM knowledge_prefs WHERE key = ?1",
+            [key],
+            |r| r.get(0),
+        )
+        .optional()?)
+}
+
+/// Stores a preference (replacing an earlier value).
+pub fn set_pref(conn: &Connection, key: &str, value: &str) -> Result<()> {
+    conn.execute(
+        "INSERT INTO knowledge_prefs (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = ?2",
+        params![key, value],
+    )?;
+    Ok(())
+}
+
+/// Conversations that have recorded sources (for removing those of deleted conversations).
+pub fn conversations_with_sources(conn: &Connection) -> Result<Vec<String>> {
+    let mut st = conn.prepare("SELECT DISTINCT conversation_id FROM knowledge_sources")?;
+    let out = st
+        .query_map([], |r| r.get(0))?
+        .collect::<std::result::Result<_, _>>()?;
+    Ok(out)
+}
+
+/// Removes the recorded sources of a conversation (deleted or purged).
+pub fn remove_conversation_sources(conn: &Connection, conversation_id: &str) -> Result<()> {
+    conn.execute(
+        "DELETE FROM knowledge_sources WHERE conversation_id = ?1",
+        [conversation_id],
     )?;
     Ok(())
 }
@@ -458,6 +675,8 @@ pub fn delete_all(conn: &Connection) -> Result<()> {
     let tx = conn.unchecked_transaction()?;
     tx.execute("DELETE FROM knowledge_chunks", [])?;
     tx.execute("DELETE FROM knowledge_files", [])?;
+    tx.execute("DELETE FROM knowledge_sources", [])?;
+    tx.execute("DELETE FROM knowledge_prefs", [])?;
     tx.execute(
         "INSERT INTO knowledge_fts(knowledge_fts) VALUES ('rebuild')",
         [],

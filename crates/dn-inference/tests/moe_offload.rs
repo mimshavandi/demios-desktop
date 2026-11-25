@@ -15,6 +15,12 @@ use std::sync::Arc;
 /// Greedy text for a fixed prompt with experts placed per `moe`.
 async fn generate(moe: MoeOffload) -> String {
     let path = std::env::var("DN_TEST_MOE_GGUF").expect("set DN_TEST_MOE_GGUF to a MoE GGUF");
+    // The test model is a base model without a chat template: give it a plain one next to
+    // the file, the way dn-models stores a template from tokenizer_config.json.
+    let side = format!("{path}{}", dn_inference::llamacpp::CHAT_TEMPLATE_SUFFIX);
+    if !std::path::Path::new(&side).exists() {
+        std::fs::write(&side, "{% for m in messages %}{{ m.content }}{% endfor %}").unwrap();
+    }
     let opts = LoadOptions {
         n_ctx: Some(256),
         moe_offload: moe,
