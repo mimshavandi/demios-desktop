@@ -14,9 +14,6 @@ pub(crate) struct OptionalParam {
     pub aliases: &'static [&'static str],
     /// Rename instead of dropping when the error suggests the new name.
     pub rename_to: Option<&'static str>,
-    /// Called with the removed value, so a param that must not silently disappear (a
-    /// response schema) can be replaced by something equivalent (a prompt instruction).
-    pub fallback: Option<fn(&mut Value, Value)>,
 }
 
 impl OptionalParam {
@@ -25,17 +22,29 @@ impl OptionalParam {
             path,
             aliases: &[],
             rename_to: None,
-            fallback: None,
         }
     }
 }
 
-/// Instruction used when a provider can't enforce a response schema natively.
-pub(crate) fn schema_instruction(schema: &Value) -> String {
-    format!(
-        "Reply with only a JSON value (no prose, no code fences) that matches this JSON Schema:\n{schema}"
-    )
-}
+/// Where each provider puts a response schema in the body. A response schema is never an
+/// optional parameter: if the provider rejects it, the call fails (see [`schema_rejected`]).
+const SCHEMA_PATHS: &[&str] = &[
+    "response_format",
+    "generationConfig.responseJsonSchema",
+    "output_config.format",
+];
+
+/// Words in a 400 body that point at the response schema.
+const SCHEMA_WORDS: &[&str] = &[
+    "response_format",
+    "json_schema",
+    "responsejsonschema",
+    "response_schema",
+    "responseschema",
+    "output_config",
+    "output_format",
+    "structured output",
+];
 
 /// Header names whose values are credentials: marked sensitive so they never show up in
 /// `Debug` output or HTTP/2 header tables.
@@ -93,6 +102,12 @@ pub(crate) async fn send(mut call: Call<'_>) -> Result<reqwest::Response, CoreEr
             .and_then(|v| v.trim().parse::<u32>().ok());
         let text = resp.text().await.unwrap_or_default();
         if status.as_u16() == 400
+            && let Some(body) = call.body.as_ref()
+            && let Some(e) = schema_rejected(call.provider_id, body, &text, call.secret)
+        {
+            return Err(e);
+        }
+        if status.as_u16() == 400
             && !retried
             && let Some(body) = call.body.as_mut()
             && drop_unsupported(body, &call.optional, &text)
@@ -131,12 +146,42 @@ fn drop_unsupported(body: &mut Value, optional: &[OptionalParam], error_text: &s
             && err.contains(new)
         {
             set_path(body, new, value);
-        } else if let Some(f) = p.fallback {
-            f(body, value);
         }
         return true;
     }
     false
+}
+
+/// A 400 about the response schema of a request that has one: a clear error, never a retry
+/// without the schema (the caller would get unvalidated text back without knowing it).
+fn schema_rejected(
+    provider_id: &str,
+    body: &Value,
+    error_text: &str,
+    secret: Option<&str>,
+) -> Option<CoreError> {
+    let has_schema = SCHEMA_PATHS.iter().any(|p| get_path(body, p).is_some());
+    let err = error_text.to_ascii_lowercase();
+    if !has_schema || !SCHEMA_WORDS.iter().any(|w| err.contains(w)) {
+        return None;
+    }
+    let model = body["model"].as_str().unwrap_or("this model");
+    Some(unavailable(
+        format!(
+            "{model} can't answer in the required format (structured output with a JSON schema). Choose a model that supports structured output for this task."
+        ),
+        format!(
+            "{provider_id}: response schema rejected: {}",
+            redact(&error_text.chars().take(300).collect::<String>(), secret)
+        ),
+        vec![],
+    ))
+}
+
+fn get_path<'a>(body: &'a Value, path: &str) -> Option<&'a Value> {
+    path.split('.')
+        .try_fold(body, |cur, p| cur.get(p))
+        .filter(|v| !v.is_null())
 }
 
 fn snake_case(s: &str) -> String {
