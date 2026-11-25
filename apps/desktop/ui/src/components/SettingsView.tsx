@@ -228,6 +228,7 @@ function ModelsPage({
       <LocalModelsCard
         api={api}
         initial={catalog.local_models}
+        compute={catalog.compute}
         onReady={refreshCatalog}
         link={addLink}
         {...(onAddLinkClosed !== undefined ? { onLinkClosed: onAddLinkClosed } : {})}

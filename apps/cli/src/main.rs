@@ -532,24 +532,33 @@ fn chat<B: InferenceBackend>(
 }
 
 /// This machine, refined with what llama.cpp reports about GPUs.
+/// GPUs llama.cpp reports in this build, for [`dn_models::compute::plan`].
+pub fn gpus() -> Vec<dn_models::compute::Gpu> {
+    let devs = LlamaCppBackend::devices().unwrap_or_default();
+    dn_models::compute::gpus_from(
+        LlamaCppBackend::GPU_BACKEND.unwrap_or("GPU"),
+        devs.iter().map(|d| {
+            (
+                d.name.as_str(),
+                d.description.as_str(),
+                d.kind.as_str(),
+                d.memory_total,
+            )
+        }),
+    )
+}
+
+/// This machine and where models run on it.
+pub fn compute() -> (Machine, dn_models::compute::Compute) {
+    dn_models::compute::plan(
+        dn_models::detect_machine(),
+        &gpus(),
+        LlamaCppBackend::GPU_BACKEND.is_some(),
+    )
+}
+
 pub fn machine(ram_gb: Option<f64>, vram_gb: Option<f64>, unified: bool) -> Machine {
-    let mut m = dn_models::detect_machine();
-    if let Ok(devs) = LlamaCppBackend::devices() {
-        let gpu = devs
-            .iter()
-            .filter(|d| d.kind == "gpu")
-            .max_by_key(|d| d.memory_total);
-        if let Some(g) = gpu {
-            m.memory = match m.memory {
-                MemoryKind::Unified { .. } => MemoryKind::Unified {
-                    gpu_budget: Some(g.memory_total),
-                },
-                _ => MemoryKind::Discrete {
-                    vram: g.memory_total,
-                },
-            };
-        }
-    }
+    let (mut m, _) = compute();
     if let Some(r) = ram_gb {
         m.total_ram = (r * GIB as f64) as u64;
         if let MemoryKind::Unified { gpu_budget } = &mut m.memory {
@@ -705,6 +714,8 @@ fn print_fit(
         }
     );
     println!("machine   {} RAM ({mem})", gib(mach.total_ram));
+    // This machine's real hardware, even when --ram-gb / --vram-gb size for another one.
+    println!("runs on   {}", compute().1.describe());
     println!("status    {}", status_label(report.status));
     println!(
         "settings  ctx {} · kv {} · gpu layers {} · moe experts on CPU: {} layers",

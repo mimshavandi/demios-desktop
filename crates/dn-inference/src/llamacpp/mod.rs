@@ -185,6 +185,19 @@ impl LlamaCppBackend {
             .collect())
     }
 
+    /// The GPU backend this build was compiled with: Metal on macOS, Vulkan or CUDA when
+    /// those features are on, else `None` (CPU only). Whether a GPU is actually there is
+    /// [`devices`](Self::devices).
+    pub const GPU_BACKEND: Option<&'static str> = if cfg!(feature = "cuda") {
+        Some("CUDA")
+    } else if cfg!(feature = "vulkan") {
+        Some("Vulkan")
+    } else if cfg!(target_os = "macos") {
+        Some("Metal")
+    } else {
+        None
+    };
+
     /// True when this build can offload layers to a GPU.
     pub fn supports_gpu() -> bool {
         global_backend()

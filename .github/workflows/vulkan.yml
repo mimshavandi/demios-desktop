@@ -1,0 +1,134 @@
+name: vulkan
+# The Vulkan build of local inference (T-INF-24): Windows and Linux installers run models on
+# the GPU through Vulkan. GitHub's runners have no GPU, so this checks the other half: a
+# Vulkan build still starts, says it runs models on the processor, and runs one.
+#
+# The Vulkan SDK (to build llama.cpp's Vulkan backend: glslc, headers) is LunarG's, pinned by
+# version and SHA-256. The loader the installers ship is built from a pinned Khronos release
+# (packaging/vulkan-loader/build.sh) and used here exactly as installed: next to the exe on
+# Windows, on the library path on Linux (as in the AppImage).
+on:
+  pull_request:
+    paths:
+      - "crates/dn-inference/**"
+      - "crates/dn-models/**"
+      - "apps/cli/**"
+      - "packaging/vulkan-loader/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/vulkan.yml"
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      compare_cpu:
+        description: Also build the CPU-only dn and compare startup time
+        type: boolean
+        default: false
+permissions:
+  contents: read
+env:
+  VULKAN_SDK_VERSION: 1.4.363.1
+  VULKAN_SDK_SHA256_WINDOWS: c02932bd9a968b22d404536108adaacac908c081cd6b0113f5bfefc523dd0a6a
+  VULKAN_SDK_SHA256_LINUX: b7867d8ca658563813af666f34b93db87f1b1c7d9d69d97e924c210c7ba33eb8
+  # ggml-org/stories15M_MOE (MIT), as in ci.yml: a 39 MB model to load and run.
+  MOE_MODEL_REV: b6dd737497465570b5f5e962dbc9d9454ed1e0eb
+  MOE_MODEL_SHA256: c7aa6863f9a4b3cdf19716e2c95622dcbd3bd06989324bf1ac8e60486ef8e881
+jobs:
+  smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # Registry only: this job's target dir (llama.cpp with Vulkan) would cost GBs of the
+      # 10 GB cache budget (T-GOV-13).
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: vulkan
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Vulkan SDK (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          f="vulkansdk-linux-x86_64-$VULKAN_SDK_VERSION.tar.xz"
+          curl -sSfL -o "$RUNNER_TEMP/$f" "https://sdk.lunarg.com/sdk/download/$VULKAN_SDK_VERSION/linux/$f"
+          echo "$VULKAN_SDK_SHA256_LINUX  $RUNNER_TEMP/$f" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/vulkan"
+          tar -xJf "$RUNNER_TEMP/$f" -C "$RUNNER_TEMP/vulkan"
+          sdk="$RUNNER_TEMP/vulkan/$VULKAN_SDK_VERSION/x86_64"
+          echo "VULKAN_SDK=$sdk" >> "$GITHUB_ENV"
+          echo "$sdk/bin" >> "$GITHUB_PATH"
+      - name: Vulkan SDK (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $f = "vulkansdk-windows-X64-$env:VULKAN_SDK_VERSION.exe"
+          $p = Join-Path $env:RUNNER_TEMP $f
+          Invoke-WebRequest "https://sdk.lunarg.com/sdk/download/$env:VULKAN_SDK_VERSION/windows/$f" -OutFile $p
+          $h = (Get-FileHash $p -Algorithm SHA256).Hash.ToLower()
+          if ($h -ne $env:VULKAN_SDK_SHA256_WINDOWS) { throw "Vulkan SDK sha256 $h does not match" }
+          $root = "C:\VulkanSDK\$env:VULKAN_SDK_VERSION"
+          & $p --root $root --accept-licenses --default-answer --confirm-command install | Out-Host
+          "VULKAN_SDK=$root" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "$root\Bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+      - name: Vulkan loader (pinned Khronos release, as the installers ship it)
+        shell: bash
+        run: packaging/vulkan-loader/build.sh target/vulkan-loader | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Build dn with Vulkan
+        run: cargo build --release --locked -p dn --features vulkan
+      - name: Build dn without Vulkan (for the startup comparison)
+        if: inputs.compare_cpu
+        run: cargo build --release --locked -p dn --target-dir target/cpu
+      - name: Cache the test model
+        id: model-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/dn-test-models/stories15M_MOE-Q8_0.gguf
+          key: moe-model-${{ env.MOE_MODEL_SHA256 }}
+      - name: Download the test model
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          mkdir -p ~/dn-test-models
+          curl -sSfL -o ~/dn-test-models/stories15M_MOE-Q8_0.gguf \
+            "https://huggingface.co/ggml-org/stories15M_MOE/resolve/$MOE_MODEL_REV/stories15M_MOE-Q8_0.gguf"
+      - name: No GPU here - a labelled processor mode, and the model runs
+        shell: bash
+        run: |
+          set -euo pipefail
+          m="$HOME/dn-test-models/stories15M_MOE-Q8_0.gguf"
+          echo "$MOE_MODEL_SHA256  $m" | shasum -a 256 -c -
+          if [ "$RUNNER_OS" = Windows ]; then
+            # Installed layout: the loader next to the exe (Windows searches the app's own
+            # folder first for the DLLs an exe links against).
+            cp target/vulkan-loader/vulkan-1.dll target/release/
+            dn=target/release/dn.exe
+          else
+            export LD_LIBRARY_PATH="$PWD/target/vulkan-loader"
+            dn=target/release/dn
+          fi
+          t0=$(date +%s%N)
+          "$dn" fit "$m" | tee fit.txt
+          t1=$(date +%s%N)
+          grep -F "runs on   Local models run on the processor: no graphics chip Demios can use was found" fit.txt
+          "$dn" bench "$m" --n-prompt 32 --n-gen 16 --reps 1 -o bench.json
+          {
+            echo "### $RUNNER_OS"
+            echo "- dn fit with the Vulkan build (backend start-up included): $(( (t1 - t0) / 1000000 )) ms"
+            echo "- dn binary: $(du -k "$dn" | cut -f1) KiB"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ -d target/cpu/release ]; then
+            cpu=target/cpu/release/dn; [ "$RUNNER_OS" = Windows ] && cpu=$cpu.exe
+            t0=$(date +%s%N); "$cpu" fit "$m" > /dev/null; t1=$(date +%s%N)
+            {
+              echo "- dn fit with the CPU-only build: $(( (t1 - t0) / 1000000 )) ms"
+              echo "- CPU-only dn binary: $(du -k "$cpu" | cut -f1) KiB"
+            } | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
