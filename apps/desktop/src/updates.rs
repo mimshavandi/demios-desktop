@@ -472,13 +472,22 @@ mod tests {
         );
     }
 
-    /// What `cargo test` builds: without the feature the commands refuse and say why.
+    /// What `cargo test` builds: without the feature the commands refuse and say why. The
+    /// distribution is fixed to a direct download, so `DEMIOS_DISTRIBUTION` at build time
+    /// (e.g. `flatpak`) doesn't change the result.
     #[cfg(not(feature = "updater"))]
     #[test]
     fn a_build_without_the_feature_has_no_updater() {
         let config: tauri::Config =
             serde_json::from_str(include_str!("../tauri.conf.json")).expect("tauri.conf.json");
-        assert_eq!(current_mode(&config), UpdateMode::Off);
+        assert_eq!(
+            mode(
+                cfg!(feature = "updater"),
+                Distribution::Direct,
+                &pubkey(&config)
+            ),
+            UpdateMode::Off
+        );
         assert_eq!(not_available(UpdateMode::Off).code, "update_not_available");
     }
 
