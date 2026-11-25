@@ -58,6 +58,8 @@ export function Updates({
   // The launch-check setting (#95); null until loaded.
   const [launch, setLaunch] = useState<{ on: boolean; offered: boolean } | null>(null);
   const [launchError, setLaunchError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadTry, setLoadTry] = useState(0);
   // Only a check the user started in this visit can lead to the one-time question.
   const [checkedNow, setCheckedNow] = useState(false);
   const rowRef = useRef<HTMLDivElement>(null);
@@ -70,18 +72,19 @@ export function Updates({
   useEffect(() => {
     if (mode !== "self_update") return;
     let alive = true;
+    setLoadError(null);
     api
       .getSettings()
       .then((s) => {
         if (alive) setLaunch({ on: s.check_updates_at_launch === true, offered: s.launch_check_offered === true });
       })
-      .catch(() => {
-        // The switch stays hidden; checking by hand still works.
+      .catch((e: unknown) => {
+        if (alive) setLoadError(errorMessage(e));
       });
     return () => {
       alive = false;
     };
-  }, [api, mode]);
+  }, [api, mode, loadTry]);
 
   useEffect(() => {
     if (!reveal) return;
@@ -217,6 +220,18 @@ export function Updates({
             checked={launch.on}
             onCheckedChange={(v) => void saveLaunch(v)}
           />
+        )}
+        {loadError !== null && (
+          <InlineMessage
+            tone="error"
+            action={
+              <Button size="sm" onClick={() => setLoadTry((n) => n + 1)}>
+                Retry
+              </Button>
+            }
+          >
+            Couldn't load the launch-check setting. {loadError}
+          </InlineMessage>
         )}
         {launchError !== null && (
           <InlineMessage tone="error">Couldn't save the setting. {launchError}</InlineMessage>

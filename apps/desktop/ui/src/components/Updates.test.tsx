@@ -253,5 +253,21 @@ describe("Updates (T-STORE-08)", () => {
         cleanup();
       }
     });
+
+    it("shows an error with Retry when the setting can't be loaded, instead of hiding it", async () => {
+      const { api } = fake(async () => available());
+      let fail = true;
+      const get = api.getSettings.bind(api);
+      api.getSettings = async () => {
+        if (fail) throw ipcError("storage", "Could not read or write local data.");
+        return get();
+      };
+      ui(api);
+      expect(await screen.findByText(/Couldn't load the launch-check setting/)).toBeTruthy();
+      expect(screen.queryByRole("switch")).toBeNull();
+      fail = false;
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      expect(await screen.findByRole("switch", { name: "Check for updates when Demios starts" })).toBeTruthy();
+    });
   });
 });
