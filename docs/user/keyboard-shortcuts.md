@@ -23,7 +23,7 @@ The card ignores keys pressed in the first half second after it appears, so a ke
 
 ## In the artifact pane
 
-Press Esc to close the pane.
+Press Esc to close the pane, also while the artifact has focus. From inside an artifact, the shortcuts for a new chat, Settings and the sidebar still work; to stop an answer or copy the last one, click into the chat first. See [Artifacts](artifacts.md).
 
 ## In Settings
 
