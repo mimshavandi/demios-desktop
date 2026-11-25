@@ -16,8 +16,10 @@ import { Badge, Button, ICON, InlineMessage, Select, Skeleton, TextField, type S
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Licences } from "./Licences";
 import { McpServersCard } from "./McpServers";
+import { SkillsCard } from "./Skills";
 import { Updates } from "./Updates";
 import { LocalModelsCard, formatBytes } from "./LocalModels";
+import { BetterSearchSetting } from "./BetterSearch";
 import { useToast } from "./toast";
 
 export type SettingsSection = "models" | "general";
@@ -232,6 +234,7 @@ function ModelsPage({
         link={addLink}
         {...(onAddLinkClosed !== undefined ? { onLinkClosed: onAddLinkClosed } : {})}
       />
+      <BetterSearchSetting api={api} />
 
       <McpServersCard api={api} live={servers} />
 
@@ -472,6 +475,7 @@ function GeneralPage({ api, info }: { api: Api; info: AppInfo | null }) {
 
   return (
     <>
+      <SkillsCard api={api} />
       <section className="card" aria-labelledby="privacy-h">
         <h2 id="privacy-h">Privacy</h2>
         <p className="dn-help">Demios collects no usage data. There is no Demios account and no Demios server.</p>
@@ -636,7 +640,8 @@ function GeneralPage({ api, info }: { api: Api; info: AppInfo | null }) {
           <li>App storage of this window</li>
         </ul>
         <p>
-          <strong>This can't be undone.</strong> Your accounts with providers are not affected.
+          <strong>This can't be undone.</strong> Your accounts with providers are not affected. Skills you wrote
+          yourself stay in your skills folder.
         </p>
       </ConfirmDialog>
     </>

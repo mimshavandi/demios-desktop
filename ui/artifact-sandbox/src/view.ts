@@ -5,7 +5,7 @@
 // tokens from ui/design-tokens (the host loads tokens.css). Styles go in through a constructable
 // stylesheet, so the host CSP needs no 'unsafe-inline'.
 
-import { buildFixPrompt, type FixMode } from "./fix";
+import { buildFixPrompt } from "./fix";
 import { ArtifactFrame, type ArtifactFrameOptions, type FrameLike } from "./frame";
 import type { KeyPress } from "./protocol";
 import { latest, type Artifact, type ArtifactVersion, type SandboxIssue } from "./types";
@@ -40,8 +40,6 @@ export interface ArtifactViewOptions {
    * The stored versions are never changed; this only affects what the frame gets.
    */
   mark?: (artifact: Artifact, v: ArtifactVersion) => string;
-  /** How the current chat model changes artifacts, for the "Ask to fix" wording (default `tools`). */
-  fixMode?: () => FixMode;
   /** Escape or an app shortcut pressed inside the frame (untrusted: act only on an allowlist). */
   onKey?: (key: KeyPress) => void;
   /** Makes the frame (default: an `ArtifactFrame` iframe in this document). */
@@ -226,7 +224,7 @@ export class ArtifactView {
           artifactId: a.id,
           version: this.shown,
           issues: [...this.issues],
-          prompt: buildFixPrompt(a.id, a.title, this.shown, this.issues, this.opts.fixMode?.() ?? "tools"),
+          prompt: buildFixPrompt(a.id, a.title, this.shown, this.issues),
         });
       }
     });
