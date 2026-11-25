@@ -52,7 +52,7 @@ Hugging Face (huggingface.co, or an HF_ENDPOINT mirror) / browsing and downloadi
 The user's own AI provider (OpenAI, Anthropic, Google Gemini, or a custom OpenAI-compatible URL) / chat replies, sent with the user's own key
 MCP servers the user adds (HTTP, or local programs the user installed) / tools, called only after the approval rules above
 OAuth servers of those MCP servers / sign-in to the user's own account there; the redirect comes back to 127.0.0.1 on a random port
-This package has no self-updater: it is built without the `updater` feature, and the build fails if that feature is turned on for a Store or Flathub build. (Direct downloads from GitHub check https://github.com/mimshavandi/demios-desktop/releases/latest/download/latest.json, only when the user asks.)
+This package has no self-updater: it is built without the `updater` feature, and the build fails if that feature is turned on for a Store or Flathub build. (Direct downloads from GitHub check https://github.com/mimshavandi/demios-desktop/releases/latest/download/latest.json, only when the user asks, or once per launch if the user turned on "Check for updates when Demios starts", which is off by default.)
 
 How code and content run (for questions about dynamic code):
 - The app never downloads or runs executables by itself. Model files are data (GGUF weights) read by the built-in engine.
