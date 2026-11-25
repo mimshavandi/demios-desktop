@@ -64,6 +64,16 @@ function readPref(key: string, fallback: boolean): boolean {
   }
 }
 
+// Below this width the artifact pane covers the whole window instead of sitting beside the
+// chat (the `max-width: 1023px` rule in styles.css). There it opens only when asked or when an
+// artifact arrives, never at launch, so Demios doesn't start behind an empty pane.
+const ARTIFACT_OVERLAY_QUERY = "(max-width: 1023px)";
+
+function artifactPaneAtLaunch(): boolean {
+  const overlays = typeof window.matchMedia === "function" && window.matchMedia(ARTIFACT_OVERLAY_QUERY).matches;
+  return !overlays && readPref("dn.artifacts", true);
+}
+
 function writePref(key: string, v: boolean) {
   try {
     localStorage.setItem(key, v ? "1" : "0");
@@ -96,7 +106,7 @@ function Shell({ api }: { api: Api }) {
   const [error, setError] = useState<string | null>(null);
   const [announce, setAnnounce] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(() => readPref("dn.sidebar", true));
-  const [artifactsOpen, setArtifactsOpen] = useState(() => readPref("dn.artifacts", true));
+  const [artifactsOpen, setArtifactsOpen] = useState(artifactPaneAtLaunch);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const [approvals, setApprovals] = useState<ApprovalPrompt[]>([]);
   const [unknowns, setUnknowns] = useState<UnknownOutcome[]>([]);

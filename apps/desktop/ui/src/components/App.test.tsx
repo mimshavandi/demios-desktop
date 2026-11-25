@@ -485,6 +485,22 @@ describe("App", () => {
     expect(shown.opts?.allowNetwork?.("art-1")).toBe(false);
   });
 
+  it("starts with the artifact pane closed when the window is too narrow to show it beside the chat", async () => {
+    const matchMedia = vi.fn((q: string) => ({ matches: q === "(max-width: 1023px)" }) as MediaQueryList);
+    vi.stubGlobal("matchMedia", matchMedia);
+    try {
+      const { api } = fakeApi();
+      render(<App api={api} />);
+      expect(await screen.findByText("What can I help with?")).toBeTruthy();
+      expect(screen.queryByTestId("artifact-pane")).toBeNull();
+      fireEvent.click(screen.getByTestId("new-chat"));
+      fireEvent.click(screen.getByRole("button", { name: "Show artifacts" }));
+      expect(screen.getByTestId("artifact-pane")).toBeTruthy();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("sends a message and renders the streamed answer as markdown", async () => {
     const { api, emit } = fakeApi();
     render(<App api={api} />);
