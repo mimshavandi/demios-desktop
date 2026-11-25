@@ -6,19 +6,17 @@
 //!   there. The origin is `artifact://localhost` on macOS/Linux and `http://artifact.localhost`
 //!   on Windows; the main window's CSP allows it in `frame-src` and nothing else.
 //! - **Model protocol.** A model that can make tool calls gets the `artifact_*` tools
-//!   ([`RunTools`]); a model that can't gets [`dn_artifacts::FENCED_INSTRUCTIONS`] and its
-//!   text goes through the fenced parser ([`FencedRun`]). Never both: [`ArtifactMode`] is
-//!   chosen once per run from the model registry, so `<artifact>` text from a tool-capable
-//!   model (or echoed from a tool result) never creates anything.
+//!   ([`RunTools`]); that is the only way to make an artifact. A model without tool calling
+//!   gets no artifact tools and can't make artifacts: the artifact pane says so
+//!   (`NO_ARTIFACT_TOOLS` in ArtifactPane.tsx). There is no text-format fallback (ADR-0004 amendment), so
+//!   `<artifact>` text in an answer or a tool result never creates anything.
 //! - **Store.** `dn-artifacts` tables live in the app database (`migration_sets`).
 
 use crate::chat::{ChatEvent, EventSink};
 use crate::error::{IpcError, IpcResult};
 use crate::state::AppState;
 use dn_agent::{BoxFuture, ToolContext, ToolExecutor, ToolOutput};
-use dn_artifacts::{
-    Applied, ArtifactError, ArtifactStore, ArtifactSummary, FenceEvent, FencedParser, OpContext,
-};
+use dn_artifacts::{Applied, ArtifactError, ArtifactStore, ArtifactSummary, OpContext};
 use dn_core::artifact::{Artifact, ArtifactType, ArtifactVersion};
 use dn_core::chat::{ToolCall, ToolSpec};
 use dn_core::{CoreError, Id};
@@ -257,14 +255,14 @@ pub fn rollback(
 
 // ---- the model side
 
-/// How the model in this run gets artifacts. Exactly one, chosen from the registry.
+/// Whether the model in this run can make artifacts. Chosen once per run from the registry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ArtifactMode {
     /// `artifact_create` / `artifact_update` / `artifact_rewrite` tool calls; text is never
     /// parsed for `<artifact>` blocks.
     Tools,
-    /// The fenced `<artifact>` format in the model's text; no artifact tools are offered.
-    Fenced,
+    /// The model has no tool calling: no artifact tools, so no artifacts (the pane says so).
+    Unavailable,
 }
 
 impl ArtifactMode {
@@ -272,7 +270,7 @@ impl ArtifactMode {
         if state.models.supports_tools(model) {
             Self::Tools
         } else {
-            Self::Fenced
+            Self::Unavailable
         }
     }
 }
@@ -299,7 +297,7 @@ fn changed(message_id: Id, conversation_id: Id, a: &Applied) -> ChatEvent {
 /// the artifact tools the manifest allows (`artifact.create` / `.update` / `.rewrite`).
 pub struct RunTools {
     pub base: Arc<dyn ToolExecutor>,
-    /// `None` in [`ArtifactMode::Fenced`]: no artifact tools at all.
+    /// `None` in [`ArtifactMode::Unavailable`]: no artifact tools at all.
     pub artifacts: Option<ArtifactTools>,
 }
 
@@ -385,118 +383,6 @@ impl ToolExecutor for RunTools {
                 ToolOutput::error(text)
             })
         })
-    }
-}
-
-/// [`ArtifactMode::Fenced`]: parses the streamed text and saves each closed `<artifact>`
-/// block in order, on one blocking worker (SQLite stays off the async threads).
-pub struct FencedRun {
-    parser: FencedParser,
-    tx: std::sync::mpsc::Sender<dn_artifacts::FencedArtifact>,
-    worker: tauri::async_runtime::JoinHandle<()>,
-    sink: Arc<dyn EventSink>,
-    conversation_id: Id,
-    message_id: Id,
-}
-
-/// The user-facing event for a fenced block that wasn't saved.
-fn not_saved(message_id: Id, conversation_id: Id, title: &str, reason: String) -> ChatEvent {
-    ChatEvent::ArtifactNotSaved {
-        message_id,
-        conversation_id,
-        title: title.to_owned(),
-        reason,
-    }
-}
-
-impl FencedRun {
-    pub fn start(
-        state: Arc<AppState>,
-        conversation_id: Id,
-        message_id: Id,
-        sink: Arc<dyn EventSink>,
-    ) -> Self {
-        let (tx, rx) = std::sync::mpsc::channel::<dn_artifacts::FencedArtifact>();
-        let worker_sink = Arc::clone(&sink);
-        let worker = tauri::async_runtime::spawn_blocking(move || {
-            let sink = worker_sink;
-            for block in rx {
-                let result = match state.db() {
-                    Ok(db) => dn_artifacts::apply_fenced(
-                        &ArtifactStore::new(&db),
-                        conversation_id,
-                        &block,
-                        &OpContext::model(Some(message_id)),
-                    ),
-                    Err(e) => {
-                        eprintln!("artifact block not saved: {}", e.message);
-                        sink.send(not_saved(
-                            message_id,
-                            conversation_id,
-                            &block.header.title,
-                            "Local data couldn't be written.".into(),
-                        ));
-                        continue;
-                    }
-                };
-                match result {
-                    Ok(a) => sink.send(changed(message_id, conversation_id, &a)),
-                    // The model can't get a tool result back: tell the user instead.
-                    Err(e) => sink.send(not_saved(
-                        message_id,
-                        conversation_id,
-                        &block.header.title,
-                        e.to_string(),
-                    )),
-                }
-            }
-        });
-        Self {
-            parser: FencedParser::new(),
-            tx,
-            worker,
-            sink,
-            conversation_id,
-            message_id,
-        }
-    }
-
-    pub fn push(&mut self, text: &str) {
-        let events = self.parser.push(text);
-        self.handle(events);
-    }
-
-    fn handle(&mut self, events: Vec<FenceEvent>) {
-        for ev in events {
-            match ev {
-                FenceEvent::Close(block) => {
-                    let _ = self.tx.send(block);
-                }
-                FenceEvent::Rejected { header, reason } => self.sink.send(not_saved(
-                    self.message_id,
-                    self.conversation_id,
-                    &header.title,
-                    reason,
-                )),
-                FenceEvent::Unterminated(block) => self.sink.send(not_saved(
-                    self.message_id,
-                    self.conversation_id,
-                    &block.header.title,
-                    ArtifactError::Unterminated.to_string(),
-                )),
-                _ => {}
-            }
-        }
-    }
-
-    /// Ends the stream (unterminated blocks are dropped, never saved) and waits until every
-    /// closed block is stored.
-    pub async fn finish(mut self) {
-        let parser = std::mem::take(&mut self.parser);
-        let events = parser.finish();
-        self.handle(events);
-        drop(self.tx);
-        let _ = self.worker.await;
     }
 }
 

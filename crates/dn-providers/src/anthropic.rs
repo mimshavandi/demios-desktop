@@ -76,9 +76,6 @@ pub(crate) fn body(inner: &Inner, model: &str, req: &ChatRequest) -> Value {
             ),
         }
     }
-    if let Some(schema) = &req.response_schema {
-        system.push(http::schema_instruction(schema));
-    }
     // Thinking blocks carry signatures that dn-core messages can't hold yet, so a
     // tool-result continuation runs without thinking (Anthropic accepts that).
     let continuing_tools = req.messages.last().is_some_and(|m| m.role == Role::Tool);
@@ -106,6 +103,13 @@ pub(crate) fn body(inner: &Inner, model: &str, req: &ChatRequest) -> Value {
             .map(|t| json!({"name": t.name, "description": t.description, "input_schema": t.input_schema}))
             .collect();
         o.insert("tools".into(), json!(tools));
+    }
+    // Native structured output; a model that rejects it fails the call (no prompt-only copy).
+    if let Some(schema) = &req.response_schema {
+        o.insert(
+            "output_config".into(),
+            json!({"format": {"type": "json_schema", "schema": schema}}),
+        );
     }
     if thinking {
         o.insert(

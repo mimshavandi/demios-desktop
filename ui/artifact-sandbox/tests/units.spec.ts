@@ -42,12 +42,6 @@ test("fix prompt wraps artifact text as capped, delimited untrusted data", () =>
   expect(p).toContain("artifact_update or artifact_rewrite");
 });
 
-test("fix prompt for a model without tools asks for the whole block again", () => {
-  const p = buildFixPrompt("art-9", "Page", 2, [{ kind: "error", message: "boom" }], "fenced");
-  expect(p).toContain('<artifact id="art-9">');
-  expect(p).not.toContain("artifact_update");
-});
-
 test("keys: only Escape and Ctrl/Cmd combinations leave the frame, as validated messages", () => {
   const k = (key: Record<string, unknown>, nonce = "n") => parseFrameMessage({ channel: "dn-artifact", nonce, type: "key", key }, "n");
   const press = (key: string, mods: Record<string, boolean> = {}) => ({ key, ctrl: false, meta: false, alt: false, shift: false, ...mods });

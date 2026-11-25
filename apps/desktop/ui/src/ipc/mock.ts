@@ -54,12 +54,14 @@ export function createMockApi(): Api {
       label: "Proofread",
       description: "Fixes spelling, grammar and punctuation without changing the meaning or tone.",
       allowed_tools: [],
+      source: "builtin",
     },
     {
       name: "explain-code",
       label: "Explain code",
       description: "Explains what a piece of code does, step by step.",
       allowed_tools: ["artifact.*"],
+      source: "user",
     },
   ];
   const keys = new Set<string>();
@@ -563,6 +565,13 @@ export function createMockApi(): Api {
     listMessages: async (cid) => structuredClone(msgs.get(cid) ?? []),
     listSkills: async () => structuredClone(skills),
     getChatSkill: async (cid) => chatSkills.get(cid) ?? null,
+    skillsOverview: async () => ({
+      skills: structuredClone(skills),
+      problems: [{ file: "my-skill/SKILL.md", message: "name: `My Skill` must be lowercase letters, digits and single hyphens" }],
+      folder: "~/.local/share/demios/skills",
+    }),
+    reloadSkills: async () => ({ skills: structuredClone(skills), problems: [], folder: "~/.local/share/demios/skills" }),
+    openSkillsFolder: async () => null,
     setChatSkill: async (cid, skill) => {
       if (skill === null) chatSkills.delete(cid);
       else if (skills.some((s) => s.name === skill)) chatSkills.set(cid, skill);

@@ -26,22 +26,7 @@ const OPTIONAL: &[OptionalParam] = &[
         ..OptionalParam::new("generationConfig.thinkingConfig")
     },
     OptionalParam::new("generationConfig.temperature"),
-    // Never dropped silently: the schema moves into the system instruction instead.
-    OptionalParam {
-        aliases: &["response_schema", "responseSchema"],
-        fallback: Some(schema_to_system_instruction),
-        ..OptionalParam::new("generationConfig.responseJsonSchema")
-    },
 ];
-
-/// `responseJsonSchema` rejected → same schema as a system instruction.
-fn schema_to_system_instruction(body: &mut Value, removed: Value) {
-    let part = json!({"text": crate::http::schema_instruction(&removed)});
-    match body["systemInstruction"]["parts"].as_array_mut() {
-        Some(parts) => parts.push(part),
-        None => body["systemInstruction"] = json!({"parts": [part]}),
-    }
-}
 
 fn headers(inner: &Inner, accept: &str) -> Vec<(&'static str, String)> {
     let mut h = vec![("accept", accept.to_string())];
