@@ -141,7 +141,7 @@ jobs:
         run: |
           set -euo pipefail
           m="$HOME/dn-test-models/stories15M_MOE-Q8_0.gguf"
-          echo "$MOE_MODEL_SHA256  $m" | shasum -a 256 -c -
+          echo "$MOE_MODEL_SHA256  $m" | sha256sum -c -
           # A base model without a chat template: give it a plain one, as dn-models stores one
           # from tokenizer_config.json (the bench's chat path needs a template).
           echo '{% for m in messages %}{{ m.content }}{% endfor %}' > "$m.chat_template.jinja"
