@@ -75,7 +75,7 @@ and can be wrong; the app says so next to the message box.
 
 - Restricted capability `runFullTrust`. Reason: "Win32 desktop app (Tauri/WebView2). It needs full trust to start local AI inference and the local tool servers (MCP) the user configures."
 - Age rating (IARC): answer honestly that the app shows unfiltered text from user-chosen AI models and can display links. There is no user-to-user communication.
-- Privacy policy URL: https://demios.io/privacy (live once the owner publishes it). Support contact: mahdi@demios.io (DigiNote Inc.).
+- Privacy policy URL: https://demios.io/privacy (live once the owner publishes it). Support contact: mahdi@demios.io (DigiNote, Inc.).
 
 **Flathub** (one `finish-args` justification per line in the PR)
 
