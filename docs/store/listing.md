@@ -1,6 +1,6 @@
 # Store listing copy (draft, T-STORE-12)
 
-**Status: draft for the owner to approve.** It describes only what the current build does (audit S-07: no future functionality in the listing). Update it when a feature ships, not before.
+**Status: draft for the owner to approve.** Store submissions are deferred (see [the store index](README.md)), so for now this copy is used by the installers on GitHub Releases and demios.io. It describes only what the current build does (audit S-07: no future functionality in the listing). Update it when a feature ships, not before.
 
 The same text is in `apps/desktop/tauri.conf.json` (`bundle.shortDescription`, `bundle.longDescription`). Installers (MSI/NSIS properties, DMG, .deb/.rpm) and later MSIX and AppStream metainfo read it from there. Keep both in sync.
 
