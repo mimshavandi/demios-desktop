@@ -8,7 +8,7 @@
 //! |---|---|
 //! | unknown tool, bad/missing args, denied or unanswered approval, tool disabled, tool reported an error, timeout, connection error, key in flight, outcome unknown | `Ok(is_error: true)` with the user message, plus the missing-field list or the tool's own `isError` text where present; developer detail stays local |
 //! | cancelled | `Err(CoreError::Cancelled)` |
-//! | server needs (re)authorisation, bad server config, ledger failure | `Err(CoreError::Capability)` (`reconnect_required` set for auth) |
+//! | server needs (re)authorisation, bad server config, ledger failure, tools unavailable after a poisoned lock (#145) | `Err(CoreError::Capability)` (`reconnect_required` set for auth) |
 
 use crate::client::McpCallOutput;
 use crate::error::{ToolError, ToolErrorKind};
@@ -48,6 +48,7 @@ fn ends_run(kind: ToolErrorKind) -> bool {
             | ToolErrorKind::AuthRequired
             | ToolErrorKind::Config
             | ToolErrorKind::Ledger
+            | ToolErrorKind::Unavailable
     )
 }
 
