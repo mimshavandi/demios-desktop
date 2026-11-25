@@ -100,10 +100,20 @@ pub struct ServerInput {
     pub transport: TransportInput,
 }
 
+/// Why a local server can't be added or started in this build (shown to the user).
+pub const LOCAL_SERVERS_UNAVAILABLE: &str = "The Flatpak version of Demios runs in a sandbox, \
+     so it can't start programs on your computer. Add a remote (HTTPS) server instead.";
+
 /// Whether this build may start local (stdio) servers. Flatpak builds can't run host
-/// programs, so they take HTTP servers only.
+/// programs, so they take remote (HTTP) servers only. A build is a Flatpak build when it was
+/// compiled with the `flatpak` feature (the Flathub manifest sets it) or runs inside a Flatpak
+/// sandbox (`FLATPAK_ID` is set), so a Flatpak built without the feature is still covered.
 pub fn local_servers_allowed() -> bool {
-    std::env::var_os("FLATPAK_ID").is_none()
+    local_servers_allowed_in(cfg!(feature = "flatpak"), std::env::var_os("FLATPAK_ID"))
+}
+
+fn local_servers_allowed_in(flatpak_feature: bool, flatpak_id: Option<std::ffi::OsString>) -> bool {
+    !flatpak_feature && flatpak_id.is_none_or(|id| id.is_empty())
 }
 
 pub fn env_secret_id(server: &str, name: &str) -> String {
@@ -296,9 +306,7 @@ pub fn config_from_input(
     let mut cfg = match &input.transport {
         TransportInput::Stdio { command, args, env } => {
             if !local_allowed {
-                return Err(invalid(
-                    "This version of Demios can't start programs on your computer. Add an HTTP server instead.",
-                ));
+                return Err(invalid(LOCAL_SERVERS_UNAVAILABLE));
             }
             if command.trim().is_empty() {
                 return Err(invalid("Enter the command that starts the server."));
@@ -742,6 +750,28 @@ mod tests {
     }
 
     #[test]
+    fn flatpak_builds_take_remote_servers_only() {
+        use std::ffi::OsString;
+        assert!(local_servers_allowed_in(false, None));
+        assert!(local_servers_allowed_in(false, Some(OsString::new())));
+        assert!(!local_servers_allowed_in(
+            false,
+            Some("io.demios.app".into())
+        ));
+        assert!(!local_servers_allowed_in(true, None));
+        assert!(!local_servers_allowed_in(
+            true,
+            Some("io.demios.app".into())
+        ));
+        // The feature alone decides at compile time (the Flathub manifest builds with it).
+        if cfg!(feature = "flatpak") {
+            assert!(!local_servers_allowed());
+        }
+        assert!(LOCAL_SERVERS_UNAVAILABLE.contains("can't start programs on your computer"));
+        assert!(LOCAL_SERVERS_UNAVAILABLE.contains("remote (HTTPS) server"));
+    }
+
+    #[test]
     fn local_servers_are_refused_where_they_cant_run() {
         let input = ServerInput {
             id: "files".into(),
@@ -779,7 +809,9 @@ mod tests {
     fn app() -> (Arc<AppState>, crate::secrets::Keys) {
         let conn = dn_store::open_in_memory(&crate::state::migration_sets()).unwrap();
         let keys = crate::secrets::Keys::memory();
-        let st = AppState::new(conn, crate::models::ModelRegistry::default(), keys.clone());
+        let mut st = AppState::new(conn, crate::models::ModelRegistry::default(), keys.clone());
+        // Tests run local (stdio) servers, also in a `--features flatpak` build.
+        st.local_servers = true;
         (Arc::new(st), keys)
     }
 
@@ -864,6 +896,8 @@ mod tests {
         let conn = dn_store::open_in_memory(&crate::state::migration_sets()).unwrap();
         let keys = crate::secrets::Keys::memory();
         let mut st = AppState::new(conn, crate::models::ModelRegistry::default(), keys.clone());
+        // Tests run local (stdio) servers, also in a `--features flatpak` build.
+        st.local_servers = true;
         let ledger = dn_store::open_in_memory(&crate::state::migration_sets()).unwrap();
         let (gate, rx) = dn_tools::ApprovalGate::new(4);
         let exec = Arc::new(dn_tools::Executor::new(

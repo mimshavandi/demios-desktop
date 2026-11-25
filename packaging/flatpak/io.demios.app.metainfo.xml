@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream metainfo for Demios Desktop (T-STORE-06). The texts come from
+     docs/store/listing.md; keep both in sync. Validate with:
+     appstreamcli validate packaging/flatpak/io.demios.app.metainfo.xml -->
+<component type="desktop-application">
+  <id>io.demios.app</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>Apache-2.0</project_license>
+
+  <name>Demios Desktop</name>
+  <summary>Chat with local or cloud AI models</summary>
+  <developer id="io.demios">
+    <name>DigiNote Inc.</name>
+  </developer>
+
+  <description>
+    <p>Demios Desktop is an open-source app for chatting with AI models.</p>
+    <ul>
+      <li>Run models on your computer. Download a model from the built-in list, or GGUF models from Hugging Face, and chat with them through llama.cpp. The app shows whether it fits in your computer’s memory and its licence before you download it.</li>
+      <li>Or bring your own key. Add an API key for Anthropic, OpenAI or Google Gemini and chat with their models under your own account and their terms.</li>
+      <li>See what the model makes. Web pages, small apps, diagrams and documents open next to the chat, run sealed off from your computer, and keep every version.</li>
+      <li>Give models tools. Add remote tool servers (MCP). Tools that change something show exactly what they will do and wait for your OK.</li>
+      <li>Your data stays with you. There is no Demios account and no Demios server. Chats and settings stay on your computer, keys stay in your system keyring, and the app collects no usage data. Delete all local data removes everything the app stored, in one step.</li>
+    </ul>
+    <p>This version runs in the Flatpak sandbox, so it connects to remote (HTTPS) tool servers only and can’t start programs on your computer.</p>
+    <p>Answers come from the AI model you chose and can be wrong. Check important facts.</p>
+  </description>
+
+  <launchable type="desktop-id">io.demios.app.desktop</launchable>
+  <provides>
+    <binary>demios-desktop</binary>
+  </provides>
+
+  <url type="homepage">https://github.com/mimshavandi/demios-desktop</url>
+  <url type="bugtracker">https://github.com/mimshavandi/demios-desktop/issues</url>
+  <url type="vcs-browser">https://github.com/mimshavandi/demios-desktop</url>
+  <url type="contribute">https://github.com/mimshavandi/demios-desktop/blob/main/CONTRIBUTING.md</url>
+  <update_contact>mahdi@demios.io</update_contact>
+
+  <categories>
+    <category>Utility</category>
+    <category>Office</category>
+  </categories>
+  <keywords>
+    <keyword>AI</keyword>
+    <keyword>LLM</keyword>
+    <keyword>chat</keyword>
+    <keyword>assistant</keyword>
+    <keyword>llama.cpp</keyword>
+    <keyword>MCP</keyword>
+  </keywords>
+
+  <branding>
+    <color type="primary" scheme_preference="light">#ECEDFC</color>
+    <color type="primary" scheme_preference="dark">#25264A</color>
+  </branding>
+
+  <requires>
+    <display_length compare="ge">900</display_length>
+  </requires>
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </supports>
+
+  <!-- Placeholder screenshots: development captures from the repo. Replace them with
+       release-build screenshots before submitting (docs/store/listing.md). -->
+  <screenshots>
+    <screenshot type="default">
+      <caption>An answer from a model running on your computer</caption>
+      <image>https://raw.githubusercontent.com/mimshavandi/demios-desktop/main/apps/desktop/docs/screenshots/light-answer.jpg</image>
+    </screenshot>
+    <screenshot>
+      <caption>Download models that fit your computer</caption>
+      <image>https://raw.githubusercontent.com/mimshavandi/demios-desktop/main/apps/desktop/docs/screenshots/light-local-models.jpg</image>
+    </screenshot>
+    <screenshot>
+      <caption>Tools that change something wait for your OK</caption>
+      <image>https://raw.githubusercontent.com/mimshavandi/demios-desktop/main/apps/desktop/docs/screenshots/light-approval.jpg</image>
+    </screenshot>
+    <screenshot>
+      <caption>What the model makes opens next to the chat</caption>
+      <image>https://raw.githubusercontent.com/mimshavandi/demios-desktop/main/apps/desktop/docs/screenshots/dark-artifact-pane.jpg</image>
+    </screenshot>
+  </screenshots>
+
+  <!-- OARS: there is no moderation layer, so the text depends on the model and provider the
+       user picks and can include anything those models write. There is no user-to-user
+       communication and no data collection. The owner confirms these answers before
+       submission (docs/store/readiness-audit.md, S-20). -->
+  <content_rating type="oars-1.1">
+    <content_attribute id="language-profanity">moderate</content_attribute>
+    <content_attribute id="language-discrimination">mild</content_attribute>
+    <content_attribute id="sex-themes">mild</content_attribute>
+  </content_rating>
+
+  <!-- One entry per release, newest first, from CHANGELOG.md (docs/releasing.md). -->
+  <releases>
+    <release version="0.1.0" type="development" date="2026-11-25">
+      <description>
+        <p>First version, not released yet. It includes:</p>
+        <ul>
+          <li>Chat with streamed answers, Markdown and highlighted code; stop, retry and copy answers</li>
+          <li>Models on your computer from a built-in list or Hugging Face, checked against their SHA-256 before use</li>
+          <li>Your own API key for Anthropic, OpenAI or Google Gemini, kept in your system keyring</li>
+          <li>Artifacts: web pages, small apps, diagrams and documents in a sandboxed side pane, with every version kept</li>
+          <li>Remote tool servers (MCP) with approval for tools that change something</li>
+          <li>Delete all local data, and a list of the open-source licences of every package shipped</li>
+        </ul>
+      </description>
+      <url type="details">https://github.com/mimshavandi/demios-desktop/blob/main/CHANGELOG.md</url>
+    </release>
+  </releases>
+</component>

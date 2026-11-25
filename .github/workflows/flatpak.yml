@@ -1,0 +1,91 @@
+# Builds the Flatpak (T-STORE-06) and runs the Flathub linters. Not a required check: it is
+# slow (GNOME SDK, llama.cpp, the whole app) and only runs when the packaging changes or on
+# demand. packaging/flatpak/README.md explains each step.
+name: flatpak
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - packaging/flatpak/**
+      - .github/workflows/flatpak.yml
+  push:
+    branches: [main]
+    paths:
+      - packaging/flatpak/**
+      - .github/workflows/flatpak.yml
+permissions:
+  contents: read
+concurrency:
+  group: flatpak-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  flatpak:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      # The SDK, its extensions and the app build need more room than the runner has free.
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - name: Install flatpak and org.flatpak.Builder
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak dbus-bin ostree
+          # Ubuntu 24.04 blocks unprivileged user namespaces, which bubblewrap needs.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user -y --noninteractive flathub org.flatpak.Builder
+      - name: Generate offline sources
+        run: packaging/flatpak/generate-sources.sh > /dev/null
+      - name: Validate metainfo
+        run: flatpak run --command=appstreamcli org.flatpak.Builder validate --no-net --explain packaging/flatpak/io.demios.app.metainfo.xml
+      - name: Validate desktop file
+        run: flatpak run --command=desktop-file-validate org.flatpak.Builder packaging/flatpak/io.demios.app.desktop
+      - name: Lint manifest
+        run: flatpak run --command=flatpak-builder-lint org.flatpak.Builder manifest packaging/flatpak/io.demios.app.yml
+      - uses: actions/cache@v4
+        with:
+          path: packaging/flatpak/.flatpak-builder
+          key: flatpak-builder-${{ hashFiles('Cargo.lock', 'apps/desktop/package-lock.json', 'ui/artifact-sandbox/package-lock.json', 'packaging/flatpak/io.demios.app.yml') }}
+          restore-keys: flatpak-builder-
+      - name: Build
+        working-directory: packaging/flatpak
+        # org.flatpak.Builder installs the SDK and extensions through the session bus, which
+        # a CI runner doesn't have: start one for the build. No --sandbox: that mode refuses the
+        # manifest's repo-root `type: dir` source (Flathub's copy uses a git source instead).
+        run: |
+          dbus-run-session -- flatpak run org.flatpak.Builder --user --force-clean --disable-rofiles-fuse \
+            --install-deps-from=flathub --ccache \
+            --mirror-screenshots-url=https://dl.flathub.org/media/ \
+            --repo=repo build-dir io.demios.app.yml
+      # As Flathub does: commit the screenshots and icons --mirror-screenshots-url fetched into
+      # the repo's screenshots branch, so the repo lint sees them mirrored.
+      - name: Commit mirrored media
+        working-directory: packaging/flatpak
+        run: ostree commit --repo=repo --canonical-permissions --branch=screenshots/$(uname -m) build-dir/files/share/app-info/media
+      # Two repo-lint errors can only be cleared by Flathub's own build infrastructure, which
+      # mirrors screenshots and icons to dl.flathub.org/media: appstream-external-screenshot-url
+      # and appstream-remote-icon-not-mirrored (packaging/flatpak/README.md, "resolved at
+      # submission"). They are reported but allowed; any other error fails this step.
+      - name: Lint build
+        working-directory: packaging/flatpak
+        run: |
+          flatpak run --command=flatpak-builder-lint org.flatpak.Builder repo repo > lint.json || true
+          cat lint.json
+          other=$(jq -r '(.errors // [])[] | select(. != "appstream-external-screenshot-url" and . != "appstream-remote-icon-not-mirrored")' lint.json)
+          if [ -n "$other" ]; then
+            echo "::error::flatpak-builder-lint repo errors: $other"
+            exit 1
+          fi
+          allowed=$(jq -r '(.errors // []) | join(", ")' lint.json)
+          if [ -n "$allowed" ]; then
+            echo "::warning::resolved at submission (Flathub mirrors media): $allowed"
+          fi
+      - name: Bundle
+        working-directory: packaging/flatpak
+        run: flatpak build-bundle repo io.demios.app.flatpak io.demios.app
+      - uses: actions/upload-artifact@v4
+        with:
+          name: io.demios.app.flatpak
+          path: packaging/flatpak/io.demios.app.flatpak
+          retention-days: 7
