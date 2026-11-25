@@ -40,19 +40,22 @@ The first build takes a while because it compiles llama.cpp. For a faster, optim
 ## Send your first message
 
 1. When the app opens, you'll see a short notice: answers come from the AI model you choose, and they can be wrong. Select **Got it**.
-2. Until a model is set up, the message box says "Connect a model to start chatting". Select **Connect a model**. This opens **Settings → Models**. You can also get there any time with **Models** at the bottom of the sidebar.
+2. Until a model is set up, the message box says "Connect a model to start chatting". Select **Connect a model**. This opens **Settings → Models → On this device**. You can also get there any time with **Settings** at the bottom of the sidebar.
 3. Add a model in one of two ways (details in [Adding a model](models.md)):
    - **On this device:** pick a model that shows **Ready** and select **Download model**.
-   - **Your own key:** paste an Anthropic, OpenAI or Google Gemini API key under **Provider keys** and select **Save key**.
+   - **Your own key:** paste an Anthropic, OpenAI or Google Gemini API key on the **Providers** tab and select **Save key**.
 4. Go back to the chat, type a message and press Enter. Or select one of the example prompts.
 
 The model in use is shown at the top right of the window and under each answer.
 
 ## Finding your way around
 
-- **Models** at the bottom of the sidebar opens **Settings → Models**: models on this device, provider keys, and which model answers.
-- **Settings** at the bottom of the sidebar, or ⌘, (Ctrl+, on Windows and Linux), opens **Settings → General**: privacy, deleting your data, reporting a problem, and **About**.
-- **About** shows the app version, where your chats and models are stored, and **Open-source licences**: every package shipped with the app, searchable, with its full licence text. It also links to the privacy policy and the accessibility statement. In a copy downloaded from GitHub, **Check for updates** looks for a new version when you select it. You can also turn on **Check for updates when Demios starts**; it's off unless you do.
+- **Settings** at the bottom of the sidebar, or ⌘, (Ctrl+, on Windows and Linux), opens Settings on the page you had open last. Its sections are listed on the left:
+  - **General**: **About** and updates, **Privacy** (with the folder your chats are stored in), **Help and legal** (reporting a problem, the privacy policy, the accessibility statement and **Open-source licences**: every package shipped with the app, searchable, with its full licence text), and **Delete local data**.
+  - **Models**: which model does each task, then **On this device** (download models; the folder they're stored in) and **Providers** (your API keys).
+  - **Tools**: tool servers (MCP).
+  - **Skills**: built-in skills and your own.
+- **About** shows the app version. In a copy downloaded from GitHub, **Check for updates** looks for a new version when you select it. You can also turn on **Check for updates when Demios starts**; it's off unless you do.
 
 ## Next
 

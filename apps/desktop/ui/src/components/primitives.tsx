@@ -10,6 +10,7 @@ import {
   useId,
   type ButtonHTMLAttributes,
   type InputHTMLAttributes,
+  type KeyboardEvent,
   type ReactNode,
 } from "react";
 
@@ -309,4 +310,74 @@ export function Select({
       </RSelect.Portal>
     </RSelect.Root>
   );
+}
+
+// ---- Tabs: a tab list whose keyboard comes from its items (ui-ux tabs behaves)
+//
+// Left/Right move to the previous/next tab and select it (automatic activation), Home/End
+// go to the first/last; only the selected tab is in the Tab order. The caller renders the
+// panel with `tabPanelProps(idBase, value)`.
+
+export interface TabItem<T extends string> {
+  id: T;
+  label: string;
+}
+
+export function Tabs<T extends string>({
+  label,
+  idBase,
+  items,
+  value,
+  onChange,
+}: {
+  /** Accessible name of the tab list. */
+  label: string;
+  idBase: string;
+  items: TabItem<T>[];
+  value: T;
+  onChange: (id: T) => void;
+}) {
+  const move = (e: KeyboardEvent<HTMLDivElement>) => {
+    const i = items.findIndex((t) => t.id === value);
+    const last = items.length - 1;
+    const to =
+      e.key === "ArrowRight" ? (i + 1) % items.length
+      : e.key === "ArrowLeft" ? (i - 1 + items.length) % items.length
+      : e.key === "Home" ? 0
+      : e.key === "End" ? last
+      : null;
+    if (to === null || items[to] === undefined) return;
+    e.preventDefault();
+    const next = items[to].id;
+    onChange(next);
+    e.currentTarget.querySelector<HTMLButtonElement>(`#${idBase}-tab-${next}`)?.focus();
+  };
+  return (
+    <div className="tabs" role="tablist" aria-label={label} onKeyDown={move}>
+      {items.map((t) => (
+        <button
+          key={t.id}
+          type="button"
+          role="tab"
+          id={`${idBase}-tab-${t.id}`}
+          aria-controls={`${idBase}-panel-${t.id}`}
+          aria-selected={t.id === value}
+          tabIndex={t.id === value ? 0 : -1}
+          className={t.id === value ? "tab selected" : "tab"}
+          onClick={() => onChange(t.id)}
+        >
+          {t.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+export function tabPanelProps(idBase: string, value: string) {
+  return {
+    role: "tabpanel" as const,
+    id: `${idBase}-panel-${value}`,
+    "aria-labelledby": `${idBase}-tab-${value}`,
+    className: "tabpanel",
+  };
 }
