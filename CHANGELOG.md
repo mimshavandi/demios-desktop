@@ -22,7 +22,7 @@ Only changes people using the app or the `dn` command-line tool can notice are l
 
 ### Fixed
 
-- Settings uses the whole window: the artifact pane is hidden while Settings or a project page is open, and comes back with the chat. If your models can't be loaded, only the Models page says so; General still works ([#PRNUM](https://github.com/mimshavandi/demios-desktop/pull/PRNUM)).
+- Settings uses the whole window: the artifact pane is hidden while Settings or a project page is open, and comes back with the chat. If your models can't be loaded, only the Models page says so; General still works ([#185](https://github.com/mimshavandi/demios-desktop/pull/185)).
 
 ## [0.1.0-preview.454e01b] - 2026-11-25
 
