@@ -30,7 +30,7 @@ jobs:
       - name: Install flatpak and org.flatpak.Builder
         run: |
           sudo apt-get update
-          sudo apt-get install -y flatpak
+          sudo apt-get install -y flatpak dbus-bin
           # Ubuntu 24.04 blocks unprivileged user namespaces, which bubblewrap needs.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
@@ -50,8 +50,10 @@ jobs:
           restore-keys: flatpak-builder-
       - name: Build
         working-directory: packaging/flatpak
+        # org.flatpak.Builder installs the SDK and extensions through the session bus, which
+        # a CI runner doesn't have: start one for the build.
         run: |
-          flatpak run org.flatpak.Builder --user --sandbox --force-clean --disable-rofiles-fuse \
+          dbus-run-session -- flatpak run org.flatpak.Builder --user --sandbox --force-clean --disable-rofiles-fuse \
             --install-deps-from=flathub --ccache \
             --mirror-screenshots-url=https://dl.flathub.org/media/ \
             --repo=repo build-dir io.demios.app.yml
