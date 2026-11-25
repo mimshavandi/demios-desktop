@@ -763,44 +763,69 @@ async fn gemini_malformed_function_call_is_error_finish() {
 }
 
 #[tokio::test]
-async fn rejected_response_schema_moves_into_the_prompt_instead_of_vanishing() {
+async fn a_rejected_response_schema_is_a_clear_error_and_never_retried_without_it() {
     let srv = serve(vec![
         Reply::json(400, "openai/schema_unsupported.json"),
-        Reply::sse("openai/text.sse"),
         Reply::json(400, "gemini/schema_unsupported.json"),
-        Reply::sse("gemini/text.sse"),
+        Reply::inline(
+            400,
+            "application/json",
+            r#"{"type":"error","error":{"type":"invalid_request_error","message":"output_config.format: structured output is not supported for this model"}}"#,
+        ),
     ])
     .await;
-    let schema = json!({"type": "object", "properties": {"title": {"type": "string"}}});
-    let oa = build(cfg("openai", ProviderKind::OpenAi, &srv.base)).unwrap();
-    let mut r = request("byok:openai:gpt-4o-mini", "chat.title");
-    r.response_schema = Some(schema.clone());
-    collect(&*oa, r).await.unwrap();
-    let gm = build(cfg("gemini", ProviderKind::Gemini, &srv.base)).unwrap();
-    let mut r = request("byok:gemini:gemini-2.5-flash", "chat.title");
-    r.response_schema = Some(schema.clone());
-    collect(&*gm, r).await.unwrap();
+    let schema = json!({"type": "object", "properties": {"title": {"type": "string"}}, "additionalProperties": false});
+    let cases = [
+        (ProviderKind::OpenAi, "openai", "byok:openai:gpt-4o-mini"),
+        (
+            ProviderKind::Gemini,
+            "gemini",
+            "byok:gemini:gemini-2.5-flash",
+        ),
+        (
+            ProviderKind::Anthropic,
+            "anthropic",
+            "byok:anthropic:claude-haiku-5-5",
+        ),
+    ];
+    for (kind, id, model) in cases {
+        let p = build(cfg(id, kind, &srv.base)).unwrap();
+        let mut r = request(model, "chat.title");
+        r.response_schema = Some(schema.clone());
+        match collect(&*p, r).await {
+            Err(CoreError::ModelUnavailable {
+                user_message,
+                recovery,
+                developer_message,
+            }) => {
+                assert!(
+                    user_message.contains("structured output"),
+                    "{id}: {user_message}"
+                );
+                assert!(recovery.is_empty(), "{id}: not retryable: {recovery:?}");
+                assert!(!developer_message.contains(FAKE_KEY));
+            }
+            other => panic!("{id}: {other:?}"),
+        }
+    }
+    // One request per provider: none was retried without the schema.
     let reqs = srv.requests();
-    let schema_text = schema.to_string();
-    // OpenAI: retried without response_format, schema appended to the system message.
-    assert!(reqs[0].body.get("response_format").is_some());
-    assert!(reqs[1].body.get("response_format").is_none());
-    let sys = reqs[1].body["messages"][0]["content"].as_str().unwrap();
-    assert!(
-        sys.starts_with("Be brief.") && sys.contains(&schema_text),
-        "{sys}"
+    assert_eq!(reqs.len(), 3);
+    assert_eq!(reqs[0].body["response_format"]["type"], "json_schema");
+    assert!(reqs[1].body["generationConfig"]["responseJsonSchema"].is_object());
+    assert_eq!(
+        reqs[2].body["output_config"]["format"]["type"],
+        "json_schema"
     );
-    // Gemini: same, in systemInstruction.
-    assert!(
-        reqs[3].body["generationConfig"]
-            .get("responseJsonSchema")
-            .is_none()
-    );
-    let parts = &reqs[3].body["systemInstruction"]["parts"];
-    assert!(
-        parts[1]["text"].as_str().unwrap().contains(&schema_text),
-        "{parts}"
-    );
+    assert_eq!(reqs[2].body["output_config"]["format"]["schema"], schema);
+    // No prompt-only copy of the schema anywhere.
+    for r in &reqs {
+        assert!(
+            !r.body.to_string().contains("Reply with only a JSON value"),
+            "{}",
+            r.body
+        );
+    }
 }
 
 #[tokio::test]
