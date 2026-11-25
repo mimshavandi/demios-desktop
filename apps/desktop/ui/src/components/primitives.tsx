@@ -170,7 +170,10 @@ type TextFieldProps = Omit<InputHTMLAttributes<HTMLInputElement>, "id"> & {
   error?: string | null;
 };
 
-export function TextField({ label, help, error, className, ...rest }: TextFieldProps) {
+export const TextField = forwardRef<HTMLInputElement, TextFieldProps>(function TextField(
+  { label, help, error, className, ...rest },
+  ref,
+) {
   const id = useId();
   const describedBy = `${id}-desc`;
   const hasError = error !== undefined && error !== null && error !== "";
@@ -178,6 +181,7 @@ export function TextField({ label, help, error, className, ...rest }: TextFieldP
     <div className={`dn-field${hasError ? " is-invalid" : ""}${className ? ` ${className}` : ""}`}>
       <label htmlFor={id}>{label}</label>
       <input
+        ref={ref}
         id={id}
         aria-invalid={hasError || undefined}
         aria-describedby={hasError || help !== undefined ? describedBy : undefined}
@@ -196,7 +200,7 @@ export function TextField({ label, help, error, className, ...rest }: TextFieldP
       )}
     </div>
   );
-}
+});
 
 // ---- Switch: on, off, disabled · only for settings that apply immediately
 

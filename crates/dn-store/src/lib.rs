@@ -5,6 +5,8 @@
 //!   `CLAUDE.md`) and applies the ones a database has not seen yet.
 //! - [`chat`]: dn-store's own tables, conversations and messages, with UUIDv7 ids and
 //!   `updated_at` so they can sync later (ADR-0008).
+//! - [`project`]: projects (T-PRJ-01): chats, files and standing instructions grouped
+//!   together, with tombstones like chats.
 //!
 //! Other crates never open the database themselves: the app opens it with [`open`] and
 //! passes `&rusqlite::Connection` around.
@@ -12,6 +14,7 @@
 pub mod chat;
 pub mod migrate;
 pub mod paths;
+pub mod project;
 
 pub use migrate::{MigrationSet, run_migrations};
 pub use rusqlite::Connection;

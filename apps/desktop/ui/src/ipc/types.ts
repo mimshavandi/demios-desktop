@@ -40,9 +40,53 @@ export interface Conversation {
   id: Id;
   title: string;
   model: string | null;
+  /** The project this chat belongs to, if any. */
+  project_id: Id | null;
   created_at: number;
   updated_at: number;
 }
+
+/** A project: chats, files and standing instructions grouped together (T-PRJ-01). */
+export interface Project {
+  id: Id;
+  name: string;
+  /** Sent with every chat of the project; "" for none. */
+  instructions: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface ProjectSummary extends Project {
+  /** Live chats in the project. */
+  chats: number;
+  files: number;
+}
+
+/** A file added to a project: a copy kept in the app data folder. */
+export interface ProjectFile {
+  id: Id;
+  project_id: Id;
+  /** Display name, plain text. */
+  name: string;
+  media_type: string;
+  size: number;
+  sha256: string;
+  /** Where it was added from (shown only). */
+  source_path: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface AddedFiles {
+  /** The file picker was closed without a choice. */
+  cancelled: boolean;
+  added: ProjectFile[];
+  skipped: { name: string; reason: string }[];
+}
+
+/** Limits the backend enforces (apps/desktop/src/projects.rs, dn_store::project). */
+export const PROJECT_NAME_MAX = 100;
+export const PROJECT_INSTRUCTIONS_MAX = 8000;
 
 /** A chat skill from the library (apps/desktop/src/skills.rs `SkillInfo`). */
 export interface SkillInfo {
@@ -423,6 +467,7 @@ export type ReportKind = "problem" | "answer";
 /** What "Delete all local data" removes (confirm dialog). */
 export interface LocalDataSummary {
   conversations: number;
+  projects: number;
   /** Artifacts in the database. */
   artifacts: number;
   data_dir: string | null;

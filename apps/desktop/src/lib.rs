@@ -20,6 +20,7 @@ pub mod links;
 pub mod local;
 pub mod mcp;
 pub mod models;
+pub mod projects;
 pub mod secrets;
 pub mod settings;
 pub mod skills;
@@ -241,6 +242,15 @@ pub fn run() {
             commands::get_chat_skill,
             commands::set_chat_skill,
             commands::restore_conversation,
+            projects::list_projects,
+            projects::create_project,
+            projects::update_project,
+            projects::delete_project,
+            projects::restore_project,
+            projects::list_project_files,
+            projects::add_project_files,
+            projects::remove_project_file,
+            projects::restore_project_file,
             commands::list_messages,
             commands::send_message,
             commands::regenerate,

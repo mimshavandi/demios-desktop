@@ -55,6 +55,7 @@ DELETE FROM store_messages WHERE conversation_id IN
     (SELECT id FROM store_conversations WHERE purged_at IS NOT NULL);
 DELETE FROM store_conversations WHERE purged_at IS NOT NULL;
 ",
+    crate::project::MIGRATION,
 ];
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -63,6 +64,8 @@ pub struct Conversation {
     pub title: String,
     /// `ModelRef` string last used in this conversation.
     pub model: Option<String>,
+    /// The project this chat belongs to (T-PRJ-01), if any.
+    pub project_id: Option<Id>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -196,7 +199,7 @@ fn enum_from<T: for<'de> Deserialize<'de>>(s: &str) -> Result<T> {
     ))?)
 }
 
-fn parse_id(s: &str) -> Result<Id> {
+pub(crate) fn parse_id(s: &str) -> Result<Id> {
     uuid::Uuid::parse_str(s)
         .map(Id)
         .map_err(|e| StoreError::Invalid(format!("id `{s}`: {e}")))
@@ -209,26 +212,65 @@ fn conversation_from_row(r: &Row<'_>) -> Result<Conversation> {
         model: r.get(2)?,
         created_at: r.get(3)?,
         updated_at: r.get(4)?,
+        project_id: r
+            .get::<_, Option<String>>(5)?
+            .as_deref()
+            .map(parse_id)
+            .transpose()?,
     })
 }
 
-const CONVERSATION_COLS: &str = "id, title, model, created_at, updated_at";
+const CONVERSATION_COLS: &str = "id, title, model, created_at, updated_at, project_id";
 
 pub fn create_conversation(conn: &Connection, title: &str) -> Result<Conversation> {
+    create_conversation_in(conn, title, None)
+}
+
+/// Creates a conversation, in `project_id` when given (which must be a live project).
+pub fn create_conversation_in(
+    conn: &Connection,
+    title: &str,
+    project_id: Option<Id>,
+) -> Result<Conversation> {
+    let tx = conn.unchecked_transaction()?;
+    if let Some(p) = project_id {
+        crate::project::get_project(&tx, p)?;
+    }
     let now = now_ms();
     let c = Conversation {
         id: Id::new(),
         title: title.to_string(),
         model: None,
+        project_id,
         created_at: now,
         updated_at: now,
     };
-    conn.execute(
-        "INSERT INTO store_conversations (id, title, model, created_at, updated_at)
-         VALUES (?1, ?2, NULL, ?3, ?3)",
-        params![c.id.to_string(), c.title, now],
+    tx.execute(
+        "INSERT INTO store_conversations (id, title, model, created_at, updated_at, project_id)
+         VALUES (?1, ?2, NULL, ?3, ?3, ?4)",
+        params![
+            c.id.to_string(),
+            c.title,
+            now,
+            project_id.map(|p| p.to_string())
+        ],
     )?;
+    tx.commit()?;
     Ok(c)
+}
+
+/// Live conversations of a live project, most recently updated first.
+pub fn list_project_conversations(conn: &Connection, project_id: Id) -> Result<Vec<Conversation>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {CONVERSATION_COLS} FROM store_conversations
+         WHERE deleted_at IS NULL AND project_id = ?1 ORDER BY updated_at DESC, id DESC"
+    ))?;
+    let mut rows = stmt.query([project_id.to_string()])?;
+    let mut out = vec![];
+    while let Some(r) = rows.next()? {
+        out.push(conversation_from_row(r)?);
+    }
+    Ok(out)
 }
 
 /// Live (not deleted) conversations, most recently updated first.
@@ -326,8 +368,8 @@ pub fn purge_deleted(conn: &Connection, before_ms: i64) -> Result<Vec<Id>> {
         ids
     };
     tx.execute(
-        "INSERT OR REPLACE INTO store_tombstones (id, deleted_at)
-         SELECT id, deleted_at FROM store_conversations
+        "INSERT OR REPLACE INTO store_tombstones (id, deleted_at, kind)
+         SELECT id, deleted_at, 'conversation' FROM store_conversations
          WHERE deleted_at IS NOT NULL AND deleted_at <= ?1",
         [before_ms],
     )?;
@@ -351,8 +393,10 @@ pub fn purge_deleted(conn: &Connection, before_ms: i64) -> Result<Vec<Id>> {
 
 /// Ids and deletion times of purged conversations, oldest first.
 pub fn list_tombstones(conn: &Connection) -> Result<Vec<(Id, i64)>> {
-    let mut stmt =
-        conn.prepare("SELECT id, deleted_at FROM store_tombstones ORDER BY deleted_at, id")?;
+    let mut stmt = conn.prepare(
+        "SELECT id, deleted_at FROM store_tombstones WHERE kind = 'conversation'
+         ORDER BY deleted_at, id",
+    )?;
     let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
     let mut out = Vec::new();
     for row in rows {
@@ -366,18 +410,23 @@ pub fn list_tombstones(conn: &Connection) -> Result<Vec<(Id, i64)>> {
 /// string) has been purged.
 pub fn is_purged(conn: &Connection, id: &str) -> Result<bool> {
     Ok(conn
-        .query_row("SELECT 1 FROM store_tombstones WHERE id = ?1", [id], |_| {
-            Ok(())
-        })
+        .query_row(
+            "SELECT 1 FROM store_tombstones WHERE id = ?1 AND kind = 'conversation'",
+            [id],
+            |_| Ok(()),
+        )
         .optional()?
         .is_some())
 }
 
-/// Deletes every conversation, message and tombstone ("Delete all local data").
+/// Deletes every conversation, message, project, project file and tombstone ("Delete
+/// all local data"). The app deletes the project files' local copies itself.
 pub fn delete_all(conn: &Connection) -> Result<()> {
     let tx = conn.unchecked_transaction()?;
     tx.execute("DELETE FROM store_messages", [])?;
     tx.execute("DELETE FROM store_conversations", [])?;
+    tx.execute("DELETE FROM store_project_files", [])?;
+    tx.execute("DELETE FROM store_projects", [])?;
     tx.execute("DELETE FROM store_tombstones", [])?;
     tx.commit()?;
     crate::checkpoint(conn);
