@@ -70,11 +70,12 @@ export function AddFromHub({
   const [sort, setSort] = useState<HubSort>("downloads");
   const [results, setResults] = useState<Results>({ kind: "idle" });
   const [repo, setRepo] = useState<string | null>(null);
-  const headingRef = useRef<HTMLHeadingElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
   const lastRepoButton = useRef<string | null>(null);
 
   useEffect(() => {
-    headingRef.current?.focus();
+    // The dialog's title says what this is: start in the search field.
+    searchRef.current?.focus();
   }, []);
 
   const search = async (cursor: string | null = null) => {
@@ -130,9 +131,6 @@ export function AddFromHub({
 
   return (
     <section className="hub" aria-label="Search Hugging Face">
-      <h3 id="hub-h" ref={headingRef} tabIndex={-1} className="card-subhead">
-        Search Hugging Face
-      </h3>
       <form
         className="hub-search"
         role="search"
@@ -142,6 +140,7 @@ export function AddFromHub({
         }}
       >
         <TextField
+          ref={searchRef}
           label="Search models"
           type="search"
           value={text}
@@ -386,7 +385,7 @@ function RepoDetail({
                       ) : (
                         <Button
                           size="sm"
-                          variant="primary"
+                          variant="secondary"
                           disabled={!v.verifiable}
                           icon={<Download {...ICON} aria-hidden="true" />}
                           onClick={() => download(v)}
