@@ -19,6 +19,8 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+const VERSION = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
+
 const PLATFORMS = [
   { platform: "darwin-aarch64", suffix: "-macos-arm64.app.tar.gz" },
   { platform: "darwin-x86_64", suffix: "-macos-x64.app.tar.gz" },
@@ -43,11 +45,14 @@ export function changelogSection(text, version) {
  * `platforms`: the platforms to include (default: every bundle found).
  */
 export function latestJson({ version, tag, repo, notes, pubDate, files, platforms }) {
-  if (!/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(version)) throw new Error(`not a version: ${version}`);
+  if (!VERSION.test(version)) throw new Error(`not a version: ${version}`);
+  if (!/^v\d/.test(tag) || tag.replace(/^v/, "") !== version) throw new Error(`tag ${tag} doesn't match version ${version}`);
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new Error(`not a repository: ${repo}`);
   const names = Object.keys(files);
   const out = { version, notes, pub_date: pubDate, platforms: {} };
   for (const p of PLATFORMS) {
-    const bundle = names.find((n) => n.endsWith(p.suffix) && n.includes(`-${version}-`));
+    // The exact name only: a stale `…-0.2.0-rc.1-…` or a renamed copy is never picked up.
+    const bundle = names.find((n) => n === `Demios-Desktop-${version}${p.suffix}`);
     const wanted = platforms === undefined ? bundle !== undefined : platforms.includes(p.platform);
     if (!wanted) continue;
     if (bundle === undefined) throw new Error(`${p.platform}: no update bundle (*${p.suffix})`);
@@ -64,9 +69,13 @@ export function latestJson({ version, tag, repo, notes, pubDate, files, platform
   return out;
 }
 
+/** A flag's value; a flag given without one (or followed by another flag) is an error. */
 function arg(argv, name) {
   const i = argv.indexOf(name);
-  return i < 0 ? undefined : argv[i + 1];
+  if (i < 0) return undefined;
+  const v = argv[i + 1];
+  if (v === undefined || v.startsWith("--") || v.trim() === "") throw new Error(`${name} needs a value`);
+  return v;
 }
 
 function main(argv) {
@@ -75,9 +84,14 @@ function main(argv) {
   const repo = arg(argv, "--repo");
   if (!tag || !dir || !repo) throw new Error("usage: --tag v<version> --dir <dist> --repo <owner/name>");
   const version = tag.replace(/^v/, "");
+  if (!VERSION.test(version)) throw new Error(`not a version: ${version}`);
   const changelog = readFileSync(arg(argv, "--changelog") ?? "CHANGELOG.md", "utf8");
   const files = {};
-  for (const n of readdirSync(dir)) files[n] = n.endsWith(".sig") ? readFileSync(join(dir, n), "utf8") : "";
+  // Regular files only: a symlinked `.sig` never brings another file's contents in.
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    if (!e.isFile()) continue;
+    files[e.name] = e.name.endsWith(".sig") ? readFileSync(join(dir, e.name), "utf8") : "";
+  }
   const list = arg(argv, "--platforms");
   const manifest = latestJson({
     version,

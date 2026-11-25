@@ -76,3 +76,34 @@ test("bundles of another version are ignored; a bad version is refused", () => {
   assert.throws(() => latestJson({ ...base, files: f }), /no platform/);
   assert.throws(() => latestJson({ ...base, version: "v0.2" }), /not a version/);
 });
+
+test("exact bundle names only; tag and repo are checked", () => {
+  const f = {
+    "Demios-Desktop-0.2.0-rc.1-linux-x86_64.AppImage": "",
+    "Demios-Desktop-0.2.0-rc.1-linux-x86_64.AppImage.sig": "s",
+    "other-0.2.0-linux-x86_64.AppImage": "",
+    "other-0.2.0-linux-x86_64.AppImage.sig": "s",
+  };
+  assert.throws(() => latestJson({ ...base, files: f }), /no platform/);
+  assert.throws(() => latestJson({ ...base, tag: "v0.2.1" }), /doesn't match/);
+  assert.throws(() => latestJson({ ...base, repo: "o/r/../x?y" }), /not a repository/);
+});
+
+test("CLI: a flag without a value fails instead of including every platform", async () => {
+  const { execFileSync } = await import("node:child_process");
+  const { fileURLToPath } = await import("node:url");
+  const script = fileURLToPath(new URL("./latest-json.mjs", import.meta.url));
+  for (const args of [
+    ["--tag", "v0.2.0", "--dir", ".", "--repo", "o/r", "--platforms"],
+    ["--tag", "v0.2.0", "--dir", "--repo", "o/r"],
+    ["--tag", "v0.2.0", "--dir", ".", "--repo", "o/r", "--platforms", ""],
+  ]) {
+    let err = "";
+    try {
+      execFileSync(process.execPath, [script, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    } catch (e) {
+      err = String(e.stderr);
+    }
+    assert.match(err, /needs a value/, args.join(" "));
+  }
+});
