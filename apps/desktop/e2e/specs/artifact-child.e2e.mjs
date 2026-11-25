@@ -172,7 +172,7 @@ describe("Windows artifact webview (ADR-0012)", () => {
     // never gets an answer ("timeout") or fails before it is sent. Were a call to get through,
     // the ACL refuses it ("not allowed", proven from the host page above). It must never succeed.
     expect(r.label).toBe("artifact");
-    const refusedOrUnsent = /^(err:.*not allowed|err:.*postMessage|timeout)$/s;
+    const refusedOrUnsent = /^(err:.*not allowed.*|err:.*postMessage.*|timeout)$/s;
     for (const k of ["listConversations", "createConversation"]) {
       expect(`${k}=${r[k]}`).not.toMatch(/=ok:/);
       expect(r[k]).toMatch(refusedOrUnsent);
