@@ -145,7 +145,7 @@ The Relay is cheap to run because it deletes what it delivers:
 - **Push** costs nothing per message from Apple or Google, but needs the developer accounts and the credentials kept in the operator's private configuration.
 - **Compute** is small: TLS, signature checks, HPKE for webhooks only, and rate-limit counters.
 
-Quotas on the hosted Relay keep the worst case bounded per mailbox. Whether some uses get larger quotas, and at what price, is a product decision outside this ADR. A self-hosted Relay costs its operator only their own machine and bandwidth.
+Quotas on the hosted Relay keep the worst case bounded per mailbox. Whether some uses get larger quotas, and at what price, is a product decision outside this ADR. Which plans include a hosted Relay, and organisation features built on it, are decided outside this ADR. A self-hosted Relay costs its operator only their own machine and bandwidth.
 
 ### 9. GDPR roles
 - **The Relay's operator** (DigiNote, Inc. for the hosted Relay) **processes ciphertext on the user's behalf**: a processor under Art. 28 for the mailbox contents and their metadata. Encrypted personal data is still personal data for the party that holds the key, so this ADR doesn't claim GDPR doesn't apply.
