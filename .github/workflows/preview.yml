@@ -1,0 +1,131 @@
+# Unsigned macOS preview build (refs #51): the same release build `tauri build` makes, with
+# local inference (llama.cpp + Metal) on and no dev-only features, uploaded as a workflow
+# artifact for repo collaborators. Not a GitHub Release, not signed or notarized.
+# See apps/desktop/e2e/README.md, "Preview builds (unsigned)".
+name: preview
+on:
+  workflow_dispatch:
+  push:
+    tags: ["preview-*"]
+permissions:
+  contents: read
+concurrency:
+  group: preview-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      CARGO_ABOUT_VERSION: 0.9.3
+      # Shown on the About screen (apps/desktop/src/commands.rs, `app_info`).
+      DEMIOS_BUILD_CHANNEL: preview
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            apps/desktop/package-lock.json
+            ui/artifact-sandbox/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: preview
+      # A release build must ship the licences screen (scripts/licenses.mjs needs cargo-about).
+      - name: Cache cargo-about
+        id: cargo-about-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-about
+          key: cargo-about-${{ env.CARGO_ABOUT_VERSION }}-${{ runner.os }}-${{ runner.arch }}
+      - name: Install cargo-about
+        if: steps.cargo-about-cache.outputs.cache-hit != 'true'
+        run: cargo install cargo-about --version ${{ env.CARGO_ABOUT_VERSION }} --locked --features cli --force
+      - run: cargo fetch --locked
+      - name: Build info
+        id: info
+        run: |
+          short="${GITHUB_SHA::7}"
+          version="$(node -p "require('./apps/desktop/tauri.conf.json').version")"
+          echo "DEMIOS_BUILD_COMMIT=$short" >> "$GITHUB_ENV"
+          echo "short=$short" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "name=Demios-Desktop-$version-preview-$short-macos-arm64" >> "$GITHUB_OUTPUT"
+      - name: npm ci
+        working-directory: apps/desktop
+        run: npm ci
+      # No `--features`: the dev fake model (debug-only anyway), e2e WebView2 flags and
+      # spikes never reach this build. `--ci` skips the DMG's Finder layout script.
+      - name: tauri build (release, aarch64)
+        working-directory: apps/desktop
+        env:
+          DEMIOS_REQUIRE_LICENSES: "1"
+        run: npx tauri build --ci --bundles app,dmg
+      - name: Package
+        id: pkg
+        run: |
+          set -euo pipefail
+          bundle=target/release/bundle
+          app="$(ls -d "$bundle"/macos/*.app | head -n1)"
+          dmg="$(ls "$bundle"/dmg/*.dmg | head -n1)"
+          mkdir -p out
+          ditto -c -k --keepParent "$app" "out/${{ steps.info.outputs.name }}.app.zip"
+          cp "$dmg" "out/${{ steps.info.outputs.name }}.dmg"
+          echo "app=$app" >> "$GITHUB_OUTPUT"
+          ls -l out
+      # Fails the build if a dev-only path made it into the shipped binary: strings that only
+      # src/fake.rs (cfg(fake_model)), the Windows e2e config and the #86 spike contain.
+      - name: No dev-only code in the bundle
+        run: |
+          set -euo pipefail
+          bin="${{ steps.pkg.outputs.app }}/Contents/MacOS/demios-desktop"
+          for s in 'DEMIOS_FAKE_DELAY_MS' 'Made by the dev fake model' 'remote-debugging-port' 'spike_open_child' 'spike_child_report'; do
+            if strings -a "$bin" | grep -qF -- "$s"; then echo "::error::found dev-only string '$s' in $bin"; exit 1; fi
+          done
+          echo "no dev-only strings found"
+      - name: Signature check (expected ad-hoc or unsigned, Gatekeeper rejects)
+        id: sig
+        run: |
+          app="${{ steps.pkg.outputs.app }}"
+          codesign -dv "$app" > codesign.txt 2>&1 || true
+          spctl -a -vv -t exec "$app" > spctl.txt 2>&1 || true
+          cat codesign.txt spctl.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.info.outputs.name }}
+          path: out/
+          retention-days: 14
+          if-no-files-found: error
+          # The .dmg and .zip are already compressed.
+          compression-level: 0
+      - name: Summary
+        run: |
+          {
+            echo "## Demios Desktop ${{ steps.info.outputs.version }} preview (unsigned)"
+            echo
+            echo "- Commit: \`${GITHUB_SHA}\` (About shows \`${{ steps.info.outputs.short }}\`)"
+            echo "- Version: ${{ steps.info.outputs.version }}, macOS arm64 (Apple silicon), release build with local inference (llama.cpp + Metal)"
+            echo "- Artifact: **${{ steps.info.outputs.name }}** (in this run's Artifacts list, kept 14 days, repo collaborators only)"
+            echo
+            echo '| File | Size |'
+            echo '|---|---|'
+            for f in out/*; do echo "| $(basename "$f") | $(du -h "$f" | cut -f1) |"; done
+            echo
+            echo "### Opening an unsigned app"
+            echo "This build is not signed or notarized, so macOS blocks it the first time."
+            echo
+            echo "1. Unzip the artifact, open the .dmg and drag **Demios Desktop** to Applications (or unzip the .app.zip)."
+            echo "2. In Finder, **right-click (Control-click) the app › Open**, then **Open** in the dialog. On macOS 15 and later, if there is no Open button: try to open it once, then go to **System Settings › Privacy & Security** and click **Open Anyway**."
+            echo "3. Or, in Terminal: \`xattr -dr com.apple.quarantine \"/Applications/Demios Desktop.app\"\`"
+            echo
+            echo "Checklist: apps/desktop/e2e/README.md, \"Preview builds (unsigned)\" (#51)."
+            echo
+            echo "<details><summary>codesign / spctl</summary>"
+            echo
+            echo '```'
+            cat codesign.txt spctl.txt
+            echo '```'
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"

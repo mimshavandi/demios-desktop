@@ -516,6 +516,13 @@ function GeneralPage({ api, info }: { api: Api; info: AppInfo | null }) {
         <div className="row">
           <div className="row-main">
             <span className="row-title">Demios Desktop {info?.version ?? ""}</span>
+            {(info?.channel != null || info?.commit != null) && (
+              <span className="dn-help">
+                {[info.channel === "preview" ? "Preview build (unsigned)" : info.channel, info.commit && `commit ${info.commit}`]
+                  .filter(Boolean)
+                  .join(", ")}
+              </span>
+            )}
             <span className="dn-help">
               Answers come from the AI model you choose, on this computer or from a provider you add a key for. Demios
               doesn't check them: they can be wrong or made up, so verify anything important.

@@ -661,6 +661,22 @@ describe("App", () => {
     await waitFor(() => expect(confirm.disabled).toBe(false));
   });
 
+  it("shows the build channel and commit on the About screen", async () => {
+    const { api } = fakeApi();
+    api.appInfo = async () => ({
+      version: "0.1.0",
+      dev_fake_model: false,
+      data_dir: null,
+      models_dir: null,
+      commit: "1a2b3c4",
+      channel: "preview",
+    });
+    render(<App api={api} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Models" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "General" }));
+    expect(await screen.findByText("Preview build (unsigned), commit 1a2b3c4")).toBeTruthy();
+  });
+
   it("asks to connect a model when none is available", async () => {
     const { api } = fakeApi();
     api.appInfo = async () => ({ version: "0.1.0", dev_fake_model: false, data_dir: null, models_dir: null });
