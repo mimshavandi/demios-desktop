@@ -403,6 +403,8 @@ export interface AppInfo {
   commit?: string | null;
   /** Build channel, e.g. "preview" (CI builds only). */
   channel?: string | null;
+  /** Why the assistant's instructions didn't load; chats can't start until fixed (#141). */
+  agent_error?: string | null;
 }
 
 /**

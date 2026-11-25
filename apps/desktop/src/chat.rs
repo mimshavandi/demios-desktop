@@ -110,6 +110,8 @@ fn title_from(text: &str) -> String {
 /// When no chat model is chosen, the resolver's automatic pick is saved as the choice, so a
 /// later download or key never silently changes which model answers.
 fn model_for_turn(state: &AppState) -> IpcResult<(ModelRef, Arc<dyn ChatModel>)> {
+    // No chat without the assistant's instructions (#141): refuse before anything is written.
+    state.agent.ready()?;
     let mut settings = state.settings()?;
     let chosen = settings.slot("chat");
     let model = match state
@@ -697,6 +699,27 @@ mod tests {
             .insert("chat".into(), "local:dev-fake".into());
         st.save_settings(&settings).unwrap();
         st
+    }
+
+    #[test]
+    fn no_chat_starts_when_the_agent_failed_to_load() {
+        let mut s = AppState::in_memory().unwrap();
+        s.agent = crate::agent::Agent::load(Some(std::path::Path::new("/definitely/not/here")));
+        let st = Arc::new(s);
+        let conv = st.create_conversation().unwrap();
+        let (_, events) = sink();
+        let e = send(&st, conv.id, "hi".into(), events).unwrap_err();
+        assert_eq!(e.code, "agent_unavailable");
+        let (_, events) = sink();
+        assert_eq!(
+            regenerate(&st, conv.id, events).unwrap_err().code,
+            "agent_unavailable"
+        );
+        assert!(
+            st.list_messages(conv.id).unwrap().is_empty(),
+            "nothing was written"
+        );
+        assert!(!st.is_generating(conv.id), "the slot was released");
     }
 
     fn sink() -> (Arc<Mutex<Vec<ChatEvent>>>, impl EventSink) {
