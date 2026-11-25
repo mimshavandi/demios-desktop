@@ -48,6 +48,9 @@ pub struct AppInfo {
     pub commit: Option<&'static str>,
     /// Build channel set by CI (`DEMIOS_BUILD_CHANNEL`, e.g. `preview`); `None` for local builds.
     pub channel: Option<&'static str>,
+    /// Why the assistant's instructions (`skills/`) didn't load, if they didn't; chats
+    /// can't start until this is fixed (#141).
+    pub agent_error: Option<String>,
 }
 
 #[tauri::command]
@@ -64,6 +67,7 @@ pub async fn app_info(app: tauri::AppHandle, state: AppStateRef<'_>) -> IpcResul
         updates: crate::updates::current_mode(app.config()),
         commit: option_env!("DEMIOS_BUILD_COMMIT").filter(|c| !c.is_empty()),
         channel: option_env!("DEMIOS_BUILD_CHANNEL").filter(|c| !c.is_empty()),
+        agent_error: state.agent.load_error().map(str::to_owned),
     })
 }
 
@@ -255,16 +259,27 @@ pub async fn open_skills_folder(app: tauri::AppHandle, state: AppStateRef<'_>) -
         })
 }
 
-/// The skill a chat uses, or `null`. A saved skill that is no longer in the library reads
-/// as `null`.
+/// The answers of a chat that were written with a skill, with the skill's label then.
+#[tauri::command]
+pub async fn list_answer_skills(
+    state: AppStateRef<'_>,
+    conversation_id: Id,
+) -> IpcResult<Vec<crate::skills::AnswerSkill>> {
+    blocking(&state, move |s| {
+        Ok(crate::skills::answer_skills(&*s.db()?, conversation_id)?)
+    })
+    .await
+}
+
+/// The skill a chat uses, or `null`. A saved skill that is no longer in the library is
+/// still returned, so the composer can say it is missing (sending then fails clearly).
 #[tauri::command]
 pub async fn get_chat_skill(
     state: AppStateRef<'_>,
     conversation_id: Id,
 ) -> IpcResult<Option<String>> {
     blocking(&state, move |s| {
-        let name = crate::skills::chat_skill(&*s.db()?, conversation_id)?;
-        Ok(name.filter(|n| s.skills.get(n).is_some()))
+        Ok(crate::skills::chat_skill(&*s.db()?, conversation_id)?)
     })
     .await
 }

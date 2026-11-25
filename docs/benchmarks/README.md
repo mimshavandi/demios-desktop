@@ -6,7 +6,8 @@ whether they still answer correctly. The numbers decide whether
 next to llama.cpp ([ADR-0003](../adr/0003-inference-layer.md) planned it as "adopt if the
 benchmark shows parity on target laptops").
 
-Results go in [`results/`](results/), one folder per machine run. The decision is recorded as an
+Results go in [`results/`](results/), one folder per machine run. Embedding models for the
+knowledge index are compared in [embeddings.md](embeddings.md) (`dn bench-embed`). The decision is recorded as an
 ADR once results from all three memory tiers exist.
 
 ## What is measured

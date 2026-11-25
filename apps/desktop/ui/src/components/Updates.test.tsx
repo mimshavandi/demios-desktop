@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Api } from "../ipc/commands";
-import type { UpdateCheck, UpdateMode, UpdateProgress } from "../ipc/types";
+import type { Settings, UpdateCheck, UpdateMode, UpdateProgress } from "../ipc/types";
 import { TooltipProvider } from "./primitives";
 import { Updates } from "./Updates";
 
@@ -16,9 +16,20 @@ const available = (patch: Partial<Extract<UpdateCheck, { status: "available" }>>
   ...patch,
 });
 
-function fake(check: () => Promise<UpdateCheck>, install?: (v: string, p: (e: UpdateProgress) => void) => Promise<null>) {
+function fake(
+  check: () => Promise<UpdateCheck>,
+  install?: (v: string, p: (e: UpdateProgress) => void) => Promise<null>,
+  stored: Partial<Settings> = {},
+) {
   const calls: string[] = [];
+  const settings: { current: Settings } = { current: { slots: {}, telemetry_enabled: false, ...stored } };
   const api = {
+    getSettings: async () => settings.current,
+    updateSettings: async (s: Settings) => {
+      calls.push(`save launch=${String(s.check_updates_at_launch)} offered=${String(s.launch_check_offered)}`);
+      settings.current = s;
+      return s;
+    },
     checkForUpdate: async () => {
       calls.push("check");
       return check();
@@ -28,13 +39,18 @@ function fake(check: () => Promise<UpdateCheck>, install?: (v: string, p: (e: Up
       return install ? install(v, p) : new Promise<null>(() => {});
     },
   } as unknown as Api;
-  return { api, calls };
+  return { api, calls, settings };
 }
 
-const ui = (api: Api, mode: UpdateMode = "self_update", online = () => true) =>
+const ui = (
+  api: Api,
+  mode: UpdateMode = "self_update",
+  online = () => true,
+  initial: UpdateCheck | null = null,
+) =>
   render(
     <TooltipProvider>
-      <Updates api={api} mode={mode} online={online} />
+      <Updates api={api} mode={mode} online={online} initial={initial} />
     </TooltipProvider>,
   );
 
@@ -178,5 +194,80 @@ describe("Updates (T-STORE-08)", () => {
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("didn't match the Demios signature");
     expect(screen.getByRole("button", { name: "Install and restart" })).toBeTruthy();
+  });
+
+  describe("launch check (#95)", () => {
+    it("is off by default, and asks once after the first manual check", async () => {
+      const { api, calls, settings } = fake(async () => ({ status: "up_to_date", current: "0.1.0" }) as const);
+      ui(api);
+      const sw = await screen.findByRole("switch", { name: "Check for updates when Demios starts" });
+      expect(sw.getAttribute("aria-checked")).toBe("false");
+      fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
+      expect(await screen.findByText(/Check for updates when Demios starts\? It asks GitHub once per launch/)).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Turn on" }));
+      await waitFor(() =>
+        expect(screen.getByRole("switch", { name: "Check for updates when Demios starts" }).getAttribute("aria-checked")).toBe(
+          "true",
+        ),
+      );
+      expect(calls).toContain("save launch=true offered=true");
+      expect(settings.current.check_updates_at_launch).toBe(true);
+      // Checking again doesn't ask again.
+      fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
+      await screen.findByText(/is the latest version/);
+      expect(screen.queryByRole("button", { name: "Turn on" })).toBeNull();
+    });
+
+    it("Not now settles the question and leaves it off", async () => {
+      const { api, settings } = fake(async () => ({ status: "up_to_date", current: "0.1.0" }) as const);
+      ui(api);
+      fireEvent.click(await screen.findByRole("button", { name: "Check for updates" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Not now" }));
+      await waitFor(() => expect(settings.current.launch_check_offered).toBe(true));
+      expect(settings.current.check_updates_at_launch).toBe(false);
+      expect(screen.queryByRole("button", { name: "Turn on" })).toBeNull();
+    });
+
+    it("doesn't ask when the question was answered before", async () => {
+      const { api } = fake(async () => ({ status: "up_to_date", current: "0.1.0" }) as const, undefined, {
+        launch_check_offered: true,
+      });
+      ui(api);
+      fireEvent.click(await screen.findByRole("button", { name: "Check for updates" }));
+      await screen.findByText(/is the latest version/);
+      expect(screen.queryByRole("button", { name: "Turn on" })).toBeNull();
+    });
+
+    it("opens on what the launch check found, without downloading", async () => {
+      const { api, calls } = fake(async () => available());
+      ui(api, "self_update", () => true, available({ version: "0.3.0" }));
+      expect(await screen.findByText(/Version 0.3.0 is available/)).toBeTruthy();
+      expect(calls.filter((c) => c.startsWith("install") || c === "check")).toEqual([]);
+    });
+
+    it("has no switch in store, Flathub and builds without the updater", () => {
+      const { api } = fake(async () => available());
+      for (const mode of ["microsoft_store", "flathub", "off", "no_key"] as const) {
+        ui(api, mode);
+        expect(screen.queryByRole("switch")).toBeNull();
+        cleanup();
+      }
+    });
+
+    it("shows an error with Retry when the setting can't be loaded, instead of hiding it", async () => {
+      const { api } = fake(async () => available());
+      let fail = true;
+      const get = api.getSettings.bind(api);
+      api.getSettings = async () => {
+        if (fail) throw ipcError("storage", "Could not read or write local data.");
+        return get();
+      };
+      ui(api);
+      expect(await screen.findByText(/Couldn't load the launch-check setting/)).toBeTruthy();
+      expect(screen.queryByRole("switch")).toBeNull();
+      fail = false;
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      expect(await screen.findByRole("switch", { name: "Check for updates when Demios starts" })).toBeTruthy();
+    });
   });
 });

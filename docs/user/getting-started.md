@@ -52,7 +52,7 @@ The model in use is shown at the top right of the window and under each answer.
 
 - **Models** at the bottom of the sidebar opens **Settings → Models**: models on this device, provider keys, and which model answers.
 - **Settings** at the bottom of the sidebar, or ⌘, (Ctrl+, on Windows and Linux), opens **Settings → General**: privacy, deleting your data, reporting a problem, and **About**.
-- **About** shows the app version, where your chats and models are stored, and **Open-source licences**: every package shipped with the app, searchable, with its full licence text. It also links to the privacy policy and the accessibility statement. In a copy downloaded from GitHub, **Check for updates** looks for a new version when you select it.
+- **About** shows the app version, where your chats and models are stored, and **Open-source licences**: every package shipped with the app, searchable, with its full licence text. It also links to the privacy policy and the accessibility statement. In a copy downloaded from GitHub, **Check for updates** looks for a new version when you select it. You can also turn on **Check for updates when Demios starts**; it's off unless you do.
 
 ## Next
 

@@ -99,11 +99,13 @@ export interface SkillInfo {
   source: "builtin" | "user";
 }
 
-/** A file in the user's skills folder that didn't load (skills.rs `SkillProblem`). */
+/** A skill file that didn't load (skills.rs `SkillProblem`). */
 export interface SkillProblem {
-  /** Relative to the skills folder, e.g. `my-skill/SKILL.md`. */
+  /** Relative to its skills folder, e.g. `my-skill/SKILL.md`. */
   file: string;
   message: string;
+  /** `builtin`: a file shipped with the app is broken (report it); `user`: the user's own. */
+  source: "builtin" | "user";
 }
 
 /** Settings › Skills (skills.rs `SkillsOverview`). */
@@ -172,6 +174,15 @@ export interface TurnStarted {
   user_message: StoredMessage | null;
   assistant_message: StoredMessage;
   title: string | null;
+  /** Label of the skill this answer is written with, if any. */
+  skill: string | null;
+}
+
+/** An answer written with a skill (skills.rs `AnswerSkill`). */
+export interface AnswerSkill {
+  message_id: Id;
+  name: string;
+  label: string;
 }
 
 // ---- tools (dn-tools via the app)
@@ -232,6 +243,10 @@ export interface Settings {
   telemetry_enabled: boolean;
   /** First-run AI notice dismissed (T-STORE-09). Missing in older saves = not seen. */
   ai_notice_seen?: boolean;
+  /** Check for updates once when Demios starts (#95). Off by default. */
+  check_updates_at_launch?: boolean;
+  /** The one-time question about the launch check was answered. */
+  launch_check_offered?: boolean;
   /** Passed through untouched (no screen edits MCP servers yet). */
   mcp_servers?: unknown[];
 }
@@ -391,7 +406,15 @@ export interface ModelCatalog {
   chat_model: string | null;
   /** Whether the chat model makes tool calls; without them it can't make artifacts. */
   chat_model_tools: boolean;
+  /** Where local models run on this computer; null when local models are off. */
+  compute: LocalCompute | null;
 }
+
+/** Where local models run (T-INF-24): a graphics card, shared graphics, or the processor. */
+export type LocalCompute =
+  | { mode: "gpu"; name: string; backend: string; vram: number; description: string }
+  | { mode: "shared_gpu"; name: string; backend: string; description: string }
+  | { mode: "cpu"; reason: "no_gpu" | "no_gpu_support"; description: string };
 
 export interface AppInfo {
   version: string;
@@ -405,6 +428,8 @@ export interface AppInfo {
   commit?: string | null;
   /** Build channel, e.g. "preview" (CI builds only). */
   channel?: string | null;
+  /** Why the assistant's instructions didn't load; chats can't start until fixed (#141). */
+  agent_error?: string | null;
 }
 
 /**
@@ -555,6 +580,35 @@ export interface McpServerToolsView {
 // ---- artifacts (apps/desktop/src/artifacts.rs, dn-artifacts)
 
 /** `dn_artifacts::ArtifactSummary`. */
+/** How a project search ranked (knowledge.rs): both ways, or keywords only (no embedding model). */
+export type SearchMode = "hybrid" | "keyword";
+
+/** One excerpt an answer was given: where it is in the project's files. */
+export interface Citation {
+  label: string;
+  chunk_id: number;
+  file_id: string;
+  display_path: string;
+  start_line: number;
+  end_line: number;
+}
+
+/** The embedding-model offer (knowledge.rs, #171). */
+export interface KnowledgeStatus {
+  /** `ask`: not answered yet (the project view may ask once); `declined`: "Not now". */
+  offer: "ask" | "declined" | "accepted";
+  /** The offered model; null when this build has no local models. */
+  model: { id: string; name: string; size: number; state: DownloadState } | null;
+  /** While the installed model hasn't embedded every passage yet. */
+  embedding: { done: number; total: number } | null;
+}
+
+/** What an answer in a project chat was given (`message_sources`). */
+export interface MessageSources {
+  mode: SearchMode;
+  citations: Citation[];
+}
+
 export interface ArtifactSummary {
   id: Id;
   conversation_id: Id;
