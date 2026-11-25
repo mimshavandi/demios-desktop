@@ -1,0 +1,465 @@
+# Unsigned preview installers for macOS (arm64, x64), Windows (NSIS, MSI) and Linux
+# (AppImage, deb). Each installer is smoke-tested on its OS. The workflow artifact holds
+# all of them plus SHA256SUMS.txt.
+#
+# Release builds only: no `--features`, so there is no dev fake model (it is debug-only
+# anyway), no self-updater (`updater` is off) and no e2e WebView2 flags. A guard step
+# checks the binaries for dev-only strings.
+#
+# Publishing is a separate job. It runs only from `main`, through workflow_dispatch with
+# `publish: true`, and creates a GitHub pre-release. A `release-preview-check-*` tag runs
+# the same builds and smoke tests but never publishes.
+name: release-preview
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish a GitHub pre-release with the installers (main only)"
+        type: boolean
+        default: false
+  push:
+    tags: ["release-preview-check-*"]
+permissions:
+  contents: read
+concurrency:
+  group: release-preview-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  CARGO_ABOUT_VERSION: 0.9.3
+  TAURI_DRIVER_VERSION: 2.0.6
+  # Shown on the About screen (apps/desktop/src/commands.rs, `app_info`).
+  DEMIOS_BUILD_CHANNEL: preview
+  # Release builds must ship the licences screen (apps/desktop/scripts/licenses.mjs).
+  DEMIOS_REQUIRE_LICENSES: "1"
+jobs:
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.m.outputs.version }}
+      short: ${{ steps.m.outputs.short }}
+      prefix: ${{ steps.m.outputs.prefix }}
+      tag: ${{ steps.m.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: m
+        run: |
+          version="$(node -p "require('./apps/desktop/tauri.conf.json').version")"
+          short="${GITHUB_SHA::7}"
+          {
+            echo "version=$version"
+            echo "short=$short"
+            echo "prefix=Demios-Desktop-$version-preview"
+            echo "tag=v$version-preview.$short"
+          } >> "$GITHUB_OUTPUT"
+
+  macos:
+    needs: meta
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+          - arch: x64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 75
+    env:
+      DEMIOS_BUILD_COMMIT: ${{ needs.meta.outputs.short }}
+      # Ad-hoc signature (`codesign -s -`): seals the bundle, no identity, not notarized.
+      APPLE_SIGNING_IDENTITY: "-"
+      NAME: ${{ needs.meta.outputs.prefix }}-macos-${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            apps/desktop/package-lock.json
+            ui/artifact-sandbox/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-preview
+      - &cargo-about-cache
+        name: Cache cargo-about
+        id: cargo-about-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-about*
+          key: cargo-about-${{ env.CARGO_ABOUT_VERSION }}-${{ runner.os }}-${{ runner.arch }}
+      - &cargo-about-install
+        name: Install cargo-about
+        if: steps.cargo-about-cache.outputs.cache-hit != 'true'
+        run: cargo install cargo-about --version ${{ env.CARGO_ABOUT_VERSION }} --locked --features cli --force
+      - run: cargo fetch --locked
+      - run: npm ci
+        working-directory: apps/desktop
+      - name: tauri build (release)
+        working-directory: apps/desktop
+        run: npx tauri build --ci --bundles app,dmg
+      - name: Collect
+        id: c
+        run: |
+          set -euo pipefail
+          app="$(ls -d target/release/bundle/macos/*.app | head -n1)"
+          mkdir -p out
+          cp "$(ls target/release/bundle/dmg/*.dmg | head -n1)" "out/$NAME.dmg"
+          echo "app=$app" >> "$GITHUB_OUTPUT"
+          echo "bin=$app/Contents/MacOS/demios-desktop" >> "$GITHUB_OUTPUT"
+      - &guard
+        name: No dev-only code in the binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin="${{ steps.c.outputs.bin }}"
+          # Strings only src/fake.rs (cfg(fake_model)), the Windows e2e config, the
+          # updater plugin and the #86 spike contain.
+          for s in 'DEMIOS_FAKE_DELAY_MS' 'Made by the dev fake model' 'remote-debugging-port' \
+                   'spike_open_child' 'spike_child_report' 'plugin:updater'; do
+            if grep -aqF -- "$s" "$bin"; then echo "::error::dev-only string '$s' in $bin"; exit 1; fi
+          done
+          grep -aqF -- "$DEMIOS_BUILD_COMMIT" "$bin" || { echo "::error::commit $DEMIOS_BUILD_COMMIT not embedded"; exit 1; }
+          echo "ok: no dev-only strings, commit $DEMIOS_BUILD_COMMIT embedded"
+      - name: Signature (expected ad-hoc; Gatekeeper rejects)
+        run: |
+          app="${{ steps.c.outputs.app }}"
+          codesign -dv "$app" 2>&1 | tee -a smoke.txt
+          codesign --verify --deep --strict "$app" && echo "codesign --verify: ok" | tee -a smoke.txt
+          spctl -a -vv -t exec "$app" >> smoke.txt 2>&1 && echo "::warning::spctl accepted an unsigned app?" || echo "spctl: rejected (expected)" | tee -a smoke.txt
+      - name: Smoke test (mount the dmg, launch, window, reinstall keeps data)
+        shell: bash
+        run: |
+          set -euo pipefail
+          data="$HOME/Library/Application Support/io.demios.app"
+          rm -rf "$data"
+          cat > windows.swift <<'EOF'
+          import CoreGraphics
+          let pid = Int(CommandLine.arguments[1])!
+          let list = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as! [[String: Any]]
+          let mine = list.filter { ($0[kCGWindowOwnerPID as String] as? Int) == pid && ($0[kCGWindowLayer as String] as? Int) == 0 }
+          for w in mine { print("window", w[kCGWindowBounds as String] ?? "") }
+          exit(mine.isEmpty ? 1 : 0)
+          EOF
+          swiftc -O windows.swift -o windows
+          install_app() {
+            mnt="$(mktemp -d)"
+            hdiutil attach -nobrowse -readonly -mountpoint "$mnt" "out/$NAME.dmg" > /dev/null
+            rm -rf "/Applications/Demios Desktop.app"
+            cp -R "$mnt/Demios Desktop.app" /Applications/
+            hdiutil detach "$mnt" > /dev/null
+          }
+          launch() {
+            "/Applications/Demios Desktop.app/Contents/MacOS/demios-desktop" > "app-$1.log" 2>&1 &
+            pid=$!
+            ok=""
+            for i in $(seq 1 30); do
+              sleep 2
+              kill -0 "$pid" 2>/dev/null || { echo "::error::app exited (run $1)"; cat "app-$1.log"; exit 1; }
+              if ./windows "$pid" > "win-$1.txt"; then ok=1; break; fi
+            done
+            [ -n "$ok" ] || { echo "::error::no window after 60 s (run $1)"; exit 1; }
+            sleep 5
+            kill -0 "$pid" 2>/dev/null || { echo "::error::app exited after its window appeared (run $1)"; exit 1; }
+            echo "run $1: pid $pid alive, $(cat "win-$1.txt")" | tee -a smoke.txt
+            kill "$pid"; wait "$pid" 2>/dev/null || true
+          }
+          install_app
+          launch 1
+          test -f "$data/demios.sqlite3" || { echo "::error::no database in $data"; ls -la "$data" || true; exit 1; }
+          echo keep > "$data/reinstall-check.txt"
+          before="$(shasum -a 256 "$data/demios.sqlite3")"
+          install_app
+          test -f "$data/reinstall-check.txt" && [ "$(shasum -a 256 "$data/demios.sqlite3")" = "$before" ] \
+            || { echo "::error::reinstall changed local data"; exit 1; }
+          echo "reinstall: local data kept ($data)" | tee -a smoke.txt
+          launch 2
+          cp smoke.txt "out/smoke-macos-${{ matrix.arch }}.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-macos-${{ matrix.arch }}
+          path: out/
+          retention-days: 1
+          if-no-files-found: error
+
+  windows:
+    needs: meta
+    runs-on: windows-latest
+    timeout-minutes: 75
+    env:
+      DEMIOS_BUILD_COMMIT: ${{ needs.meta.outputs.short }}
+      PREFIX: ${{ needs.meta.outputs.prefix }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            apps/desktop/package-lock.json
+            ui/artifact-sandbox/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-preview
+      - *cargo-about-cache
+      - *cargo-about-install
+      - run: cargo fetch --locked
+      - run: npm ci
+        working-directory: apps/desktop
+      - name: tauri build (release)
+        working-directory: apps/desktop
+        run: npx tauri build --ci --bundles nsis,msi
+      - name: Collect
+        id: c
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          cp "$(ls target/release/bundle/nsis/*-setup.exe | head -n1)" "out/$PREFIX-windows-x64-setup.exe"
+          cp "$(ls target/release/bundle/msi/*.msi | head -n1)" "out/$PREFIX-windows-x64.msi"
+          echo "bin=target/release/demios-desktop.exe" >> "$GITHUB_OUTPUT"
+      - *guard
+      # tauri-driver can't attach here: msedgedriver needs WebView2 remote debugging, which
+      # only the e2e build's window config turns on (apps/desktop/e2e/README.md, T-SHELL-06),
+      # and the shipped build must not have it. UI Automation reads the rendered page
+      # instead: the main UI's "New chat" button must be in the WebView2 accessibility tree.
+      - name: Smoke test (silent install, UI renders, reinstall keeps data, MSI)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Windows.Forms, System.Drawing
+          $data = Join-Path $env:LOCALAPPDATA 'io.demios.app'
+          Remove-Item -Recurse -Force $data -ErrorAction SilentlyContinue
+          $log = @()
+          function Launch([string]$exe, [string]$tag) {
+            $p = Start-Process -FilePath $exe -PassThru
+            $deadline = (Get-Date).AddSeconds(90)
+            $button = $null
+            while ((Get-Date) -lt $deadline -and -not $button) {
+              Start-Sleep 2
+              if ($p.HasExited) { throw "app exited ($tag), code $($p.ExitCode)" }
+              $p.Refresh()
+              if ($p.MainWindowHandle -eq 0) { continue }
+              $win = [System.Windows.Automation.AutomationElement]::FromHandle($p.MainWindowHandle)
+              $cond = New-Object System.Windows.Automation.AndCondition(
+                (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty, 'New chat')),
+                (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button)))
+              $button = $win.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $cond)
+            }
+            $shot = "out/smoke-windows-$tag.png"
+            $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+            $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+            [System.Drawing.Graphics]::FromImage($bmp).CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+            $bmp.Save($shot)
+            if (-not $button) { throw "main UI did not render ($tag): no 'New chat' button after 90 s" }
+            Start-Sleep 3
+            if ($p.HasExited) { throw "app exited after rendering ($tag)" }
+            $script:log += "${tag}: pid $($p.Id) alive, window '$($p.MainWindowTitle)', 'New chat' button rendered"
+            Stop-Process -Id $p.Id -Force
+            Start-Sleep 2
+          }
+          function Find-Exe([string]$root) {
+            (Get-ChildItem -Path $root -Recurse -Filter demios-desktop.exe -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+          }
+          $setup = (Resolve-Path "out/$env:PREFIX-windows-x64-setup.exe").Path
+          $msi = (Resolve-Path "out/$env:PREFIX-windows-x64.msi").Path
+
+          # NSIS, per-user, silent.
+          Start-Process -Wait -FilePath $setup -ArgumentList '/S'
+          $exe = Find-Exe (Join-Path $env:LOCALAPPDATA 'Demios Desktop')
+          if (-not $exe) { throw 'NSIS install: demios-desktop.exe not found' }
+          $log += "nsis: installed to $exe"
+          Launch $exe 'nsis-1'
+          if (-not (Test-Path (Join-Path $data 'demios.sqlite3'))) { throw "no database in $data" }
+          Set-Content (Join-Path $data 'reinstall-check.txt') 'keep'
+          $before = (Get-FileHash (Join-Path $data 'demios.sqlite3')).Hash
+          Start-Process -Wait -FilePath $setup -ArgumentList '/S'
+          if (-not (Test-Path (Join-Path $data 'reinstall-check.txt')) -or (Get-FileHash (Join-Path $data 'demios.sqlite3')).Hash -ne $before) { throw 'NSIS reinstall changed local data' }
+          $log += "nsis reinstall: local data kept ($data)"
+          Launch $exe 'nsis-2'
+          $uninstaller = Join-Path (Split-Path $exe) 'uninstall.exe'
+          Start-Process -Wait -FilePath $uninstaller -ArgumentList '/S'
+          Start-Sleep 3
+          $kept = Test-Path (Join-Path $data 'reinstall-check.txt')
+          $log += "nsis silent uninstall: app removed=$(-not (Test-Path $exe)), local data kept=$kept"
+
+          # MSI, per-machine, quiet.
+          $p = Start-Process -Wait -PassThru -FilePath msiexec.exe -ArgumentList '/i', "`"$msi`"", '/qn', '/l*v', 'msi-install.log'
+          if ($p.ExitCode -ne 0) { Get-Content msi-install.log -Tail 40; throw "msiexec exited $($p.ExitCode)" }
+          $exe = Find-Exe (Join-Path $env:ProgramFiles 'Demios Desktop')
+          if (-not $exe) { throw 'MSI install: demios-desktop.exe not found' }
+          $log += "msi: installed to $exe"
+          Launch $exe 'msi'
+          $log += "msi: local data still present=$(Test-Path (Join-Path $data 'reinstall-check.txt'))"
+          $log | Tee-Object -FilePath out/smoke-windows.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: installer-windows-x64
+          path: out/
+          retention-days: 1
+          if-no-files-found: error
+
+  linux:
+    needs: meta
+    # The oldest supported Ubuntu, so the AppImage runs on older glibc too.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 75
+    env:
+      DEMIOS_BUILD_COMMIT: ${{ needs.meta.outputs.short }}
+      PREFIX: ${{ needs.meta.outputs.prefix }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            apps/desktop/package-lock.json
+            apps/desktop/e2e/package-lock.json
+            ui/artifact-sandbox/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-preview
+      - name: Linux deps (webview, AppImage, WebDriver)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev \
+            libfuse2 file webkit2gtk-driver xvfb
+      - *cargo-about-cache
+      - *cargo-about-install
+      - run: cargo fetch --locked
+      - run: npm ci
+        working-directory: apps/desktop
+      - name: tauri build (release)
+        working-directory: apps/desktop
+        run: npx tauri build --ci --bundles appimage,deb
+      - name: Collect
+        id: c
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          cp "$(ls target/release/bundle/appimage/*.AppImage | head -n1)" "out/$PREFIX-linux-x86_64.AppImage"
+          cp "$(ls target/release/bundle/deb/*.deb | head -n1)" "out/$PREFIX-linux-amd64.deb"
+          chmod +x "out/$PREFIX-linux-x86_64.AppImage"
+          echo "bin=target/release/demios-desktop" >> "$GITHUB_OUTPUT"
+      - *guard
+      - name: Cache tauri-driver
+        id: tauri-driver-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/tauri-driver
+          key: tauri-driver-${{ env.TAURI_DRIVER_VERSION }}-${{ runner.os }}-22.04
+      - name: Install tauri-driver
+        if: steps.tauri-driver-cache.outputs.cache-hit != 'true'
+        run: cargo install tauri-driver --version ${{ env.TAURI_DRIVER_VERSION }} --locked --force
+      - run: npm ci
+        working-directory: apps/desktop/e2e
+      - name: Smoke test (.deb install, tauri-driver on the deb and the AppImage, reinstall keeps data)
+        working-directory: apps/desktop/e2e
+        env:
+          TAURI_WEBVIEW_AUTOMATION: "true"
+        run: |
+          set -euo pipefail
+          out="$GITHUB_WORKSPACE/out"
+          deb="$out/$PREFIX-linux-amd64.deb"
+          sudo apt-get install -y "$deb"
+          echo "deb: installed $(dpkg-deb -f "$deb" Package Version | tr '\n' ' ') -> $(command -v demios-desktop)" | tee -a smoke.txt
+          DEMIOS_E2E_APP=/usr/bin/demios-desktop xvfb-run -a npm run smoke
+          echo "deb: tauri-driver smoke passed (main UI rendered)" | tee -a smoke.txt
+          DEMIOS_E2E_APP="$out/$PREFIX-linux-x86_64.AppImage" xvfb-run -a npm run smoke
+          echo "AppImage: tauri-driver smoke passed (main UI rendered)" | tee -a smoke.txt
+          # Reinstall: run the installed app once on the real data dir, then reinstall the deb.
+          data="${XDG_DATA_HOME:-$HOME/.local/share}/io.demios.app"
+          rm -rf "$data"
+          timeout 20 xvfb-run -a demios-desktop > app.log 2>&1 || true
+          test -f "$data/demios.sqlite3" || { echo "::error::no database in $data"; cat app.log; exit 1; }
+          echo keep > "$data/reinstall-check.txt"
+          before="$(sha256sum "$data/demios.sqlite3")"
+          sudo apt-get install -y --reinstall "$deb"
+          test -f "$data/reinstall-check.txt" && [ "$(sha256sum "$data/demios.sqlite3")" = "$before" ] \
+            || { echo "::error::reinstall changed local data"; exit 1; }
+          echo "deb reinstall: local data kept ($data)" | tee -a smoke.txt
+          sudo apt-get remove -y "$(dpkg-deb -f "$deb" Package)" > /dev/null
+          echo "deb remove: local data kept=$(test -f "$data/reinstall-check.txt" && echo true || echo false)" | tee -a smoke.txt
+          cp smoke.txt "$out/smoke-linux.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-linux-x64
+          path: out/
+          retention-days: 1
+          if-no-files-found: error
+
+  checksums:
+    needs: [meta, macos, windows, linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: installer-*
+          path: dist
+          merge-multiple: true
+      - name: SHA256SUMS.txt and summary
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          mkdir -p ../smoke
+          mv smoke-* ../smoke/
+          sha256sum -- * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          {
+            echo "## Demios Desktop ${{ needs.meta.outputs.version }} preview installers (unsigned)"
+            echo
+            echo "Commit \`$GITHUB_SHA\` (About shows \`${{ needs.meta.outputs.short }}\`). Artifact: **${{ needs.meta.outputs.prefix }}-${{ needs.meta.outputs.short }}**, kept 14 days."
+            echo
+            echo '| File | Size | SHA-256 |'
+            echo '|---|---|---|'
+            while read -r sum f; do echo "| $f | $(du -h "$f" | cut -f1) | \`${sum:0:16}…\` |"; done < SHA256SUMS.txt
+            echo
+            echo "### Smoke tests"
+            echo '```'
+            cat ../smoke/*.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ needs.meta.outputs.prefix }}-${{ needs.meta.outputs.short }}
+          path: |
+            dist/
+            smoke/
+          retention-days: 14
+          compression-level: 0
+          if-no-files-found: error
+
+  # A GitHub pre-release with the installers. Off unless started by hand from main with
+  # `publish: true`.
+  publish:
+    needs: [meta, checksums]
+    if: github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.meta.outputs.prefix }}-${{ needs.meta.outputs.short }}
+          path: release
+      - name: Create the pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.meta.outputs.version }}
+          SHORT: ${{ needs.meta.outputs.short }}
+          TAG: ${{ needs.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" > /dev/null 2>&1; then echo "::error::release $TAG already exists"; exit 1; fi
+          sed -e "s/{{VERSION}}/$VERSION/g" -e "s/{{COMMIT}}/$GITHUB_SHA/g" -e "s/{{SHORT}}/$SHORT/g" \
+            .github/release-preview/notes.md > notes.md
+          gh release create "$TAG" release/dist/* \
+            --prerelease --latest=false --target "$GITHUB_SHA" \
+            --title "Demios Desktop $VERSION (Preview, unsigned)" \
+            --notes-file notes.md
