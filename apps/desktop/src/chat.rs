@@ -1580,6 +1580,7 @@ mod tests {
                 capabilities: vec![dn_core::model::Capability::Chat],
                 license: "mit".into(),
                 notes: String::new(),
+                tool_support: None,
             }],
         };
         // 1 MiB of RAM: the 999B model can't fit.
@@ -1630,6 +1631,7 @@ mod tests {
                 capabilities: vec![dn_core::model::Capability::Chat],
                 license: "mit".into(),
                 notes: String::new(),
+                tool_support: None,
             }],
         };
         let local = crate::local::LocalModels::new(

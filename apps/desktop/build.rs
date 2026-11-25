@@ -36,6 +36,7 @@ const COMMANDS: &[&str] = &[
     "update_project",
     "delete_project",
     "restore_project",
+    "move_conversation",
     "list_project_files",
     "add_project_files",
     "remove_project_file",

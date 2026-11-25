@@ -21,6 +21,11 @@ pub struct CatalogEntry {
     pub license: String,
     #[serde(default)]
     pub notes: String,
+    /// Chat models: whether the chat template handles tool calls, as read from the GGUF header
+    /// (T-INF-26; checked by `every_chat_model_has_a_chat_template`). `None` for embedding
+    /// models and models outside the catalogue.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_support: Option<crate::kind::ToolSupport>,
 }
 
 impl CatalogEntry {
@@ -67,6 +72,13 @@ mod tests {
         assert!(c.models.len() >= 10);
         let mut ids = HashSet::new();
         for m in &c.models {
+            // Chat models say whether they make tool calls (T-INF-26); others don't.
+            assert_eq!(
+                m.tool_support.is_some(),
+                m.capabilities.contains(&Capability::Chat),
+                "{}",
+                m.id
+            );
             assert!(ids.insert(&m.id), "duplicate id {}", m.id);
             assert_eq!(m.sha256.len(), 64, "{}", m.id);
             assert!(m.sha256.chars().all(|c| c.is_ascii_hexdigit()), "{}", m.id);
@@ -137,6 +149,14 @@ mod tests {
                 sha256: Some(m.sha256.clone()),
             };
             let g = hub.gguf_header(&m.repo, &m.revision, &file).await.unwrap();
+            // The catalogue's tool_support is what the header says (T-INF-26).
+            let traits = crate::kind::from_gguf(&g);
+            assert_eq!(
+                Some(traits.tool_support),
+                m.tool_support,
+                "{}: catalogue tool_support differs from the header",
+                m.id
+            );
             match g.chat_template() {
                 Some(t) => {
                     eprintln!("ok  {} ({} bytes)", m.id, t.len());

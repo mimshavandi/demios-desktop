@@ -259,6 +259,28 @@ pub fn create_conversation_in(
     Ok(c)
 }
 
+/// Moves a live conversation into `project_id` (a live project) or, with `None`, out of
+/// any project (#136). Returns the project it was in before, so the move can be undone.
+/// Its next message uses the new project's instructions; earlier answers stay as they are.
+pub fn set_conversation_project(
+    conn: &Connection,
+    id: Id,
+    project_id: Option<Id>,
+) -> Result<Option<Id>> {
+    let tx = conn.unchecked_transaction()?;
+    let before = get_conversation(&tx, id)?.project_id;
+    if let Some(p) = project_id {
+        crate::project::get_project(&tx, p)?;
+    }
+    tx.execute(
+        "UPDATE store_conversations SET project_id = ?2, updated_at = ?3
+         WHERE id = ?1 AND deleted_at IS NULL",
+        params![id.to_string(), project_id.map(|p| p.to_string()), now_ms()],
+    )?;
+    tx.commit()?;
+    Ok(before)
+}
+
 /// Live conversations of a live project, most recently updated first.
 pub fn list_project_conversations(conn: &Connection, project_id: Id) -> Result<Vec<Conversation>> {
     let mut stmt = conn.prepare(&format!(
