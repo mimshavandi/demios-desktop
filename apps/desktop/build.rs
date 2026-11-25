@@ -51,6 +51,8 @@ const COMMANDS: &[&str] = &[
     "add_remote_server",
     "refresh_remote_server",
     "remove_remote_server",
+    "restore_remote_server",
+    "check_remote_server",
     "set_remote_model_tools",
     "delete_provider_key",
     "restore_provider_key",

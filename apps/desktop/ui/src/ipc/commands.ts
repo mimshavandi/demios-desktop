@@ -21,6 +21,7 @@ import type {
   ProjectFile,
   ProjectSummary,
   ModelCatalog,
+  RemoteServerStatus,
   Settings,
   StoredMessage,
   TurnStarted,
@@ -103,6 +104,8 @@ interface Commands {
   add_remote_server: { args: { name: string; baseUrl: string; apiKey: string | null }; ret: ModelCatalog };
   refresh_remote_server: { args: { serverId: string }; ret: ModelCatalog };
   remove_remote_server: { args: { serverId: string }; ret: ModelCatalog };
+  restore_remote_server: { args: { serverId: string }; ret: ModelCatalog };
+  check_remote_server: { args: { serverId: string }; ret: RemoteServerStatus };
   set_remote_model_tools: { args: { serverId: string; modelId: string; enabled: boolean }; ret: ModelCatalog };
   restore_provider_key: { args: { providerId: string }; ret: ModelCatalog };
   watch_tools: { args: { onEvent: Channel<ToolEvent> }; ret: ToolSnapshot };
@@ -252,6 +255,8 @@ export const api = {
     call("add_remote_server", { name, baseUrl, apiKey }),
   refreshRemoteServer: (serverId: string) => call("refresh_remote_server", { serverId }),
   removeRemoteServer: (serverId: string) => call("remove_remote_server", { serverId }),
+  restoreRemoteServer: (serverId: string) => call("restore_remote_server", { serverId }),
+  checkRemoteServer: (serverId: string) => call("check_remote_server", { serverId }),
   setRemoteModelTools: (serverId: string, modelId: string, enabled: boolean) =>
     call("set_remote_model_tools", { serverId, modelId, enabled }),
   watchTools: (onEvent: (ev: ToolEvent) => void) =>

@@ -166,6 +166,15 @@ struct RemovedKey {
     at: Instant,
 }
 
+/// A removed OpenAI-compatible server, kept for [`KEY_UNDO_WINDOW`] so Undo can put it back
+/// with its key and the tasks that used it (T-PRV-05).
+pub struct RemovedServer {
+    pub server: settings::RemoteServer,
+    pub key: Option<Secret>,
+    pub slots: Vec<(String, String)>,
+    at: Instant,
+}
+
 pub struct AppState {
     db: Mutex<Connection>,
     pub models: ModelRegistry,
@@ -183,6 +192,7 @@ pub struct AppState {
     running: Mutex<HashMap<Id, Running>>,
     live: Mutex<HashMap<Id, Live>>,
     removed_keys: Mutex<HashMap<String, RemovedKey>>,
+    removed_servers: Mutex<HashMap<String, RemovedServer>>,
     next_token: AtomicU64,
     /// Bumped by "Delete all local data": a background MCP connect started before it must
     /// not add its server afterwards.
@@ -254,6 +264,7 @@ impl AppState {
             running: Mutex::new(HashMap::new()),
             live: Mutex::new(HashMap::new()),
             removed_keys: Mutex::new(HashMap::new()),
+            removed_servers: Mutex::new(HashMap::new()),
             next_token: AtomicU64::new(1),
             mcp_epoch: AtomicU64::new(0),
             local_servers: crate::mcp::local_servers_allowed(),
@@ -685,6 +696,7 @@ impl AppState {
             }
         }
         lock(&self.removed_keys).clear();
+        lock(&self.removed_servers).clear();
         if !keys_ok {
             failed.push("keys in the system keychain");
         }
@@ -1101,6 +1113,32 @@ impl AppState {
         );
     }
 
+    pub fn remember_removed_server(
+        &self,
+        server: settings::RemoteServer,
+        key: Option<Secret>,
+        slots: Vec<(String, String)>,
+    ) {
+        let mut m = lock(&self.removed_servers);
+        m.retain(|_, r| r.at.elapsed() < KEY_UNDO_WINDOW);
+        m.insert(
+            server.id.clone(),
+            RemovedServer {
+                server,
+                key,
+                slots,
+                at: Instant::now(),
+            },
+        );
+    }
+
+    /// The removed server, if still within the undo window.
+    pub fn take_removed_server(&self, server_id: &str) -> Option<RemovedServer> {
+        let mut m = lock(&self.removed_servers);
+        m.retain(|_, r| r.at.elapsed() < KEY_UNDO_WINDOW);
+        m.remove(server_id)
+    }
+
     /// The removed key and the slots it was cleared from, if still within the window.
     pub fn take_removed_key(&self, provider_id: &str) -> Option<(Secret, Vec<(String, String)>)> {
         let mut m = lock(&self.removed_keys);
@@ -1389,6 +1427,42 @@ mod tests {
             assert!(project::file_path(&root, &kept_file).exists());
         });
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn removed_servers_wait_for_undo_and_delete_all_drops_them_and_their_keys() {
+        let keys = Keys::memory();
+        let conn = dn_store::open_in_memory(&migration_sets()).unwrap();
+        let st = AppState::new(conn, ModelRegistry::default(), keys.clone());
+        let server = settings::RemoteServer {
+            id: "box".into(),
+            name: "Box".into(),
+            base_url: "http://localhost:11434/v1".into(),
+            family: Default::default(),
+            models: vec![],
+        };
+        st.remember_removed_server(
+            server.clone(),
+            Some(Secret::new("k")),
+            vec![("chat".into(), "remote:box:m".into())],
+        );
+        let r = st.take_removed_server("box").expect("within the window");
+        assert_eq!(r.server, server);
+        assert_eq!(r.key.unwrap().expose(), "k");
+        assert!(st.take_removed_server("box").is_none(), "taken once");
+        // A saved server's key is deleted by Delete all local data, and so is a pending undo.
+        keys.set(&server.key_id(), &Secret::new("saved")).unwrap();
+        st.save_settings(&Settings {
+            remote_servers: vec![server.clone()],
+            ..Default::default()
+        })
+        .unwrap();
+        st.remember_removed_server(server.clone(), None, vec![]);
+        assert_eq!(st.keychain_entries(), ["Box server key"]);
+        assert!(st.wipe_local_data().is_empty());
+        assert!(!keys.has(&server.key_id()).unwrap());
+        assert!(st.take_removed_server("box").is_none());
+        assert!(st.settings().unwrap().remote_servers.is_empty());
     }
 
     #[test]

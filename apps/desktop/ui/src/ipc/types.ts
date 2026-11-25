@@ -379,6 +379,12 @@ export interface RemoteModelView {
   tool_support_reported: boolean;
 }
 
+/** Whether a model server answers now (from `check_remote_server`). */
+export type RemoteServerStatus =
+  | { state: "connected"; models: number }
+  | { state: "needs_key"; message: string }
+  | { state: "unreachable"; message: string };
+
 /** An OpenAI-compatible server (Ollama, LM Studio, llama.cpp, vLLM, a hosted gateway). */
 export interface RemoteServerView {
   id: string;

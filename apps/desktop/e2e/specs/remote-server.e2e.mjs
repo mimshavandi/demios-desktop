@@ -114,6 +114,11 @@ describe("OpenAI-compatible server", () => {
     }
     if (models === undefined) throw new Error("no Models button in the sidebar");
     await models.click();
+    // The form opens from "Add model server" (an empty state while there are no servers).
+    const open = await byTestId("add-model-server");
+    await open.waitForExist({ timeout: 30_000, timeoutMsg: "Settings › Models has no Add model server button" });
+    await open.scrollIntoView();
+    await open.click();
     const url = await byTestId("server-url");
     // waitForExist, not waitForDisplayed: WebKitWebDriver's visibility check fails for
     // fields below the fold of the long Models page. Scroll it in before typing.
@@ -129,6 +134,12 @@ describe("OpenAI-compatible server", () => {
     await row.waitForExist({ timeout: 30_000, timeoutMsg: "the server's model was not listed" });
     // The server said "tools" in /api/show: no switch, a "Tool calls" badge.
     expect(await textOf(row)).toContain("Tool calls");
+    // The status check lists the models again: the badge says Connected.
+    const server = await byTestId("remote-server");
+    await browser.waitUntil(async () => (await textOf(server)).includes("Connected"), {
+      timeout: 15_000,
+      timeoutMsg: "the server never showed Connected",
+    });
 
     // Model for each task › Chat: the server's model.
     await (await $("#slot-chat")).click();

@@ -310,6 +310,8 @@ function fakeApi() {
     addRemoteServer: async () => catalog(),
     refreshRemoteServer: async () => catalog(),
     removeRemoteServer: async () => catalog(),
+    restoreRemoteServer: async () => catalog(),
+    checkRemoteServer: async () => ({ state: "connected", models: 0 }) as const,
     setRemoteModelTools: async () => catalog(),
     deleteProviderKey: async () => catalog(),
     restoreProviderKey: async () => catalog(),

@@ -224,6 +224,7 @@ export function createMockApi(): Api {
   const removedKeys = new Set<string>();
   // OpenAI-compatible servers: an Ollama-like server on localhost has two models.
   let remotes: RemoteServerView[] = [];
+  const removedRemotes = new Map<string, RemoteServerView>();
   let settings: Settings = { slots: {}, telemetry_enabled: false };
   const timers = new Map<string, number>();
   const id = () => crypto.randomUUID();
@@ -641,9 +642,24 @@ export function createMockApi(): Api {
       return catalog();
     },
     removeRemoteServer: async (id) => {
+      removedRemotes.set(id, remotes.find((r) => r.id === id)!);
       remotes = remotes.filter((r) => r.id !== id);
       settings = { ...settings, slots: Object.fromEntries(Object.entries(settings.slots).filter(([, m]) => !m.startsWith(`remote:${id}:`))) };
       return catalog();
+    },
+    restoreRemoteServer: async (id) => {
+      const r = removedRemotes.get(id);
+      if (r === undefined) throw { code: "expired", message: "The server can no longer be restored. Add it again." };
+      removedRemotes.delete(id);
+      remotes = [...remotes, r];
+      return catalog();
+    },
+    checkRemoteServer: async (id) => {
+      await new Promise((r) => setTimeout(r, 300));
+      const r = remotes.find((x) => x.id === id);
+      return r === undefined
+        ? { state: "unreachable", message: "This server was removed." }
+        : { state: "connected", models: r.models.length };
     },
     setRemoteModelTools: async (serverId, modelId, enabled) => {
       remotes = remotes.map((r) =>

@@ -103,7 +103,8 @@ pub async fn refresh_remote_server(
 }
 
 /// Removes the server, its key and any task that used one of its models (the task then
-/// shows "choose a model" instead of quietly using another).
+/// shows "choose a model" instead of quietly using another). [`restore_remote_server`] puts
+/// all of it back within [`crate::state::KEY_UNDO_WINDOW`].
 #[tauri::command]
 pub async fn remove_remote_server(
     state: AppStateRef<'_>,
@@ -111,16 +112,110 @@ pub async fn remove_remote_server(
 ) -> IpcResult<ModelCatalog> {
     blocking(&state, move |s| {
         let mut settings = s.settings()?;
-        find(&settings.remote_servers, &server_id)?;
-        s.keys.delete(&remote_key_id(&server_id))?;
+        let server = find(&settings.remote_servers, &server_id)?.clone();
+        let key = s.keys.get(&server.key_id())?;
+        s.keys.delete(&server.key_id())?;
         settings.remote_servers.retain(|r| r.id != server_id);
         let prefix = format!("remote:{server_id}:");
+        let cleared: Vec<(String, String)> = settings
+            .slots
+            .iter()
+            .filter(|(_, m)| m.starts_with(&prefix))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
         settings.slots.retain(|_, m| !m.starts_with(&prefix));
         s.save_settings(&settings)?;
         s.models.invalidate(&remote_key_id(&server_id));
+        s.remember_removed_server(server, key, cleared);
         catalog(s)
     })
     .await
+}
+
+/// Undo for [`remove_remote_server`]: the server, its key and its tasks come back.
+#[tauri::command]
+pub async fn restore_remote_server(
+    state: AppStateRef<'_>,
+    server_id: String,
+) -> IpcResult<ModelCatalog> {
+    blocking(&state, move |s| {
+        let removed = s.take_removed_server(&server_id).ok_or_else(|| {
+            IpcError::new(
+                "expired",
+                "The server can no longer be restored. Add it again.",
+            )
+        })?;
+        let mut settings = s.settings()?;
+        if settings
+            .remote_servers
+            .iter()
+            .any(|r| r.id == server_id || r.base_url == removed.server.base_url)
+        {
+            return Err(IpcError::invalid(
+                "This server was added again in the meantime.",
+            ));
+        }
+        if let Some(k) = &removed.key {
+            s.keys.set(&removed.server.key_id(), k)?;
+        }
+        settings.remote_servers.push(removed.server);
+        for (slot, model) in removed.slots {
+            settings.slots.entry(slot).or_insert(model);
+        }
+        s.save_settings(&settings)?;
+        catalog(s)
+    })
+    .await
+}
+
+/// Whether the server answers now: shown as a badge on its row.
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "snake_case", tag = "state")]
+pub enum ServerStatus {
+    Connected {
+        models: usize,
+    },
+    /// 401/403: the server wants a key, or the saved one was refused.
+    NeedsKey {
+        message: String,
+    },
+    Unreachable {
+        message: String,
+    },
+}
+
+/// Lists the server's models (no chat request) to see whether it answers. Bounded to 8 s.
+#[tauri::command]
+pub async fn check_remote_server(
+    state: AppStateRef<'_>,
+    server_id: String,
+) -> IpcResult<ServerStatus> {
+    let cfg = blocking(&state, move |s| {
+        let server = find(&s.settings()?.remote_servers, &server_id)?.clone();
+        remote_config(&server, &s.keys).map_err(core_error)
+    })
+    .await?;
+    let adapter = dn_providers::build(cfg).map_err(core_error)?;
+    let r = tokio::time::timeout(std::time::Duration::from_secs(8), adapter.list_models()).await;
+    Ok(match r {
+        Ok(Ok(list)) => ServerStatus::Connected { models: list.len() },
+        Ok(Err(e)) => status_for(&e),
+        Err(_) => ServerStatus::Unreachable {
+            message: "The server didn't answer within 8 seconds.".into(),
+        },
+    })
+}
+
+fn status_for(e: &CoreError) -> ServerStatus {
+    let message = core_message(e);
+    match e {
+        CoreError::ModelUnavailable { recovery, .. }
+            if recovery.contains(&dn_core::RecoveryAction::AddProviderKey) =>
+        {
+            ServerStatus::NeedsKey { message }
+        }
+        _ => ServerStatus::Unreachable { message },
+    }
 }
 
 /// The user's answer for a model whose server doesn't say whether it makes tool calls.
@@ -299,6 +394,25 @@ mod tests {
             long.len() <= 24 && crate::settings::valid_server_id(&long),
             "{long}"
         );
+    }
+
+    #[test]
+    fn status_tells_a_missing_key_from_an_unreachable_server() {
+        let unavailable = |recovery| CoreError::ModelUnavailable {
+            user_message: "msg".into(),
+            developer_message: "dev".into(),
+            recovery,
+        };
+        assert!(matches!(
+            status_for(&unavailable(vec![dn_core::RecoveryAction::AddProviderKey])),
+            ServerStatus::NeedsKey { .. }
+        ));
+        assert!(matches!(
+            status_for(&unavailable(vec![dn_core::RecoveryAction::Retry { after_seconds: None }])),
+            ServerStatus::Unreachable { ref message } if message == "msg"
+        ));
+        let json = serde_json::to_value(ServerStatus::Connected { models: 2 }).unwrap();
+        assert_eq!(json, serde_json::json!({"state": "connected", "models": 2}));
     }
 
     #[test]

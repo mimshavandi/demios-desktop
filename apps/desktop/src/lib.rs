@@ -263,6 +263,8 @@ pub fn run() {
             remote::add_remote_server,
             remote::refresh_remote_server,
             remote::remove_remote_server,
+            remote::restore_remote_server,
+            remote::check_remote_server,
             remote::set_remote_model_tools,
             commands::delete_provider_key,
             commands::restore_provider_key,

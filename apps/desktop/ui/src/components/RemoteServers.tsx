@@ -1,16 +1,26 @@
-import { Plus, RefreshCw, Server, Trash2, Wrench } from "lucide-react";
-import { useRef, useState } from "react";
+import { Plus, RefreshCw, Trash2, Wrench } from "lucide-react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { Api } from "../ipc/commands";
-import { errorMessage, type ModelCatalog, type RemoteModelView, type RemoteServerView } from "../ipc/types";
-import { ConfirmDialog } from "./ConfirmDialog";
-import { Badge, Button, ICON, InlineMessage, Switch, TextField } from "./primitives";
+import {
+  errorMessage,
+  type ModelCatalog,
+  type RemoteModelView,
+  type RemoteServerStatus,
+  type RemoteServerView,
+} from "../ipc/types";
+import { Badge, Button, EmptyState, ICON, InlineMessage, Switch, TextField } from "./primitives";
 import { useToast } from "./toast";
+
+/** How long Undo stays on the toast after a server is removed (the backend keeps it 15 s). */
+const UNDO_MS = 10_000;
 
 /**
  * Settings › Models › Model servers (T-PRV-05, issue #113): OpenAI-compatible servers such
- * as Ollama, LM Studio, llama.cpp or vLLM, added by address with an optional key. Each
- * model shows whether it makes tool calls, as the server reports it. When the server doesn't
- * say, the user can turn tool calls on; nothing is assumed.
+ * as Ollama, LM Studio, llama.cpp or vLLM, added by address with an optional key.
+ * - Each server shows whether it answers now: Connected, Needs key, or Unreachable with Retry.
+ * - Each model shows whether it makes tool calls, as the server reports it. When the server
+ *   doesn't say, the user can turn tool calls on; nothing is assumed.
+ * - Remove takes effect at once, with Undo for 10 seconds.
  */
 export function RemoteServersCard({
   api,
@@ -22,16 +32,41 @@ export function RemoteServersCard({
   onCatalog: (c: ModelCatalog) => void;
 }) {
   const toast = useToast();
-  const [removing, setRemoving] = useState<RemoteServerView | null>(null);
-  const [removeError, setRemoveError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const removeTrigger = useRef<HTMLButtonElement | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [status, setStatus] = useState<Record<string, RemoteServerStatus | "checking">>({});
+  const formId = useId();
+  const addRef = useRef<HTMLButtonElement>(null);
+  const servers = catalog.remote_servers;
+
+  const check = useCallback(
+    async (id: string) => {
+      setStatus((s) => ({ ...s, [id]: "checking" }));
+      try {
+        const st = await api.checkRemoteServer(id);
+        setStatus((s) => ({ ...s, [id]: st }));
+      } catch (e) {
+        setStatus((s) => ({ ...s, [id]: { state: "unreachable", message: errorMessage(e) } }));
+      }
+    },
+    [api],
+  );
+
+  // Check each server once when it appears (and again after Refresh or Retry).
+  const ids = servers.map((s) => s.id).join(",");
+  useEffect(() => {
+    for (const id of ids.split(",").filter(Boolean)) {
+      if (status[id] === undefined) void check(id);
+    }
+    // `status` is read only to skip servers already checked, so it isn't a dependency.
+  }, [ids, check]);
 
   const refresh = async (s: RemoteServerView) => {
     setBusy(`refresh:${s.id}`);
     try {
       onCatalog(await api.refreshRemoteServer(s.id));
       toast({ tone: "success", title: `${s.name}: model list updated` });
+      void check(s.id);
     } catch (e) {
       toast({ tone: "error", title: `Couldn't refresh ${s.name}. ${errorMessage(e)}` });
     } finally {
@@ -39,16 +74,29 @@ export function RemoteServersCard({
     }
   };
 
-  const remove = async () => {
-    if (removing === null) return;
-    setBusy(`remove:${removing.id}`);
-    setRemoveError(null);
+  const remove = async (s: RemoteServerView) => {
+    setBusy(`remove:${s.id}`);
     try {
-      onCatalog(await api.removeRemoteServer(removing.id));
-      toast({ tone: "info", title: `${removing.name} removed` });
-      setRemoving(null);
+      onCatalog(await api.removeRemoteServer(s.id));
+      toast({
+        tone: "info",
+        title: `${s.name} removed`,
+        duration: UNDO_MS,
+        action: {
+          label: "Undo",
+          onAction: () => {
+            void api
+              .restoreRemoteServer(s.id)
+              .then((c) => {
+                onCatalog(c);
+                toast({ tone: "success", title: `${s.name} restored` });
+              })
+              .catch((e: unknown) => toast({ tone: "error", title: errorMessage(e) }));
+          },
+        },
+      });
     } catch (e) {
-      setRemoveError(errorMessage(e));
+      toast({ tone: "error", title: `Couldn't remove ${s.name}. ${errorMessage(e)}` });
     } finally {
       setBusy(null);
     }
@@ -62,7 +110,20 @@ export function RemoteServersCard({
     }
   };
 
-  const servers = catalog.remote_servers;
+  const addButton = (
+    <Button
+      ref={addRef}
+      variant="primary"
+      icon={<Plus {...ICON} aria-hidden="true" />}
+      aria-expanded={adding}
+      aria-controls={formId}
+      data-testid="add-model-server"
+      onClick={() => setAdding((a) => !a)}
+    >
+      Add model server
+    </Button>
+  );
+
   return (
     <section className="card" aria-labelledby="remote-h" data-testid="remote-servers">
       <h2 id="remote-h">Model servers</h2>
@@ -71,34 +132,50 @@ export function RemoteServersCard({
         local network can use http://; any other server needs https://. Messages in chats that use a server's models are sent
         to that server.
       </p>
+      {servers.length === 0 && !adding ? (
+        <EmptyState title="No model servers yet" action={addButton}>
+          Add the address of a server you run, such as http://localhost:11434 for Ollama.
+        </EmptyState>
+      ) : (
+        <div className="row-actions">{addButton}</div>
+      )}
+      {adding && (
+        <AddServerForm
+          id={formId}
+          api={api}
+          onCatalog={onCatalog}
+          onDone={() => {
+            setAdding(false);
+            addRef.current?.focus();
+          }}
+        />
+      )}
       {servers.map((s) => (
         <div key={s.id} data-testid="remote-server">
           <div className="row">
             <div className="row-main">
               <span className="row-title">{s.name}</span>
               <span className="dn-help">
-                {s.base_url} · {s.has_key ? "key saved in your system keychain" : "no key"} ·{" "}
-                {s.models.length === 1 ? "1 model" : `${s.models.length} models`}
+                {s.base_url} · {s.models.length === 1 ? "1 model" : `${s.models.length} models`}
               </span>
             </div>
+            <StatusBadge status={status[s.id]} hasKey={s.has_key} onRetry={() => void check(s.id)} />
             <div className="row-actions">
               <Button
                 variant="secondary"
                 loading={busy === `refresh:${s.id}`}
                 icon={<RefreshCw {...ICON} aria-hidden="true" />}
+                aria-label={`Refresh ${s.name}`}
                 onClick={() => void refresh(s)}
               >
                 Refresh
               </Button>
               <Button
                 variant="ghost"
+                loading={busy === `remove:${s.id}`}
                 icon={<Trash2 {...ICON} aria-hidden="true" />}
                 aria-label={`Remove ${s.name}`}
-                onClick={(e) => {
-                  removeTrigger.current = e.currentTarget;
-                  setRemoveError(null);
-                  setRemoving(s);
-                }}
+                onClick={() => void remove(s)}
               >
                 Remove
               </Button>
@@ -114,28 +191,39 @@ export function RemoteServersCard({
           ))}
         </div>
       ))}
-      <AddServerForm api={api} onCatalog={onCatalog} />
-      <ConfirmDialog
-        open={removing !== null}
-        onOpenChange={(o) => {
-          if (!o && busy === null) setRemoving(null);
-        }}
-        title={`Remove ${removing?.name ?? "server"}?`}
-        confirmLabel="Remove server"
-        busy={busy?.startsWith("remove:") === true}
-        error={removeError}
-        onConfirm={() => void remove()}
-        returnFocusTo={removeTrigger}
-      >
-        <p>This deletes, on this computer:</p>
-        <ul>
-          <li>the server's address and model list</li>
-          {removing?.has_key === true && <li>its key in your system keychain</li>}
-          <li>any task set to one of its models (choose another model for it)</li>
-        </ul>
-        <p>Nothing on the server itself changes. Chats that used its models keep their history.</p>
-      </ConfirmDialog>
     </section>
+  );
+}
+
+function StatusBadge({
+  status,
+  hasKey,
+  onRetry,
+}: {
+  status: RemoteServerStatus | "checking" | undefined;
+  hasKey: boolean;
+  onRetry: () => void;
+}) {
+  if (status === undefined || status === "checking") {
+    return <Badge tone="neutral">Checking…</Badge>;
+  }
+  if (status.state === "connected") {
+    return <Badge tone="success">Connected</Badge>;
+  }
+  if (status.state === "needs_key") {
+    return (
+      <span className="row-actions" title={status.message}>
+        <Badge tone="warning">{hasKey ? "Key refused" : "Needs key"}</Badge>
+      </span>
+    );
+  }
+  return (
+    <span className="row-actions" title={status.message}>
+      <Badge tone="danger">Unreachable</Badge>
+      <Button size="sm" variant="ghost" onClick={onRetry}>
+        Retry
+      </Button>
+    </span>
   );
 }
 
@@ -172,7 +260,17 @@ function ModelRow({ model: m, onTools }: { model: RemoteModelView; onTools: (on:
   );
 }
 
-function AddServerForm({ api, onCatalog }: { api: Api; onCatalog: (c: ModelCatalog) => void }) {
+function AddServerForm({
+  id,
+  api,
+  onCatalog,
+  onDone,
+}: {
+  id: string;
+  api: Api;
+  onCatalog: (c: ModelCatalog) => void;
+  onDone: () => void;
+}) {
   const toast = useToast();
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
@@ -196,9 +294,7 @@ function AddServerForm({ api, onCatalog }: { api: Api; onCatalog: (c: ModelCatal
         tone: "success",
         title: `${added?.name ?? "Server"} added: ${n === 0 ? "no models yet" : n === 1 ? "1 model" : `${n} models`}`,
       });
-      setName("");
-      setUrl("");
-      setKey("");
+      onDone();
     } catch (e) {
       setError(errorMessage(e));
     } finally {
@@ -208,17 +304,15 @@ function AddServerForm({ api, onCatalog }: { api: Api; onCatalog: (c: ModelCatal
 
   return (
     <form
+      id={id}
       className="mcp-form"
-      aria-labelledby="add-server-h"
+      aria-label="Add model server"
       data-testid="add-server-form"
       onSubmit={(e) => {
         e.preventDefault();
         void add();
       }}
     >
-      <h3 id="add-server-h" className="card-subhead">
-        <Server {...ICON} aria-hidden="true" /> Add a server
-      </h3>
       <TextField
         label="Address"
         type="url"
@@ -226,6 +320,7 @@ function AddServerForm({ api, onCatalog }: { api: Api; onCatalog: (c: ModelCatal
         placeholder="http://localhost:11434"
         spellCheck={false}
         autoComplete="off"
+        autoFocus
         data-testid="server-url"
         error={error}
         help="Ollama: http://localhost:11434 · LM Studio: http://localhost:1234 · /v1 is added if the address has no path."
@@ -248,13 +343,16 @@ function AddServerForm({ api, onCatalog }: { api: Api; onCatalog: (c: ModelCatal
         autoComplete="off"
         spellCheck={false}
         placeholder="Only if the server needs one"
-        help="Saved in your system keychain and sent only to this server."
+        help="Saved in your system keychain."
         data-testid="server-key"
         onChange={(e) => setKey(e.target.value)}
       />
-      <div className="row-actions">
-        <Button type="submit" variant="secondary" loading={busy} icon={<Plus {...ICON} aria-hidden="true" />} data-testid="add-server">
-          Add server
+      <div className="mcp-form-actions">
+        <Button variant="ghost" onClick={onDone}>
+          Cancel
+        </Button>
+        <Button type="submit" variant="primary" loading={busy} data-testid="add-server">
+          Add
         </Button>
       </div>
     </form>
