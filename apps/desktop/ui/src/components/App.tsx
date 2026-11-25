@@ -14,6 +14,8 @@ import {
   type Id,
   type McpServerStatus,
   type ModelCatalog,
+  type Project,
+  type ProjectSummary,
   type ReportKind,
   type AddModelLink,
   type Settings,
@@ -26,13 +28,16 @@ import { chatReducer, initialChat } from "../state/chat";
 import { ArtifactPane } from "./ArtifactPane";
 import { ChatView, type ArtifactCardInfo } from "./ChatView";
 import { ModelBadge } from "./ModelBadge";
+import { NewProjectView, ProjectView, type ProjectDraft } from "./ProjectView";
 import { Badge, Button, ICON, IconButton, InlineMessage, TooltipProvider } from "./primitives";
 import { SettingsView, type SettingsSection } from "./SettingsView";
 import { Sidebar, type ListState } from "./Sidebar";
 import { ToastProvider, useToast } from "./toast";
 
-type View = { kind: "chat" } | { kind: "settings"; section: SettingsSection };
-
+type View =
+  | { kind: "chat" }
+  | { kind: "settings"; section: SettingsSection }
+  | { kind: "project"; id: Id | "new" };
 
 export function App({ api = realApi }: { api?: Api }) {
   return (
@@ -67,6 +72,12 @@ function Shell({ api }: { api: Api }) {
   const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [listState, setListState] = useState<ListState>({ kind: "loading" });
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [projectsState, setProjectsState] = useState<ListState>({ kind: "loading" });
+  // The project a chat that isn't created yet (no message sent) will belong to.
+  const [newChatProject, setNewChatProject] = useState<Id | null>(null);
+  // Unsaved project edits survive a look at a chat and back.
+  const [projectDrafts, setProjectDrafts] = useState<Record<Id, ProjectDraft>>({});
   const [view, setView] = useState<View>({ kind: "chat" });
   const [chat, dispatch] = useReducer(chatReducer, initialChat);
   const [loadingMessages, setLoadingMessages] = useState(false);
@@ -90,6 +101,8 @@ function Shell({ api }: { api: Api }) {
   const devFake = info?.dev_fake_model ?? false;
   const ready = chatModelReady(catalog, devFake);
   const activeConversation = conversations.find((c) => c.id === chat.conversationId);
+  const chatProjectId = chat.conversationId === null ? newChatProject : (activeConversation?.project_id ?? null);
+  const chatProject = chatProjectId === null ? undefined : projects.find((p) => p.id === chatProjectId);
   // First-run AI notice (T-STORE-09): shown until dismissed; the dismissal is a setting, so
   // "Delete all local data" brings it back.
   const showAiNotice = catalog !== null && catalog.settings.ai_notice_seen !== true;
@@ -161,6 +174,15 @@ function Shell({ api }: { api: Api }) {
       setListState({ kind: "ready" });
     } catch (e) {
       setListState({ kind: "error", message: errorMessage(e) });
+    }
+  }, [api]);
+
+  const refreshProjects = useCallback(async () => {
+    try {
+      setProjects(await api.listProjects());
+      setProjectsState({ kind: "ready" });
+    } catch (e) {
+      setProjectsState({ kind: "error", message: errorMessage(e) });
     }
   }, [api]);
 
@@ -247,6 +269,7 @@ function Shell({ api }: { api: Api }) {
   const open = useCallback(
     async (id: Id | null) => {
       setView({ kind: "chat" });
+      setNewChatProject(null);
       setError(null);
       void refreshUnknowns(id);
       openIdRef.current = id;
@@ -312,6 +335,7 @@ function Shell({ api }: { api: Api }) {
         setError(errorMessage(e));
       }
       await refreshCatalog();
+      void refreshProjects();
       try {
         const list = await api.listConversations();
         setConversations(list);
@@ -323,7 +347,7 @@ function Shell({ api }: { api: Api }) {
         setListState({ kind: "error", message: errorMessage(e) });
       }
     })();
-  }, [api, open, refreshCatalog]);
+  }, [api, open, refreshCatalog, refreshProjects]);
 
   const say = useCallback((msg: string) => {
     // Clear first so the same words are announced again.
@@ -414,7 +438,7 @@ function Shell({ api }: { api: Api }) {
       try {
         let id = chat.conversationId;
         if (id === null) {
-          const c = await api.createConversation();
+          const c = await api.createConversation(newChatProject);
           id = c.id;
           dispatch({ kind: "open", conversationId: id, messages: [] });
           dispatch({ kind: "sending" });
@@ -429,7 +453,7 @@ function Shell({ api }: { api: Api }) {
         return false;
       }
     },
-    [api, chat.conversationId, onEvent, refreshConversations],
+    [api, chat.conversationId, newChatProject, onEvent, refreshConversations],
   );
 
   const regenerate = useCallback(async () => {
@@ -481,6 +505,67 @@ function Shell({ api }: { api: Api }) {
       });
     },
     [api, chat.conversationId, conversations, open, refreshConversations, toast],
+  );
+
+  /** A new chat in `projectId`; like any new chat, it is created on the first message. */
+  const newChatIn = useCallback(
+    (projectId: Id) => {
+      void open(null);
+      setNewChatProject(projectId);
+    },
+    [open],
+  );
+
+  const projectCreated = useCallback(
+    (p: Project) => {
+      void refreshProjects();
+      setView({ kind: "project", id: p.id });
+    },
+    [refreshProjects],
+  );
+
+  const projectSaved = useCallback((p: Project) => {
+    setProjects((list) => list.map((x) => (x.id === p.id ? { ...x, ...p } : x)));
+  }, []);
+
+  // Delete acts at once (soft delete of the project, its chats and files) and offers Undo
+  // for 10 s, like chats; the store purges them on the next start.
+  const removeProject = useCallback(
+    async (p: ProjectSummary) => {
+      let chats: number;
+      try {
+        chats = await api.deleteProject(p.id);
+      } catch (e) {
+        toast({ tone: "error", title: `Couldn't delete the project. ${errorMessage(e)}` });
+        return;
+      }
+      setProjectDrafts(({ [p.id]: _gone, ...rest }) => rest);
+      const list = await api.listConversations().catch(() => conversations.filter((c) => c.project_id !== p.id));
+      setConversations(list);
+      void refreshProjects();
+      const openGone = chatProjectId === p.id;
+      if (openGone || view.kind === "project") void open(openGone ? (list[0]?.id ?? null) : chat.conversationId);
+      toast({
+        tone: "info",
+        title:
+          chats === 0
+            ? `Deleted “${p.name}”`
+            : `Deleted “${p.name}” and its ${chats === 1 ? "chat" : `${chats} chats`}`,
+        duration: 10_000,
+        action: {
+          label: "Undo",
+          onAction: () => {
+            void api
+              .restoreProject(p.id)
+              .then(() => Promise.all([refreshProjects(), refreshConversations()]))
+              .catch((e: unknown) =>
+                toast({ tone: "error", title: `Couldn't restore the project. ${errorMessage(e)}` }),
+              );
+          },
+        },
+      });
+    },
+    [api, chat.conversationId, chatProjectId, conversations, open, refreshConversations, refreshProjects, toast, view.kind],
   );
 
   const copyLastAnswer = useCallback(() => {
@@ -561,8 +646,17 @@ function Shell({ api }: { api: Api }) {
     (a) => a.scope.startsWith("conv:") && (view.kind !== "chat" || a.scope !== `conv:${chat.conversationId ?? ""}`),
   );
   const model = chatModel(catalog, devFake);
+  const openProject =
+    view.kind === "project" && view.id !== "new" ? projects.find((p) => p.id === view.id) : undefined;
+  const chatTitle = activeConversation?.title ?? "New chat";
   const title =
-    view.kind === "settings" ? "Settings" : (activeConversation?.title ?? "New chat");
+    view.kind === "settings"
+      ? "Settings"
+      : view.kind === "project"
+        ? (openProject?.name ?? "New project")
+        : chatProject !== undefined
+          ? `${chatProject.name} / ${chatTitle}`
+          : chatTitle;
 
   return (
     <div
@@ -596,6 +690,12 @@ function Shell({ api }: { api: Api }) {
           conversations={conversations}
           state={listState}
           activeId={view.kind === "chat" ? chat.conversationId : null}
+          projects={projects}
+          projectsState={projectsState}
+          activeProject={view.kind === "project" ? view.id : null}
+          onNewProject={() => setView({ kind: "project", id: "new" })}
+          onOpenProject={(id) => setView({ kind: "project", id })}
+          onRetryProjects={() => void refreshProjects()}
           settings={view.kind === "settings" ? view.section : null}
           onNew={newChat}
           onOpen={(id) => void open(id)}
@@ -646,6 +746,50 @@ function Shell({ api }: { api: Api }) {
             aiNotice={showAiNotice}
             onDismissAiNotice={() => void dismissAiNotice()}
           />
+        ) : view.kind === "project" ? (
+          view.id === "new" ? (
+            <NewProjectView api={api} onCreated={projectCreated} />
+          ) : openProject === undefined ? (
+            <section className="settings" aria-label="Project">
+              <div className="settings-column">
+                {projectsState.kind === "error" ? (
+                  <InlineMessage
+                    tone="error"
+                    action={
+                      <Button size="sm" onClick={() => void refreshProjects()}>
+                        Retry
+                      </Button>
+                    }
+                  >
+                    Couldn't load the project. {projectsState.message}
+                  </InlineMessage>
+                ) : projectsState.kind === "loading" ? (
+                  <p className="dn-help" role="status">
+                    Loading the project…
+                  </p>
+                ) : (
+                  <InlineMessage tone="info">This project was deleted.</InlineMessage>
+                )}
+              </div>
+            </section>
+          ) : (
+            <ProjectView
+              api={api}
+              project={openProject}
+              chats={conversations.filter((c) => c.project_id === openProject.id)}
+              draft={projectDrafts[openProject.id] ?? null}
+              onDraft={(d) =>
+                setProjectDrafts(({ [openProject.id]: _old, ...rest }) =>
+                  d === null ? rest : { ...rest, [openProject.id]: d },
+                )
+              }
+              onSaved={projectSaved}
+              onNewChat={() => newChatIn(openProject.id)}
+              onOpenChat={(id) => void open(id)}
+              onDelete={() => void removeProject(openProject)}
+              onFilesChanged={() => void refreshProjects()}
+            />
+          )
         ) : (
           <SettingsView
             api={api}

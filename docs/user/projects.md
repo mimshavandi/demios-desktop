@@ -1,0 +1,36 @@
+# Projects
+
+A project keeps related chats together, with files and instructions that apply to every chat in it.
+
+## Create a project
+
+1. In the sidebar, select the **New project** button next to **Projects**.
+2. Type a name and select **Create project**.
+
+The project opens on its own page. Select it under **Projects** in the sidebar to come back to it.
+
+## Instructions
+
+Under **Details**, write what every chat in the project should follow, for example "Answer in British English" or "The reader is a first-year student". Select **Save changes**. Instructions can be up to 8,000 characters.
+
+The instructions are sent to the model with each message in the project's chats, so a model from a provider receives them too. Chats outside the project don't get them.
+
+If you leave the page before saving, your changes are kept until you come back. "Unsaved changes" next to the button reminds you.
+
+## Files
+
+Select **Add files** and pick one or more files. Demios keeps a copy of each file in its data folder, so moving, changing or deleting the original afterwards doesn't affect the project. A file can be up to 50 MB, and a project can hold up to 100 files. Files that can't be added are listed with the reason.
+
+To remove a file, select the remove button next to it. A message lets you **Undo** for 10 seconds. The copy is deleted for good the next time the app starts.
+
+Answers don't use the files yet. Searching them for answers is coming in a later version.
+
+## Chats in a project
+
+On the project's page, select **New chat**. The title bar shows the project's name before the chat's title. Like any new chat, it's saved when you send the first message. The project's chats are listed on its page and also under **Recent** in the sidebar.
+
+## Delete a project
+
+At the bottom of the project's page, select **Delete project**. Its chats and files are deleted with it. A message lets you **Undo** for 10 seconds; until the app restarts, Undo brings back the project, its chats and its files. After that, they're removed for good.
+
+**Delete all local data** removes every project too. See [Privacy and your data](privacy.md).
