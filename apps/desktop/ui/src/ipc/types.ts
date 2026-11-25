@@ -199,6 +199,8 @@ export interface McpServerStatus {
   tools: number;
   /** Tools that are new or changed since they were reviewed; they always ask meanwhile. */
   review: number;
+  /** Bumped when the server changed its tools mid-session, so the Tools view reloads. */
+  revision: number;
 }
 
 /** Tool-runtime events (`watch_tools`). */

@@ -1003,7 +1003,7 @@ describe("App", () => {
     act(() =>
       f.approve({
         type: "mcp_server",
-        status: { server_id: "fs", name: "Files", state: "failed", message: "It didn't start.", tools: 0, review: 0 },
+        status: { server_id: "fs", name: "Files", state: "failed", message: "It didn't start.", tools: 0, review: 0, revision: 0 },
       }),
     );
     expect(await screen.findByText("Files couldn't connect. It didn't start.")).toBeTruthy();

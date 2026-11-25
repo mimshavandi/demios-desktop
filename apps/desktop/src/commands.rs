@@ -725,6 +725,7 @@ pub async fn sign_out_mcp_server(
         message: Some("Signed out. Sign in to use this server's tools.".into()),
         tools: 0,
         review: 0,
+        revision: 0,
     });
     blocking(&state, |s| s.mcp_servers_view()).await
 }
@@ -757,6 +758,7 @@ pub async fn sign_in_mcp_server(
             message,
             tools: 0,
             review: 0,
+            revision: 0,
         })
     };
     set(
