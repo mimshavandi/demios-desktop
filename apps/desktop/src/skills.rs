@@ -45,12 +45,14 @@ pub struct SkillInfo {
     pub source: SkillSource,
 }
 
-/// A user skill file that didn't load, and why.
+/// A skill file that didn't load, and why.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct SkillProblem {
-    /// The file, relative to the user's skills folder (`my-skill/SKILL.md`).
+    /// The file, relative to its skills folder (`my-skill/SKILL.md`).
     pub file: String,
     pub message: String,
+    /// Shipped with the app (a broken build) or the user's own file.
+    pub source: SkillSource,
 }
 
 /// What Settings shows: every skill, the files that didn't load, and the folder.
@@ -124,17 +126,16 @@ impl Library {
         lib
     }
 
-    /// Built-in skills only, without folders (tests).
+    /// Built-in skills only, without folders (tests). A bad allowlist panics.
     pub fn from_skills(skills: Vec<ChatSkill>) -> Self {
         let mut loaded = Loaded::default();
         for s in skills {
-            if let Ok(allow) = ToolAllowlist::new(&s.allowed_tools) {
-                loaded.skills.push(Arc::new(Skill {
-                    skill: s,
-                    allow,
-                    source: SkillSource::Builtin,
-                }));
-            }
+            let allow = ToolAllowlist::new(&s.allowed_tools).expect("valid allowed-tools");
+            loaded.skills.push(Arc::new(Skill {
+                skill: s,
+                allow,
+                source: SkillSource::Builtin,
+            }));
         }
         Self {
             loaded: RwLock::new(Arc::new(loaded)),
@@ -146,10 +147,14 @@ impl Library {
     pub fn reload(&self) {
         let mut out = Loaded::default();
         if let Some(dir) = self.bundled.as_deref().filter(|d| d.is_dir()) {
+            // A broken built-in file is a broken build: Settings shows it like a user file's
+            // problem instead of the skill just missing.
             let (skills, errors) = dn_agent::chat_skill::load_dir(dir);
-            for e in errors {
+            for e in &errors {
                 eprintln!("could not load a built-in skill: {e}");
             }
+            out.problems
+                .extend(errors.iter().map(|e| problem(dir, e, SkillSource::Builtin)));
             for s in skills {
                 match ToolAllowlist::new(&s.allowed_tools) {
                     Ok(allow) => out.skills.push(Arc::new(Skill {
@@ -157,19 +162,25 @@ impl Library {
                         allow,
                         source: SkillSource::Builtin,
                     })),
-                    Err(e) => eprintln!("could not load the built-in skill `{}`: {e}", s.name),
+                    Err(message) => out.problems.push(SkillProblem {
+                        file: format!("{}/{}", s.name, dn_agent::chat_skill::SKILL_FILE),
+                        message,
+                        source: SkillSource::Builtin,
+                    }),
                 }
             }
         }
         if let Some(dir) = self.user.as_deref().filter(|d| d.is_dir()) {
             let (skills, errors) = dn_agent::chat_skill::load_dir(dir);
-            out.problems.extend(errors.iter().map(|e| problem(dir, e)));
+            out.problems
+                .extend(errors.iter().map(|e| problem(dir, e, SkillSource::User)));
             let mut taken = 0;
             for s in skills {
                 let file = format!("{}/{}", s.name, dn_agent::chat_skill::SKILL_FILE);
                 if out.skills.iter().any(|b| b.skill.name == s.name) {
                     out.problems.push(SkillProblem {
                         file,
+                        source: SkillSource::User,
                         message: format!(
                             "A built-in skill is already called \"{}\". Rename the folder and \
                              the name in the file.",
@@ -181,6 +192,7 @@ impl Library {
                 if taken == MAX_USER_SKILLS {
                     out.problems.push(SkillProblem {
                         file,
+                        source: SkillSource::User,
                         message: format!("Only {MAX_USER_SKILLS} of your skills can load."),
                     });
                     continue;
@@ -195,21 +207,21 @@ impl Library {
                             source: SkillSource::User,
                         }));
                     }
-                    Err(message) => out.problems.push(SkillProblem { file, message }),
+                    Err(message) => out.problems.push(SkillProblem {
+                        file,
+                        message,
+                        source: SkillSource::User,
+                    }),
                 }
             }
         }
         out.problems.sort_by(|a, b| a.file.cmp(&b.file));
-        if let Ok(mut l) = self.loaded.write() {
-            *l = Arc::new(out);
-        }
+        // A panic elsewhere while holding the lock doesn't make the data wrong: keep using it.
+        *self.loaded.write().unwrap_or_else(|p| p.into_inner()) = Arc::new(out);
     }
 
     fn current(&self) -> Arc<Loaded> {
-        self.loaded
-            .read()
-            .map(|l| Arc::clone(&l))
-            .unwrap_or_default()
+        Arc::clone(&self.loaded.read().unwrap_or_else(|p| p.into_inner()))
     }
 
     pub fn list(&self) -> Vec<SkillInfo> {
@@ -240,7 +252,7 @@ impl Library {
 
 /// A load error as Settings shows it: the file relative to the folder, and each problem
 /// with the field it is about.
-fn problem(dir: &Path, e: &ManifestError) -> SkillProblem {
+fn problem(dir: &Path, e: &ManifestError, source: SkillSource) -> SkillProblem {
     let file = e
         .file
         .strip_prefix(dir)
@@ -256,16 +268,85 @@ fn problem(dir: &Path, e: &ManifestError) -> SkillProblem {
         })
         .collect::<Vec<_>>()
         .join("; ");
-    SkillProblem { file, message }
+    SkillProblem {
+        file,
+        message,
+        source,
+    }
 }
 
-/// App-owned table: the skill each chat uses (no row = no skill).
+/// App-owned tables: the skill each chat uses (no row = no skill), and the skill each
+/// answer was written with (T-SKL-03; kept with its label so it still reads after the skill
+/// is renamed or removed).
 pub fn migrations() -> &'static [&'static str] {
-    &["CREATE TABLE app_conversation_skills (
+    &[
+        "CREATE TABLE app_conversation_skills (
         conversation_id TEXT    PRIMARY KEY NOT NULL,
         skill           TEXT    NOT NULL,
         updated_at      INTEGER NOT NULL
-    );"]
+    );",
+        "CREATE TABLE app_answer_skills (
+        message_id      TEXT    PRIMARY KEY NOT NULL,
+        conversation_id TEXT    NOT NULL,
+        skill           TEXT    NOT NULL,
+        label           TEXT    NOT NULL,
+        created_at      INTEGER NOT NULL
+    );
+    CREATE INDEX app_answer_skills_conversation ON app_answer_skills (conversation_id);",
+    ]
+}
+
+/// The skill an answer was written with.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct AnswerSkill {
+    pub message_id: Id,
+    pub name: String,
+    pub label: String,
+}
+
+/// Remembers that `message_id` (an assistant answer) is written with `skill`.
+pub fn record_answer_skill(
+    conn: &Connection,
+    conversation_id: Id,
+    message_id: Id,
+    skill: &Skill,
+) -> Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO app_answer_skills
+         (message_id, conversation_id, skill, label, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![
+            message_id.to_string(),
+            conversation_id.to_string(),
+            skill.skill.name,
+            skill.skill.label(),
+            dn_store::now_ms()
+        ],
+    )?;
+    Ok(())
+}
+
+/// The answers of a chat that were written with a skill, oldest first.
+pub fn answer_skills(conn: &Connection, conversation_id: Id) -> Result<Vec<AnswerSkill>> {
+    let mut stmt = conn.prepare(
+        "SELECT message_id, skill, label FROM app_answer_skills
+         WHERE conversation_id = ?1 ORDER BY created_at, message_id",
+    )?;
+    let rows = stmt
+        .query_map([conversation_id.to_string()], |r| {
+            Ok((r.get::<_, String>(0)?, r.get(1)?, r.get(2)?))
+        })?
+        .collect::<rusqlite::Result<Vec<(String, String, String)>>>()?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|(id, name, label)| {
+            Some(AnswerSkill {
+                // `Id` is a transparent UUID: parse it the way serde reads it.
+                message_id: serde_json::from_value(serde_json::Value::String(id)).ok()?,
+                name,
+                label,
+            })
+        })
+        .collect())
 }
 
 /// The skill name saved for a chat, if any.
@@ -288,20 +369,32 @@ pub fn set_chat_skill(conn: &Connection, conversation_id: Id, skill: Option<&str
              ON CONFLICT(conversation_id) DO UPDATE SET skill = ?2, updated_at = ?3",
             params![conversation_id.to_string(), s, dn_store::now_ms()],
         )?,
-        None => forget_chat(conn, conversation_id)?,
+        // Only the choice: answers keep the skill they were written with.
+        None => conn.execute(
+            "DELETE FROM app_conversation_skills WHERE conversation_id = ?1",
+            [conversation_id.to_string()],
+        )?,
     };
     Ok(())
 }
 
+/// Forgets a chat's skill and its answers' skills (the chat was deleted).
 pub fn forget_chat(conn: &Connection, conversation_id: Id) -> Result<usize> {
-    Ok(conn.execute(
+    let id = conversation_id.to_string();
+    let n = conn.execute(
         "DELETE FROM app_conversation_skills WHERE conversation_id = ?1",
-        [conversation_id.to_string()],
-    )?)
+        [&id],
+    )?;
+    conn.execute(
+        "DELETE FROM app_answer_skills WHERE conversation_id = ?1",
+        [&id],
+    )?;
+    Ok(n)
 }
 
 pub fn delete_all(conn: &Connection) -> Result<()> {
     conn.execute("DELETE FROM app_conversation_skills", [])?;
+    conn.execute("DELETE FROM app_answer_skills", [])?;
     Ok(())
 }
 
@@ -445,6 +538,22 @@ mod tests {
         assert!(msg("empty/SKILL.md").contains("front matter"));
         // The built-in skill of that name is the one in use.
         assert_eq!(lib.get("summarize").unwrap().source, SkillSource::Builtin);
+    }
+
+    #[test]
+    fn a_broken_built_in_skill_is_reported_not_just_missing() {
+        let root = Folder::new();
+        root.write("library/fine", &file("fine", "[]", ""));
+        root.write("library/broken", &file("broken", "[]", "risk: read\n"));
+        let lib = Library::load(Some(&root.0), None);
+        assert!(lib.get("fine").is_some());
+        assert!(lib.get("broken").is_none());
+        let p = &lib.overview().problems;
+        assert_eq!(p.len(), 1);
+        assert_eq!(
+            (p[0].file.as_str(), p[0].source),
+            ("broken/SKILL.md", SkillSource::Builtin)
+        );
     }
 
     #[test]

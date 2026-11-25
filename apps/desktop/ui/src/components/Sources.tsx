@@ -5,16 +5,20 @@
 // keyword-only and how to get better results (the reduced mode is labelled, never silent).
 
 import { useCallback, useEffect, useState } from "react";
-import type { Id, MessageSources } from "../ipc/types";
+import type { Id, KnowledgeStatus, MessageSources } from "../ipc/types";
+import { progressText } from "./BetterSearch";
 import { Button, InlineMessage } from "./primitives";
 
 type Loader = (messageId: Id) => Promise<MessageSources | null>;
+type StatusLoader = () => Promise<KnowledgeStatus>;
 
 let loader: Loader | null = null;
+let statusLoader: StatusLoader | null = null;
 
 /** Set once by the app with its IPC (the real one, or the browser mock). */
-export function configureSources(load: Loader): void {
+export function configureSources(load: Loader, status?: StatusLoader): void {
   loader = load;
+  statusLoader = status ?? null;
 }
 
 export const KEYWORD_ONLY =
@@ -28,6 +32,21 @@ type State =
 
 export function Sources({ messageId }: { messageId: Id }) {
   const [state, setState] = useState<State>({ kind: "loading" });
+  // Keyword-only answers: whether the search model is on its way (download or embedding).
+  const [progress, setProgress] = useState<string | null>(null);
+  const keyword = state.kind === "ready" && state.sources.mode === "keyword";
+  useEffect(() => {
+    if (!keyword || statusLoader === null) return;
+    let live = true;
+    statusLoader()
+      .then((s) => {
+        if (live) setProgress(progressText(s));
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [keyword]);
   const load = useCallback(() => {
     if (loader === null) {
       setState({ kind: "none" });
@@ -95,7 +114,7 @@ export function Sources({ messageId }: { messageId: Id }) {
           )}
           {mode === "keyword" && (
             <p className="sources-mode" data-testid="sources-keyword-only">
-              {KEYWORD_ONLY}
+              {progress ?? KEYWORD_ONLY}
             </p>
           )}
         </section>

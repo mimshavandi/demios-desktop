@@ -1,4 +1,5 @@
 import { FilePlus, FileText, MessageSquarePlus, Trash2 } from "lucide-react";
+import { BetterSearchOffer } from "./BetterSearch";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { Api } from "../ipc/commands";
 import {
@@ -360,6 +361,7 @@ function ProjectFiles({ api, projectId, onChanged }: { api: Api; projectId: Id; 
         Demios keeps a copy on this computer, so moving or changing the original doesn't affect it. Up to 50 MB per
         file.
       </p>
+      <BetterSearchOffer api={api} hasFiles={files.kind === "ready" && files.value.length > 0} />
       {skipped.length > 0 && (
         <InlineMessage tone="warning">
           {skipped.length === 1 ? "1 file wasn't added:" : `${skipped.length} files weren't added:`}
