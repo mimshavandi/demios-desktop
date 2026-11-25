@@ -8,7 +8,10 @@
 use dn_core::chat::ChatModel;
 use dn_core::model::{Capability, FitStatus, ModelRef};
 use dn_core::{CoreError, RecoveryAction};
-use dn_inference::{InferenceBackend, LlamaCppBackend, LoadOptions, LoadedModel, ModelSpec};
+use dn_inference::{
+    InferenceBackend, KvCacheQuant, LlamaCppBackend, LoadOptions, LoadedModel, ModelSpec,
+    MoeOffload,
+};
 use dn_models::download::DownloadError;
 use dn_models::{Catalog, CatalogEntry, FitReport, Gguf, Machine, ModelFootprint};
 use serde::Serialize;
@@ -368,6 +371,20 @@ fn fit_reason(status: FitStatus) -> &'static str {
 
 fn fit_view(report: &FitReport, estimated: bool) -> FitView {
     let mut reason = fit_reason(report.status).to_string();
+    if report.status != FitStatus::MemoryBlocked {
+        if report.moe_preset.is_some() {
+            // Mixture-of-experts preset (T-INF-20): experts in RAM, attention on the GPU.
+            reason.push_str(
+                " To fit, part of this model stays in regular memory instead of on the \
+                 graphics chip, so replies are a little slower.",
+            );
+        } else if report.recommended.placement.is_split() {
+            reason.push_str(
+                " To fit, part of this model runs on the processor instead of the graphics \
+                 chip, so replies are slower.",
+            );
+        }
+    }
     if let Some(q) = &report.suggested_quant {
         reason.push_str(&format!(" A smaller version ({q}) would fit better."));
     }
@@ -376,6 +393,38 @@ fn fit_view(report: &FitReport, estimated: bool) -> FitView {
         estimated,
         reason,
         suggested_quant: report.suggested_quant.clone(),
+    }
+}
+
+/// Load settings for the GGUF at `path` on `machine`. llama.cpp's defaults, unless the fit
+/// estimator splits the model between the GPU and the CPU (MoE experts in RAM, or some of a
+/// dense model's layers on the CPU); then its recommended context, KV type and placement,
+/// which were estimated together (T-INF-20).
+pub fn load_options(path: &Path, machine: &Machine) -> LoadOptions {
+    let Ok(g) = Gguf::open(path) else {
+        return LoadOptions::default();
+    };
+    let fp = ModelFootprint::from_gguf(&g);
+    options_for(&dn_models::fit(&fp, machine).recommended, fp.n_layer)
+}
+
+fn options_for(rec: &dn_models::fit::Estimate, n_layer: u32) -> LoadOptions {
+    if !rec.placement.is_split() {
+        return LoadOptions::default();
+    }
+    LoadOptions {
+        n_ctx: Some(rec.n_ctx),
+        gpu_layers: rec.placement.gpu_layers,
+        moe_offload: match rec.placement.moe_cpu_layers {
+            0 => MoeOffload::None,
+            k if k >= n_layer => MoeOffload::All,
+            k => MoeOffload::FirstLayers(k),
+        },
+        kv_cache: match rec.kv {
+            dn_models::fit::KvType::F16 => KvCacheQuant::F16,
+            dn_models::fit::KvType::Q8_0 => KvCacheQuant::Q8_0,
+        },
+        ..LoadOptions::default()
     }
 }
 
@@ -1073,20 +1122,23 @@ impl<B: InferenceBackend> LocalModels<B> {
                 Err(in_use) => drop(in_use),
             }
         }
-        let m = LoadedModel::load(
-            Arc::clone(&self.backend),
-            &ModelSpec::gguf(self.path(&e)),
-            &LoadOptions::default(),
-        )
-        .await
-        .map_err(|err| CoreError::ModelUnavailable {
-            user_message: format!("{} couldn't be loaded. It may not fit in memory.", e.name),
-            developer_message: format!("load {id}: {err}"),
-            recovery: vec![RecoveryAction::ChooseModelForSlot {
-                agent_id: crate::agent::AGENT_ID.into(),
-                slot_id: "primary".into(),
-            }],
-        })?;
+        let path = self.path(&e);
+        let opts = {
+            let (path, machine) = (path.clone(), self.machine);
+            tauri::async_runtime::spawn_blocking(move || load_options(&path, &machine))
+                .await
+                .unwrap_or_default()
+        };
+        let m = LoadedModel::load(Arc::clone(&self.backend), &ModelSpec::gguf(path), &opts)
+            .await
+            .map_err(|err| CoreError::ModelUnavailable {
+                user_message: format!("{} couldn't be loaded. It may not fit in memory.", e.name),
+                developer_message: format!("load {id}: {err}"),
+                recovery: vec![RecoveryAction::ChooseModelForSlot {
+                    agent_id: crate::agent::AGENT_ID.into(),
+                    slot_id: "primary".into(),
+                }],
+            })?;
         let m = Arc::new(Resident::new(m));
         *loaded = Some((id.to_string(), Arc::clone(&m)));
         let m: Arc<dyn ChatModel> = m;
@@ -1161,6 +1213,65 @@ mod tests {
         assert_eq!(
             dn_models::fit(&estimated_footprint(&huge), &m).status,
             FitStatus::MemoryBlocked
+        );
+    }
+
+    /// Qwen3-30B-A3B-like MoE footprint (18.6 GB, 48 layers, ~94% experts).
+    fn moe_30b() -> ModelFootprint {
+        ModelFootprint {
+            weight_bytes: 18_600_000_000,
+            expert_bytes: 17_500_000_000,
+            n_params: 30_500_000_000,
+            n_layer: 48,
+            n_ctx_train: 40_960,
+            n_vocab: 151_936,
+            n_embd: 2048,
+            kv_elems_per_token: 48 * 4 * 256,
+            swa_kv_elems_per_token: 0,
+            sliding_window: 0,
+            quant: Some("Q4_K_M".into()),
+        }
+    }
+
+    #[test]
+    fn moe_preset_sets_load_options_and_explains_itself() {
+        let gib = dn_models::fit::GIB;
+        let m = moe_30b();
+        // 8 GB GPU + 32 GB RAM: some experts in RAM.
+        let r = dn_models::fit(&m, &Machine::discrete(32 * gib, 8 * gib));
+        let o = options_for(&r.recommended, m.n_layer);
+        assert_eq!(
+            o.moe_offload,
+            MoeOffload::FirstLayers(r.recommended.placement.moe_cpu_layers)
+        );
+        assert_eq!(o.n_ctx, Some(r.recommended.n_ctx));
+        assert_eq!(o.gpu_layers, None);
+        assert!(fit_view(&r, false).reason.contains("regular memory"));
+        // 2 GB GPU: every layer's experts in RAM.
+        let r = dn_models::fit(&m, &Machine::discrete(32 * gib, 2 * gib));
+        assert_eq!(
+            options_for(&r.recommended, m.n_layer).moe_offload,
+            MoeOffload::All
+        );
+        // All on the GPU: llama.cpp defaults, nothing extra to explain.
+        let r = dn_models::fit(&m, &Machine::unified(64 * gib));
+        assert_eq!(
+            options_for(&r.recommended, m.n_layer),
+            LoadOptions::default()
+        );
+        assert!(!fit_view(&r, false).reason.contains("regular memory"));
+        // A model that won't fit isn't explained as a split.
+        let r = dn_models::fit(&m, &Machine::unified(8 * gib));
+        assert_eq!(r.status, FitStatus::MemoryBlocked);
+        assert!(!fit_view(&r, false).reason.contains("To fit"));
+    }
+
+    #[test]
+    fn unreadable_gguf_loads_with_defaults() {
+        let gib = dn_models::fit::GIB;
+        assert_eq!(
+            load_options(Path::new("/nonexistent.gguf"), &Machine::unified(16 * gib)),
+            LoadOptions::default()
         );
     }
 

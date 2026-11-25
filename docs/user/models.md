@@ -19,6 +19,7 @@ Each row shows:
   - **Caution** or **Memory pressure**: it may run slowly, or slow down other apps.
   - **Won't fit**: it's likely too large for this computer's memory. The app never picks it on its own.
   - "(estimate)" after the status means the app couldn't measure everything and guessed.
+  - "To fit, part of this model stays in regular memory" means a large mixture-of-experts model (such as a 30B model with about 3B active parameters) keeps its experts in regular memory and the rest on the graphics chip. It fits on a computer with 16–32 GB of memory but replies a little slower. "Part of this model runs on the processor" means the same for other models, which slows replies more.
 - **Its licence and model card.** Select the copy button to copy the model card link and read it in your browser. If the licence is missing, non-commercial or custom, a warning asks you to check it before downloading.
 
 To download a model, select **Download model**. While it downloads you see the progress and the time left. You can:
