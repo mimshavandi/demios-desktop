@@ -107,6 +107,9 @@ fn main() {
     ) {
         panic!("{why}");
     }
+    // Shown on the About screen (`app_info`); set by the preview workflow.
+    println!("cargo::rerun-if-env-changed=DEMIOS_BUILD_COMMIT");
+    println!("cargo::rerun-if-env-changed=DEMIOS_BUILD_CHANNEL");
     // The dev fake model (T-SHELL-03) exists only with the feature *and* in debug builds.
     println!("cargo::rustc-check-cfg=cfg(fake_model)");
     if std::env::var_os("CARGO_FEATURE_DEV_FAKE_MODEL").is_some()

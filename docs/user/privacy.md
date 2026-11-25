@@ -14,6 +14,8 @@ Demios collects no usage data. There is no Demios account and no Demios server.
 
 **Settings → General → About** shows the exact folders for your chats and for downloaded models. The confirmation for **Delete all local data** shows them too.
 
+The full privacy policy is at [demios.io/privacy](https://demios.io/privacy), and the accessibility statement at [demios.io/accessibility](https://demios.io/accessibility). **Settings → General → About** links to both. Demios asks before it opens your browser.
+
 ## Delete one chat
 
 Point at the chat in the sidebar and select the delete button. You can undo it for 10 seconds. After that, it's removed for good, with its artifacts, the next time the app starts. See [Chats](chats.md).

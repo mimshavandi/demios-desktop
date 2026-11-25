@@ -22,6 +22,10 @@ import { useToast } from "./toast";
 
 export type SettingsSection = "models" | "general";
 
+/** The privacy policy and accessibility statement on demios.io (T-STORE-05, T-STORE-13). */
+export const PRIVACY_URL = "https://demios.io/privacy";
+export const ACCESSIBILITY_URL = "https://demios.io/accessibility";
+
 interface Props {
   api: Api;
   info: AppInfo | null;
@@ -438,6 +442,15 @@ function GeneralPage({ api, info }: { api: Api; info: AppInfo | null }) {
     }
   };
 
+  // Through the same native "Open link?" confirm as links in answers (`open_link`).
+  const openPage = async (url: string) => {
+    try {
+      await api.openLink(url);
+    } catch (e) {
+      toast({ tone: "error", title: `Couldn't open the page. ${errorMessage(e)}` });
+    }
+  };
+
   const deleteAll = async () => {
     setDeleting(true);
     setDeleteError(null);
@@ -525,6 +538,13 @@ function GeneralPage({ api, info }: { api: Api; info: AppInfo | null }) {
         <div className="row">
           <div className="row-main">
             <span className="row-title">Demios Desktop {info?.version ?? ""}</span>
+            {(info?.channel != null || info?.commit != null) && (
+              <span className="dn-help">
+                {[info.channel === "preview" ? "Preview build (unsigned)" : info.channel, info.commit && `commit ${info.commit}`]
+                  .filter(Boolean)
+                  .join(", ")}
+              </span>
+            )}
             <span className="dn-help">
               Answers come from the AI model you choose, on this computer or from a provider you add a key for. Demios
               doesn't check them: they can be wrong or made up, so verify anything important.
@@ -545,6 +565,28 @@ function GeneralPage({ api, info }: { api: Api; info: AppInfo | null }) {
           <div className="row-actions">
             <Button icon={<ExternalLink {...ICON} aria-hidden="true" />} onClick={() => void reportProblem()}>
               Report a problem
+            </Button>
+          </div>
+        </div>
+        <div className="row">
+          <div className="row-main">
+            <span className="row-title">Privacy policy</span>
+            <span className="dn-help">What Demios does with your data, on demios.io. Demios asks before it opens your browser.</span>
+          </div>
+          <div className="row-actions">
+            <Button icon={<ExternalLink {...ICON} aria-hidden="true" />} onClick={() => void openPage(PRIVACY_URL)}>
+              Privacy policy
+            </Button>
+          </div>
+        </div>
+        <div className="row">
+          <div className="row-main">
+            <span className="row-title">Accessibility statement</span>
+            <span className="dn-help">How accessible Demios is and how to report a barrier, on demios.io.</span>
+          </div>
+          <div className="row-actions">
+            <Button icon={<ExternalLink {...ICON} aria-hidden="true" />} onClick={() => void openPage(ACCESSIBILITY_URL)}>
+              Accessibility statement
             </Button>
           </div>
         </div>

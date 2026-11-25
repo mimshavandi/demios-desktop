@@ -332,6 +332,10 @@ export interface AppInfo {
   models_dir: string | null;
   /** How this build gets updates (T-STORE-08). */
   updates: UpdateMode;
+  /** Commit the build was made from (CI builds only). */
+  commit?: string | null;
+  /** Build channel, e.g. "preview" (CI builds only). */
+  channel?: string | null;
 }
 
 /**

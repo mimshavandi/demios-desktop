@@ -463,6 +463,27 @@ describe("App", () => {
     expect(back.value).toBe("half-written question");
   });
 
+  it("About opens the privacy policy and accessibility statement through the link confirm", async () => {
+    const { api, links } = fakeApi();
+    let fail = false;
+    api.openLink = async (url) => {
+      links.push(url);
+      if (fail) throw { code: "unavailable", message: "Couldn't open your browser." };
+      return false; // the user cancelled the native confirm
+    };
+    render(<App api={api} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Models" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "General" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Privacy policy" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Accessibility statement" }));
+    await waitFor(() => expect(links).toEqual(["https://demios.io/privacy", "https://demios.io/accessibility"]));
+    expect(screen.queryByText(/Couldn't open the page/)).toBeNull();
+    expect(screen.queryByRole("button", { name: /Impressum|Imprint|Legal notice/ })).toBeNull();
+    fail = true;
+    fireEvent.click(screen.getByRole("button", { name: "Privacy policy" }));
+    expect(await screen.findByText("Couldn't open the page. Couldn't open your browser.")).toBeTruthy();
+  });
+
   it("links in answers go to the backend to confirm and open, never navigate the app", async () => {
     const { api, emit, msgs, links } = fakeApi();
     let refuse = false;
@@ -661,6 +682,23 @@ describe("App", () => {
     expect(confirm.disabled).toBe(true);
     act(() => finish?.());
     await waitFor(() => expect(confirm.disabled).toBe(false));
+  });
+
+  it("shows the build channel and commit on the About screen", async () => {
+    const { api } = fakeApi();
+    api.appInfo = async () => ({
+      version: "0.1.0",
+      dev_fake_model: false,
+      data_dir: null,
+      models_dir: null,
+      commit: "1a2b3c4",
+      channel: "preview",
+      updates: "off",
+    });
+    render(<App api={api} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Models" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "General" }));
+    expect(await screen.findByText("Preview build (unsigned), commit 1a2b3c4")).toBeTruthy();
   });
 
   it("asks to connect a model when none is available", async () => {
