@@ -167,15 +167,22 @@ describe("Windows artifact webview (ADR-0012)", () => {
     console.log("artifact frame probe:", JSON.stringify(r, null, 2));
     // The frame is the opaque-origin sandbox inside the artifact webview...
     expect(r.origin).toBe("null");
-    // ...where Tauri's IPC object exists, labelled as the artifact webview, and is refused.
+    // ...where Tauri's IPC object exists (labelled as the artifact webview) but can't send: the
+    // shell removed `chrome.webview` and the frame CSP blocks `ipc.localhost`, so a call either
+    // never gets an answer ("timeout") or fails before it is sent. Were a call to get through,
+    // the ACL refuses it ("not allowed", proven from the host page above). It must never succeed.
     expect(r.label).toBe("artifact");
-    expect(r.listConversations).toMatch(/^err:.*not allowed/s);
-    expect(r.createConversation).toMatch(/^err:.*not allowed/s);
+    const refusedOrUnsent = /^(err:.*not allowed|err:.*postMessage|timeout)$/s;
+    for (const k of ["listConversations", "createConversation"]) {
+      expect(`${k}=${r[k]}`).not.toMatch(/=ok:/);
+      expect(r[k]).toMatch(refusedOrUnsent);
+    }
     for (const k of ["parentDocument", "topDocument", "hostDoc", "hostEvent", "ipcHttp"]) {
       expect(`${k}=${r[k]}`).toMatch(/=blocked:/);
     }
+    // Judged from outside: the frame created nothing.
     const after = await invoke("list_conversations");
-    expect(after.value.length).toBe(before.value.length + 0);
+    expect(after.value.length).toBe(before.value.length);
   });
 
   it("steps aside while an app dialog is over the pane", async () => {
