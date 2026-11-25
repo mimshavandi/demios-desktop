@@ -33,8 +33,10 @@ An open-source desktop app for chatting with AI models you choose: one running o
 Not available yet:
 
 - Connecting the app to an OpenAI-compatible server (such as Ollama). The `dn` CLI can already do this.
-- Signed installers for macOS, Windows and Linux.
-- Updates in the app for copies downloaded from GitHub. **Settings → General → About → Check for updates** is built, and starts working with the first signed release. Microsoft Store and Flathub copies will be updated by their store.
+- Signed installers, on GitHub Releases and demios.io: `.dmg` for macOS, `.exe` for Windows, and AppImage, `.deb` and `.rpm` for Linux.
+- Updates in the app for those installers. **Settings → General → About → Check for updates** is built, and starts working with the first signed release.
+
+Versions in app stores (Mac App Store, Microsoft Store, Flathub) are not planned for the first releases.
 
 ## Screenshots
 
