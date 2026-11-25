@@ -1,5 +1,5 @@
 # Unsigned preview installers for macOS (arm64, x64), Windows (NSIS) and Linux
-# (AppImage, deb). Each installer is smoke-tested on its OS. The workflow artifact holds
+# (AppImage, deb, rpm). Each installer is smoke-tested on its OS. The workflow artifact holds
 # all of them plus SHA256SUMS.txt.
 #
 # Release builds only: no `--features`, so there is no dev fake model (it is debug-only
@@ -331,7 +331,7 @@ jobs:
         working-directory: apps/desktop
       - name: tauri build (release)
         working-directory: apps/desktop
-        run: npx tauri build --ci --bundles appimage,deb
+        run: npx tauri build --ci --bundles appimage,deb,rpm
       - name: Collect
         id: c
         run: |
@@ -339,6 +339,7 @@ jobs:
           mkdir -p out
           cp "$(ls target/release/bundle/appimage/*.AppImage | head -n1)" "out/$PREFIX-linux-x86_64.AppImage"
           cp "$(ls target/release/bundle/deb/*.deb | head -n1)" "out/$PREFIX-linux-amd64.deb"
+          cp "$(ls target/release/bundle/rpm/*.rpm | head -n1)" "out/$PREFIX-linux-x86_64.rpm"
           chmod +x "out/$PREFIX-linux-x86_64.AppImage"
           echo "bin=target/release/demios-desktop" >> "$GITHUB_OUTPUT"
       - *guard
@@ -353,7 +354,7 @@ jobs:
         run: cargo install tauri-driver --version ${{ env.TAURI_DRIVER_VERSION }} --locked --force
       - run: npm ci
         working-directory: apps/desktop/e2e
-      - name: Smoke test (.deb install, tauri-driver on the deb and the AppImage, reinstall keeps data)
+      - name: Smoke test (.deb install, tauri-driver on the deb and the AppImage, reinstall keeps data, rpm on Fedora)
         working-directory: apps/desktop/e2e
         env:
           TAURI_WEBVIEW_AUTOMATION: "true"
@@ -385,6 +386,25 @@ jobs:
           echo "deb reinstall: local data kept ($data)" | tee -a smoke.txt
           sudo apt-get remove -y "$(dpkg-deb -f "$deb" Package)" > /dev/null
           echo "deb remove: local data kept=$(test -f "$data/reinstall-check.txt" && echo true || echo false)" | tee -a smoke.txt
+          # .rpm (Fedora, openSUSE): metadata and dependencies, then install it in a Fedora
+          # container (dnf resolves its Requires) and check the app starts under Xvfb.
+          rpmf="$out/$PREFIX-linux-x86_64.rpm"
+          docker run --rm -v "$out:/out:ro" -e RPM="/out/$(basename "$rpmf")" fedora:latest bash -euo pipefail -c '
+            rpm -qpi "$RPM" | sed -n "1,/^Description/p"
+            echo "Requires:"; rpm -qpR "$RPM" | sed "s/^/  /"
+            dnf -y -q install "$RPM" xorg-x11-server-Xvfb procps-ng > /dev/null
+            echo "rpm: installed $(rpm -q "$(rpm -qp --qf "%{NAME}" "$RPM")") on $(. /etc/os-release; echo "$PRETTY_NAME")"
+            Xvfb :99 > /dev/null 2>&1 & export DISPLAY=:99
+            demios-desktop > /tmp/app.log 2>&1 & pid=$!
+            db="$HOME/.local/share/io.demios.app/demios.sqlite3"
+            for i in $(seq 1 45); do [ -f "$db" ] && break; kill -0 $pid || { cat /tmp/app.log; exit 1; }; sleep 2; done
+            sleep 3
+            kill -0 $pid || { echo "app exited"; cat /tmp/app.log; exit 1; }
+            [ -f "$db" ] || { echo "no database after 90 s"; cat /tmp/app.log; exit 1; }
+            echo "rpm: app started under Xvfb (pid $pid alive, database created)"
+          ' 2>&1 | tee rpm.txt
+          grep -E "^rpm: " rpm.txt >> smoke.txt
+          cp rpm.txt "$out/smoke-linux-rpm.txt"
           cp smoke.txt "$out/smoke-linux.txt"
       - uses: actions/upload-artifact@v4
         with:

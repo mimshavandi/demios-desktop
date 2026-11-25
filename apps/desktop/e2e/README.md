@@ -107,12 +107,12 @@ For testing real models before releases are signed (#51). The `preview` workflow
 `.github/workflows/release-preview.yml` builds unsigned release installers:
 - macOS `.dmg` for arm64 and x64, each built natively and ad-hoc signed with `codesign -s -`;
 - Windows NSIS `-setup.exe` (no `.msi` in previews);
-- Linux AppImage and `.deb`, built on Ubuntu 22.04 for an older glibc.
+- Linux AppImage, `.deb` and `.rpm`, built on Ubuntu 22.04 for an older glibc.
 
 The `updater` feature is off. Each installer is smoke-tested on its own OS:
 - **macOS:** mount the dmg, copy the app to Applications, launch it, and check that the process is alive and has a window.
 - **Windows:** install silently. UI Automation must find the "New chat" button. tauri-driver can't attach to a build without WebView2 remote debugging, which must not ship.
-- **Linux:** install the deb, then run `npm run smoke` (`specs/smoke.e2e.mjs`, tauri-driver) against both the installed binary and the AppImage.
+- **Linux:** install the deb, then run `npm run smoke` (`specs/smoke.e2e.mjs`, tauri-driver) against both the installed binary and the AppImage. The `.rpm` is installed with dnf in a `fedora:latest` container and must start under Xvfb.
 - **Every OS:** reinstalling must leave the local data folder unchanged.
 
 The workflow artifact holds every installer, `SHA256SUMS.txt` and the smoke logs.

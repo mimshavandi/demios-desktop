@@ -20,6 +20,7 @@ These installers are for trying the app early. Please know that:
 | Windows 10/11 (x64) | `Demios-Desktop-{{VERSION}}-preview-windows-x64-setup.exe` |
 | Linux (x86_64), any distro | `Demios-Desktop-{{VERSION}}-preview-linux-x86_64.AppImage` |
 | Debian, Ubuntu (amd64) | `Demios-Desktop-{{VERSION}}-preview-linux-amd64.deb` |
+| Fedora, openSUSE (x86_64) | `Demios-Desktop-{{VERSION}}-preview-linux-x86_64.rpm` |
 
 Check a download against `SHA256SUMS.txt`:
 - macOS: `shasum -a 256 -c SHA256SUMS.txt --ignore-missing`
@@ -42,4 +43,5 @@ The app needs Microsoft Edge WebView2, which Windows 10 and 11 already have. The
 
 **Linux**
 - **AppImage:** make it executable (`chmod +x Demios-Desktop-*.AppImage`) and run it. If it says FUSE is missing, install `libfuse2` (Ubuntu 24.04: `libfuse2t64`).
-- **.deb:** `sudo apt install ./Demios-Desktop-{{VERSION}}-preview-linux-amd64.deb`, then start **Demios Desktop** from your apps.
+- **.deb** (Debian, Ubuntu): `sudo apt install ./Demios-Desktop-{{VERSION}}-preview-linux-amd64.deb`, then start **Demios Desktop** from your apps.
+- **.rpm** (Fedora): `sudo dnf install ./Demios-Desktop-{{VERSION}}-preview-linux-x86_64.rpm`. On openSUSE: `sudo zypper install --allow-unsigned-rpm ./Demios-Desktop-{{VERSION}}-preview-linux-x86_64.rpm`. The package is not signed, so zypper needs that flag.
