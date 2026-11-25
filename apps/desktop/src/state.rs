@@ -891,14 +891,8 @@ impl AppState {
             loop {
                 let ids: Vec<String> = match changes.recv().await {
                     Ok(id) => vec![id],
-                    // Notices were dropped: every server may have changed.
-                    Err(RecvError::Lagged(_)) => executor
-                        .capabilities()
-                        .into_iter()
-                        .map(|c| c.server_id)
-                        .collect::<std::collections::BTreeSet<_>>()
-                        .into_iter()
-                        .collect(),
+                    // Notices were dropped: every server marked stale is reviewed again.
+                    Err(RecvError::Lagged(_)) => executor.stale_servers(),
                     Err(RecvError::Closed) => return,
                 };
                 let Some(state) = state.upgrade() else {
@@ -916,11 +910,13 @@ impl AppState {
     /// re-list leaves the server stale, with its tools refused, and says so in its status.
     pub async fn tools_changed(&self, executor: &dn_tools::Executor, id: &str) {
         if executor.client(id).is_none() {
-            // Removed meanwhile ("Delete all", or the user removed it).
-            executor.settled(id);
+            // Removed meanwhile ("Delete all", or the user removed it); removal cleared it.
             return;
         }
         let _settling = self.tools_settling.hold(id);
+        // Before listing: a change that arrives during this review bumps it, and `settled`
+        // then leaves the server stale for the next review.
+        let generation = executor.tool_list_generation(id);
         let previous = lock(&self.mcp_status).get(id).cloned();
         let name = previous
             .as_ref()
@@ -947,7 +943,7 @@ impl AppState {
         };
         match self.apply_tool_policy(executor, Some(id)) {
             Ok(review) => {
-                executor.settled(id);
+                executor.settled(id, generation);
                 self.set_mcp_status(McpServerStatus {
                     server_id: id.to_owned(),
                     name,

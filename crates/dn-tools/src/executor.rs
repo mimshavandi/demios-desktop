@@ -84,12 +84,20 @@ pub struct Executor {
     /// the user's per-tool choices, can't be trusted, so every tool is refused until
     /// restart. Never read as "no overrides" or "no tools" and carry on.
     unavailable: AtomicBool,
-    /// Servers that sent `tools/list_changed` and whose tools aren't reviewed again yet
-    /// (#178). Their tools are left out of the model's list and refused, until the app calls
-    /// [`Executor::settled`]. Only ids go in and out, so a poisoned lock keeps its data.
-    stale: Arc<Mutex<HashSet<String>>>,
+    /// Per server, how many times it sent `tools/list_changed`, and whether the latest
+    /// change isn't reviewed yet (#178). A stale server's tools are left out of the model's
+    /// list and refused until the app calls [`Executor::settled`] for that change. Simple
+    /// values only, so a poisoned lock keeps valid data and is read, never treated as empty.
+    changes: Arc<Mutex<HashMap<String, ToolListState>>>,
     /// Server ids, sent when a server's tool list changes.
     tool_changes: tokio::sync::broadcast::Sender<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct ToolListState {
+    /// Bumped on every `tools/list_changed`.
+    generation: u64,
+    stale: bool,
 }
 
 /// How many unread change notices the app may fall behind by before it re-reads every
@@ -155,7 +163,7 @@ impl Executor {
             retry: RetryPolicy::default(),
             diagnostics: Mutex::default(),
             unavailable: AtomicBool::new(false),
-            stale: Arc::default(),
+            changes: Arc::default(),
             tool_changes: tokio::sync::broadcast::channel(TOOL_CHANGES_BUFFER).0,
         }
     }
@@ -167,28 +175,61 @@ impl Executor {
         self.tool_changes.subscribe()
     }
 
+    fn list_state(&self, server_id: &str) -> ToolListState {
+        self.changes
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(server_id)
+            .copied()
+            .unwrap_or_default()
+    }
+
     /// Whether `server_id` changed its tools and they aren't reviewed again yet.
     pub fn is_stale(&self, server_id: &str) -> bool {
-        self.stale
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .contains(server_id)
+        self.list_state(server_id).stale
     }
 
-    /// The server's changed tools were listed and reviewed again: offer them again.
-    pub fn settled(&self, server_id: &str) {
-        self.stale
+    /// Servers whose tools changed and aren't reviewed again yet.
+    pub fn stale_servers(&self) -> Vec<String> {
+        let mut v: Vec<String> = self
+            .changes
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .remove(server_id);
+            .iter()
+            .filter(|(_, st)| st.stale)
+            .map(|(id, _)| id.clone())
+            .collect();
+        v.sort();
+        v
     }
 
-    fn check_fresh(&self, server_id: &str, id: &str) -> Result<(), ToolError> {
-        if self.is_stale(server_id) {
+    /// How many times `server_id` has changed its tools. Read it **before** listing them
+    /// again, and pass it to [`Self::settled`].
+    pub fn tool_list_generation(&self, server_id: &str) -> u64 {
+        self.list_state(server_id).generation
+    }
+
+    /// The server's changed tools were listed and reviewed again, as of `generation` (read
+    /// before the re-list): offer them again. If the server changed them again since, it
+    /// stays stale until that change is reviewed too.
+    pub fn settled(&self, server_id: &str, generation: u64) {
+        let mut all = self.changes.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(st) = all.get_mut(server_id)
+            && st.generation == generation
+        {
+            st.stale = false;
+        }
+    }
+
+    /// Refuses a call when the server changed its tools since `seen` (the generation when
+    /// the call resolved the tool), or the change isn't reviewed yet.
+    fn check_fresh(&self, server_id: &str, id: &str, seen: u64) -> Result<(), ToolError> {
+        let now = self.list_state(server_id);
+        if now.stale || now.generation != seen {
             Err(ToolError::new(
                 id,
                 ToolErrorKind::Changing,
-                "server sent tools/list_changed; waiting for review",
+                "server sent tools/list_changed; the tool may not be what was resolved or approved",
             ))
         } else {
             Ok(())
@@ -303,16 +344,19 @@ impl Executor {
     pub async fn add_server(&self, client: McpClient) -> Result<Vec<McpCapability>, CoreError> {
         let id = client.server_id().to_owned();
         self.check_available(&format!("mcp.{id}"))?;
-        // Mark stale first, then tell the app: no call runs on the old list in between.
-        let stale = Arc::clone(&self.stale);
-        let changes = self.tool_changes.clone();
+        // Mark stale and bump the generation first, then tell the app: no call runs on the
+        // old list in between, and no approval given before the change carries over.
+        let list_states = Arc::clone(&self.changes);
+        let notices = self.tool_changes.clone();
         client.set_tools_changed(Arc::new(move |server_id: &str| {
-            stale
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .insert(server_id.to_owned());
+            {
+                let mut all = list_states.lock().unwrap_or_else(|p| p.into_inner());
+                let st = all.entry(server_id.to_owned()).or_default();
+                st.generation += 1;
+                st.stale = true;
+            }
             // No receiver yet (tests, start-up): the server stays stale, which is safe.
-            let _ = changes.send(server_id.to_owned());
+            let _ = notices.send(server_id.to_owned());
         }));
         match self.wr(&self.clients) {
             Some(mut c) => {
@@ -332,7 +376,10 @@ impl Executor {
         }
         self.recovering_write(&self.capabilities)
             .retain(|_, c| c.server_id != server_id);
-        self.settled(server_id);
+        self.changes
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(server_id);
         self.reindex_names();
     }
 
@@ -518,7 +565,8 @@ impl Executor {
         let cap = self
             .resolve(&call.name)
             .ok_or_else(|| Self::not_found(&call.name))?;
-        self.check_fresh(&cap.server_id, &cap.spec.id)?;
+        let seen = self.tool_list_generation(&cap.server_id);
+        self.check_fresh(&cap.server_id, &cap.spec.id, seen)?;
         let status = self
             .client(&cap.server_id)
             .map(|c| c.status())
@@ -644,7 +692,8 @@ impl Executor {
         self.check_available(&call.name)?;
         // The server changed its tools and they aren't reviewed again yet: this call would
         // run on the old definition and approval (#178).
-        self.check_fresh(&cap.server_id, &cap.spec.id)?;
+        let seen = self.tool_list_generation(&cap.server_id);
+        self.check_fresh(&cap.server_id, &cap.spec.id, seen)?;
         let id = cap.spec.id.clone();
         let scope = ctx.scope();
         let client = self
@@ -777,8 +826,9 @@ impl Executor {
             }
         }
         // The user approved what the card showed. If the server changed its tools while
-        // the card was open, that may no longer be what runs.
-        self.check_fresh(&cap.server_id, &id)?;
+        // the card was open (even if the change was already reviewed again), that may no
+        // longer be what runs: refuse, and a retry shows a new card.
+        self.check_fresh(&cap.server_id, &id, seen)?;
 
         let mut guard = None;
         let attempt_base = match &key {
