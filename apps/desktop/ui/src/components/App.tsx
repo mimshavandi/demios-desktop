@@ -268,7 +268,9 @@ function Shell({ api }: { api: Api }) {
           .then((s) => {
             if (openIdRef.current === id) setSkill(s);
           })
-          .catch(() => {});
+          .catch((e: unknown) => {
+            if (openIdRef.current === id) setError(`Couldn't read this chat's skill. ${errorMessage(e)}`);
+          });
         void api
           .listAnswerSkills(id)
           .then((list) => {
@@ -276,7 +278,9 @@ function Shell({ api }: { api: Api }) {
               setAnswerSkills(Object.fromEntries(list.map((a) => [a.message_id, a.label])));
             }
           })
-          .catch(() => {});
+          .catch((e: unknown) => {
+            if (openIdRef.current === id) setError(`Couldn't read which skills wrote these answers. ${errorMessage(e)}`);
+          });
       }
       if (id === null) {
         dispatch({ kind: "open", conversationId: null, messages: [] });
@@ -331,14 +335,14 @@ function Shell({ api }: { api: Api }) {
   }, [api, toast]);
 
   // The skill library, read again whenever the chat comes back into view (Settings ›
-  // Skills can reload it). Without a library the picker stays hidden.
+  // Skills can reload it). An empty library hides the picker; a failed read says so.
   useEffect(() => {
     if (view.kind !== "chat") return;
     let alive = true;
     api
       .listSkills()
       .then((s) => alive && setSkills(s))
-      .catch(() => {});
+      .catch((e: unknown) => alive && setError(`Couldn't load the skills. ${errorMessage(e)}`));
     return () => {
       alive = false;
     };
