@@ -433,6 +433,7 @@ export function createMockApi(): Api {
         date: "2027-01-15T10:00:00Z",
       };
     },
+    launchUpdateCheck: async () => null,
     installUpdate: async (version, onProgress) => {
       const total = 40 * 1024 * 1024;
       for (let done = 0; done <= total; done += total / 8) {

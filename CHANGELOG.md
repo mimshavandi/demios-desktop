@@ -13,6 +13,7 @@ Only changes people using the app or the `dn` command-line tool can notice are l
 - Projects: group chats with standing instructions that are sent with each chat in the project, and add files, which Demios copies into its data folder. Deleting a project, or a file in it, can be undone for 10 seconds ([#135](https://github.com/mimshavandi/demios-desktop/pull/135)).
 - Move a chat into a project, or out of one, from the **Project** list under the message box. Undo moves it back, and the chat follows its new project's instructions from the next message ([#165](https://github.com/mimshavandi/demios-desktop/pull/165)).
 - Each chat in the sidebar has a **More actions** menu: move it to a project, rename it in place, or delete it with Undo. The menu works with the keyboard ([#168](https://github.com/mimshavandi/demios-desktop/pull/168)).
+- **Check for updates when Demios starts**, off by default: after your first check for updates, Demios asks once whether to turn it on. When it's on, a new version shows a notice; nothing downloads until you install it ([#139](https://github.com/mimshavandi/demios-desktop/pull/139)).
 
 #### `dn` command-line tool
 

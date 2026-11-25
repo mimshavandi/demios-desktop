@@ -21,6 +21,7 @@ import {
   type AddModelLink,
   type Settings,
   type UnknownOutcome,
+  type UpdateCheck,
 } from "../ipc/types";
 import { markArtifact } from "../artifactMarks";
 import { chatModel, chatModelReady, describeModel, modelName } from "../models";
@@ -124,6 +125,27 @@ function Shell({ api }: { api: Api }) {
     },
     [api, toast],
   );
+
+  // The opt-in launch check (#95): a newer version shows a notice; nothing downloads.
+  const [launchUpdate, setLaunchUpdate] = useState<UpdateCheck | null>(null);
+  const [updateNotice, setUpdateNotice] = useState(false);
+  const [revealUpdates, setRevealUpdates] = useState(false);
+  useEffect(() => {
+    if (info?.updates !== "self_update") return;
+    let alive = true;
+    void api
+      .launchUpdateCheck()
+      .then((r) => {
+        if (!alive || r?.status !== "available") return;
+        setLaunchUpdate(r);
+        setUpdateNotice(true);
+      })
+      // Silent: the next launch tries again.
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [api, info?.updates]);
 
   // The composer's draft survives a switch to Settings (a link, ⌘,) and back.
   const [draft, setDraft] = useState("");
@@ -875,6 +897,32 @@ function Shell({ api }: { api: Api }) {
             </InlineMessage>
           </div>
         )}
+        {updateNotice && launchUpdate?.status === "available" && (
+          <div className="approval-elsewhere" data-testid="update-notice">
+            <InlineMessage
+              tone="info"
+              action={
+                <span className="update-offer-actions">
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      setUpdateNotice(false);
+                      setRevealUpdates(true);
+                      setView({ kind: "settings", section: "general" });
+                    }}
+                  >
+                    View update
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => setUpdateNotice(false)}>
+                    Dismiss
+                  </Button>
+                </span>
+              }
+            >
+              Demios {launchUpdate.version} is available.
+            </InlineMessage>
+          </div>
+        )}
         {view.kind === "chat" ? (
           <ChatView
             state={chat}
@@ -962,6 +1010,8 @@ function Shell({ api }: { api: Api }) {
             servers={servers}
             addLink={addLink}
             onAddLinkClosed={closeAddLink}
+            launchUpdate={launchUpdate}
+            revealUpdates={revealUpdates}
           />
         )}
       </main>

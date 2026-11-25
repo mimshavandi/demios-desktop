@@ -290,6 +290,7 @@ pub fn run() {
             commands::pause_download,
             updates::check_for_update,
             updates::install_update,
+            updates::launch_update_check,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Demios Desktop")

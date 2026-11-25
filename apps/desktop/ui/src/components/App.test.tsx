@@ -16,6 +16,8 @@ import type {
   LocalModelRow,
   ToolEvent,
   UnknownOutcome,
+  UpdateCheck,
+  UpdateMode,
 } from "../ipc/types";
 import { App } from "./App";
 
@@ -68,6 +70,7 @@ async function chatMenuItem(title: string, item: string) {
 
 /** In-memory stand-in for the Rust commands. */
 function fakeApi() {
+  const launch = { result: null as UpdateCheck | null, mode: "off" as UpdateMode };
   const convs: Conversation[] = [];
   const trash: Conversation[] = [];
   const projects: Project[] = [];
@@ -157,9 +160,10 @@ function fakeApi() {
     messageSources: async () => null,
     knowledgeStatus: async () => ({ offer: "ask", model: null, embedding: null }),
     knowledgeOffer: async () => null,
-    appInfo: async () => ({ version: "0.1.0", dev_fake_model: true, data_dir: "/tmp", models_dir: "/tmp/models", updates: "off" }),
+    appInfo: async () => ({ version: "0.1.0", dev_fake_model: true, data_dir: "/tmp", models_dir: "/tmp/models", updates: launch.mode }),
     checkForUpdate: async () => ({ status: "up_to_date", current: "0.1.0" }) as const,
     installUpdate: async () => null,
+    launchUpdateCheck: async () => launch.result,
     hubSearch: async () => ({ items: [], next: null }),
     hubRepo: async () => {
       throw { code: "model_unavailable", message: "not in this test" };
@@ -389,6 +393,7 @@ function fakeApi() {
   };
   return {
     api,
+    launch,
     project,
     projects,
     files,
@@ -1105,6 +1110,52 @@ describe("App", () => {
     act(() => f.local({ type: "changed", row: { ...base, state: { state: "ready" } } }));
     expect(await screen.findByText("On this device", { selector: ".dn-badge" })).toBeTruthy();
     expect(await screen.findByText("Tiny Model downloaded")).toBeTruthy();
+  });
+});
+
+describe("Launch update check (#95)", () => {
+  it("shows a notice for a newer version and opens About › Updates on it", async () => {
+    const { api, launch } = fakeApi();
+    launch.mode = "self_update";
+    launch.result = { status: "available", version: "0.2.0", current: "0.1.0", notes: "Fixes", date: null };
+    let installs = 0;
+    api.installUpdate = async () => {
+      installs++;
+      return null;
+    };
+    render(<App api={api} />);
+    const notice = await screen.findByTestId("update-notice");
+    expect(notice.textContent).toContain("Demios 0.2.0 is available.");
+    fireEvent.click(screen.getByRole("button", { name: "View update" }));
+    expect(await screen.findByText(/Version 0.2.0 is available/)).toBeTruthy();
+    expect(screen.queryByTestId("update-notice")).toBeNull();
+    expect(installs).toBe(0);
+  });
+
+  it("doesn't ask at all in builds that don't update themselves", async () => {
+    const { api, launch } = fakeApi();
+    launch.result = { status: "available", version: "0.2.0", current: "0.1.0", notes: "", date: null };
+    let asked = 0;
+    api.launchUpdateCheck = async () => {
+      asked++;
+      return launch.result;
+    };
+    render(<App api={api} />);
+    await screen.findByLabelText("Message");
+    expect(asked).toBe(0);
+    expect(screen.queryByTestId("update-notice")).toBeNull();
+  });
+
+  it("stays silent when the launch check finds nothing or fails", async () => {
+    const { api, launch } = fakeApi();
+    launch.mode = "self_update";
+    api.launchUpdateCheck = async () => {
+      throw { code: "internal", message: "boom" };
+    };
+    render(<App api={api} />);
+    await screen.findByLabelText("Message");
+    expect(screen.queryByTestId("update-notice")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });
 
