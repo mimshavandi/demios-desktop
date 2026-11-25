@@ -11,7 +11,7 @@
 use crate::commands::{AppStateRef, catalog};
 use crate::error::{IpcError, IpcResult};
 use crate::models::{ModelCatalog, remote_config};
-use crate::secrets::Secret;
+use crate::secrets::{Keys, Secret, SecretError};
 use crate::settings::{RemoteModel, RemoteServer, remote_key_id};
 use crate::state::AppState;
 use dn_core::CoreError;
@@ -51,26 +51,62 @@ pub async fn add_remote_server(
         family,
         models,
     };
-    blocking(&state, move |s| {
-        match &key {
-            Some(k) => s.keys.set(&server.key_id(), k)?,
-            // A key left behind under this id (an earlier server whose removal couldn't
-            // delete it) must never be sent to this one.
-            None => {
-                s.keys.delete(&server.key_id())?;
-            }
-        }
-        let mut settings = s.settings()?;
-        let key_id = server.key_id();
-        settings.remote_servers.push(server);
-        if let Err(e) = s.save_settings(&settings) {
-            let _ = s.keys.delete(&key_id);
-            return Err(e);
-        }
-        catalog(s)
-    })
-    .await
+    blocking(&state, move |s| save_new_server(s, server, key)).await
 }
+
+/// Stores a newly listed server and its key (if any) and returns the catalog.
+fn save_new_server(
+    s: &AppState,
+    server: RemoteServer,
+    key: Option<Secret>,
+) -> IpcResult<ModelCatalog> {
+    match &key {
+        // No keychain: say how to get one. The key is never kept anywhere else.
+        Some(k) => s.keys.set(&server.key_id(), k).map_err(key_store_error)?,
+        // A key left behind under this id (an earlier server whose removal couldn't
+        // delete it) must never be sent to this one.
+        None => clear_key(&s.keys, &server.key_id())?,
+    }
+    let mut settings = s.settings()?;
+    let key_id = server.key_id();
+    settings.remote_servers.push(server);
+    if let Err(e) = s.save_settings(&settings) {
+        let _ = s.keys.delete(&key_id);
+        return Err(e);
+    }
+    catalog(s)
+}
+
+/// Deletes any key stored for a server. With no keychain at all (`Unavailable`) no key can
+/// have been stored, so there is nothing to delete: a server without a key works on a
+/// system without a keychain. Every other keychain error (denied, failed) still fails.
+fn clear_key(keys: &Keys, key_id: &str) -> Result<(), SecretError> {
+    match keys.delete(key_id) {
+        Ok(_) | Err(SecretError::Unavailable(_)) => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+/// The key stored for a server; none when there is no keychain at all (see [`clear_key`]).
+pub(crate) fn stored_key(keys: &Keys, key_id: &str) -> Result<Option<Secret>, SecretError> {
+    match keys.get(key_id) {
+        Err(SecretError::Unavailable(_)) => Ok(None),
+        r => r,
+    }
+}
+
+/// A server key can't be saved: with no keychain at all, name what to install.
+fn key_store_error(e: SecretError) -> IpcError {
+    match e {
+        SecretError::Unavailable(_) => IpcError::new("key_store_unavailable", NO_KEYCHAIN),
+        e => e.into(),
+    }
+}
+
+#[cfg(target_os = "linux")]
+const NO_KEYCHAIN: &str = "No system keychain found. Install GNOME Keyring or KWallet to save API keys, or add the server without a key.";
+#[cfg(not(target_os = "linux"))]
+const NO_KEYCHAIN: &str = "Your system keychain isn't available, so the API key can't be saved. Add the server without a key, or try again.";
 
 /// Lists the server's models again (new or removed models, changed tool support). The
 /// user's tool-call answers are kept for models still there.
@@ -113,8 +149,8 @@ pub async fn remove_remote_server(
     blocking(&state, move |s| {
         let mut settings = s.settings()?;
         let server = find(&settings.remote_servers, &server_id)?.clone();
-        let key = s.keys.get(&server.key_id())?;
-        s.keys.delete(&server.key_id())?;
+        let key = stored_key(&s.keys, &server.key_id())?;
+        clear_key(&s.keys, &server.key_id())?;
         settings.remote_servers.retain(|r| r.id != server_id);
         let prefix = format!("remote:{server_id}:");
         let cleared: Vec<(String, String)> = settings
@@ -156,7 +192,9 @@ pub async fn restore_remote_server(
             ));
         }
         if let Some(k) = &removed.key {
-            s.keys.set(&removed.server.key_id(), k)?;
+            s.keys
+                .set(&removed.server.key_id(), k)
+                .map_err(key_store_error)?;
         }
         settings.remote_servers.push(removed.server);
         for (slot, model) in removed.slots {
@@ -377,6 +415,78 @@ mod tests {
             family: ServerFamily::Unknown,
             models: vec![],
         }
+    }
+
+    /// A keychain that always fails with one error, like Linux without a Secret Service.
+    struct Broken(fn() -> SecretError);
+    impl dn_secrets::SecretStore for Broken {
+        fn get(&self, _: &dn_secrets::SecretId) -> Result<Option<Secret>, SecretError> {
+            Err((self.0)())
+        }
+        fn set(&self, _: &dn_secrets::SecretId, _: &Secret) -> Result<(), SecretError> {
+            Err((self.0)())
+        }
+        fn delete(&self, _: &dn_secrets::SecretId) -> Result<bool, SecretError> {
+            Err((self.0)())
+        }
+    }
+
+    fn state_with(err: fn() -> SecretError) -> (AppState, Keys) {
+        let keys = Keys {
+            store: Arc::new(Broken(err)),
+            description: "broken (tests)",
+        };
+        let conn = dn_store::open_in_memory(&crate::state::migration_sets()).unwrap();
+        let st = AppState::new(conn, crate::models::ModelRegistry::default(), keys.clone());
+        (st, keys)
+    }
+
+    fn no_keychain() -> SecretError {
+        SecretError::Unavailable("no Secret Service".into())
+    }
+
+    #[test]
+    fn a_server_without_a_key_needs_no_keychain() {
+        let (st, keys) = state_with(no_keychain);
+        let c = save_new_server(&st, server("ollama"), None).expect("added without a keychain");
+        assert_eq!(c.remote_servers.len(), 1);
+        assert!(!c.remote_servers[0].has_key);
+        // Chat builds its config without a key, and the server can be removed again.
+        let cfg = crate::models::remote_config(&server("ollama"), &keys).expect("no key needed");
+        assert!(cfg.api_key.is_none());
+        assert!(
+            stored_key(&keys, &server("ollama").key_id())
+                .unwrap()
+                .is_none()
+        );
+        clear_key(&keys, &server("ollama").key_id()).expect("nothing stored, nothing to delete");
+    }
+
+    #[test]
+    fn a_key_without_a_keychain_is_refused_and_says_how_to_fix_it() {
+        let (st, _) = state_with(no_keychain);
+        let e = save_new_server(&st, server("vllm"), Some(Secret::new("k"))).unwrap_err();
+        assert_eq!(e.code, "key_store_unavailable");
+        #[cfg(target_os = "linux")]
+        assert!(
+            e.message.contains("GNOME Keyring or KWallet"),
+            "{}",
+            e.message
+        );
+        // Not saved anywhere else, and the server isn't added without its key.
+        assert!(st.settings().unwrap().remote_servers.is_empty());
+    }
+
+    #[test]
+    fn other_keychain_errors_still_fail() {
+        // Only "no keychain at all" means nothing was stored; a denied or failing keychain
+        // may still hold an old key, which must not be sent to a new server.
+        let (st, keys) = state_with(|| SecretError::Denied("locked".into()));
+        let e = save_new_server(&st, server("ollama"), None).unwrap_err();
+        assert_eq!(e.code, "key_store_denied");
+        assert!(st.settings().unwrap().remote_servers.is_empty());
+        assert!(stored_key(&keys, "x").is_err());
+        assert!(crate::models::remote_config(&server("ollama"), &keys).is_err());
     }
 
     #[test]

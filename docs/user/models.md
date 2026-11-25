@@ -102,7 +102,7 @@ Using a provider's model costs whatever that provider charges your account.
 If you already run models in Ollama, LM Studio, llama.cpp's `llama-server`, vLLM, or any server with an OpenAI-compatible API, add it in Settings › Models › **Model servers**:
 
 1. Select **Add model server** and enter its address, for example `http://localhost:11434` (Ollama) or `http://localhost:1234` (LM Studio). If the address has no path, `/v1` is added.
-2. Optionally give it a name, and an API key if the server needs one. The key is stored in your system keychain and sent only to this server.
+2. Optionally give it a name, and an API key if the server needs one. The key is stored in your system keychain and sent only to this server. On Linux, saving a key needs a system keychain (GNOME Keyring or KWallet); a server without a key works without one.
 3. Select **Add**. The app lists the server's models; they appear in the model lists under the server's name.
 
 Each server shows whether it answers: **Connected**, **Needs key** (the server wants a key, or refused the one you saved), or **Unreachable**, with **Retry**.

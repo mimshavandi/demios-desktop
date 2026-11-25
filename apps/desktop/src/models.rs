@@ -336,8 +336,8 @@ pub fn remote_config(server: &RemoteServer, keys: &Keys) -> Result<ProviderConfi
     let mut cfg = ProviderConfig::new(&server.id, ProviderKind::OpenAiCompatible)
         .with_base_url(&server.base_url);
     cfg.server_family = server.family;
-    let key = keys
-        .get(&server.key_id())
+    // No keychain at all: a server without a key still works (see `remote::stored_key`).
+    let key = crate::remote::stored_key(keys, &server.key_id())
         .map_err(|e| unavailable(crate::error::IpcError::from(e).message, vec![]))?;
     Ok(match key {
         Some(k) => cfg.with_key(k),
