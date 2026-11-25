@@ -1708,6 +1708,18 @@ describe("Settings sections (#174)", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "Models" })).toBeTruthy();
   });
 
+  it("stays in Settings when it is opened while the chat list is still loading", async () => {
+    const { api } = fakeApi();
+    let release: () => void = () => {};
+    const list = api.listConversations;
+    api.listConversations = () => new Promise((resolve) => (release = () => void list().then(resolve)));
+    render(<App api={api} />);
+    await openSettings("Models");
+    await act(async () => release());
+    expect(screen.getByRole("heading", { level: 1, name: "Models" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Model servers" })).toBeTruthy();
+  });
+
   it("moves between the Models tabs with the arrow keys, Home and End", async () => {
     const { api } = fakeApi();
     render(<App api={api} />);
