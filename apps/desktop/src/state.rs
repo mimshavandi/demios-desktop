@@ -93,6 +93,7 @@ pub fn migration_sets() -> Vec<MigrationSet> {
         MigrationSet::new("app_skills", crate::skills::migrations()),
         MigrationSet::new("tool_ledger", dn_tools::migrations()),
         MigrationSet::new("artifact", dn_artifacts::migrations()),
+        MigrationSet::new("knowledge", dn_knowledge::migrations()),
     ]
 }
 
@@ -683,6 +684,10 @@ impl AppState {
                 if let Err(e) = &artifacts {
                     eprintln!("could not delete artifacts: {e}");
                     failed.push("artifacts");
+                }
+                if let Err(e) = dn_knowledge::delete_all(&db) {
+                    eprintln!("could not delete the knowledge index: {e}");
+                    failed.push("knowledge index");
                 }
                 if let Some(root) = &self.project_files {
                     match std::fs::remove_dir_all(root) {

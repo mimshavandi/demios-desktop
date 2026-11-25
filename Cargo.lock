@@ -1095,6 +1095,7 @@ dependencies = [
  "dn-artifacts",
  "dn-core",
  "dn-inference",
+ "dn-knowledge",
  "dn-models",
  "dn-providers",
  "dn-secrets",

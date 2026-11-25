@@ -221,6 +221,9 @@ pub struct LocalModels<B: InferenceBackend = LlamaCppBackend> {
     owns_dir: bool,
     /// The one local model the app holds (others may live on briefly in running replies).
     loaded: tokio::sync::Mutex<Option<(String, Arc<Resident<B>>)>>,
+    /// The embedding model for knowledge search (#116), in its own slot so it never evicts
+    /// the chat model.
+    embedding: tokio::sync::Mutex<Option<(String, Arc<LoadedModel<B>>)>>,
     /// Hub downloads and Hugging Face cache models (see [`Self::refresh_externals`]).
     externals: Mutex<Vec<External>>,
     /// The user's Hugging Face cache, read for models to reuse; `None` = don't look (tests).
@@ -537,6 +540,7 @@ impl<B: InferenceBackend> LocalModels<B> {
             backend,
             owns_dir: false,
             loaded: tokio::sync::Mutex::new(None),
+            embedding: tokio::sync::Mutex::new(None),
             externals: Mutex::new(Vec::new()),
             hf_cache: None,
         };
@@ -1063,6 +1067,12 @@ impl<B: InferenceBackend> LocalModels<B> {
                 Err(in_use) => drop(in_use),
             }
         }
+        if let Some((_, m)) = self.embedding.lock().await.take()
+            && let Ok(idle) = Arc::try_unwrap(m)
+            && let Err(e) = idle.unload().await
+        {
+            eprintln!("could not unload the embedding model: {e}");
+        }
         let ignore_missing = |r: std::io::Result<()>| match r {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
             _ => Ok(()),
@@ -1166,6 +1176,80 @@ impl<B: InferenceBackend> LocalModels<B> {
         let m = Arc::new(Resident::new(m));
         *loaded = Some((id.to_string(), Arc::clone(&m)));
         let m: Arc<dyn ChatModel> = m;
+        Ok(m)
+    }
+
+    /// The embedding model `local:<id>` for knowledge search (#116): loaded on first use and
+    /// kept in its own slot, so it never evicts the chat model. Same refusals as
+    /// [`Self::chat_model`]: not an embedding model, not downloaded, or won't fit.
+    pub async fn embedding_model(&self, id: &str) -> Result<Arc<LoadedModel<B>>, CoreError> {
+        let unavailable = |user: String, dev: String| CoreError::ModelUnavailable {
+            user_message: user,
+            developer_message: dev,
+            recovery: vec![RecoveryAction::ChooseModelForSlot {
+                agent_id: crate::agent::AGENT_ID.into(),
+                slot_id: "embed".into(),
+            }],
+        };
+        let e = self.find(id).ok_or_else(|| {
+            unavailable(
+                format!("`local:{id}` isn't a model this app knows."),
+                format!("unknown catalogue id {id}"),
+            )
+        })?;
+        if !e.capabilities.contains(&Capability::Embedding) {
+            return Err(unavailable(
+                format!(
+                    "{} isn't an embedding model. Choose one for Embeddings.",
+                    e.name
+                ),
+                format!("{id}: not an embedding model ({:?})", e.capabilities),
+            ));
+        }
+        if !self.is_ready(id) {
+            return Err(unavailable(
+                format!(
+                    "{} isn't downloaded yet. Download it in Settings → Models.",
+                    e.name
+                ),
+                format!("{id} not downloaded"),
+            ));
+        }
+        if self.wont_fit(id) {
+            return Err(unavailable(
+                format!("{} won't fit in this computer's memory.", e.name),
+                format!("{id}: fit MemoryBlocked"),
+            ));
+        }
+        let mut slot = self.embedding.lock().await;
+        if let Some((cur, m)) = slot.as_ref()
+            && cur == id
+        {
+            return Ok(Arc::clone(m));
+        }
+        if let Some((_, old)) = slot.take()
+            && let Ok(idle) = Arc::try_unwrap(old)
+            && let Err(err) = idle.unload().await
+        {
+            eprintln!("could not unload the embedding model: {err}");
+        }
+        let path = self.path(&e);
+        let opts = {
+            let (path, machine) = (path.clone(), self.machine);
+            tauri::async_runtime::spawn_blocking(move || load_options(&path, &machine))
+                .await
+                .unwrap_or_default()
+        };
+        let m = LoadedModel::load(Arc::clone(&self.backend), &ModelSpec::gguf(path), &opts)
+            .await
+            .map_err(|err| {
+                unavailable(
+                    format!("{} couldn't be loaded.", e.name),
+                    format!("load {id}: {err}"),
+                )
+            })?;
+        let m = Arc::new(m);
+        *slot = Some((id.to_string(), Arc::clone(&m)));
         Ok(m)
     }
 }

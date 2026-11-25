@@ -45,6 +45,7 @@ dn-providers = { path = "../../crates/dn-providers", version = "0.1.0" }
 dn-tools = { path = "../../crates/dn-tools", version = "0.1.0" }
 dn-artifacts = { path = "../../crates/dn-artifacts", version = "0.1.0" }
 dn-inference = { path = "../../crates/dn-inference", version = "0.1.0" }
+dn-knowledge = { path = "../../crates/dn-knowledge", version = "0.1.0" }
 dn-models = { path = "../../crates/dn-models", version = "0.1.0" }
 futures-core.workspace = true
 rusqlite.workspace = true
