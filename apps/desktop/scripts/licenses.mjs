@@ -19,7 +19,8 @@
 //   node scripts/licenses.mjs --check    generate into memory and validate only (CI)
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -105,23 +106,35 @@ function cargoAboutAvailable() {
 }
 
 function rustLicences() {
-  const json = execFileSync(
-    "cargo",
-    [
-      "about",
-      "generate",
-      "--format",
-      "json",
-      "--locked",
-      "--offline",
-      "--manifest-path",
-      join(appDir, "Cargo.toml"),
-      // The build's cargo features (e.g. `updater` for direct downloads, T-STORE-08), so the
-      // list matches what that build contains.
-      ...(process.env.DEMIOS_FEATURES ? ["--features", process.env.DEMIOS_FEATURES] : []),
-    ],
-    { cwd: repoDir, encoding: "utf8", maxBuffer: 256 * 1024 * 1024, stdio: ["ignore", "pipe", "inherit"] },
-  );
+  // Written to a file, not stdout: cargo-about refuses to print when PowerShell is an ancestor
+  // process (its encoding issue #198), which it is in Windows CI and Windows release builds.
+  const tmp = mkdtempSync(join(tmpdir(), "dn-licences-"));
+  const outPath = join(tmp, "about.json");
+  let json;
+  try {
+    execFileSync(
+      "cargo",
+      [
+        "about",
+        "generate",
+        "--format",
+        "json",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        join(appDir, "Cargo.toml"),
+        // The build's cargo features (e.g. `updater` for direct downloads, T-STORE-08), so the
+        // list matches what that build contains.
+        ...(process.env.DEMIOS_FEATURES ? ["--features", process.env.DEMIOS_FEATURES] : []),
+        "--output-file",
+        outPath,
+      ],
+      { cwd: repoDir, stdio: ["ignore", "inherit", "inherit"] },
+    );
+    json = readFileSync(outPath, "utf8");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
   const about = JSON.parse(json);
   const texts = new Map(); // crate id -> texts
   for (const l of about.licenses) {
