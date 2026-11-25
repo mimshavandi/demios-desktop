@@ -2,7 +2,7 @@
 
 Last reviewed: set on publication · App version: 0.1.0
 
-Demios Desktop is published by DigiNote Inc.
+Demios Desktop is published by DigiNote, Inc.
 
 ## Our goal
 

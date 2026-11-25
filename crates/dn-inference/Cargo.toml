@@ -10,7 +10,7 @@ description = "Inference backends (llama.cpp in-process, OpenAI-compatible serve
 [features]
 default = ["llamacpp"]
 # In-process llama.cpp via llama-cpp-2. Metal is switched on automatically on macOS.
-llamacpp = ["dep:llama-cpp-2"]
+llamacpp = ["dep:llama-cpp-2", "dep:minijinja", "dep:minijinja-contrib"]
 cuda = ["llamacpp", "llama-cpp-2/cuda"]
 vulkan = ["llamacpp", "llama-cpp-2/vulkan"]
 
@@ -24,6 +24,9 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "ti
 dn-providers.workspace = true
 reqwest.workspace = true
 llama-cpp-2 = { workspace = true, optional = true }
+# The model's own (Jinja) chat template, T-INF-23.
+minijinja = { workspace = true, optional = true }
+minijinja-contrib = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["net", "io-util"] }

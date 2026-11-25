@@ -628,6 +628,12 @@ function GeneralPage({ api, info }: { api: Api; info: AppInfo | null }) {
             , settings and tool history
           </li>
           <li>
+            {summary === null
+              ? "Projects"
+              : `${summary.projects} ${summary.projects === 1 ? "project" : "projects"}`}
+            , with their instructions and the copies of their files
+          </li>
+          <li>
             Downloaded models{modelsDir !== null ? ` in ${modelsDir}` : ""}
             {summary !== null && (summary.models_bytes > 0 ? ` (${formatBytes(summary.models_bytes)})` : " (none)")}, also
             the ones the <code>dn</code> command-line tool uses

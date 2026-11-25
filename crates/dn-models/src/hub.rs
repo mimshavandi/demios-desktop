@@ -84,6 +84,10 @@ pub enum HubError {
     RangeUnsupported,
     #[error("endpoint `{0}` must be https (or loopback)")]
     InsecureEndpoint(String),
+    /// Neither the GGUF nor the repo's `tokenizer_config.json` has a chat template, so the
+    /// model can't chat (T-INF-23). Checked before anything is downloaded.
+    #[error("{0}: no chat template in the GGUF or the repo's tokenizer_config.json")]
+    NoChatTemplate(String),
     #[error(transparent)]
     Download(#[from] DownloadError),
     #[error("io: {0}")]
@@ -109,6 +113,13 @@ impl From<HubError> for CoreError {
             ),
             HubError::NoGguf(_) => (
                 "This repo has no GGUF files Demios can run.".to_string(),
+                vec![],
+            ),
+            HubError::NoChatTemplate(_) => (
+                format!(
+                    "{}, so Demios can't chat with it. Pick another version or model.",
+                    crate::template::NO_TEMPLATE_MESSAGE
+                ),
                 vec![],
             ),
             HubError::RateLimited { retry_after } => (
@@ -417,6 +428,10 @@ pub struct SourceManifest {
     pub card_url: String,
     /// Seconds since the Unix epoch.
     pub downloaded_at: u64,
+    /// Where the model's chat template comes from; `None` for embedding models and
+    /// projectors (and manifests written before T-INF-23).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat_template: Option<crate::template::TemplateSource>,
 }
 
 impl SourceManifest {
@@ -875,6 +890,64 @@ impl HubClient {
         Ok(ModelFootprint::from_gguf(&g))
     }
 
+    /// Where `variant`'s chat template comes from, and the template text to store next to it
+    /// when it isn't in the GGUF. Reads the first part's header (range requests) and, only if
+    /// that has no template and the model isn't an embedding model, the repo's
+    /// `tokenizer_config.json` at the pinned commit. Its size must match the tree listing.
+    pub async fn chat_template(
+        &self,
+        info: &RepoInfo,
+        variant: &GgufVariant,
+    ) -> Result<(Option<crate::template::TemplateSource>, Option<String>)> {
+        use crate::template::{self, TemplateSource};
+        let first = variant
+            .files
+            .first()
+            .ok_or_else(|| HubError::InvalidPath("empty variant".into()))?;
+        let g = self.gguf_header(&info.id, &info.sha, first).await?;
+        if g.chat_template().is_some() {
+            return Ok((Some(TemplateSource::Gguf), None));
+        }
+        if template::is_embedding(&g) {
+            return Ok((None, None));
+        }
+        let none = || HubError::NoChatTemplate(info.id.clone());
+        let files = self.files(&info.id, &info.sha).await?;
+        let cfg = files
+            .iter()
+            .find(|f| f.path == "tokenizer_config.json")
+            .ok_or_else(none)?;
+        // tokenizer_config.json is small; with the vocabulary inlined it can reach a few MiB.
+        if cfg.size > 16 << 20 {
+            return Err(none());
+        }
+        let url = reqwest::Url::parse(&self.file_url(&info.id, &info.sha, &cfg.path)?)
+            .map_err(|e| HubError::Parse(e.to_string()))?;
+        let mut resp = self.get(url, Some(&info.id)).await?;
+        let mut body = Vec::new();
+        while let Some(c) = resp
+            .chunk()
+            .await
+            .map_err(|e| HubError::Http(e.without_url().to_string()))?
+        {
+            if (body.len() + c.len()) as u64 > cfg.size {
+                return Err(HubError::Parse(
+                    "tokenizer_config.json larger than listed".into(),
+                ));
+            }
+            body.extend_from_slice(&c);
+        }
+        if body.len() as u64 != cfg.size {
+            return Err(HubError::Parse(
+                "tokenizer_config.json size differs from the listing".into(),
+            ));
+        }
+        let json: Value =
+            serde_json::from_slice(&body).map_err(|e| HubError::Parse(e.to_string()))?;
+        let t = template::from_tokenizer_config(&json).ok_or_else(none)?;
+        Ok((Some(TemplateSource::TokenizerConfig), Some(t)))
+    }
+
     /// `{endpoint}/{repo}/resolve/{sha}/{path}`.
     pub fn file_url(&self, repo: &str, sha: &str, path: &str) -> Result<String> {
         validate_repo_id(repo)?;
@@ -911,6 +984,11 @@ impl HubClient {
                 return Err(HubError::NoChecksum(f.path.clone()));
             }
         }
+        // Every chat model renders with its own template: find it before downloading.
+        let (template_source, sidecar) = match variant.kind {
+            VariantKind::Model => self.chat_template(info, variant).await?,
+            VariantKind::Projector => (None, None),
+        };
         let total: u64 = variant.files.iter().map(|f| f.size).sum();
         let parts = variant.files.len();
         let mut before = 0u64;
@@ -951,6 +1029,9 @@ impl HubClient {
             before += f.size;
         }
         let first = first.ok_or_else(|| HubError::InvalidPath("empty variant".into()))?;
+        if let Some(t) = &sidecar {
+            write_atomic(&crate::template::sidecar_path(&first), t.as_bytes()).await?;
+        }
         let manifest = SourceManifest {
             source: "huggingface".into(),
             endpoint: self.endpoint().into(),
@@ -963,6 +1044,7 @@ impl HubClient {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0),
+            chat_template: template_source,
         };
         let json =
             serde_json::to_vec_pretty(&manifest).map_err(|e| HubError::Parse(e.to_string()))?;
@@ -1608,7 +1690,7 @@ mod tests {
 
     #[tokio::test]
     async fn tree_reads_lfs_sha_and_pull_verifies() {
-        let data = b"GGUF-fake-weights-0123456789".to_vec();
+        let data = tiny_gguf(Some("{{ messages[0].content }}"), false);
         let sha = {
             use sha2::{Digest, Sha256};
             Sha256::digest(&data)
@@ -1636,7 +1718,7 @@ mod tests {
         );
         routes.insert(
             format!("/o/n/resolve/{SHA}/m-Q4_K_M.gguf"),
-            Reply::bytes(data.clone()),
+            Reply::bytes(data.clone()).with_ranges(),
         );
         let s = serve(routes).await;
         let c = client(&s.url, Some("hf_tok"));
@@ -1666,6 +1748,9 @@ mod tests {
         let m = SourceManifest::read(&p).unwrap();
         assert_eq!((m.repo.as_str(), m.revision.as_str()), ("o/n", SHA));
         assert_eq!(m.license.id.as_deref(), Some("apache-2.0"));
+        // The template is in the GGUF: nothing stored next to it.
+        assert_eq!(m.chat_template, Some(crate::template::TemplateSource::Gguf));
+        assert!(!crate::template::sidecar_path(&p).exists());
         // The file download carried the token (same origin as the Hub endpoint).
         let reqs = s.requests.lock().unwrap();
         assert!(
@@ -1673,6 +1758,166 @@ mod tests {
                 .any(|r| r.contains("/resolve/") && r.contains("bearer hf_tok"))
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A minimal llama GGUF, with or without a chat template; `embedding` adds a pooling type.
+    fn tiny_gguf(template: Option<&str>, embedding: bool) -> Vec<u8> {
+        use crate::gguf::write::{V, gguf};
+        let mut kv = vec![
+            ("general.architecture", V::Str("llama")),
+            ("llama.block_count", V::U32(1)),
+        ];
+        if let Some(t) = template {
+            kv.push(("tokenizer.chat_template", V::Str(t)));
+        }
+        if embedding {
+            kv.push(("llama.pooling_type", V::U32(1)));
+        }
+        gguf(&kv, &[("blk.0.attn_q.weight", &[8, 8], 0, 256)])
+    }
+
+    /// A Hub serving `data` as `m.gguf` (and `extra` files) in repo `o/n` at `SHA`, and the
+    /// pinned info and variant to pull it.
+    async fn hub_with(
+        data: &[u8],
+        extra: &[(&str, &str)],
+    ) -> (crate::testserver::Server, HubClient, RepoInfo, GgufVariant) {
+        hub_listing(data, extra, 0).await
+    }
+
+    /// [`hub_with`], with every extra file listed `size_delta` bytes bigger than it is.
+    async fn hub_listing(
+        data: &[u8],
+        extra: &[(&str, &str)],
+        size_delta: u64,
+    ) -> (crate::testserver::Server, HubClient, RepoInfo, GgufVariant) {
+        use sha2::{Digest, Sha256};
+        let sha: String = Sha256::digest(data)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        let mut tree = vec![format!(
+            r#"{{"type":"file","path":"m.gguf","size":134,"oid":"x","lfs":{{"oid":"{sha}","size":{},"pointerSize":134}}}}"#,
+            data.len()
+        )];
+        let mut routes = HashMap::new();
+        for (path, body) in extra {
+            tree.push(format!(
+                r#"{{"type":"file","path":"{path}","size":{},"oid":"y"}}"#,
+                body.len() as u64 + size_delta
+            ));
+            routes.insert(
+                format!("/o/n/resolve/{SHA}/{path}"),
+                Reply::bytes(body.as_bytes().to_vec()),
+            );
+        }
+        routes.insert(
+            format!("/api/models/o/n/tree/{SHA}?recursive=true"),
+            Reply::json(&format!("[{}]", tree.join(","))),
+        );
+        routes.insert(
+            format!("/o/n/resolve/{SHA}/m.gguf"),
+            Reply::bytes(data.to_vec()).with_ranges(),
+        );
+        let s = serve(routes).await;
+        let c = client(&s.url, None);
+        let info = RepoInfo {
+            id: "o/n".into(),
+            sha: SHA.into(),
+            gated: false,
+            private: false,
+            license: LicenseInfo::classify(Some("mit"), None, None),
+            card_url: String::new(),
+            tags: vec![],
+        };
+        let v = GgufVariant {
+            name: "m".into(),
+            quant: None,
+            kind: VariantKind::Model,
+            files: vec![f("m.gguf", data.len() as u64, Some(&sha))],
+            total_size: data.len() as u64,
+        };
+        (s, c, info, v)
+    }
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("dn-hub-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        d
+    }
+
+    #[tokio::test]
+    async fn pull_stores_the_tokenizer_config_template_next_to_the_gguf() {
+        let cfg = r#"{"bos_token":"<s>","chat_template":"{% for m in messages %}{{ m.content }}{% endfor %}"}"#;
+        let (_s, c, info, v) =
+            hub_with(&tiny_gguf(None, false), &[("tokenizer_config.json", cfg)]).await;
+        let dir = temp_dir("tplcfg");
+        let p = c.pull(&info, &v, &dir, &mut |_| {}).await.unwrap();
+        assert_eq!(
+            std::fs::read_to_string(crate::template::sidecar_path(&p)).unwrap(),
+            "{% for m in messages %}{{ m.content }}{% endfor %}"
+        );
+        let m = SourceManifest::read(&p).unwrap();
+        assert_eq!(
+            m.chat_template,
+            Some(crate::template::TemplateSource::TokenizerConfig)
+        );
+        let g = Gguf::open(&p).unwrap();
+        assert_eq!(
+            crate::template::source(&g, &p),
+            Some(crate::template::TemplateSource::TokenizerConfig)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn pull_refuses_a_model_without_any_chat_template_before_downloading() {
+        for extra in [
+            vec![],
+            vec![("tokenizer_config.json", r#"{"bos_token":"<s>"}"#)],
+        ] {
+            let data = tiny_gguf(None, false);
+            let (s, c, info, v) = hub_with(&data, &extra).await;
+            let dir = temp_dir("notpl");
+            let e = c.pull(&info, &v, &dir, &mut |_| {}).await.unwrap_err();
+            assert!(
+                matches!(e, HubError::NoChatTemplate(ref r) if r == "o/n"),
+                "{e}"
+            );
+            assert!(!dir.exists(), "nothing written");
+            // Only the header was read (range requests), never the whole file.
+            let reqs = s.requests.lock().unwrap();
+            assert!(
+                reqs.iter()
+                    .filter(|r| r.contains("/m.gguf"))
+                    .all(|r| r.contains("range: bytes="))
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn embedding_models_need_no_chat_template() {
+        let (_s, c, info, v) = hub_with(&tiny_gguf(None, true), &[]).await;
+        let dir = temp_dir("emb");
+        let p = c.pull(&info, &v, &dir, &mut |_| {}).await.unwrap();
+        assert_eq!(SourceManifest::read(&p).unwrap().chat_template, None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn tokenizer_config_must_match_its_listed_size() {
+        // The listing at the pinned commit says the file is bigger than what is served.
+        let (_s, c, info, v) = hub_listing(
+            &tiny_gguf(None, false),
+            &[("tokenizer_config.json", r#"{"chat_template":"x"}"#)],
+            1,
+        )
+        .await;
+        let e = c
+            .pull(&info, &v, &temp_dir("size"), &mut |_| {})
+            .await
+            .unwrap_err();
+        assert!(matches!(e, HubError::Parse(_)), "{e}");
     }
 
     fn fake_gguf(vocab: usize, tensors: &[(&str, &[u64], u32, u64)]) -> Vec<u8> {

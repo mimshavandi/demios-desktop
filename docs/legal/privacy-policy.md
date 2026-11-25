@@ -4,9 +4,9 @@ Last updated: set on publication
 
 ## Who we are
 
-Demios Desktop ("the app") is an open-source desktop app licensed under Apache-2.0. It is published by **DigiNote Inc.**, which is responsible for this policy and is the controller for the processing described in [Data protection (GDPR)](#data-protection-gdpr). DigiNote Inc. is also the provider of the app under the EU AI Act. App id: `io.demios.app`.
+Demios Desktop ("the app") is an open-source desktop app licensed under Apache-2.0. It is published by **DigiNote, Inc.**, which is responsible for this policy and is the controller for the processing described in [Data protection (GDPR)](#data-protection-gdpr). DigiNote, Inc. is also the provider of the app under the EU AI Act. App id: `io.demios.app`.
 
-DigiNote Inc.
+DigiNote, Inc.
 Niederkasseler Kirchweg 85
 40547 Düsseldorf
 Germany
@@ -130,7 +130,7 @@ This section gives the information required by Articles 13 and 14 of the EU Gene
 
 ### Controller
 
-DigiNote Inc., at the address in [Who we are](#who-we-are). Email: mahdi@demios.io. No data protection officer is designated. None is required: fewer than 20 people regularly process personal data for us (§ 38(1) BDSG), and our core activities don't involve large-scale monitoring or special categories of data (Art. 37(1) GDPR). For data protection questions, write to mahdi@demios.io.
+DigiNote, Inc., at the address in [Who we are](#who-we-are). Email: mahdi@demios.io. No data protection officer is designated. None is required: fewer than 20 people regularly process personal data for us (§ 38(1) BDSG), and our core activities don't involve large-scale monitoring or special categories of data (Art. 37(1) GDPR). For data protection questions, write to mahdi@demios.io.
 
 ### What we process, why, and on what legal basis
 
@@ -203,7 +203,7 @@ If the app starts sending any data to us (for example optional crash reports), w
 
 ## Contact
 
-DigiNote Inc. · Niederkasseler Kirchweg 85, 40547 Düsseldorf, Germany · mahdi@demios.io · [GitHub issues](https://github.com/mimshavandi/demios-desktop/issues)
+DigiNote, Inc. · Niederkasseler Kirchweg 85, 40547 Düsseldorf, Germany · mahdi@demios.io · [GitHub issues](https://github.com/mimshavandi/demios-desktop/issues)
 
 Legal notice (Impressum): https://demios.io/impressum
 
