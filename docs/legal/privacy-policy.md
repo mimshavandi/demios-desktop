@@ -1,6 +1,6 @@
 # Demios Desktop privacy policy
 
-> **Pending owner approval.** The owner approves the final text before it is published at demios.io/privacy and linked from the app and the store listings. Text in [square brackets] is still to be confirmed by the owner. Every statement about the app was checked against the code on `main`.
+> **Pending owner approval.** The owner approves the final text before it is published at demios.io/privacy and linked from the app and the download page. Text in [square brackets] is still to be confirmed by the owner. Every statement about the app was checked against the code on `main`.
 
 Last updated: set on publication
 
@@ -86,7 +86,7 @@ Some models need your Hugging Face token. If you save one, it is kept in your sy
 
 ### Updates (copies downloaded from GitHub)
 
-A copy of the app downloaded from GitHub can update itself. It checks for a new version only when you select **Check for updates** in **Settings → General → About**. The app then asks GitHub (`github.com`, which sends it on to `release-assets.githubusercontent.com`) for a small file that names the newest version. The address is the same for everyone and carries nothing about you or your copy. GitHub sees your IP address and standard request headers. If a newer version exists, the app shows its release notes, and downloads it from GitHub only after you select **Install and restart**. Nothing else is sent. Copies from the Microsoft Store or Flathub are updated by their store and never contact GitHub for updates. [GitHub privacy statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement).
+A copy of the app downloaded from GitHub can update itself. It checks for a new version only when you select **Check for updates** in **Settings → General → About**. The app then asks GitHub (`github.com`, which sends it on to `release-assets.githubusercontent.com`) for a small file that names the newest version. The address is the same for everyone and carries nothing about you or your copy. GitHub sees your IP address and standard request headers. If a newer version exists, the app shows its release notes, and downloads it from GitHub only after you select **Install and restart**. Nothing else is sent. Demios isn't offered in any app store yet. If it is later, store copies will be updated by their store and won't contact GitHub for updates. [GitHub privacy statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement).
 
 ### Tool servers (MCP)
 

@@ -1,6 +1,6 @@
 # Demios Desktop accessibility statement
 
-> **Pending owner approval.** The owner approves the final text before it is published at demios.io/accessibility and linked from the app and the store listings.
+> **Pending owner approval.** The owner approves the final text before it is published at demios.io/accessibility and linked from the app and the download page.
 
 Last reviewed: set on publication · App version: 0.1.0
 

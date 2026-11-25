@@ -1,6 +1,6 @@
 # Legal notice (Impressum)
 
-> **Pending owner approval.** The owner approves the final text before it is published at demios.io/impressum and linked from the app and the store listings. Text in [square brackets] is still to be confirmed by the owner.
+> **Pending owner approval.** The owner approves the final text before it is published at demios.io/impressum and linked from the app and the download page. Text in [square brackets] is still to be confirmed by the owner.
 
 Information under § 5 of the German Digital Services Act (Digitale-Dienste-Gesetz, DDG). It applies to the website demios.io and to the Demios Desktop app.
 
