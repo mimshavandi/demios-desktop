@@ -555,8 +555,8 @@ function Shell({ api }: { api: Api }) {
   // Move the open chat into a project or out of one (#136). A chat not created yet just
   // remembers where it will start. Undo moves it back.
   const moveChat = useCallback(
-    async (projectId: Id | null) => {
-      const id = chat.conversationId;
+    async (projectId: Id | null, conversationId: Id | null = chat.conversationId) => {
+      const id = conversationId;
       if (id === null) {
         setNewChatProject(projectId);
         return;
@@ -589,6 +589,16 @@ function Shell({ api }: { api: Api }) {
       });
     },
     [api, chat.conversationId, projects, refreshConversations, refreshProjects, toast],
+  );
+
+  // Rename from the sidebar menu (#166). Rejects so the row keeps the typed text and shows
+  // why; nothing else changes on failure.
+  const renameChat = useCallback(
+    async (c: Conversation, title: string) => {
+      await api.renameConversation(c.id, title);
+      await refreshConversations();
+    },
+    [api, refreshConversations],
   );
 
   const projectCreated = useCallback(
@@ -783,6 +793,8 @@ function Shell({ api }: { api: Api }) {
           onNew={newChat}
           onOpen={(id) => void open(id)}
           onDelete={(c) => void remove(c)}
+          onMove={(c, pid) => moveChat(pid, c.id)}
+          onRename={renameChat}
           onRetry={() => void refreshConversations()}
           onSettings={goSettings}
         />

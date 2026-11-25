@@ -23,7 +23,10 @@ Chats are listed in the sidebar under **Recent**, the most recently used first, 
 - **New chat:** select **New chat** in the sidebar or press ⌘N (Ctrl+N).
 - **Open a chat:** select it in the sidebar.
 - **Chats in a project** get the project's instructions. See [Projects](projects.md).
-- **Delete a chat:** point at it in the sidebar and select the delete button. The chat goes at once, and a message lets you **Undo** for 10 seconds. After that it is removed for good the next time the app starts.
+- **Chat menu:** point at a chat in the sidebar, or move to it with Tab, and select **More actions** (the … button). It has:
+  - **Move to project**: pick a project, or **No project**. A message lets you **Undo** for 10 seconds. See [Projects](projects.md).
+  - **Rename**: type the new name in place and press **Enter**. **Esc** keeps the old name. A name can be up to 200 characters.
+  - **Delete**: the chat goes at once, and a message lets you **Undo** for 10 seconds. After that it is removed for good the next time the app starts.
 - **Hide or show the sidebar:** select the sidebar button at the top left, or press ⌘\ (Ctrl+\).
 
 ## Links in answers

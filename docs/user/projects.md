@@ -31,7 +31,7 @@ On the project's page, select **New chat**. The title bar shows the project's na
 
 ## Move a chat into or out of a project
 
-Under the message box of any chat, the **Project** list shows which project the chat is in. Choose another project to move the chat there, or **No project** to take it out. A message lets you **Undo** for 10 seconds. The list is shown once you have a project.
+In the sidebar, open a chat's **More actions** menu (the … button) and choose **Move to project**. Or, under the message box of the open chat, the **Project** list shows which project the chat is in. Choose another project to move the chat there, or **No project** to take it out. A message lets you **Undo** for 10 seconds. The list is shown once you have a project.
 
 From the next message on, the chat follows the instructions of the project it's in now. Answers it already gave stay as they are. A chat you moved out of a project stays when that project is deleted.
 
