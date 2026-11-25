@@ -111,7 +111,9 @@ function fakeApi() {
     chat_model_tools: true,
   });
   const api: Api = {
-    appInfo: async () => ({ version: "0.1.0", dev_fake_model: true, data_dir: "/tmp", models_dir: "/tmp/models" }),
+    appInfo: async () => ({ version: "0.1.0", dev_fake_model: true, data_dir: "/tmp", models_dir: "/tmp/models", updates: "off" }),
+    checkForUpdate: async () => ({ status: "up_to_date", current: "0.1.0" }) as const,
+    installUpdate: async () => null,
     hubSearch: async () => ({ items: [], next: null }),
     hubRepo: async () => {
       throw { code: "model_unavailable", message: "not in this test" };
@@ -691,6 +693,7 @@ describe("App", () => {
       models_dir: null,
       commit: "1a2b3c4",
       channel: "preview",
+      updates: "off",
     });
     render(<App api={api} />);
     fireEvent.click(await screen.findByRole("button", { name: "Models" }));
@@ -700,7 +703,7 @@ describe("App", () => {
 
   it("asks to connect a model when none is available", async () => {
     const { api } = fakeApi();
-    api.appInfo = async () => ({ version: "0.1.0", dev_fake_model: false, data_dir: null, models_dir: null });
+    api.appInfo = async () => ({ version: "0.1.0", dev_fake_model: false, data_dir: null, models_dir: null, updates: "off" });
     render(<App api={api} />);
     expect(await screen.findByText(/No model connected/)).toBeTruthy();
     expect((screen.getByLabelText("Message") as HTMLTextAreaElement).disabled).toBe(true);

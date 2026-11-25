@@ -16,6 +16,7 @@ import { Badge, Button, ICON, InlineMessage, Select, Skeleton, TextField, type S
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Licences } from "./Licences";
 import { McpServersCard } from "./McpServers";
+import { Updates } from "./Updates";
 import { LocalModelsCard, formatBytes } from "./LocalModels";
 import { useToast } from "./toast";
 
@@ -504,6 +505,14 @@ function GeneralPage({ api, info }: { api: Api; info: AppInfo | null }) {
               allowed that tool for the chat.
             </span>
           </li>
+          {info?.updates === "self_update" && (
+            <li>
+              <span className="row-title">GitHub, for updates</span>
+              <span className="dn-help">
+                Only when you select Check for updates, and the download after you confirm an update. Nothing else is sent.
+              </span>
+            </li>
+          )}
         </ul>
         <div className="row">
           <div className="row-main">
@@ -544,6 +553,7 @@ function GeneralPage({ api, info }: { api: Api; info: AppInfo | null }) {
             {info?.models_dir != null && <span className="dn-help">Downloaded models are stored in {info.models_dir}</span>}
           </div>
         </div>
+        {info !== null && <Updates api={api} mode={info.updates} />}
         <div className="row">
           <div className="row-main">
             <span className="row-title">Report a problem</span>

@@ -51,6 +51,8 @@ const COMMANDS: &[&str] = &[
     "watch_local_models",
     "download_model",
     "pause_download",
+    "check_for_update",
+    "install_update",
 ];
 
 /// Copies the artifact frame shell (`ui/artifact-sandbox/dist/frame/`) into OUT_DIR for
@@ -90,8 +92,21 @@ fn artifact_frame() {
     std::fs::write(out.join("artifact-frame-csp.json"), c).expect("write frame csp");
 }
 
+// The distribution guard (T-STORE-08), shared with the app as `crate::distribution`.
+include!("src/distribution.rs");
+
 fn main() {
     artifact_frame();
+    // Store (MSIX) and Flathub builds must not contain the self-updater.
+    println!("cargo::rerun-if-env-changed=DEMIOS_DISTRIBUTION");
+    println!("cargo::rerun-if-env-changed=DEMIOS_UPDATER_PUBKEY");
+    let distribution = std::env::var("DEMIOS_DISTRIBUTION").ok();
+    if let Err(why) = check_build(
+        std::env::var_os("CARGO_FEATURE_UPDATER").is_some(),
+        distribution.as_deref(),
+    ) {
+        panic!("{why}");
+    }
     // Shown on the About screen (`app_info`); set by the preview workflow.
     println!("cargo::rerun-if-env-changed=DEMIOS_BUILD_COMMIT");
     println!("cargo::rerun-if-env-changed=DEMIOS_BUILD_CHANNEL");

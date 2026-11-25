@@ -26,6 +26,9 @@ default = []
 dev-fake-model = []
 # Set by `tauri build`: embed the built UI instead of using the dev server.
 custom-protocol = ["tauri/custom-protocol"]
+# T-STORE-08: the signed self-updater. Only direct-download builds (macOS DMG, Windows
+# MSI/NSIS, AppImage) turn it on; MSIX and Flatpak builds must not (stores update the app).
+updater = ["dep:tauri-plugin-updater"]
 
 [build-dependencies]
 tauri-build.workspace = true
@@ -57,6 +60,11 @@ sha2.workspace = true
 # demios://models/add links (T-INF-12): the OS hands the URL to the running app; Rust only.
 tauri-plugin-deep-link = "2"
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
+# Signed self-update for direct downloads only (T-STORE-08). Off unless the `updater` feature
+# is on: Microsoft Store (MSIX) and Flathub builds leave it out and never self-update.
+# No `zip` feature: it only unpacks the old v1 update archives (.zip, .AppImage.tar.gz), and
+# its `zip` 4 has open advisories. We publish v2 bundles (`createUpdaterArtifacts: true`).
+tauri-plugin-updater = { version = "2", optional = true, default-features = false, features = ["rustls-tls", "system-proxy"] }
 tokio = { workspace = true, features = ["sync", "macros", "time", "rt"] }
 
 [dev-dependencies]

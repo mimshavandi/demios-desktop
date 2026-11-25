@@ -353,7 +353,35 @@ export function createMockApi(): Api {
   };
 
   const api: Api = {
-    appInfo: async () => ({ version: "0.1.0 (browser mock)", dev_fake_model: true, data_dir: null, models_dir: null }),
+    appInfo: async () => ({
+      version: "0.1.0 (browser mock)",
+      dev_fake_model: true,
+      data_dir: null,
+      models_dir: null,
+      updates: "self_update",
+    }),
+    // A newer version, so the About screen's update states can be tried in the browser.
+    checkForUpdate: async () => {
+      await new Promise((r) => setTimeout(r, 600));
+      return {
+        status: "available",
+        version: "0.2.0",
+        current: "0.1.0",
+        notes:
+          "Added\n- Check for updates in Settings › About (direct downloads).\n\nFixed\n- Tool servers reconnect after sleep.",
+        date: "2027-01-15T10:00:00Z",
+      };
+    },
+    installUpdate: async (version, onProgress) => {
+      const total = 40 * 1024 * 1024;
+      for (let done = 0; done <= total; done += total / 8) {
+        onProgress({ kind: "downloading", downloaded: done, total });
+        await new Promise((r) => setTimeout(r, 250));
+      }
+      onProgress({ kind: "installing" });
+      console.info("mock: would install", version, "and restart");
+      return new Promise<null>(() => {});
+    },
     openLink: async (url) => {
       console.info("mock: would confirm and open", url);
       return false;

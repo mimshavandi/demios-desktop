@@ -18,6 +18,7 @@ export function ConfirmDialog({
   children,
   confirmLabel,
   cancelLabel = "Cancel",
+  confirmVariant = "danger",
   busy = false,
   ready = true,
   error = null,
@@ -31,6 +32,8 @@ export function ConfirmDialog({
   confirmLabel: string;
   /** The safe choice, focused when the dialog opens. */
   cancelLabel?: string;
+  /** "danger" (the default) for deleting or loosening a guard; "primary" for a big but safe step. */
+  confirmVariant?: "danger" | "primary";
   busy?: boolean;
   /** False while the body is still loading what will be deleted: confirm stays disabled. */
   ready?: boolean;
@@ -87,7 +90,7 @@ export function ConfirmDialog({
               </Button>
             </AlertDialog.Cancel>
             {/* Not AlertDialog.Action: that closes at once; this stays open until the work ends. */}
-            <Button variant="danger" loading={busy} disabled={!armed || !ready || busy} onClick={onConfirm}>
+            <Button variant={confirmVariant} loading={busy} disabled={!armed || !ready || busy} onClick={onConfirm}>
               {confirmLabel}
             </Button>
           </div>

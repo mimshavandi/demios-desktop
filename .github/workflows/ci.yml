@@ -45,6 +45,9 @@ jobs:
       # The shell without the dev fake model (what release builds ship) and with it.
       - run: cargo test -p demios-desktop --no-default-features
       - run: cargo test -p demios-desktop --features dev-fake-model
+      # Direct-download builds turn on the signed updater (T-STORE-08).
+      - run: cargo clippy -p demios-desktop --all-targets --features updater -- -D warnings
+      - run: cargo test -p demios-desktop --features updater
   design-tokens:
     runs-on: ubuntu-latest
     steps:
