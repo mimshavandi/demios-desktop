@@ -37,14 +37,6 @@ async function sizeWindow() {
   await browser.waitUntil(async () => browser.execute(() => document.readyState === "complete"), {
     timeout: 60_000,
   });
-  // The app places its (hidden) window and then shows it (window_state::restore). Log what
-  // the page sees here, so a resize that lands before the placement shows in the log.
-  const seen = await browser.execute(() => ({
-    visibility: document.visibilityState,
-    focus: document.hasFocus(),
-    inner: [window.innerWidth, window.innerHeight],
-  }));
-  console.log(`window before sizing: ${JSON.stringify(seen)}, rect ${JSON.stringify(await browser.getWindowRect())}`);
   await browser.setWindowSize(1280, 820);
 }
 

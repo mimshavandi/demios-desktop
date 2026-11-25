@@ -13,7 +13,8 @@
       "params_b": 0.5,
       "capabilities": ["chat"],
       "license": "apache-2.0",
-      "notes": "Tiny; smoke tests and very old machines."
+      "notes": "Tiny; smoke tests and very old machines.",
+      "tool_support": "supported"
     },
     {
       "id": "llama-3.2-3b-instruct-q4_k_m",
@@ -27,7 +28,8 @@
       "params_b": 3.2,
       "capabilities": ["chat"],
       "license": "llama3.2",
-      "notes": "Good default for 8 GB machines."
+      "notes": "Good default for 8 GB machines.",
+      "tool_support": "supported"
     },
     {
       "id": "qwen3-4b-q4_k_m",
@@ -41,7 +43,8 @@
       "params_b": 4.0,
       "capabilities": ["chat"],
       "license": "apache-2.0",
-      "notes": "Thinking model with tool calling."
+      "notes": "Thinking model with tool calling.",
+      "tool_support": "supported"
     },
     {
       "id": "phi-4-mini-instruct-q4_k_m",
@@ -55,7 +58,8 @@
       "params_b": 3.8,
       "capabilities": ["chat"],
       "license": "mit",
-      "notes": "Strong reasoning for its size."
+      "notes": "Strong reasoning for its size.",
+      "tool_support": "unknown"
     },
     {
       "id": "gemma-4-e2b-it-q4_k_m",
@@ -69,7 +73,8 @@
       "params_b": 5.1,
       "capabilities": ["chat"],
       "license": "apache-2.0",
-      "notes": "Effective-2B on-device model."
+      "notes": "Effective-2B on-device model.",
+      "tool_support": "supported"
     },
     {
       "id": "llama-3.1-8b-instruct-q4_k_m",
@@ -83,7 +88,8 @@
       "params_b": 8.0,
       "capabilities": ["chat"],
       "license": "llama3.1",
-      "notes": "Well-known 8B baseline for benchmarks."
+      "notes": "Well-known 8B baseline for benchmarks.",
+      "tool_support": "supported"
     },
     {
       "id": "qwen3-8b-q4_k_m",
@@ -97,7 +103,8 @@
       "params_b": 8.2,
       "capabilities": ["chat"],
       "license": "apache-2.0",
-      "notes": "Default for 16 GB machines."
+      "notes": "Default for 16 GB machines.",
+      "tool_support": "supported"
     },
     {
       "id": "gpt-oss-20b-q4_k_m",
@@ -111,7 +118,8 @@
       "params_b": 21.0,
       "capabilities": ["chat"],
       "license": "apache-2.0",
-      "notes": "MoE (3.6B active); expert offload helps on small GPUs."
+      "notes": "MoE (3.6B active); expert offload helps on small GPUs.",
+      "tool_support": "supported"
     },
     {
       "id": "mistral-small-24b-instruct-2501-q4_k_m",
@@ -125,7 +133,8 @@
       "params_b": 23.6,
       "capabilities": ["chat"],
       "license": "apache-2.0",
-      "notes": "Dense; 32 GB machines."
+      "notes": "Dense; 32 GB machines.",
+      "tool_support": "unknown"
     },
     {
       "id": "gemma-4-26b-a4b-it-q4_k_m",
@@ -139,7 +148,8 @@
       "params_b": 26.0,
       "capabilities": ["chat"],
       "license": "apache-2.0",
-      "notes": "MoE (4B active)."
+      "notes": "MoE (4B active).",
+      "tool_support": "supported"
     },
     {
       "id": "qwen3-30b-a3b-q4_k_m",
@@ -153,7 +163,8 @@
       "params_b": 30.5,
       "capabilities": ["chat"],
       "license": "apache-2.0",
-      "notes": "MoE (3B active); the bigger-model-on-a-laptop showcase."
+      "notes": "MoE (3B active); the bigger-model-on-a-laptop showcase.",
+      "tool_support": "supported"
     },
     {
       "id": "nomic-embed-text-v2-moe-q8_0",

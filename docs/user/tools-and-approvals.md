@@ -4,14 +4,14 @@ Tools let a model do things beyond writing an answer, like reading a file or cal
 
 ## Add a tool server
 
-Go to **Settings → Models → Tool servers** and select **Add server**. Give it a name; the ID is suggested from the name and can't change later. Then choose where it runs:
+Go to **Settings → Tools** and select **Add tool server**. Give it a name; the ID is suggested from the name and can't change later. Then choose where it runs:
 
 - **On this computer (a program Demios starts):** enter the command, its arguments and any environment variables. The program runs with your permissions, so add only programs you trust.
 - **Remote (an HTTPS address):** enter the server address and any headers. If the server needs you to sign in with an account, turn on **Sign in with the server's account (OAuth)**.
 
 Mark a variable or header as secret, such as an API token, and its value goes into your system keychain. It is never shown again; leave a saved one empty to keep it. Names that look like secrets are marked secret for you.
 
-Select **Add server** to save. The server connects, and its row shows **Connected** with the number of tools, or why it failed.
+Select **Add tool server** to save. The server connects, and its row shows **Connected** with the number of tools, or why it failed.
 
 ### Starting a local server
 
@@ -21,9 +21,11 @@ A Flatpak build of Demios can't start programs on your computer and offers remot
 
 ### Signing in to a remote server
 
-For a server that uses sign-in, select **Sign in** on its row. The server's sign-in page opens in your browser; finish there, and the row changes to **Connected**. **Sign out** deletes the stored sign-in and keeps the server's other settings.
+For a server that uses sign-in, select **Sign in** on its row. The server's sign-in page opens in your browser; finish there, and the row changes to **Connected**. **Sign out**, in the row's **More actions** menu, deletes the stored sign-in and keeps the server's other settings.
 
 ### Change or remove a server
+
+Each server's row has a **More actions** menu (the … button):
 
 - **Edit** changes a server's settings. If its address or program changes, type its secrets again.
 - **Reconnect** tries again after a server failed.

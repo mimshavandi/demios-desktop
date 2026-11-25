@@ -134,7 +134,7 @@ jobs:
       - name: Linux webview + WebDriver deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev webkitgtk-webdriver xvfb
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev webkitgtk-webdriver xvfb gnome-keyring
       - name: Cache tauri-driver
         id: tauri-driver-cache
         uses: actions/cache@v4
@@ -158,7 +158,14 @@ jobs:
         run: npm ci
       - name: e2e
         working-directory: apps/desktop/e2e
-        run: xvfb-run -a npm test
+        # A real Secret Service, as on a Linux desktop: the app keeps server and provider keys
+        # in the system keychain, and a headless runner has none (adding a server then fails).
+        # CI only: a session bus plus gnome-keyring with a throwaway, empty-password keyring.
+        run: |
+          dbus-run-session -- bash -euo pipefail -c '
+            printf "" | gnome-keyring-daemon --unlock --components=secrets > /dev/null
+            xvfb-run -a npm test
+          '
 
   # Windows (WebView2 + msedgedriver): runs the same specs as `e2e`, including the axe check,
   # and is a required check. It includes the artifact webview isolation spec

@@ -21,6 +21,8 @@ pub struct Fixture {
     pub extra_tools: Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
     /// Set by `change_tools`: `echo` advertises a different description (#178).
     pub echo_changed: Arc<std::sync::atomic::AtomicBool>,
+    /// Set by `change_tools_and_break_listing`: every later `tools/list` fails.
+    pub listing_broken: Arc<std::sync::atomic::AtomicBool>,
 }
 
 fn tool(v: serde_json::Value) -> Tool {
@@ -94,6 +96,12 @@ pub fn tools() -> Vec<Tool> {
             "inputSchema": {"type": "object"},
             "annotations": {"readOnlyHint": true}
         })),
+        tool(serde_json::json!({
+            "name": "change_tools_and_break_listing",
+            "description": "Changes `echo`, sends tools/list_changed, and makes tools/list fail",
+            "inputSchema": {"type": "object"},
+            "annotations": {"readOnlyHint": true}
+        })),
     ]
 }
 
@@ -112,6 +120,9 @@ impl ServerHandler for Fixture {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
+        if self.listing_broken.load(Ordering::SeqCst) {
+            return Err(ErrorData::internal_error("listing is broken (test)", None));
+        }
         let mut all = tools();
         if self.echo_changed.load(Ordering::SeqCst) {
             for t in &mut all {
@@ -170,6 +181,17 @@ impl ServerHandler for Fixture {
                     .collect();
                 names.sort();
                 CallToolResult::success(vec![ContentBlock::text(names.join(","))])
+            }
+            "change_tools_and_break_listing" => {
+                // As `change_tools`, but listing the tools again then fails.
+                self.echo_changed.store(true, Ordering::SeqCst);
+                self.listing_broken.store(true, Ordering::SeqCst);
+                context
+                    .peer
+                    .notify_tool_list_changed()
+                    .await
+                    .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+                CallToolResult::success(vec![ContentBlock::text("changed; listing broken")])
             }
             "change_tools" => {
                 // Mid-session change (#178): `echo` changes, `added` appears, then the server

@@ -246,6 +246,10 @@ pub struct RepoSummary {
     pub pipeline_tag: Option<String>,
     pub license: Option<String>,
     pub tags: Vec<String>,
+    /// What the model is for, from `pipeline_tag` and tags only (T-INF-26): a hint until a
+    /// header is read; `None` when the Hub doesn't say.
+    #[serde(default)]
+    pub traits_hint: Option<crate::kind::TraitsView>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -882,12 +886,23 @@ impl HubClient {
         info: &RepoInfo,
         variant: &GgufVariant,
     ) -> Result<ModelFootprint> {
+        self.inspect(info, variant).await.map(|(fp, _)| fp)
+    }
+
+    /// [`footprint`](Self::footprint) and what the model is for (T-INF-26), from the same
+    /// header reads. Quantisations of one repo share architecture and template, so one
+    /// variant's traits stand for the repo.
+    pub async fn inspect(
+        &self,
+        info: &RepoInfo,
+        variant: &GgufVariant,
+    ) -> Result<(ModelFootprint, crate::kind::ModelTraits)> {
         let mut parts = Vec::with_capacity(variant.files.len());
         for f in &variant.files {
             parts.push(self.gguf_header(&info.id, &info.sha, f).await?);
         }
         let g = Gguf::merge_split(parts).ok_or_else(|| HubError::Gguf("empty variant".into()))?;
-        Ok(ModelFootprint::from_gguf(&g))
+        Ok((ModelFootprint::from_gguf(&g), crate::kind::from_gguf(&g)))
     }
 
     /// Where `variant`'s chat template comes from, and the template text to store next to it
@@ -1140,6 +1155,7 @@ fn parse_summary(v: &Value) -> Option<RepoSummary> {
         gated: is_gated(&v["gated"]),
         pipeline_tag: v["pipeline_tag"].as_str().map(String::from),
         license: license_of(v, &tags).id,
+        traits_hint: crate::kind::hint(v["pipeline_tag"].as_str(), &tags).map(Into::into),
         tags,
     })
 }
@@ -1495,7 +1511,7 @@ mod tests {
         let mut routes = HashMap::new();
         routes.insert(
             "/api/models?filter=gguf&search=qwen&sort=downloads&direction=-1&limit=2&full=false&cardData=true".into(),
-            Reply::json(r#"[{"id":"Qwen/Qwen3-8B-GGUF","downloads":10,"likes":2,"tags":["license:apache-2.0"]},{"id":"bad id"}]"#),
+            Reply::json(r#"[{"id":"Qwen/Qwen3-8B-GGUF","downloads":10,"likes":2,"pipeline_tag":"text-generation","tags":["license:apache-2.0","conversational"]},{"id":"bad id"}]"#),
         );
         let s = serve(routes).await;
         let c = client(&s.url, None);
@@ -1510,6 +1526,10 @@ mod tests {
         assert_eq!(page.items.len(), 1);
         assert_eq!(page.items[0].id, "Qwen/Qwen3-8B-GGUF");
         assert_eq!(page.items[0].license.as_deref(), Some("apache-2.0"));
+        // Kind from Hub metadata only, marked as a hint (T-INF-26).
+        let hint = page.items[0].traits_hint.as_ref().unwrap();
+        assert_eq!(hint.label, "Chat");
+        assert_eq!(hint.traits.source, crate::kind::TraitsSource::Hint);
         assert!(page.next.is_none());
         // A cursor pointing elsewhere is refused.
         assert!(

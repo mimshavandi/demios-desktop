@@ -50,6 +50,7 @@
     "allow-update-project",
     "allow-delete-project",
     "allow-restore-project",
+    "allow-move-conversation",
     "allow-list-project-files",
     "allow-add-project-files",
     "allow-remove-project-file",

@@ -21,7 +21,10 @@ import type {
 } from "../ipc/types";
 import { App } from "./App";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  localStorage.clear();
+});
 
 // The real renderer needs a webview (constructable stylesheets, sandboxed frames); record
 // what the pane hands it instead. Its own behaviour is tested in ui/artifact-sandbox.
@@ -54,6 +57,34 @@ Element.prototype.hasPointerCapture ??= () => false;
 Element.prototype.releasePointerCapture ??= () => {};
 Element.prototype.scrollIntoView ??= () => {};
 
+/** Opens Settings on a section through the section list (#174). */
+async function openSettings(section: "General" | "Models" | "Tools" | "Skills") {
+  fireEvent.click(await screen.findByRole("button", { name: /^Settings/ }));
+  const nav = await screen.findByRole("navigation", { name: "Settings sections" });
+  fireEvent.click(within(nav).getByRole("button", { name: section }));
+  await screen.findByRole("heading", { level: 1, name: section });
+}
+
+/** Moves to another section while Settings is open. */
+function settingsSection(section: string) {
+  const nav = screen.getByRole("navigation", { name: "Settings sections" });
+  fireEvent.click(within(nav).getByRole("button", { name: section }));
+}
+
+/** Opens a sidebar chat's menu with the keyboard (Radix opens menus on Enter). */
+async function chatMenu(title: string) {
+  const trigger = await screen.findByRole("button", { name: `More actions for “${title}”` });
+  trigger.focus();
+  fireEvent.keyDown(trigger, { key: "Enter" });
+  await screen.findByRole("menu");
+  return trigger;
+}
+
+async function chatMenuItem(title: string, item: string) {
+  await chatMenu(title);
+  fireEvent.click(await screen.findByRole("menuitem", { name: item }));
+}
+
 /** In-memory stand-in for the Rust commands. */
 function fakeApi() {
   const launch = { result: null as UpdateCheck | null, mode: "off" as UpdateMode };
@@ -69,6 +100,8 @@ function fakeApi() {
     pick: [] as { name: string; size: number }[],
     skipped: [] as { name: string; reason: string }[],
     updates: [] as [string, string, string][],
+    moves: [] as [string, string | null][],
+    renames: [] as [string, string][],
   };
   let approvalSink: ((e: ToolEvent) => void) | null = null;
   const responses: [string, string][] = [];
@@ -97,6 +130,7 @@ function fakeApi() {
       notes: "",
       state: { state: "not_downloaded" },
       fit: { status: "caution", estimated: true, reason: "Fits, with little memory left for other apps.", suggested_quant: null },
+      traits: null,
     },
   ];
   const msgs = new Map<string, StoredMessage[]>();
@@ -204,7 +238,12 @@ function fakeApi() {
       msgs.set(c.id, []);
       return c;
     },
-    renameConversation: async () => null,
+    renameConversation: async (cid, title) => {
+      project.renames.push([cid, title]);
+      const c = convs.find((x) => x.id === cid);
+      if (c) c.title = title;
+      return null;
+    },
     listProjects: async () => {
       if (project.failList) throw { code: "storage", message: "Could not read or write local data." };
       return projects.map((p) => ({
@@ -245,6 +284,15 @@ function fakeApi() {
         convs.unshift(c);
       }
       return null;
+    },
+    moveConversation: async (cid, pid) => {
+      project.moves.push([cid, pid]);
+      const c = convs.find((x) => x.id === cid);
+      if (!c) throw { code: "not_found", message: "conversation" };
+      if (pid !== null && !projects.some((x) => x.id === pid)) throw { code: "not_found", message: "This project was deleted." };
+      const before = c.project_id;
+      c.project_id = pid;
+      return before;
     },
     listProjectFiles: async (pid) => files.filter((f) => f.project_id === pid),
     addProjectFiles: async (pid) => {
@@ -444,6 +492,22 @@ describe("App", () => {
     expect(shown.opts?.allowNetwork?.("art-1")).toBe(false);
   });
 
+  it("starts with the artifact pane closed when the window is too narrow to show it beside the chat", async () => {
+    const matchMedia = vi.fn((q: string) => ({ matches: q === "(max-width: 1023px)" }) as MediaQueryList);
+    vi.stubGlobal("matchMedia", matchMedia);
+    try {
+      const { api } = fakeApi();
+      render(<App api={api} />);
+      expect(await screen.findByText("What can I help with?")).toBeTruthy();
+      expect(screen.queryByTestId("artifact-pane")).toBeNull();
+      fireEvent.click(screen.getByTestId("new-chat"));
+      fireEvent.click(screen.getByRole("button", { name: "Show artifacts" }));
+      expect(screen.getByTestId("artifact-pane")).toBeTruthy();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("sends a message and renders the streamed answer as markdown", async () => {
     const { api, emit } = fakeApi();
     render(<App api={api} />);
@@ -553,8 +617,7 @@ describe("App", () => {
     await waitFor(() => expect(reports).toEqual([["answer", "id-3"]]));
     expect(await screen.findByText("Opened the report form in your browser")).toBeTruthy();
 
-    fireEvent.click(await screen.findByRole("button", { name: "Models" }));
-    fireEvent.click(await screen.findByRole("tab", { name: "General" }));
+    await openSettings("General");
     fireEvent.click(await screen.findByRole("button", { name: "Report a problem" }));
     await waitFor(() => expect(reports).toEqual([["answer", "id-3"], ["problem", null]]));
     // Only kinds and message ids went to the backend: no chat text.
@@ -575,6 +638,7 @@ describe("App", () => {
         card_url: "https://huggingface.co/org/Tiny-GGUF",
         selected: "Tiny-Q8_0",
         fit_unknown: false,
+        traits: null,
         variants: [
           { name: "Tiny-Q4_K_M", quant: "Q4_K_M", total_size: 1e9, parts: 1, verifiable: true, fit: null, downloaded: null, progress: null },
           { name: "Tiny-Q8_0", quant: "Q8_0", total_size: 2e9, parts: 1, verifiable: true, fit: null, downloaded: null, progress: null },
@@ -633,8 +697,7 @@ describe("App", () => {
       return false; // the user cancelled the native confirm
     };
     render(<App api={api} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Models" }));
-    fireEvent.click(await screen.findByRole("tab", { name: "General" }));
+    await openSettings("General");
     fireEvent.click(await screen.findByRole("button", { name: "Privacy policy" }));
     fireEvent.click(await screen.findByRole("button", { name: "Accessibility statement" }));
     await waitFor(() => expect(links).toEqual(["https://demios.io/privacy", "https://demios.io/accessibility"]));
@@ -740,12 +803,12 @@ describe("App", () => {
       return res(id);
     };
     render(<App api={api} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Delete “New chat”" }));
+    await chatMenuItem("New chat", "Delete");
     expect(await screen.findByText("Deleted “New chat”")).toBeTruthy();
     expect(deletes).toBe(1);
-    await waitFor(() => expect(screen.queryByRole("button", { name: "Delete “New chat”" })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("button", { name: "More actions for “New chat”" })).toBeNull());
     fireEvent.click(screen.getByRole("button", { name: "Undo" }));
-    expect(await screen.findByRole("button", { name: "Delete “New chat”" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "More actions for “New chat”" })).toBeTruthy();
     expect(restores).toBe(1);
     expect(deletes).toBe(1);
   });
@@ -753,24 +816,28 @@ describe("App", () => {
   it("shows models and settings with telemetry off", async () => {
     const { api } = fakeApi();
     render(<App api={api} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Models" }));
+    await openSettings("Models");
     expect(await screen.findByText("Model for each task")).toBeTruthy();
     expect(screen.getByLabelText("Chat")).toBeTruthy();
-    const key = screen.getByLabelText("OpenAI") as HTMLInputElement;
+    // On this device is the first tab; the models folder is shown there.
+    expect(screen.getByRole("tab", { name: "On this device" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByText("Downloaded models are stored in /tmp/models")).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", { name: "Providers" }));
+    const key = (await screen.findByLabelText("OpenAI")) as HTMLInputElement;
     expect(key.type).toBe("password");
-    expect(screen.getByText(/Messages in chats that use OpenAI models are sent to OpenAI/)).toBeTruthy();
+    // The data-flow sentence once for all providers, not under every key.
+    expect(screen.getAllByText(/sent to that provider under your account/)).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "Save key" }));
     expect(await screen.findByText("Paste the key first.")).toBeTruthy();
     expect(key.getAttribute("aria-invalid")).toBe("true");
 
-    fireEvent.click(screen.getByRole("tab", { name: "General" }));
-    expect(screen.getByRole("tabpanel").getAttribute("aria-labelledby")).toBe("tab-general");
+    settingsSection("General");
+    expect(await screen.findByRole("heading", { level: 1, name: "General" })).toBeTruthy();
     expect(screen.getByText(/Read-only tools run without asking/)).toBeTruthy();
     // No inert telemetry switch; a plain statement instead (T-STORE-11).
     expect(await screen.findByText(/Demios collects no usage data/)).toBeTruthy();
     expect(screen.queryByRole("switch")).toBeNull();
     expect(screen.getByText("Where your data goes")).toBeTruthy();
-    expect(screen.getByText("Downloaded models are stored in /tmp/models")).toBeTruthy();
   });
 
   it("deletes all local data only after a confirm, and cancel changes nothing", async () => {
@@ -783,8 +850,7 @@ describe("App", () => {
       return null;
     };
     render(<App api={api} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Models" }));
-    fireEvent.click(await screen.findByRole("tab", { name: "General" }));
+    await openSettings("General");
     const trigger = await screen.findByRole("button", { name: "Delete all local data" });
 
     fireEvent.click(trigger);
@@ -834,8 +900,7 @@ describe("App", () => {
         finish = () => void summary().then(resolve);
       });
     render(<App api={api} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Models" }));
-    fireEvent.click(await screen.findByRole("tab", { name: "General" }));
+    await openSettings("General");
     fireEvent.click(await screen.findByRole("button", { name: "Delete all local data" }));
     const confirm = (await screen.findByRole("button", { name: "Delete all data" })) as HTMLButtonElement;
     // Well past the 500 ms guard, still disabled: the list isn't known yet.
@@ -857,8 +922,7 @@ describe("App", () => {
       updates: "off",
     });
     render(<App api={api} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Models" }));
-    fireEvent.click(await screen.findByRole("tab", { name: "General" }));
+    await openSettings("General");
     expect(await screen.findByText("Preview build (unsigned), commit 1a2b3c4")).toBeTruthy();
   });
 
@@ -869,6 +933,11 @@ describe("App", () => {
     expect(await screen.findByText(/No model connected/)).toBeTruthy();
     expect((screen.getByLabelText("Message") as HTMLTextAreaElement).disabled).toBe(true);
     expect(screen.getAllByRole("button", { name: "Connect a model" }).length).toBeGreaterThan(0);
+    // The button is a deep link: it opens Models › On this device, even if another page was last.
+    localStorage.setItem("dn.settings", JSON.stringify({ section: "skills" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "Connect a model" })[0]!);
+    expect(await screen.findByRole("heading", { level: 1, name: "Models" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "On this device" }).getAttribute("aria-selected")).toBe("true");
   });
 
   it("shows an approval card with the exact arguments and never auto-allows", async () => {
@@ -1097,9 +1166,9 @@ describe("App", () => {
   it("downloads a local model with progress, pause and a licence warning", async () => {
     const f = fakeApi();
     render(<App api={f.api} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Models" }));
+    await openSettings("Models");
     const row = await screen.findByTestId("local-model-row");
-    expect(row.textContent).toContain("Caution (estimate)");
+    expect(row.textContent).toContain("Tight fit (estimate)");
     expect(row.textContent).toContain("Licence: cc-by-nc-4.0");
     expect(screen.getByText(/Check the licence before downloading/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Download model" }));
@@ -1306,6 +1375,201 @@ describe("Projects", () => {
   });
 });
 
+describe("Settings quick fixes (#174 review)", () => {
+  it("shows General even when the model catalogue can't load; only Models shows the error", async () => {
+    const { api } = fakeApi();
+    const list = api.listModels;
+    let broken = true;
+    api.listModels = async () => {
+      if (broken) throw { code: "storage", message: "Could not read or write local data." };
+      return list();
+    };
+    render(<App api={api} />);
+    await openSettings("General");
+    expect(await screen.findByRole("button", { name: "Delete all local data" })).toBeTruthy();
+    expect(screen.queryByText(/Couldn't load your models/)).toBeNull();
+    settingsSection("Models");
+    expect(await screen.findByText(/Couldn't load your models/)).toBeTruthy();
+    broken = false;
+    fireEvent.click(screen.getAllByRole("button", { name: "Retry" }).at(-1)!);
+    await waitFor(() => expect(screen.queryByText(/Couldn't load your models/)).toBeNull());
+  });
+
+  it("hides the artifact pane while Settings is open and brings it back for the chat", async () => {
+    const { api } = fakeApi();
+    render(<App api={api} />);
+    expect(await screen.findByTestId("artifact-pane")).toBeTruthy();
+    await openSettings("General");
+    expect(screen.queryByTestId("artifact-pane")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Hide artifacts" })).toBeNull();
+    expect(document.querySelector(".app")?.classList.contains("artifacts-open")).toBe(false);
+    fireEvent.click(screen.getByTestId("new-chat"));
+    expect(await screen.findByTestId("artifact-pane")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Hide artifacts" })).toBeTruthy();
+  });
+});
+
+describe("Move a chat into or out of a project (#136)", () => {
+  const setup = () => {
+    const f = fakeApi();
+    f.projects.push({ id: "p1", name: "Thesis", instructions: "", created_at: 0, updated_at: 0 });
+    f.projects.push({ id: "p2", name: "Work", instructions: "", created_at: 0, updated_at: 0 });
+    f.convs.push({ id: "c1", title: "Loose chat", model: null, project_id: null, created_at: 0, updated_at: 0 });
+    return f;
+  };
+  const pick = async (name: string) => {
+    fireEvent.click(await screen.findByRole("combobox", { name: "Project" }));
+    fireEvent.click(await screen.findByRole("option", { name }));
+  };
+
+  it("moves the open chat into a project, shows it there, and Undo moves it back", async () => {
+    const { api, project, convs } = setup();
+    render(<App api={api} />);
+    expect(await screen.findByText("Loose chat", { selector: ".titlebar-title" })).toBeTruthy();
+    await pick("Thesis");
+    expect(await screen.findByText("Moved to “Thesis”")).toBeTruthy();
+    expect(project.moves).toEqual([["c1", "p1"]]);
+    expect(await screen.findByText("Thesis / Loose chat")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(project.moves).toEqual([["c1", "p1"], ["c1", null]]));
+    await waitFor(() => expect(convs[0]?.project_id).toBeNull());
+    expect(await screen.findByText("Loose chat", { selector: ".titlebar-title" })).toBeTruthy();
+  });
+
+  it("moves a chat out of its project", async () => {
+    const { api, project, convs } = setup();
+    convs[0]!.project_id = "p2";
+    render(<App api={api} />);
+    expect(await screen.findByText("Work / Loose chat")).toBeTruthy();
+    await pick("No project");
+    expect(await screen.findByText("Removed from “Work”")).toBeTruthy();
+    expect(project.moves).toEqual([["c1", null]]);
+  });
+
+  it("says so when the project is gone, and the chat stays where it was", async () => {
+    const { api, projects, convs } = setup();
+    render(<App api={api} />);
+    await screen.findByText("Loose chat", { selector: ".titlebar-title" });
+    projects.splice(0, 1); // Thesis deleted elsewhere
+    await pick("Thesis");
+    expect(await screen.findByText(/Couldn't move the chat. This project was deleted./)).toBeTruthy();
+    expect(convs[0]?.project_id).toBeNull();
+  });
+
+  it("a new chat starts in the project picked before the first message", async () => {
+    const { api, created, convs } = setup();
+    convs.length = 0;
+    render(<App api={api} />);
+    await pick("Work");
+    expect(await screen.findByText("Work / New chat")).toBeTruthy();
+    const box = screen.getByLabelText("Message");
+    fireEvent.change(box, { target: { value: "Plan the week" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    await waitFor(() => expect(created).toEqual(["p2"]));
+  });
+
+  it("has no project picker when there are no projects", async () => {
+    const { api } = fakeApi();
+    render(<App api={api} />);
+    await screen.findByLabelText("Message");
+    expect(screen.queryByTestId("project-picker")).toBeNull();
+  });
+});
+
+describe("Sidebar chat menu (#166)", () => {
+  const setup = () => {
+    const f = fakeApi();
+    f.projects.push({ id: "p1", name: "Thesis", instructions: "", created_at: 0, updated_at: 0 });
+    f.convs.push({ id: "c1", title: "Draft", model: null, project_id: null, created_at: 0, updated_at: 0 });
+    return f;
+  };
+
+  it("opens from the keyboard, moves with the arrow keys, and Esc returns focus to the trigger", async () => {
+    const { api } = setup();
+    render(<App api={api} />);
+    const trigger = await chatMenu("Draft");
+    const items = screen.getAllByRole("menuitem").map((i) => i.textContent);
+    expect(items).toEqual(["Move to project", "Rename", "Delete"]);
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+  });
+
+  it("moves a chat into a project from the submenu, with Undo", async () => {
+    const { api, project, convs } = setup();
+    render(<App api={api} />);
+    await chatMenu("Draft");
+    const sub = screen.getByRole("menuitem", { name: "Move to project" });
+    sub.focus();
+    fireEvent.keyDown(sub, { key: "ArrowRight" });
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: "Thesis" }));
+    expect(await screen.findByText("Moved to “Thesis”")).toBeTruthy();
+    expect(project.moves).toEqual([["c1", "p1"]]);
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(convs[0]?.project_id).toBeNull());
+  });
+
+  it("renames inline: Enter saves, and focus goes back to the row", async () => {
+    const { api, project } = setup();
+    render(<App api={api} />);
+    await chatMenuItem("Draft", "Rename");
+    const input = (await screen.findByLabelText("Chat name")) as HTMLInputElement;
+    await waitFor(() => expect(document.activeElement).toBe(input));
+    fireEvent.change(input, { target: { value: "Final report" } });
+    fireEvent.submit(input.closest("form")!);
+    expect(await screen.findByRole("button", { name: "Final report" })).toBeTruthy();
+    expect(project.renames).toEqual([["c1", "Final report"]]);
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Final report" })));
+  });
+
+  it("Esc cancels a rename without saving", async () => {
+    const { api, project } = setup();
+    render(<App api={api} />);
+    await chatMenuItem("Draft", "Rename");
+    const input = await screen.findByLabelText("Chat name");
+    fireEvent.change(input, { target: { value: "Something else" } });
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(await screen.findByRole("button", { name: "Draft" })).toBeTruthy();
+    expect(project.renames).toEqual([]);
+  });
+
+  it("keeps the typed name and says why when renaming fails, and refuses an empty name", async () => {
+    const { api } = setup();
+    api.renameConversation = async () => {
+      throw { code: "storage", message: "Could not read or write local data." };
+    };
+    render(<App api={api} />);
+    await chatMenuItem("Draft", "Rename");
+    const input = (await screen.findByLabelText("Chat name")) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "   " } });
+    fireEvent.submit(input.closest("form")!);
+    expect(await screen.findByText("A chat name is 1–200 characters.")).toBeTruthy();
+    fireEvent.change(input, { target: { value: "Final report" } });
+    fireEvent.submit(input.closest("form")!);
+    expect(await screen.findByText(/Couldn't rename the chat. Could not read or write local data./)).toBeTruthy();
+    expect(input.value).toBe("Final report");
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+  });
+
+  it("deletes from the menu with Undo, and focus moves to New chat", async () => {
+    const { api } = setup();
+    render(<App api={api} />);
+    await chatMenuItem("Draft", "Delete");
+    expect(await screen.findByText("Deleted “Draft”")).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId("new-chat")));
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    expect(await screen.findByRole("button", { name: "Draft" })).toBeTruthy();
+  });
+
+  it("has no Move to project entry when there are no projects", async () => {
+    const { api, convs } = fakeApi();
+    convs.push({ id: "c1", title: "Draft", model: null, project_id: null, created_at: 0, updated_at: 0 });
+    render(<App api={api} />);
+    await chatMenu("Draft");
+    expect(screen.getAllByRole("menuitem").map((i) => i.textContent)).toEqual(["Rename", "Delete"]);
+  });
+});
+
 describe("No silent fallbacks (#141)", () => {
   const fail = () => {
     throw { code: "storage", message: "Could not read or write local data." };
@@ -1327,8 +1591,9 @@ describe("No silent fallbacks (#141)", () => {
     convs.push({ id: "c1", title: "Gone", model: null, project_id: null, created_at: 0, updated_at: 0 });
     convs.push({ id: "c2", title: "Kept", model: null, project_id: null, created_at: 0, updated_at: 0 });
     render(<App api={api} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Delete “Gone”" }));
+    await chatMenu("Gone");
     api.listConversations = async () => fail();
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
     expect(await screen.findByText(/Couldn't load chats/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Kept" })).toBeNull();
   });
@@ -1383,11 +1648,103 @@ describe("No silent fallbacks (#141)", () => {
     let broken = true;
     api.watchLocalModels = async (cb) => (broken ? fail() : watch(cb));
     render(<App api={api} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Models" }));
+    await openSettings("Models");
     expect(await screen.findByText(/Couldn't load the models on this device/)).toBeTruthy();
     expect(screen.queryByText("No models in the catalogue.")).toBeNull();
     broken = false;
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(screen.queryByText(/Couldn't load the models on this device/)).toBeNull());
+  });
+});
+
+describe("Settings sections (#174)", () => {
+  it("lists General first, marks the open section, and moves with the arrow keys", async () => {
+    const { api } = fakeApi();
+    render(<App api={api} />);
+    await openSettings("General");
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    const items = within(nav).getAllByRole("button");
+    expect(items.map((b) => b.textContent)).toEqual(["General", "Models", "Tools", "Skills"]);
+    expect(items[0]!.getAttribute("aria-current")).toBe("page");
+    // Roving focus: only the open section is in the Tab order.
+    expect(items.map((b) => b.tabIndex)).toEqual([0, -1, -1, -1]);
+    items[0]!.focus();
+    fireEvent.keyDown(items[0]!, { key: "ArrowDown" });
+    expect(await screen.findByRole("heading", { level: 1, name: "Models" })).toBeTruthy();
+    await waitFor(() => expect(document.activeElement?.textContent).toBe("Models"));
+    fireEvent.keyDown(document.activeElement!, { key: "End" });
+    expect(await screen.findByRole("heading", { level: 1, name: "Skills" })).toBeTruthy();
+    fireEvent.keyDown(document.activeElement!, { key: "Home" });
+    expect(await screen.findByRole("heading", { level: 1, name: "General" })).toBeTruthy();
+  });
+
+  it("opens Tools and Skills on their own pages", async () => {
+    const { api } = fakeApi();
+    render(<App api={api} />);
+    await openSettings("Tools");
+    expect(await screen.findByRole("button", { name: "Add tool server" })).toBeTruthy();
+    settingsSection("Skills");
+    expect(await screen.findByRole("heading", { level: 1, name: "Skills" })).toBeTruthy();
+    // Skills moved out of General.
+    settingsSection("General");
+    await screen.findByRole("heading", { level: 1, name: "General" });
+    expect(screen.queryByRole("heading", { level: 2, name: "Skills" })).toBeNull();
+  });
+
+  it("remembers the last page and opens it again from the sidebar and ⌘,", async () => {
+    const { api } = fakeApi();
+    render(<App api={api} />);
+    await openSettings("Models");
+    fireEvent.click(screen.getByRole("tab", { name: "Providers" }));
+    settingsSection("Models");
+    fireEvent.click(screen.getByTestId("new-chat"));
+    await screen.findByLabelText("Message");
+    fireEvent.click(screen.getByRole("button", { name: /^Settings/ }));
+    expect(await screen.findByRole("heading", { level: 1, name: "Models" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Providers" }).getAttribute("aria-selected")).toBe("true");
+    fireEvent.click(screen.getByTestId("new-chat"));
+    await screen.findByLabelText("Message");
+    fireEvent.keyDown(window, { key: ",", metaKey: true, ctrlKey: true });
+    expect(await screen.findByRole("heading", { level: 1, name: "Models" })).toBeTruthy();
+  });
+
+  it("moves between the Models tabs with the arrow keys, Home and End", async () => {
+    const { api } = fakeApi();
+    render(<App api={api} />);
+    await openSettings("Models");
+    const device = screen.getByRole("tab", { name: "On this device" });
+    device.focus();
+    fireEvent.keyDown(device, { key: "ArrowRight" });
+    const servers = screen.getByRole("tab", { name: "Model servers" });
+    expect(servers.getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(servers);
+    expect(screen.getByRole("tabpanel").getAttribute("aria-labelledby")).toBe("models-tab-servers");
+    expect(within(screen.getByRole("tabpanel")).getByRole("button", { name: "Add model server" })).toBeTruthy();
+    fireEvent.keyDown(servers, { key: "ArrowRight" });
+    const providers = screen.getByRole("tab", { name: "Providers" });
+    expect(providers.getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("tabpanel").getAttribute("aria-labelledby")).toBe("models-tab-providers");
+    fireEvent.keyDown(providers, { key: "Home" });
+    expect(screen.getByRole("tab", { name: "On this device" }).getAttribute("aria-selected")).toBe("true");
+    fireEvent.keyDown(document.activeElement!, { key: "End" });
+    expect(screen.getByRole("tab", { name: "Providers" }).getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("offers a select for the section on narrow windows", async () => {
+    const { api } = fakeApi();
+    render(<App api={api} />);
+    await openSettings("General");
+    const select = screen.getByLabelText("Settings section") as HTMLSelectElement;
+    expect(select.value).toBe("general");
+    fireEvent.change(select, { target: { value: "tools" } });
+    expect(await screen.findByRole("heading", { level: 1, name: "Tools" })).toBeTruthy();
+  });
+
+  it("has one Settings entry in the app sidebar", async () => {
+    const { api } = fakeApi();
+    render(<App api={api} />);
+    const side = await screen.findByRole("navigation", { name: "Chats" });
+    expect(within(side).queryByRole("button", { name: "Models" })).toBeNull();
+    expect(within(side).getByRole("button", { name: /^Settings/ })).toBeTruthy();
   });
 });

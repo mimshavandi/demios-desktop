@@ -48,6 +48,8 @@ Every direct dependency is listed here with why and its licence (ADR-0009). Anyt
 | highlight.js (core + 13 languages) | code highlighting | BSD-3-Clause | T-SHELL-01 |
 | @radix-ui/react-{tooltip,switch,select,toast} | headless primitives required by the design standard (ADR-0010, §4) | MIT | T-SHELL-01 |
 | @radix-ui/react-alert-dialog | shared confirm for irreversible actions (design-system §4 Dialog, alert variant; lead approved 2026-11-24) | MIT | T-STORE-11 |
+| @radix-ui/react-dialog 1 | design-system Dialog for work in a layer above the page (the add-model dialog): role=dialog, focus trap, Esc, focus return, full screen on narrow windows; confirms stay on alert-dialog (lead approved 2026-11-25; already in the tree through alert-dialog) | MIT | T-SHELL-19 |
+| @radix-ui/react-dropdown-menu 2 | design-system DropdownMenu (keyboard, typeahead, submenus, focus return); the sidebar chat menu: move to project, rename, delete (lead approved 2026-11-25) | MIT | T-SHELL-16 |
 | lucide-react | icons, 16 px / 1.5 stroke (design standard §4) | ISC | T-SHELL-01 |
 | dev: typescript 7, vite 8, @vitejs/plugin-react, vitest, @testing-library/react, jsdom, @types/react(-dom), @types/node 22, @tauri-apps/cli ~2.11 | strict typecheck, build, unit tests, `tauri dev/build` | MIT / Apache-2.0 | T-SHELL-01 |
 

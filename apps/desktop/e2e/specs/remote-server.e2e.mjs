@@ -7,6 +7,9 @@ import http from "node:http";
 
 const byTestId = (id) => $(`[data-testid="${id}"]`);
 const textOf = (el) => browser.execute((e) => e.textContent ?? "", el);
+/** What the page shows, for failure messages. */
+const onScreen = () =>
+  browser.execute(() => (document.querySelector("main") ?? document.body).innerText.replace(/\s+/g, " ").slice(0, 600));
 
 /** Streams `chunks` as OpenAI chat-completion SSE events, then `[DONE]`. */
 function sse(res, chunks, finish) {
@@ -107,34 +110,18 @@ describe("OpenAI-compatible server", () => {
     await (await byTestId("new-chat")).waitForExist({ timeout: 60_000 });
 
     // Settings › Models › Model servers: add the mock by address.
-    // CSS plus a text match (`.x button*=Models`) is an invalid WebDriver selector: filter by text.
-    let models;
-    for (const b of await $$(".sidebar-foot button")) {
-      if ((await textOf(b)).trim() === "Models") models = b;
-    }
-    if (models === undefined) throw new Error("no Models button in the sidebar");
-    // Settings › Models shows its cards once the model catalog loads (`list_models`): time it,
-    // so a slow catalog (for example the system keychain answering slowly) shows in the log.
-    const catalogMs = await browser.executeAsync((done) => {
-      const t0 = performance.now();
-      window.__TAURI_INTERNALS__
-        .invoke("list_models")
-        .then(() => done(Math.round(performance.now() - t0)))
-        .catch((e) => done(`failed after ${Math.round(performance.now() - t0)} ms: ${JSON.stringify(e)}`));
-    });
-    console.log(`list_models: ${catalogMs}${typeof catalogMs === "number" ? " ms" : ""}`);
+    const settings = await $(".sidebar-foot button");
+    await settings.waitForExist({ timeout: 30_000, timeoutMsg: "no Settings button in the sidebar" });
+    await settings.click();
+    const models = await $('.settings-nav button[data-section="models"]');
+    await models.waitForExist({ timeout: 30_000, timeoutMsg: "Settings has no Models section" });
     await models.click();
+    const tab = await $("#models-tab-servers");
+    await tab.waitForExist({ timeout: 30_000, timeoutMsg: "Settings › Models has no Model servers tab" });
+    await tab.click();
     // The form opens from "Add model server" (an empty state while there are no servers).
     const open = await byTestId("add-model-server");
-    try {
-      await open.waitForExist({ timeout: 30_000 });
-    } catch {
-      // Say what Settings › Models shows instead (still loading, an error, another page).
-      const shown = await browser.execute(() =>
-        (document.querySelector("main") ?? document.body).innerText.replace(/\s+/g, " ").slice(0, 600),
-      );
-      throw new Error(`Settings › Models has no Add model server button. On screen: ${shown}`);
-    }
+    await open.waitForExist({ timeout: 30_000, timeoutMsg: "the Model servers tab has no Add model server button" });
     await open.scrollIntoView();
     await open.click();
     const url = await byTestId("server-url");
@@ -149,7 +136,12 @@ describe("OpenAI-compatible server", () => {
     await (await byTestId("server-name")).setValue("Mock");
     await (await byTestId("add-server")).click();
     const row = await $('[data-testid="remote-model"][data-model="mock-chat"]');
-    await row.waitForExist({ timeout: 30_000, timeoutMsg: "the server's model was not listed" });
+    try {
+      await row.waitForExist({ timeout: 30_000 });
+    } catch {
+      // Say why (for example the error under the Address field).
+      throw new Error(`the server's model was not listed. On screen: ${await onScreen()}`);
+    }
     // The server said "tools" in /api/show: no switch, a "Tool calls" badge.
     expect(await textOf(row)).toContain("Tool calls");
     // The status check lists the models again: the badge says Connected.
