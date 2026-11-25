@@ -11,6 +11,7 @@ pub mod artifacts;
 pub mod chat;
 pub mod commands;
 pub mod deeplink;
+pub mod distribution;
 pub mod error;
 #[cfg(any(fake_model, test))]
 pub mod fake;
@@ -24,6 +25,7 @@ pub mod settings;
 pub mod state;
 pub mod support;
 pub mod tool_review;
+pub mod updates;
 
 use std::path::PathBuf;
 
@@ -143,7 +145,7 @@ impl mcp::LaunchApprover for NativeLaunchApprover {
 }
 
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         // First: a second launch (e.g. from a demios:// link) hands over to this one. With
         // the `deep-link` feature the link is forwarded to the deep-link plugin below; the
         // second launch's command line is otherwise ignored.
@@ -174,7 +176,13 @@ pub fn run() {
         )
         // Native "start this program?" confirm for local MCP servers, shown from Rust only;
         // none of the dialog plugin's JS commands are granted (see capabilities).
-        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_dialog::init());
+    // Signed self-update, direct-download builds only (T-STORE-08). Used from Rust only
+    // (`updates::check_for_update` / `install_update`); none of its JS commands are granted.
+    #[cfg(feature = "updater")]
+    let builder = builder.plugin(updates::plugin());
+    builder
+        .manage(updates::Updates::default())
         .setup(|app| {
             use tauri::Manager;
             let dir = data_dir().ok_or("no home directory to keep app data in")?;
@@ -257,6 +265,8 @@ pub fn run() {
             artifact_child::artifact_child_probe_report,
             artifact_child::artifact_child_state,
             commands::pause_download,
+            updates::check_for_update,
+            updates::install_update,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Demios Desktop")

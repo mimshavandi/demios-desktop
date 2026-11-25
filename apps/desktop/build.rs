@@ -51,6 +51,8 @@ const COMMANDS: &[&str] = &[
     "watch_local_models",
     "download_model",
     "pause_download",
+    "check_for_update",
+    "install_update",
     // Windows artifact webview (artifact_child.rs, ADR-0012); main webview only.
     "artifact_child_open",
     "artifact_child_render",
@@ -126,8 +128,24 @@ fn artifact_frame() {
     std::fs::write(out.join("artifact-host.js"), hj).expect("write host script");
 }
 
+// The distribution guard (T-STORE-08), shared with the app as `crate::distribution`.
+include!("src/distribution.rs");
+
 fn main() {
     artifact_frame();
+    // Store (MSIX) and Flathub builds must not contain the self-updater.
+    println!("cargo::rerun-if-env-changed=DEMIOS_DISTRIBUTION");
+    println!("cargo::rerun-if-env-changed=DEMIOS_UPDATER_PUBKEY");
+    let distribution = std::env::var("DEMIOS_DISTRIBUTION").ok();
+    if let Err(why) = check_build(
+        std::env::var_os("CARGO_FEATURE_UPDATER").is_some(),
+        distribution.as_deref(),
+    ) {
+        panic!("{why}");
+    }
+    // Shown on the About screen (`app_info`); set by the preview workflow.
+    println!("cargo::rerun-if-env-changed=DEMIOS_BUILD_COMMIT");
+    println!("cargo::rerun-if-env-changed=DEMIOS_BUILD_CHANNEL");
     // The dev fake model (T-SHELL-03) exists only with the feature *and* in debug builds.
     println!("cargo::rustc-check-cfg=cfg(fake_model)");
     if std::env::var_os("CARGO_FEATURE_DEV_FAKE_MODEL").is_some()

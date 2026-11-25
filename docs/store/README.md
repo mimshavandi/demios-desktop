@@ -5,6 +5,7 @@ What it takes to ship Demios Desktop to its distribution targets: macOS direct d
 | File | What it is |
 |---|---|
 | [readiness-audit.md](readiness-audit.md) | T-STORE-01 audit: ranked findings with evidence, a verdict per target, a Mac App Store note and the owner items |
+| [updates.md](updates.md) | T-STORE-08: signed updates for direct downloads, the signing-key setup and what a release must publish |
 | [review-notes.md](review-notes.md) | Draft reviewer and certification notes (Microsoft Store, Flathub PR) |
 | [`apps/desktop/.app-review-readiness.json`](../../apps/desktop/.app-review-readiness.json) | Manual-check record in the app-store-compliance skill's format. It sits in the app folder because the skill's guard reads it from the folder it scans. `desktop_checks` adds the desktop gates the guard does not know about |
 

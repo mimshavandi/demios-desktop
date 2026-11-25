@@ -380,6 +380,17 @@ pre.code .code-copy { position: absolute; top: var(--dn-space-1); right: var(--d
   transition: width var(--dn-motion-base) var(--dn-motion-ease);
 }
 
+/* ---------- updates (Settings › About, T-STORE-08) ---------- */
+.update-row { align-items: flex-start; }
+.update-status { display: grid; gap: var(--dn-space-1); }
+.update-status:empty { display: none; }
+.update-found { font-weight: var(--dn-weight-medium); }
+.update-notes {
+  max-height: calc(var(--dn-space-8) * 4); overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+  padding: var(--dn-space-2) var(--dn-space-3); border-radius: var(--dn-radius-md);
+  background: var(--dn-color-surface-sunken); font-size: var(--dn-text-sm);
+}
+
 /* ---------- artifact pane ---------- */
 .artifacts {
   grid-area: art; min-width: 0; display: grid; place-items: center;

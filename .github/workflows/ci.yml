@@ -5,6 +5,9 @@ on:
     branches: [main]
 permissions:
   contents: read
+# Actions cache budget (T-GOV-13): the repo gets 10 GB. Rust caches are saved from main only;
+# pull requests restore main's entry and never save, so they can't evict it.
+# cache-cleanup.yml removes superseded main entries and closed PRs' entries.
 jobs:
   secrets:
     runs-on: ubuntu-latest
@@ -28,6 +31,8 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # Tauri (apps/desktop) links WebKitGTK on Linux.
       - name: Linux webview deps
         if: runner.os == 'Linux'
@@ -40,6 +45,9 @@ jobs:
       # The shell without the dev fake model (what release builds ship) and with it.
       - run: cargo test -p demios-desktop --no-default-features
       - run: cargo test -p demios-desktop --features dev-fake-model
+      # Direct-download builds turn on the signed updater (T-STORE-08).
+      - run: cargo clippy -p demios-desktop --all-targets --features updater -- -D warnings
+      - run: cargo test -p demios-desktop --features updater
   design-tokens:
     runs-on: ubuntu-latest
     steps:
@@ -70,6 +78,8 @@ jobs:
       # The UI imports dn-core's generated TS types; fail if they are stale.
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo test -p dn-core --features ts ts_bindings
   # Real-app e2e (T-SHELL-05): tauri-driver + WebdriverIO against a debug build with
   # the dev fake model. macOS has no WKWebView WebDriver; see apps/desktop/e2e/README.md.
@@ -91,6 +101,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: e2e
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Linux webview + WebDriver deps
         run: |
           sudo apt-get update
@@ -143,6 +154,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: e2e
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Cache tauri-driver
         id: tauri-driver-cache
         uses: actions/cache@v4
