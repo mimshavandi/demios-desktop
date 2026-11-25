@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-mcp-tool-choice"
+description = "Enables the set_mcp_tool_choice command without any pre-configured scope."
+commands.allow = ["set_mcp_tool_choice"]
+
+[[permission]]
+identifier = "deny-set-mcp-tool-choice"
+description = "Denies the set_mcp_tool_choice command without any pre-configured scope."
+commands.deny = ["set_mcp_tool_choice"]

@@ -162,6 +162,8 @@ pub fn model_error(e: CoreError) -> IpcError {
 pub struct ManifestTools {
     pub executor: Arc<dn_tools::Executor>,
     pub manifest: AgentManifest,
+    /// Servers still connecting: their tools are hidden until their review policy applies.
+    pub settling: Arc<crate::tool_review::Settling>,
 }
 
 impl ManifestTools {
@@ -169,7 +171,11 @@ impl ManifestTools {
         self.executor
             .capabilities()
             .into_iter()
-            .filter(|c| !c.disabled && self.manifest.allows_tool(&c.spec.id))
+            .filter(|c| {
+                !c.disabled
+                    && !self.settling.contains(&c.server_id)
+                    && self.manifest.allows_tool(&c.spec.id)
+            })
             .map(|c| c.llm_name)
             .collect()
     }

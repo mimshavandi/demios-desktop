@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-hub-resolve-link"
+description = "Enables the hub_resolve_link command without any pre-configured scope."
+commands.allow = ["hub_resolve_link"]
+
+[[permission]]
+identifier = "deny-hub-resolve-link"
+description = "Denies the hub_resolve_link command without any pre-configured scope."
+commands.deny = ["hub_resolve_link"]

@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The main window may call the app's own chat, history and settings commands and drag the window by its title bar; nothing else (no fs, shell or http plugins; the opener plugin is present for Rust-side use but not granted to the webview).",
-  "windows": [
+  "description": "The app's main webview (label `main`) may call the app's own chat, history and settings commands and drag the window by its title bar; nothing else (no fs, shell or http plugins; the opener plugin is present for Rust-side use but not granted to the webview).",
+  "webviews": [
     "main"
   ],
   "permissions": [
@@ -16,12 +16,18 @@
     "allow-remove-mcp-server",
     "allow-reconnect-mcp-server",
     "allow-sign-in-mcp-server",
+    "allow-list-mcp-tools",
+    "allow-set-mcp-tool-choice",
+    "allow-mark-mcp-tools-reviewed",
     "allow-sign-out-mcp-server",
     "allow-hub-search",
     "allow-hub-repo",
     "allow-hub-pull",
     "allow-hub-cancel",
     "allow-hub-pull-status",
+    "allow-watch-add-links",
+    "allow-add-link-done",
+    "allow-hub-resolve-link",
     "allow-hf-token-status",
     "allow-set-hf-token",
     "allow-delete-hf-token",

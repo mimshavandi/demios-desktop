@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Api } from "../ipc/commands";
 import type {
+  AddModelLink,
   ApprovalPrompt,
   ArtifactDetail,
   ChatEvent,
@@ -118,6 +119,11 @@ function fakeApi() {
     hubPull: async () => "local:x",
     hubCancel: async () => true,
     hubPullStatus: async () => ({}),
+    watchAddLinks: async () => null,
+    addLinkDone: async () => null,
+    hubResolveLink: async () => {
+      throw { code: "model_unavailable", message: "not in this test" };
+    },
     hfTokenStatus: async () => false,
     setHfToken: async () => true,
     deleteHfToken: async () => false,
@@ -127,6 +133,9 @@ function fakeApi() {
     reconnectMcpServer: async () => null,
     signInMcpServer: async () => null,
     signOutMcpServer: async () => ({ servers: [], local_servers_allowed: true }),
+    listMcpTools: async (serverId) => ({ server_id: serverId, connected: false, tools: [] }),
+    setMcpToolChoice: async (serverId) => ({ server_id: serverId, connected: false, tools: [] }),
+    markMcpToolsReviewed: async (serverId) => ({ server_id: serverId, connected: false, tools: [] }),
     openLink: async (url) => {
       links.push(url);
       return true;
@@ -387,6 +396,69 @@ describe("App", () => {
     await waitFor(() => expect(reports).toEqual([["answer", "id-3"], ["problem", null]]));
     // Only kinds and message ids went to the backend: no chat text.
     expect(JSON.stringify(reports)).not.toContain("private question");
+  });
+
+  it("a demios:// link opens the add-model confirmation and downloads nothing by itself", async () => {
+    const { api } = fakeApi();
+    const calls: string[] = [];
+    api.watchAddLinks = async () => ({ repo: "org/Tiny-GGUF", file: null, quant: "Q8_0", revision: null });
+    api.hubResolveLink = async (link) => {
+      calls.push(`resolve ${link.repo} ${link.quant ?? ""}`);
+      return {
+        id: "org/Tiny-GGUF",
+        sha: "c".repeat(40),
+        gated: false,
+        license: { id: "apache-2.0", name: null, link: null, warning: null },
+        card_url: "https://huggingface.co/org/Tiny-GGUF",
+        selected: "Tiny-Q8_0",
+        fit_unknown: false,
+        variants: [
+          { name: "Tiny-Q4_K_M", quant: "Q4_K_M", total_size: 1e9, parts: 1, verifiable: true, fit: null, downloaded: null, progress: null },
+          { name: "Tiny-Q8_0", quant: "Q8_0", total_size: 2e9, parts: 1, verifiable: true, fit: null, downloaded: null, progress: null },
+        ],
+      };
+    };
+    api.hubPull = async () => {
+      calls.push("pull");
+      return "local:x";
+    };
+    api.addLinkDone = async () => {
+      calls.push("done");
+      return null;
+    };
+    render(<App api={api} />);
+    expect(await screen.findByText(/A link asked to add this model/)).toBeTruthy();
+    const variants = await screen.findAllByTestId("hub-variant");
+    expect(variants[0]!.textContent).toContain("Chosen by the link");
+    expect(variants[0]!.getAttribute("data-selected")).toBe("true");
+    expect(calls).toEqual(["resolve org/Tiny-GGUF Q8_0"]);
+    expect(calls).not.toContain("pull");
+
+    fireEvent.click(screen.getByRole("button", { name: "Not now" }));
+    await waitFor(() => expect(calls).toContain("done"));
+    expect(screen.queryByText(/A link asked to add this model/)).toBeNull();
+    expect(calls).not.toContain("pull");
+  });
+
+  it("a link mid-chat keeps the composer draft", async () => {
+    const { api } = fakeApi();
+    let deliver: ((l: AddModelLink) => void) | null = null;
+    api.watchAddLinks = async (on) => {
+      deliver = on;
+      return null;
+    };
+    api.hubResolveLink = async () => {
+      throw { code: "model_unavailable", message: "offline in this test" };
+    };
+    render(<App api={api} />);
+    const box = (await screen.findByLabelText("Message")) as HTMLTextAreaElement;
+    fireEvent.change(box, { target: { value: "half-written question" } });
+    await waitFor(() => expect(deliver).not.toBeNull());
+    act(() => deliver?.({ repo: "org/Tiny-GGUF", file: null, quant: null, revision: null }));
+    fireEvent.click(await screen.findByRole("button", { name: "Not now" }));
+    fireEvent.click(screen.getAllByRole("button", { name: /New chat/ })[0]!);
+    const back = (await screen.findByLabelText("Message")) as HTMLTextAreaElement;
+    expect(back.value).toBe("half-written question");
   });
 
   it("links in answers go to the backend to confirm and open, never navigate the app", async () => {
@@ -748,7 +820,7 @@ describe("App", () => {
     act(() =>
       f.approve({
         type: "mcp_server",
-        status: { server_id: "fs", name: "Files", state: "failed", message: "It didn't start.", tools: 0 },
+        status: { server_id: "fs", name: "Files", state: "failed", message: "It didn't start.", tools: 0, review: 0 },
       }),
     );
     expect(await screen.findByText("Files couldn't connect. It didn't start.")).toBeTruthy();

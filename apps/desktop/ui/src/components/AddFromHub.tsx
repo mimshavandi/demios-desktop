@@ -8,6 +8,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Api } from "../ipc/commands";
 import {
   errorMessage,
+  type AddModelLink,
   type HubLicense,
   type HubRepoSummary,
   type HubRepoView,
@@ -31,7 +32,16 @@ const SORTS: { value: HubSort; label: string }[] = [
   { value: "updated", label: "Recently updated" },
 ];
 
-export function AddFromHub({ api, onClose }: { api: Api; onClose: () => void }) {
+export function AddFromHub({
+  api,
+  onClose,
+  link = null,
+}: {
+  api: Api;
+  onClose: () => void;
+  /** Opened by a demios:// link: go straight to its confirmation. */
+  link?: AddModelLink | null;
+}) {
   const [text, setText] = useState("");
   const [sort, setSort] = useState<HubSort>("downloads");
   const [results, setResults] = useState<Results>({ kind: "idle" });
@@ -60,6 +70,11 @@ export function AddFromHub({ api, onClose }: { api: Api; onClose: () => void }) 
       setResults({ kind: "error", message: errorMessage(e) });
     }
   };
+
+  if (link !== null) {
+    // From a link: the confirmation only; leaving it closes the panel.
+    return <RepoDetail api={api} repo={link.repo} link={link} onBack={onClose} />;
+  }
 
   if (repo !== null) {
     return (
@@ -194,7 +209,17 @@ type Pull =
   | { paused: true; done: number; total: number }
   | { error: string };
 
-function RepoDetail({ api, repo, onBack }: { api: Api; repo: string; onBack: () => void }) {
+function RepoDetail({
+  api,
+  repo,
+  onBack,
+  link = null,
+}: {
+  api: Api;
+  repo: string;
+  onBack: () => void;
+  link?: AddModelLink | null;
+}) {
   const toast = useToast();
   const [view, setView] = useState<HubRepoView | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -219,7 +244,7 @@ function RepoDetail({ api, repo, onBack }: { api: Api; repo: string; onBack: () 
     setError(null);
     setView(null);
     try {
-      const v = await api.hubRepo(repo);
+      const v = link !== null ? await api.hubResolveLink(link) : await api.hubRepo(repo);
       setView(v);
       // Downloads still running from an earlier visit: show them, then follow them below.
       const running: Record<string, Pull> = {};
@@ -298,8 +323,13 @@ function RepoDetail({ api, repo, onBack }: { api: Api; repo: string; onBack: () 
   return (
     <section className="hub" aria-labelledby="hub-repo-h" aria-busy={view === null && error === null}>
       <Button size="sm" variant="ghost" icon={<ArrowLeft {...ICON} aria-hidden="true" />} onClick={onBack}>
-        Back to results
+        {link !== null ? "Not now" : "Back to results"}
       </Button>
+      {link !== null && (
+        <InlineMessage tone="info">
+          A link asked to add this model. Check it below; nothing downloads until you choose Download.
+        </InlineMessage>
+      )}
       <h3 id="hub-repo-h" ref={headingRef} tabIndex={-1} className="card-subhead hub-repo-name">
         {repo}
       </h3>
@@ -338,6 +368,11 @@ function RepoDetail({ api, repo, onBack }: { api: Api; repo: string; onBack: () 
               <Copy {...ICON} aria-hidden="true" />
             </IconButton>
           </span>
+          {view.fit_unknown && (
+            <InlineMessage tone="warning">
+              Demios couldn't read this model's details, so it can't tell whether it fits this computer.
+            </InlineMessage>
+          )}
           {view.license.warning !== null && (
             <InlineMessage tone={LICENSE_NOTE[view.license.warning].tone}>{LICENSE_NOTE[view.license.warning].text}</InlineMessage>
           )}
@@ -346,16 +381,20 @@ function RepoDetail({ api, repo, onBack }: { api: Api; repo: string; onBack: () 
             <p className="dn-help">This repo has no GGUF files Demios can run.</p>
           ) : (
             <ul className="hub-variants" aria-label="Versions">
-              {view.variants.map((v) => {
+              {[...view.variants]
+                // The variant the link chose comes first.
+                .sort((a, b) => Number(b.name === view.selected) - Number(a.name === view.selected))
+                .map((v) => {
                 const pull = pulls[v.name];
                 const ref = done[v.name] ?? v.downloaded;
                 const fit = v.fit !== null ? FIT[v.fit.status] : null;
                 const nameId = `hubv-${v.name}`;
                 return (
-                  <li key={v.name} className="hub-variant" data-testid="hub-variant">
+                  <li key={v.name} className="hub-variant" data-testid="hub-variant" data-selected={v.name === view.selected || undefined}>
                     <div className="row-main">
                       <span className="row-title" id={nameId}>
                         {v.quant ?? v.name}{" "}
+                        {v.name === view.selected && <Badge tone="accent">Chosen by the link</Badge>}{" "}
                         <span className="dn-help">
                           {formatBytes(v.total_size)}
                           {v.parts > 1 ? ` · ${v.parts} files` : ""}

@@ -18,7 +18,7 @@ globalThis.ResizeObserver ??= class {
 const tracker: McpServersView["servers"][number] = {
   id: "tracker",
   name: "Issue tracker",
-  status: { server_id: "tracker", name: "Issue tracker", state: "needs_auth", message: "Sign in to use this server's tools.", tools: 0 },
+  status: { server_id: "tracker", name: "Issue tracker", state: "needs_auth", message: "Sign in to use this server's tools.", tools: 0, review: 0 },
   transport: {
     type: "streamable_http",
     url: "https://mcp.tracker.example/mcp",
@@ -142,7 +142,7 @@ describe("McpServersCard", () => {
     fireEvent.click(within(row).getByRole("button", { name: "Sign in" }));
     await waitFor(() => expect(calls).toContainEqual(["signin", "tracker"]));
 
-    const connected: McpServerStatus = { server_id: "tracker", name: "Issue tracker", state: "connected", message: null, tools: 2 };
+    const connected: McpServerStatus = { server_id: "tracker", name: "Issue tracker", state: "connected", message: null, tools: 2, review: 0 };
     const signedIn = { ...tracker, transport: { ...tracker.transport, oauth: { scopes: ["read"], client_id: null, signed_in: true } } } as typeof tracker;
     const after = fake({ servers: [signedIn], local_servers_allowed: true });
     rerender(
@@ -228,5 +228,29 @@ describe("McpServersCard", () => {
     expect((screen.getByLabelText(/Remote/) as HTMLInputElement).checked).toBe(true);
     expect(screen.getByLabelText("Server address")).toBeTruthy();
     expect(screen.getByText(/can't start programs on your computer/)).toBeTruthy();
+  });
+
+  it("shows how many tools need review and opens a server's tools", async () => {
+    const { api } = fake({ servers: [tracker], local_servers_allowed: true });
+    let listed = 0;
+    const withTools = {
+      ...api,
+      listMcpTools: async (serverId: string) => (
+        listed++,
+        { server_id: serverId, connected: true, tools: [] }
+      ),
+    } as Api;
+    const live: McpServerStatus = { server_id: "tracker", name: "Issue tracker", state: "connected", message: null, tools: 2, review: 2 };
+    ui(withTools, [live]);
+    const row = await screen.findByTestId("mcp-server-row");
+    expect(within(row).getByText("2 to review")).toBeTruthy();
+    const toggle = within(row).getByRole("button", { name: "Tools of Issue tracker" });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(await screen.findByRole("region", { name: "Tools of Issue tracker" })).toBeTruthy();
+    await waitFor(() => expect(listed).toBe(1));
+    fireEvent.click(toggle);
+    expect(screen.queryByRole("region", { name: "Tools of Issue tracker" })).toBeNull();
   });
 });

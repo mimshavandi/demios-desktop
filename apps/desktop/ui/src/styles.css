@@ -481,6 +481,19 @@ pre.code .code-copy { position: absolute; top: var(--dn-space-1); right: var(--d
 .mcp-secret { height: var(--dn-space-8); font-size: var(--dn-text-sm); }
 .mcp-textarea { padding: var(--dn-space-2) var(--dn-space-3); border: 1px solid var(--dn-color-border-strong); border-radius: var(--dn-radius-md); background: var(--dn-color-surface); color: var(--dn-color-text); font-family: var(--dn-font-mono); font-size: var(--dn-text-sm); resize: vertical; }
 .mcp-form-actions { display: flex; justify-content: flex-end; gap: var(--dn-space-2); }
+/* Tools of one server (T-SHELL-11) */
+.mcp-tools-chevron { transition: transform var(--dn-motion-fast) var(--dn-motion-ease); }
+[aria-expanded="true"] > .mcp-tools-chevron { transform: rotate(90deg); }
+.mcp-tools { display: grid; gap: var(--dn-space-3); padding: var(--dn-space-3) 0 var(--dn-space-4) var(--dn-space-4); border-bottom: 1px solid var(--dn-color-border); }
+.mcp-tool-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--dn-space-2); }
+.mcp-tool { display: grid; gap: var(--dn-space-2); padding: var(--dn-space-3); border: 1px solid var(--dn-color-border); border-radius: var(--dn-radius-md); background: var(--dn-color-surface); }
+.mcp-tool-head, .mcp-tool-meta, .mcp-tool-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--dn-space-2); }
+.mcp-tool-name { font-family: var(--dn-font-mono); font-size: var(--dn-text-sm); font-weight: var(--dn-weight-medium); overflow-wrap: anywhere; }
+.mcp-tool-desc { margin: 0; font-size: var(--dn-text-sm); color: var(--dn-color-text-muted); white-space: pre-wrap; overflow-wrap: anywhere; max-height: calc(var(--dn-space-8) * 4); overflow: auto; }
+.mcp-tool-label { font-size: var(--dn-text-sm); }
+.mcp-tool-now { margin-left: var(--dn-space-2); }
+.mcp-tool-actions .dn-select { min-width: calc(var(--dn-space-8) * 6); }
+@media (prefers-reduced-motion: reduce) { .mcp-tools-chevron { transition: none; } }
 
 /* ---------- open-source licences (T-STORE-07) ---------- */
 .licences { display: grid; gap: var(--dn-space-3); padding-top: var(--dn-space-3); border-top: 1px solid var(--dn-color-border); }

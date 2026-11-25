@@ -130,6 +130,8 @@ export interface McpServerStatus {
   state: "connecting" | "connected" | "needs_auth" | "signing_in" | "failed";
   message: string | null;
   tools: number;
+  /** Tools that are new or changed since they were reviewed; they always ask meanwhile. */
+  review: number;
 }
 
 /** Tool-runtime events (`watch_tools`). */
@@ -286,6 +288,18 @@ export interface HubRepoView {
   license: HubLicense;
   card_url: string;
   variants: HubVariant[];
+  /** The variant a demios:// link chose, if it chose exactly one. */
+  selected: string | null;
+  /** The fit couldn't be worked out (header unreadable). */
+  fit_unknown: boolean;
+}
+
+/** A demios://models/add link, validated by the backend (T-INF-12). */
+export interface AddModelLink {
+  repo: string;
+  file: string | null;
+  quant: string | null;
+  revision: string | null;
 }
 
 export interface HubPullProgress {
@@ -412,6 +426,35 @@ export function errorMessage(e: unknown): string {
 
 export function messageText(m: Pick<StoredMessage, "content">): string {
   return m.content.map((p) => (p.type === "text" ? p.text : "")).join("");
+}
+
+// ---- each server's tools (T-SHELL-11)
+
+/** The user's choice for one tool. `default` follows its risk tier. */
+export type ToolChoice = "default" | "always_ask" | "ask_once_per_chat" | "run_without_asking" | "off";
+
+export interface McpToolView {
+  /** Capability id, `mcp.<server>.<tool>`. */
+  id: string;
+  name: string;
+  title: string | null;
+  /** From the server: plain text, never rendered as Markdown or HTML. */
+  description: string;
+  seeded_risk: RiskTier;
+  /** In force now, after the user's choice and any review flag. */
+  approval: ApprovalPolicy;
+  runs_without_asking: boolean;
+  disabled: boolean;
+  choice: ToolChoice;
+  flag: "new" | "changed" | null;
+  /** Sent back with "Mark reviewed". */
+  fingerprint: string;
+}
+
+export interface McpServerToolsView {
+  server_id: string;
+  connected: boolean;
+  tools: McpToolView[];
 }
 
 // ---- artifacts (apps/desktop/src/artifacts.rs, dn-artifacts)

@@ -24,7 +24,7 @@ Every direct dependency is listed here with why and its licence (ADR-0009). Anyt
 | tokio | dn-inference, dn-models, dn | async runtime, channels, fs for downloads | MIT | T-INF-01 |
 | llama-cpp-2 (+ llama-cpp-sys-2, builds llama.cpp) | dn-inference | in-process llama.cpp backend; `metal` on macOS, `cuda`/`vulkan` features | MIT/Apache-2.0 (llama.cpp: MIT) | T-INF-02 |
 | reqwest 0.13 (rustls) | dn-models, dn-inference | resumable model downloads (HTTPS only, read timeout); `/v1/embeddings` for OpenAI-compatible servers (chat goes through dn-providers) | MIT/Apache-2.0 | T-INF-05, T-INF-06 |
-| sha2 | dn-models | SHA-256 verification of downloads | MIT/Apache-2.0 | T-INF-05 |
+| sha2 | dn-models, demios-desktop | SHA-256 verification of downloads; fingerprints of MCP tools | MIT/Apache-2.0 | T-INF-05 |
 | sysinfo (`system`; `disk` in dn-models) | dn-models, dn | RAM detection for the fit estimator; free disk space before a model download; peak RSS in `dn bench` | MIT | T-INF-03 |
 | clap (derive) | dn | `dn` command-line parsing | MIT/Apache-2.0 | T-INF-04 |
 | tauri 2, tauri-build 2 | apps/desktop | desktop shell, typed IPC, capabilities (ADR-0002) | MIT/Apache-2.0 | T-SHELL-01 |
@@ -32,6 +32,8 @@ Every direct dependency is listed here with why and its licence (ADR-0009). Anyt
 | tauri-plugin-opener 2 | apps/desktop | open the "Report a problem" form in the system browser; called from Rust only, its JS commands are not granted (lead approved 2026-11-24); links in answers also open through it, from the `open_link` command after a native confirm (T-SHELL-09) | MIT/Apache-2.0 | T-STORE-14 |
 | tauri-plugin-dialog 2 | apps/desktop | native confirms shown from Rust only: "start this program?" before a local MCP server is launched, and "open this link?" with the full URL for links in answers (T-SHELL-09); its JS commands are not granted (lead approved) | MIT/Apache-2.0 | T-SHELL-08 |
 | url 2 | apps/desktop | parse the MCP OAuth sign-in URL (scheme, host, no userinfo) before opening it; already in the tree via reqwest (lead approved) | MIT/Apache-2.0 | T-SHELL-08 |
+| tauri-plugin-deep-link 2 | apps/desktop | the OS hands `demios://models/add` links to the app; handled in Rust only (`AddModelLink::parse` as data, opens the confirmation, never downloads); its JS commands are not granted (lead approved) | MIT/Apache-2.0 | T-INF-12 |
+| tauri-plugin-single-instance 2 (`deep-link`) | apps/desktop | a link (or a second launch) opens the running app instead of a second copy; the second launch's command line is ignored, its link forwarded to the deep-link handler (lead approved) | MIT/Apache-2.0 | T-INF-12 |
 
 ### UI (npm, `apps/desktop/package.json`)
 

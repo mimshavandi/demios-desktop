@@ -269,8 +269,8 @@ pub async fn update_settings(
     mut settings: Settings,
 ) -> IpcResult<Settings> {
     blocking(&state, move |s| {
-        // No screen edits MCP servers yet; never let a settings save drop them.
-        settings.mcp_servers = s.settings()?.mcp_servers;
+        // Servers and tool choices have their own commands; a settings save keeps them.
+        settings.keep_managed(s.settings()?);
         s.save_settings(&settings)?;
         s.settings()
     })
@@ -533,14 +533,9 @@ pub async fn watch_local_models(
     state: AppStateRef<'_>,
     on_event: Channel<crate::local::LocalModelEvent>,
 ) -> IpcResult<Vec<crate::local::LocalModelRow>> {
-    let lm = local(&state)?;
-    let rows = lm.watch(Arc::new(move |ev| {
+    Ok(local(&state)?.watch_and_refresh(Arc::new(move |ev| {
         let _ = on_event.send(ev);
-    }));
-    // Settings › Models opened: pick up Hub downloads made by the CLI and changes in the
-    // Hugging Face cache; rows that changed arrive as events.
-    tauri::async_runtime::spawn_blocking(move || lm.refresh_externals());
-    Ok(rows)
+    })))
 }
 
 /// Starts or resumes a catalogue download (resumable, SHA-256 verified).
@@ -631,6 +626,7 @@ pub async fn sign_out_mcp_server(
         state: "needs_auth",
         message: Some("Signed out. Sign in to use this server's tools.".into()),
         tools: 0,
+        review: 0,
     });
     blocking(&state, |s| s.mcp_servers_view()).await
 }
@@ -662,6 +658,7 @@ pub async fn sign_in_mcp_server(
             state,
             message,
             tools: 0,
+            review: 0,
         })
     };
     set(
@@ -734,6 +731,43 @@ pub async fn sign_in_mcp_server(
             Err(e)
         }
     }
+}
+
+// ---- each server's tools (T-SHELL-11)
+
+#[tauri::command]
+pub async fn list_mcp_tools(
+    state: AppStateRef<'_>,
+    server_id: String,
+) -> IpcResult<crate::tool_review::ServerToolsView> {
+    blocking(&state, move |s| s.mcp_tools_view(&server_id)).await
+}
+
+/// Saves the user's choice for one tool ("always ask", "off", ...) and applies it now.
+#[tauri::command]
+pub async fn set_mcp_tool_choice(
+    state: AppStateRef<'_>,
+    server_id: String,
+    tool: String,
+    choice: crate::tool_review::ToolChoice,
+) -> IpcResult<crate::tool_review::ServerToolsView> {
+    blocking(&state, move |s| {
+        s.set_mcp_tool_choice(&server_id, &tool, choice)
+    })
+    .await
+}
+
+/// Marks new or changed tools as reviewed, so they follow their usual approval again.
+#[tauri::command]
+pub async fn mark_mcp_tools_reviewed(
+    state: AppStateRef<'_>,
+    server_id: String,
+    tools: Vec<crate::tool_review::Reviewed>,
+) -> IpcResult<crate::tool_review::ServerToolsView> {
+    blocking(&state, move |s| {
+        s.mark_mcp_tools_reviewed(&server_id, &tools)
+    })
+    .await
 }
 
 // ---- links in answers (T-SHELL-09)
@@ -889,4 +923,35 @@ pub async fn delete_hf_token(state: AppStateRef<'_>) -> IpcResult<bool> {
         Ok(false)
     })
     .await
+}
+
+// ---- demios://models/add links (T-INF-12)
+
+/// The add-model screen subscribes to links from the OS; returns one that arrived first.
+#[tauri::command]
+pub async fn watch_add_links(
+    state: AppStateRef<'_>,
+    on_event: Channel<dn_models::link::AddModelLink>,
+) -> IpcResult<Option<dn_models::link::AddModelLink>> {
+    Ok(state
+        .add_links
+        .watch(Arc::new(move |l| on_event.send(l).is_ok())))
+}
+
+/// The link's confirmation was closed: the next link may open it again.
+#[tauri::command]
+pub async fn add_link_done(state: AppStateRef<'_>) -> IpcResult<()> {
+    state.add_links.done();
+    Ok(())
+}
+
+/// What a link asks for, resolved for the confirmation screen (no download).
+#[tauri::command]
+pub async fn hub_resolve_link(
+    state: AppStateRef<'_>,
+    link: dn_models::link::AddModelLink,
+) -> IpcResult<crate::hub::RepoView> {
+    let hub = blocking(&state, |s| crate::hub::client(&s.keys)).await?;
+    let local = local_models(&state)?;
+    crate::hub::resolve_link(&hub, &local, &state.hub_pulls, &link).await
 }
