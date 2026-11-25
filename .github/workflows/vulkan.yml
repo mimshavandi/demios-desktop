@@ -39,9 +39,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            target_dir: target
+          # llama.cpp's nested Vulkan shader-generator build goes past Windows' 260-character
+          # path limit under the default target dir (C1083); a short one keeps it under.
+          - os: windows-latest
+            target_dir: C:\t
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
+    env:
+      CARGO_TARGET_DIR: ${{ matrix.target_dir }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -104,7 +112,7 @@ jobs:
         run: cargo build --release --locked -p dn --features vulkan
       - name: Build dn without Vulkan (for the startup comparison)
         if: inputs.compare_cpu
-        run: cargo build --release --locked -p dn --target-dir target/cpu
+        run: cargo build --release --locked -p dn --target-dir ${{ matrix.target_dir }}/cpu
       - name: Cache the test model
         id: model-cache
         uses: actions/cache@v4
@@ -124,14 +132,18 @@ jobs:
           set -euo pipefail
           m="$HOME/dn-test-models/stories15M_MOE-Q8_0.gguf"
           echo "$MOE_MODEL_SHA256  $m" | shasum -a 256 -c -
+          # A base model without a chat template: give it a plain one, as dn-models stores one
+          # from tokenizer_config.json (the bench's chat path needs a template).
+          echo '{% for m in messages %}{{ m.content }}{% endfor %}' > "$m.chat_template.jinja"
+          t="$(cygpath -u "$CARGO_TARGET_DIR" 2>/dev/null || echo "$CARGO_TARGET_DIR")"
           if [ "$RUNNER_OS" = Windows ]; then
             # Installed layout: the loader next to the exe (Windows searches the app's own
             # folder first for the DLLs an exe links against).
-            cp target/vulkan-loader/vulkan-1.dll target/release/
-            dn=target/release/dn.exe
+            cp target/vulkan-loader/vulkan-1.dll "$t/release/"
+            dn="$t/release/dn.exe"
           else
             export LD_LIBRARY_PATH="$PWD/target/vulkan-loader"
-            dn=target/release/dn
+            dn="$t/release/dn"
           fi
           t0=$(date +%s%N)
           "$dn" fit "$m" | tee fit.txt
@@ -143,8 +155,8 @@ jobs:
             echo "- dn fit with the Vulkan build (backend start-up included): $(( (t1 - t0) / 1000000 )) ms"
             echo "- dn binary: $(du -k "$dn" | cut -f1) KiB"
           } | tee -a "$GITHUB_STEP_SUMMARY"
-          if [ -d target/cpu/release ]; then
-            cpu=target/cpu/release/dn; [ "$RUNNER_OS" = Windows ] && cpu=$cpu.exe
+          if [ -d "$t/cpu/release" ]; then
+            cpu="$t/cpu/release/dn"; [ "$RUNNER_OS" = Windows ] && cpu=$cpu.exe
             t0=$(date +%s%N); "$cpu" fit "$m" > /dev/null; t1=$(date +%s%N)
             {
               echo "- dn fit with the CPU-only build: $(( (t1 - t0) / 1000000 )) ms"

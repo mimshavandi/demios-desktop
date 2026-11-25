@@ -200,6 +200,9 @@ jobs:
     env:
       DEMIOS_BUILD_COMMIT: ${{ needs.meta.outputs.short }}
       PREFIX: ${{ needs.meta.outputs.prefix }}
+      # llama.cpp's nested Vulkan shader-generator build goes past Windows' 260-character path
+      # limit under the default target dir (C1083); a short one keeps it under.
+      CARGO_TARGET_DIR: C:\t
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -213,6 +216,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: release-preview
+          workspaces: ". -> C:\\t"
       - *cargo-about-cache
       - *cargo-about-install
       - run: cargo fetch --locked
@@ -258,9 +262,10 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p out
-          cp "$(ls target/release/bundle/nsis/*-setup.exe | head -n1)" "out/$PREFIX-windows-x64-setup.exe"
+          t="$(cygpath -u "$CARGO_TARGET_DIR")"
+          cp "$(ls "$t"/release/bundle/nsis/*-setup.exe | head -n1)" "out/$PREFIX-windows-x64-setup.exe"
           echo "- Windows installer (Vulkan build): $(du -k "out/$PREFIX-windows-x64-setup.exe" | cut -f1) KiB" >> "$GITHUB_STEP_SUMMARY"
-          echo "bin=target/release/demios-desktop.exe" >> "$GITHUB_OUTPUT"
+          echo "bin=$t/release/demios-desktop.exe" >> "$GITHUB_OUTPUT"
       - *guard
       # tauri-driver can't attach here: msedgedriver needs WebView2 remote debugging, which
       # only the e2e build's window config turns on (apps/desktop/e2e/README.md, T-SHELL-06),
