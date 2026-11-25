@@ -59,6 +59,14 @@ Every direct dependency is listed here with why and its licence (ADR-0009). Anyt
 
 Release builds (`tauri build` without `--debug`, i.e. `TAURI_ENV_DEBUG=false`, or `DEMIOS_REQUIRE_LICENSES=1`) fail if cargo-about is missing. Dev, test and debug builds skip the list with a warning.
 
+### Flatpak packaging (T-STORE-06; build tools only, not dependencies of any crate)
+
+| Tool | Where | Why | Licence |
+|---|---|---|---|
+| flatpak-builder-tools (pinned commit in `generate-sources.sh`) with its Python requirements aiohttp and tomlkit (in a throwaway venv) | `packaging/flatpak/generate-sources.sh`, CI job `flatpak` | offline cargo and npm source lists for the Flatpak build | MIT (tools), Apache-2.0 (aiohttp), MIT (tomlkit) |
+| org.flatpak.Builder (Flathub; flatpak-builder, flatpak-builder-lint, appstreamcli, desktop-file-validate) | CI job `flatpak`, local builds | builds the Flatpak and runs Flathub's linters | LGPL-2.1+ / MIT |
+| cargo-about 0.9.3, built from its crates.io source inside the Flatpak build and removed from the app | `packaging/flatpak/io.demios.app.yml` | the licences list in an offline build (same tool and version as above) | MIT OR Apache-2.0 |
+
 ### e2e (`apps/desktop/e2e`, dev only)
 
 | Package | Why | Licence | Added in |
