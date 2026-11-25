@@ -116,8 +116,14 @@ describe("OpenAI-compatible server", () => {
     const models = await $('.settings-nav button[data-section="models"]');
     await models.waitForExist({ timeout: 30_000, timeoutMsg: "Settings has no Models section" });
     await models.click();
+    // The tabs show once the model catalog has loaded (a keychain that never answers keeps it
+    // loading): say what the page shows instead.
     const tab = await $("#models-tab-servers");
-    await tab.waitForExist({ timeout: 30_000, timeoutMsg: "Settings › Models has no Model servers tab" });
+    try {
+      await tab.waitForExist({ timeout: 30_000 });
+    } catch {
+      throw new Error(`Settings › Models has no Model servers tab. On screen: ${await onScreen()}`);
+    }
     await tab.click();
     // The form opens from "Add model server" (an empty state while there are no servers).
     const open = await byTestId("add-model-server");

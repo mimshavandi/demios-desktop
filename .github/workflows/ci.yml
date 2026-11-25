@@ -134,7 +134,7 @@ jobs:
       - name: Linux webview + WebDriver deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev webkitgtk-webdriver xvfb gnome-keyring
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev webkitgtk-webdriver xvfb gnome-keyring libsecret-tools
       - name: Cache tauri-driver
         id: tauri-driver-cache
         uses: actions/cache@v4
@@ -159,11 +159,16 @@ jobs:
       - name: e2e
         working-directory: apps/desktop/e2e
         # A real Secret Service, as on a Linux desktop: the app keeps server and provider keys
-        # in the system keychain, and a headless runner has none (adding a server then fails).
-        # CI only: a session bus plus gnome-keyring with a throwaway, empty-password keyring.
+        # in the system keychain, and a headless runner has none. CI only: a session bus plus
+        # gnome-keyring, whose login keyring is created and unlocked with a throwaway password
+        # (an empty one leaves it locked, and every keychain call then waits on an unlock
+        # prompt nobody can answer). secret-tool checks it answers before the specs run.
         run: |
           dbus-run-session -- bash -euo pipefail -c '
-            printf "" | gnome-keyring-daemon --unlock --components=secrets > /dev/null
+            printf "e2e-throwaway" | gnome-keyring-daemon --daemonize --unlock --components=secrets > /dev/null
+            printf "ok" | timeout 15 secret-tool store --label="e2e keyring check" demios-e2e check
+            test "$(timeout 15 secret-tool lookup demios-e2e check)" = ok
+            timeout 15 secret-tool clear demios-e2e check
             xvfb-run -a npm test
           '
 
