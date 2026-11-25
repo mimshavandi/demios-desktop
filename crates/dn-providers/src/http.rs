@@ -101,12 +101,8 @@ pub(crate) async fn send(mut call: Call<'_>) -> Result<reqwest::Response, CoreEr
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.trim().parse::<u32>().ok());
         let text = resp.text().await.unwrap_or_default();
-        if status.as_u16() == 400
-            && let Some(body) = call.body.as_ref()
-            && let Some(e) = schema_rejected(call.provider_id, body, &text, call.secret)
-        {
-            return Err(e);
-        }
+        // A named optional parameter (temperature, a thinking switch) is dropped first: the
+        // error may mention the schema only in passing. A schema rejection is never retried.
         if status.as_u16() == 400
             && !retried
             && let Some(body) = call.body.as_mut()
@@ -114,6 +110,12 @@ pub(crate) async fn send(mut call: Call<'_>) -> Result<reqwest::Response, CoreEr
         {
             retried = true;
             continue;
+        }
+        if status.as_u16() == 400
+            && let Some(body) = call.body.as_ref()
+            && let Some(e) = schema_rejected(call.provider_id, body, &text, call.secret)
+        {
+            return Err(e);
         }
         return Err(http_error(
             call.provider_id,
