@@ -188,21 +188,23 @@ describe("Windows artifact webview (ADR-0012)", () => {
   it("steps aside while an app dialog is over the pane", async () => {
     const slot = await byTestId("artifact-webview-slot");
     await browser.waitUntil(() => shownNear(slot), { timeout: 20_000, timeoutMsg: "the artifact webview isn't over the pane" });
-    // Settings › General has "Delete all local data", whose confirm dialog covers the window.
-    await browser.keys(["Control", ","]);
-    const del = await $("button=Delete all local data");
-    await del.waitForClickable({ timeout: 20_000 });
-    await del.click();
-    const dialog = await $('[role="alertdialog"]');
-    await dialog.waitForDisplayed({ timeout: 10_000 });
+    // Settings hides the artifact pane (#174 review), so no app dialog opens over the pane from
+    // the chat today. Put one there the way every app overlay is: a dialog element portalled
+    // into <body>. overlay.ts finds overlays by role, so this is what any Radix dialog looks like.
+    await browser.execute(() => {
+      const d = document.createElement("div");
+      d.setAttribute("role", "dialog");
+      d.setAttribute("aria-label", "e2e overlay");
+      d.id = "e2e-overlay";
+      d.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.3)";
+      document.body.append(d);
+    });
     await browser.waitUntil(async () => (await childState()).shown == null, {
       timeout: 5_000,
       timeoutMsg: "the artifact webview stayed over an open dialog",
     });
     osScreenshot("artifact-dialog-over-pane");
-    // The dialog is usable: its own button is on top.
-    await (await (await $('[role="alertdialog"]')).$("button=Cancel")).click();
-    await dialog.waitForDisplayed({ reverse: true, timeout: 10_000 });
+    await browser.execute(() => document.getElementById("e2e-overlay")?.remove());
     await browser.waitUntil(() => shownNear(slot), { timeout: 5_000, timeoutMsg: "the artifact webview didn't come back" });
   });
 
