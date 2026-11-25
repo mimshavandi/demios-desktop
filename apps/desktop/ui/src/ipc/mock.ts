@@ -874,6 +874,16 @@ export function createMockApi(): Api {
       emitRow(r);
       return null;
     },
+    checkModelTools: async (id) => {
+      await new Promise((r) => setTimeout(r, 800));
+      const r = localRows.find((x) => x.id === id);
+      if (r === undefined || r.traits === null || r.traits.kind !== "chat") {
+        throw { code: "model_unavailable", message: "That isn't a chat model, so it makes no tool calls." };
+      }
+      r.traits = { kind: "chat", tool_support: "supported", source: "checked", label: "Chat · Tools" };
+      emitRow(r);
+      return r.traits;
+    },
     cancelDownload: async (id) => {
       const r = localRows.find((x) => x.id === id);
       window.clearTimeout(timersDl.get(id));

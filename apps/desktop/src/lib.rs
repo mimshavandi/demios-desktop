@@ -27,6 +27,7 @@ pub mod settings;
 pub mod skills;
 pub mod state;
 pub mod support;
+pub mod tool_probe;
 pub mod tool_review;
 pub mod updates;
 
@@ -290,6 +291,7 @@ pub fn run() {
             commands::pause_download,
             commands::remove_local_model,
             commands::cancel_download,
+            commands::check_model_tools,
             updates::check_for_update,
             updates::install_update,
             updates::launch_update_check,

@@ -67,6 +67,7 @@
     "allow-pause-download",
     "allow-remove-local-model",
     "allow-cancel-download",
+    "allow-check-model-tools",
     "allow-check-for-update",
     "allow-install-update",
     "allow-launch-update-check",

@@ -62,6 +62,7 @@ const COMMANDS: &[&str] = &[
     "pause_download",
     "remove_local_model",
     "cancel_download",
+    "check_model_tools",
     "check_for_update",
     "install_update",
     "launch_update_check",
