@@ -385,24 +385,70 @@ mod capability_tests {
         assert!(cap.get("local").is_none_or(|l| l == true));
     }
 
-    /// The Windows artifact webview's isolation is that no capability names it (ADR-0012).
+    /// Tauri's capability patterns: `*` matches any run of characters, `?` one character.
+    fn glob_matches(pattern: &str, name: &str) -> bool {
+        fn go(p: &[u8], n: &[u8]) -> bool {
+            match (p.first(), n.first()) {
+                (None, None) => true,
+                (Some(b'*'), _) => go(&p[1..], n) || (!n.is_empty() && go(p, &n[1..])),
+                (Some(b'?'), Some(_)) => go(&p[1..], &n[1..]),
+                (Some(a), Some(b)) if a == b => go(&p[1..], &n[1..]),
+                _ => false,
+            }
+        }
+        go(pattern.as_bytes(), name.as_bytes())
+    }
+
     #[test]
-    fn no_capability_names_the_artifact_webview() {
+    fn glob_matching_follows_tauri() {
+        assert!(glob_matches("*", "artifact"));
+        assert!(glob_matches("art*", "artifact"));
+        assert!(glob_matches("m?in", "main"));
+        assert!(glob_matches("*a*", "main"));
+        assert!(!glob_matches("main", "artifact"));
+        assert!(!glob_matches("ma", "main"));
+    }
+
+    /// The Windows artifact webview's isolation is that no capability can reach it (ADR-0012):
+    /// in **every** capability file, no `webviews` entry may match `artifact` (by name or
+    /// pattern), and no `windows` entry may match the `main` window, which holds both webviews.
+    #[test]
+    fn no_capability_reaches_the_artifact_webview() {
         let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/capabilities");
+        let mut files = 0;
         for entry in std::fs::read_dir(dir).unwrap() {
             let path = entry.unwrap().path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            files += 1;
             let text = std::fs::read_to_string(&path).unwrap();
             let cap: serde_json::Value = serde_json::from_str(&text).unwrap();
-            for key in ["webviews", "windows"] {
-                let names = cap[key].as_array().cloned().unwrap_or_default();
+            let names = |key: &str| -> Vec<String> {
+                cap[key]
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .map(|v| v.as_str().expect("capability names are strings").to_owned())
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            };
+            for w in names("webviews") {
                 assert!(
-                    !names
-                        .iter()
-                        .any(|n| n == crate::artifact_child::LABEL || n == "*"),
-                    "{} grants the artifact webview",
+                    !glob_matches(&w, crate::artifact_child::LABEL),
+                    "{}: webviews entry {w:?} matches the artifact webview",
+                    path.display()
+                );
+            }
+            for w in names("windows") {
+                assert!(
+                    !glob_matches(&w, "main") && !glob_matches(&w, crate::artifact_child::LABEL),
+                    "{}: windows entry {w:?} matches the main window, which holds the artifact webview",
                     path.display()
                 );
             }
         }
+        assert!(files > 0, "no capability files found in {dir}");
     }
 }

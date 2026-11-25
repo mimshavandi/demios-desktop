@@ -45,7 +45,7 @@ The owner accepted Tauri's `unstable` feature (multiwebview) for this.
    - One central signal (`ui/src/overlay.ts`) watches the portalled Radix overlays. No component reports itself.
 6. **Focus and keys.**
    - The placeholder passes focus into the child. Tab out of the child comes back as an event, and focus moves on in the main window.
-   - Escape and the app's own shortcuts pressed in the frame are forwarded. Escape closes the pane; only an allowlist of shortcuts runs. Artifact code can fake these reports, so none of the allowed shortcuts deletes or sends anything.
+   - Escape and the app's own shortcuts pressed in the frame are forwarded. Escape closes the pane. Only new chat, settings and the sidebar toggle run, at most one every 500 ms. Artifact code can fake these reports, so stop (Ctrl+.) and copy last answer (Ctrl+Shift+C) are not forwarded: a forged report could cancel every answer or overwrite the clipboard.
    - The pane's labels, issue bar and live announcements stay in the main webview.
 7. **Tauri is pinned to the 2.11 minor** (`~2.11`; the npm `@tauri-apps` packages likewise). `unstable` has no semver promise.
    - The isolation spec (`apps/desktop/e2e/specs/artifact-child.e2e.mjs`) is part of the required `e2e-windows` job.
@@ -80,7 +80,7 @@ The owner accepted Tauri's `unstable` feature (multiwebview) for this.
 ## What users see (Windows)
 - Artifacts open in the right-hand pane, as on macOS and Linux. The "Artifacts aren't available on Windows yet" message is gone.
 - While a dialog, menu, toast or tooltip is over the pane, the artifact area is blank. It comes back when the overlay closes.
-- Esc inside an artifact closes the pane. Ctrl+N, Ctrl+, and the other app shortcuts work from inside an artifact. Tab moves from the artifact back into the app.
+- Esc inside an artifact closes the pane. Ctrl+N (new chat), Ctrl+, (settings) and Ctrl+\\ (sidebar) work from inside an artifact. Stop and copy last answer don't: click into the app first. Tab moves from the artifact back into the app.
 - Artifacts are AI-generated and labelled as such, as on the other platforms.
 
 ## Action items

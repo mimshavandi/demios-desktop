@@ -62,17 +62,35 @@ export function TypeIcon({ type }: { type: ArtifactType }): ReactElement {
 }
 
 /**
- * App shortcuts (App.tsx, design-system §7) that still work while the artifact has focus. The
- * frame reports them, but artifact code can fake that report, so only these are passed on, as
- * if pressed in the app: none of them deletes or sends anything.
+ * App shortcuts (App.tsx, design-system §7) that still work while the artifact has focus: new
+ * chat, settings, sidebar. Artifact code can post a "key" report without any key being pressed,
+ * so only shortcuts that just move around the app are passed on. Stop (⌘/Ctrl+.) and copy last
+ * answer (⌘/Ctrl+Shift+C) are not: a forged report could cancel every answer or overwrite the
+ * clipboard.
  */
-export const FRAME_SHORTCUTS: ReadonlySet<string> = new Set(["n", ",", ".", "\\", "c"]);
+export const FRAME_SHORTCUTS: ReadonlySet<string> = new Set(["n", ",", "\\"]);
+
+/** Forwarded shortcuts closer together than this are dropped (a forged report can't loop one). */
+export const FRAME_SHORTCUT_GAP_MS = 500;
 
 /** What a key pressed in the frame does: close the pane, run an app shortcut, or nothing. */
 export function frameKeyAction(k: KeyPress, mac = isMac): "close" | "shortcut" | null {
   if (k.key === "Escape" && !k.ctrl && !k.meta && !k.alt) return "close";
   const mod = mac ? k.meta : k.ctrl;
-  return mod && !k.alt && FRAME_SHORTCUTS.has(k.key.toLowerCase()) ? "shortcut" : null;
+  return mod && !k.alt && !k.shift && FRAME_SHORTCUTS.has(k.key.toLowerCase()) ? "shortcut" : null;
+}
+
+/** `frameKeyAction` with a rate limit on shortcuts (Escape only closes, so it isn't limited). */
+export function frameKeyGate(now: () => number = () => Date.now()): (k: KeyPress, mac?: boolean) => "close" | "shortcut" | null {
+  let last = Number.NEGATIVE_INFINITY;
+  return (k, mac = isMac) => {
+    const action = frameKeyAction(k, mac);
+    if (action !== "shortcut") return action;
+    const t = now();
+    if (t - last < FRAME_SHORTCUT_GAP_MS) return null;
+    last = t;
+    return action;
+  };
 }
 
 type Sandbox = typeof import("@dn-artifacts");
@@ -98,6 +116,7 @@ export function ArtifactPane(p: ArtifactPaneProps) {
     if (!hasDetail) return;
     let dead = false;
     let view: SandboxView | null = null;
+    const keyGate = frameKeyGate();
     loadSandbox()
       .then((m) => {
         if (dead || hostRef.current === null) return;
@@ -118,7 +137,7 @@ export function ArtifactPane(p: ArtifactPaneProps) {
               ? (latest.current.mark?.(a.artifact_type, v as ArtifactVersionView) ?? v.content)
               : v.content,
           onKey: (k) => {
-            const action = frameKeyAction(k);
+            const action = keyGate(k);
             if (action === "close") latest.current.onClose();
             else if (action === "shortcut") {
               window.dispatchEvent(

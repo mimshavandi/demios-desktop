@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { intersects, overlayBoxes, overlayOver, OVERLAY_SELECTOR } from "./overlay";
 import { cssColorToHex } from "./artifactWebview";
-import { frameKeyAction } from "./components/ArtifactPane";
+import { FRAME_SHORTCUT_GAP_MS, frameKeyAction, frameKeyGate } from "./components/ArtifactPane";
 
 function placed(html: string, rect: { left: number; top: number; width: number; height: number }): HTMLElement {
   const wrap = document.createElement("div");
@@ -70,6 +70,28 @@ describe("keys from the artifact frame", () => {
     expect(frameKeyAction(k("w", { ctrl: true }), false)).toBeNull();
     expect(frameKeyAction(k("n", { ctrl: true, alt: true }), false)).toBeNull();
     expect(frameKeyAction(k("a"), false)).toBeNull();
+  });
+
+  it("a forged stop or copy report does nothing", () => {
+    // Artifact code can post these without a key press: they must not reach the app.
+    for (const mac of [false, true]) {
+      const m = mac ? { meta: true } : { ctrl: true };
+      expect(frameKeyAction(k(".", m), mac)).toBeNull();
+      expect(frameKeyAction(k("c", { ...m, shift: true }), mac)).toBeNull();
+      expect(frameKeyAction(k("C", { ...m, shift: true }), mac)).toBeNull();
+      expect(frameKeyAction(k("c", m), mac)).toBeNull();
+    }
+  });
+
+  it("forwarded shortcuts are rate-limited, Escape is not", () => {
+    let t = 1000;
+    const gate = frameKeyGate(() => t);
+    expect(gate(k("n", { ctrl: true }), false)).toBe("shortcut");
+    t += 10;
+    expect(gate(k("n", { ctrl: true }), false)).toBeNull();
+    expect(gate(k("Escape"), false)).toBe("close");
+    t += FRAME_SHORTCUT_GAP_MS;
+    expect(gate(k(",", { ctrl: true }), false)).toBe("shortcut");
   });
 });
 
