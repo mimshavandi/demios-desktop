@@ -25,6 +25,7 @@ import type {
   McpServerToolsView,
   McpToolView,
   McpValueInput,
+  HubRepoSummary,
   HubRepoView,
   HubSearchPage,
   Project,
@@ -92,6 +93,7 @@ export function createMockApi(): Api {
       notes: "Tiny; smoke tests and very old machines.",
       state: { state: "ready" },
       fit: fit("ready", "Fits this computer with room to spare.", false),
+      traits: { kind: "chat", tool_support: "supported", source: "header", label: "Chat · Tools" },
     },
     {
       id: "llama-3.2-3b-instruct-q4_k_m",
@@ -110,6 +112,7 @@ export function createMockApi(): Api {
       notes: "Good default for 8 GB machines.",
       state: { state: "not_downloaded" },
       fit: fit("ready", "Fits this computer with room to spare."),
+      traits: { kind: "chat", tool_support: "supported", source: "header", label: "Chat · Tools" },
     },
     {
       id: "example-70b-nc",
@@ -128,6 +131,7 @@ export function createMockApi(): Api {
       notes: "",
       state: { state: "failed", message: "Not enough disk space: needs 42.5 GB, 12.0 GB free. Free up space, then retry.", done: 0, total: 42_500_000_000 },
       fit: fit("memory_blocked", "Won't fit in this computer's memory."),
+      traits: { kind: "chat", tool_support: "supported", source: "header", label: "Chat · Tools" },
     },
   ];
   // MCP servers (T-SHELL-08): one local server that works, one remote one that needs sign-in.
@@ -217,10 +221,10 @@ export function createMockApi(): Api {
   };
   // Hugging Face (T-INF-10): a few repos to search in the browser preview.
   let hfToken = false;
-  const hubRepos = [
-    { id: "Qwen/Qwen2.5-1.5B-Instruct-GGUF", author: "Qwen", downloads: 182_000, likes: 120, last_modified: null, gated: false, pipeline_tag: "text-generation", license: "apache-2.0", tags: ["gguf"] },
-    { id: "bartowski/Llama-3.2-1B-Instruct-GGUF", author: "bartowski", downloads: 95_000, likes: 80, last_modified: null, gated: true, pipeline_tag: "text-generation", license: "llama3.2", tags: ["gguf"] },
-    { id: "example/Tiny-Research-GGUF", author: "example", downloads: 120, likes: 2, last_modified: null, gated: false, pipeline_tag: null, license: "cc-by-nc-4.0", tags: ["gguf"] },
+  const hubRepos: HubRepoSummary[] = [
+    { id: "Qwen/Qwen2.5-1.5B-Instruct-GGUF", author: "Qwen", downloads: 182_000, likes: 120, last_modified: null, gated: false, pipeline_tag: "text-generation", license: "apache-2.0", tags: ["gguf"], traits_hint: { kind: "chat", tool_support: "unknown", source: "hint", label: "Chat" } },
+    { id: "bartowski/Llama-3.2-1B-Instruct-GGUF", author: "bartowski", downloads: 95_000, likes: 80, last_modified: null, gated: true, pipeline_tag: "text-generation", license: "llama3.2", tags: ["gguf"], traits_hint: { kind: "chat", tool_support: "unknown", source: "hint", label: "Chat" } },
+    { id: "example/Tiny-Research-GGUF", author: "example", downloads: 120, likes: 2, last_modified: null, gated: false, pipeline_tag: null, license: "cc-by-nc-4.0", tags: ["gguf"], traits_hint: null },
   ];
   const timersDl = new Map<string, number>();
   const emitRow = (r: LocalModelRow) => localSink?.({ type: "changed", row: { ...r } });
@@ -678,6 +682,7 @@ export function createMockApi(): Api {
         card_url: `https://huggingface.co/${repo}`,
         selected: null,
         fit_unknown: false,
+        traits: { kind: "chat", tool_support: "supported", source: "header", label: "Chat · Tools" },
         variants: [
           { name: "Q4_K_M", quant: "Q4_K_M", total_size: 1_100_000_000, parts: 1, verifiable: true, fit: fit("ready", "Fits this computer with room to spare.", false), downloaded: null, progress: null },
           { name: "Q8_0", quant: "Q8_0", total_size: 2_000_000_000, parts: 1, verifiable: true, fit: { ...fit("caution", "Fits, with little memory left for other apps."), estimated: true }, downloaded: null, progress: null },

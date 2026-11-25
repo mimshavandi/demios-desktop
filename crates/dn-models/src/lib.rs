@@ -13,6 +13,7 @@ pub mod download;
 pub mod fit;
 pub mod gguf;
 pub mod hub;
+pub mod kind;
 pub mod link;
 pub mod template;
 #[cfg(test)]
