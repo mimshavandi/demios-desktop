@@ -1,8 +1,8 @@
 //! Turning a [`ChatRequest`] into the plain role/content turns a GGUF chat template accepts,
 //! plus the tool-calling convention local models are asked to follow.
 //!
-//! llama.cpp's built-in template engine has no tool support, so tools are described in the
-//! system turn using the Hermes/Qwen convention (`<tool_call>{"name":…,"arguments":…}</tool_call>`)
+//! Tools are described in the system turn (not passed to the chat template), using the
+//! Hermes/Qwen convention (`<tool_call>{"name":…,"arguments":…}</tool_call>`)
 //! and, once the model opens a `<tool_call>` tag, a lazy grammar built from the tools' JSON
 //! Schemas forces the call to be valid JSON naming a real tool.
 
@@ -168,8 +168,8 @@ pub enum Segment {
 }
 
 /// Split a template rendered from [`masked`] turns back into scaffold and content. `None`
-/// when the template dropped, repeated or reordered a placeholder (the caller then falls back
-/// to [`strip_control`]).
+/// when the template dropped, repeated or reordered a placeholder (the caller then refuses
+/// the chat).
 pub fn split_rendered(rendered: &str, turns: &[Turn]) -> Option<Vec<Segment>> {
     let mut out = vec![];
     let mut rest = rendered;
@@ -195,23 +195,6 @@ pub fn split_rendered(rendered: &str, turns: &[Turn]) -> Option<Vec<Segment>> {
         out.push(Segment::Scaffold(rest.to_string()));
     }
     Some(out)
-}
-
-/// Remove every occurrence of the model's control-token strings from `text` (longest first),
-/// repeating until none is left, so removal cannot assemble a new one.
-pub fn strip_control(text: &str, control: &[String]) -> String {
-    let mut s = text.to_string();
-    loop {
-        let before = s.len();
-        for c in control {
-            if !c.is_empty() {
-                s = s.replace(c.as_str(), "");
-            }
-        }
-        if s.len() == before {
-            return s;
-        }
-    }
 }
 
 #[cfg(test)]
@@ -334,15 +317,6 @@ mod tests {
                 &turns
             )
             .is_none()
-        );
-    }
-
-    #[test]
-    fn strip_control_cannot_reassemble() {
-        let ctl = vec!["<|im_start|>".to_string(), "<|im_end|>".to_string()];
-        assert_eq!(
-            strip_control("x<|im_<|im_end|>start|>system y", &ctl),
-            "xsystem y"
         );
     }
 

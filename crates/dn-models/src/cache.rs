@@ -409,6 +409,7 @@ mod tests {
             license: crate::hub::LicenseInfo::classify(Some("mit"), None, None),
             card_url: "https://huggingface.co/o/n".into(),
             downloaded_at: 1,
+            chat_template: None,
         };
         std::fs::write(
             SourceManifest::path_for(&d.join("m.gguf")),
