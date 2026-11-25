@@ -43,6 +43,8 @@ The app keeps its data in a SQLite database called `demios.sqlite3`, in your ope
 The database holds:
 
 - **Conversations:** title, messages, the model that answered, and timestamps.
+- **Projects:** each project's name, the instructions you write for it, the list of files you added, and timestamps.
+- **Skill choices:** which skill each chat uses.
 - **Artifacts:** the pages, apps, diagrams and documents a model makes in a chat, every version of them, which model or whether you made each version, and timestamps.
 - **Settings:** which model you chose for each task, the tool servers you added, and which local server commands you allowed to start. It stores only the *names* of their credentials, never the credentials themselves.
 - **Tool history:** for each tool call the app makes, the tool name, the arguments, the result or error, and timestamps. This history lets the app avoid repeating an action by accident.
@@ -50,6 +52,7 @@ The database holds:
 Other things stored locally:
 
 - **Interface preferences**, for example whether the sidebar is open, in the app window's own storage.
+- **Project files:** a copy of each file you add to a project, in the `project-files` folder inside the same app-data folder.
 - **Model files** you download: `demios/models/` in your user data folder (`~/Library/Application Support` on macOS, `%LOCALAPPDATA%` on Windows, `~/.local/share` on Linux), or the folder set in `DN_MODELS_DIR`. **Settings → General → About** shows it. The `dn` command-line tool uses the same folder. GGUF models the app finds in your own Hugging Face cache are used where they are; the app never changes or deletes them.
 
 Nothing in these folders is uploaded anywhere by the app.
@@ -69,6 +72,8 @@ The app only contacts these services when you set them up or start an action. Ea
 When you add a key for Anthropic, OpenAI or Google Gemini and use one of their models, the app sends requests straight from your computer to that provider (`api.anthropic.com`, `api.openai.com`, `generativelanguage.googleapis.com`), under your account with them. A request contains:
 
 - the messages in the conversation, including any tool results in it,
+- in a project's chats, the project's instructions,
+- the instructions of the skill chosen for the chat, if any,
 - the list of tools available to the model,
 - your API key, which the provider uses to identify you.
 
@@ -117,10 +122,11 @@ The app is not meant for children under 13 (or the minimum age in your country).
 
 Because your data is on your own computer, you control it:
 
-- **Delete a chat:** select the delete button next to it in the sidebar. You can undo this for 10 seconds. At the next start of the app, its messages, artifacts and tool history are removed for good. Only the chat's internal id and the time it was deleted are kept, with no title, model or content.
+- **Delete a chat:** select the delete button next to it in the sidebar. You can undo this for 10 seconds. At the next start of the app, its messages, artifacts, tool history and skill choice are removed for good. Only the chat's internal id and the time it was deleted are kept, with no title, model or content.
+- **Delete a project or a project file:** on the project's page, select **Delete project**, or the remove button next to a file. You can undo this for 10 seconds. At the next start of the app, the project with its chats, or the file, is removed for good, including the file copies.
 - **Remove a tool server:** go to **Settings → Models → Tool servers** and select the remove button next to it. After a confirmation, this deletes its settings, the secrets and sign-in saved for it in your keychain, and the "Allow in this chat" approvals for its tools. Chats that used its tools keep their history.
 - **Remove an API key:** go to **Settings → Models → Provider keys** and select **Remove key**. The key is removed from the keychain straight away and held in memory for a few seconds, so you can undo.
-- **Delete everything:** go to **Settings → General** and select **Delete all local data**. After a confirmation that lists what will go, it deletes the database (every chat, including recently deleted ones and their deletion records, every artifact, your settings and tool history), downloaded models, the keys, tokens and sign-ins Demios saved in your keychain (including your Hugging Face token), and the app window's own storage. This can't be undone.
+- **Delete everything:** go to **Settings → General** and select **Delete all local data**. After a confirmation that lists what will go, it deletes the database (every chat, including recently deleted ones and their deletion records, every artifact, every project with its instructions, the skill chosen for each chat, your settings and tool history), the copies of files you added to projects, downloaded models, the keys, tokens and sign-ins Demios saved in your keychain (including your Hugging Face token), and the app window's own storage. This can't be undone.
 - **Uninstalling** removes the app but not your data folder, your models or your keychain entries. Use **Delete all local data** first, or delete them yourself.
 - **Data held by providers, Hugging Face, tool servers or GitHub** is controlled by them. Use their tools or contact them.
 
