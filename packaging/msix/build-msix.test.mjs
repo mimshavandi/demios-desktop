@@ -6,12 +6,14 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   ASSETS,
+  bundleResources,
   checkStoreFeatures,
   manifestValues,
   msixVersion,
   renderManifest,
   resolveIdentity,
   storeBuildEnv,
+  VULKAN_CONF,
 } from "./build-msix.mjs";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
@@ -87,4 +89,16 @@ test("every asset the manifest names has variants", () => {
     assert.ok(ASSETS.some(([f]) => f.startsWith(`${base}.scale-100`)), base);
     assert.ok(ASSETS.some(([f]) => f.startsWith(`${base}.scale-200`)), base);
   }
+});
+
+test("a vulkan build lays out the Vulkan loader next to the exe, as NSIS does", () => {
+  const appDir = join(here, "..", "..", "apps", "desktop");
+  const conf = JSON.parse(readFileSync(join(appDir, "tauri.conf.json"), "utf8"));
+  const vulkan = JSON.parse(readFileSync(join(appDir, VULKAN_CONF), "utf8"));
+  const plain = bundleResources(conf, [], vulkan);
+  assert.ok(!Object.values(plain).includes("vulkan-1.dll"));
+  const gpu = bundleResources(conf, ["vulkan"], vulkan);
+  assert.equal(gpu["../../target/vulkan-loader/vulkan-1.dll"], "vulkan-1.dll");
+  // The app's own resources are still there.
+  for (const k of Object.keys(plain)) assert.ok(k in gpu, k);
 });

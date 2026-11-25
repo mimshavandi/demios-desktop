@@ -267,7 +267,7 @@ pub async fn repo(
         .iter()
         .map(|v| {
             base_fp.as_ref().map(|(b, fp)| {
-                let est = hub::estimate_variant(fp, b, v).fit(local.machine());
+                let est = hub::estimate_variant(fp, b, v).fit(&local.machine());
                 local.fit_view_for(&est.value, est.estimated)
             })
         })
@@ -345,7 +345,7 @@ pub async fn resolve_link(
     let link = crate::deeplink::revalidate(link)
         .map_err(|_| IpcError::invalid("That link isn't a valid Demios model link."))?;
     let plan = link
-        .resolve(hub, local.machine())
+        .resolve(hub, &local.machine())
         .await
         .map_err(hub_error)?;
     let fits = plan

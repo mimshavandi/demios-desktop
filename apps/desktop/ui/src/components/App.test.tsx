@@ -16,6 +16,8 @@ import type {
   LocalModelRow,
   ToolEvent,
   UnknownOutcome,
+  UpdateCheck,
+  UpdateMode,
 } from "../ipc/types";
 import { App } from "./App";
 
@@ -68,6 +70,7 @@ async function chatMenuItem(title: string, item: string) {
 
 /** In-memory stand-in for the Rust commands. */
 function fakeApi() {
+  const launch = { result: null as UpdateCheck | null, mode: "off" as UpdateMode };
   const convs: Conversation[] = [];
   const trash: Conversation[] = [];
   const projects: Project[] = [];
@@ -145,6 +148,7 @@ function fakeApi() {
     settings,
     chat_model: null,
     chat_model_tools: true,
+    compute: null,
   });
   const api: Api = {
     // The Windows artifact webview has no browser equivalent.
@@ -158,9 +162,10 @@ function fakeApi() {
     messageSources: async () => null,
     knowledgeStatus: async () => ({ offer: "ask", model: null, embedding: null }),
     knowledgeOffer: async () => null,
-    appInfo: async () => ({ version: "0.1.0", dev_fake_model: true, data_dir: "/tmp", models_dir: "/tmp/models", updates: "off" }),
+    appInfo: async () => ({ version: "0.1.0", dev_fake_model: true, data_dir: "/tmp", models_dir: "/tmp/models", updates: launch.mode }),
     checkForUpdate: async () => ({ status: "up_to_date", current: "0.1.0" }) as const,
     installUpdate: async () => null,
+    launchUpdateCheck: async () => launch.result,
     hubSearch: async () => ({ items: [], next: null }),
     hubRepo: async () => {
       throw { code: "model_unavailable", message: "not in this test" };
@@ -392,6 +397,7 @@ function fakeApi() {
   };
   return {
     api,
+    launch,
     project,
     projects,
     files,
@@ -1150,6 +1156,52 @@ describe("App", () => {
   });
 });
 
+describe("Launch update check (#95)", () => {
+  it("shows a notice for a newer version and opens About › Updates on it", async () => {
+    const { api, launch } = fakeApi();
+    launch.mode = "self_update";
+    launch.result = { status: "available", version: "0.2.0", current: "0.1.0", notes: "Fixes", date: null };
+    let installs = 0;
+    api.installUpdate = async () => {
+      installs++;
+      return null;
+    };
+    render(<App api={api} />);
+    const notice = await screen.findByTestId("update-notice");
+    expect(notice.textContent).toContain("Demios 0.2.0 is available.");
+    fireEvent.click(screen.getByRole("button", { name: "View update" }));
+    expect(await screen.findByText(/Version 0.2.0 is available/)).toBeTruthy();
+    expect(screen.queryByTestId("update-notice")).toBeNull();
+    expect(installs).toBe(0);
+  });
+
+  it("doesn't ask at all in builds that don't update themselves", async () => {
+    const { api, launch } = fakeApi();
+    launch.result = { status: "available", version: "0.2.0", current: "0.1.0", notes: "", date: null };
+    let asked = 0;
+    api.launchUpdateCheck = async () => {
+      asked++;
+      return launch.result;
+    };
+    render(<App api={api} />);
+    await screen.findByLabelText("Message");
+    expect(asked).toBe(0);
+    expect(screen.queryByTestId("update-notice")).toBeNull();
+  });
+
+  it("stays silent when the launch check finds nothing or fails", async () => {
+    const { api, launch } = fakeApi();
+    launch.mode = "self_update";
+    api.launchUpdateCheck = async () => {
+      throw { code: "internal", message: "boom" };
+    };
+    render(<App api={api} />);
+    await screen.findByLabelText("Message");
+    expect(screen.queryByTestId("update-notice")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
+
 describe("Projects", () => {
   it("shows the chat list's error, not a guessed list, if reloading after a project delete fails", async () => {
     const { api, projects, convs } = fakeApi();
@@ -1435,5 +1487,92 @@ describe("Sidebar chat menu (#166)", () => {
     render(<App api={api} />);
     await chatMenu("Draft");
     expect(screen.getAllByRole("menuitem").map((i) => i.textContent)).toEqual(["Rename", "Delete"]);
+  });
+});
+
+describe("No silent fallbacks (#141)", () => {
+  const fail = () => {
+    throw { code: "storage", message: "Could not read or write local data." };
+  };
+
+  it("says chats can't start when the assistant's instructions didn't load", async () => {
+    const { api } = fakeApi();
+    const info = api.appInfo;
+    api.appInfo = async () => ({ ...(await info()), agent_error: "the skills folder wasn't found" });
+    render(<App api={api} />);
+    const banner = await screen.findByTestId("agent-error");
+    expect(banner.textContent).toContain("chats can't start");
+    expect(banner.textContent).toContain("the skills folder wasn't found");
+    expect(within(banner).getByRole("button", { name: "Report a problem" })).toBeTruthy();
+  });
+
+  it("shows the list's error, not a guessed list, if reloading after deleting a chat fails", async () => {
+    const { api, convs } = fakeApi();
+    convs.push({ id: "c1", title: "Gone", model: null, project_id: null, created_at: 0, updated_at: 0 });
+    convs.push({ id: "c2", title: "Kept", model: null, project_id: null, created_at: 0, updated_at: 0 });
+    render(<App api={api} />);
+    await chatMenu("Gone");
+    api.listConversations = async () => fail();
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
+    expect(await screen.findByText(/Couldn't load chats/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Kept" })).toBeNull();
+  });
+
+  it("keeps the AI notice and says so when dismissing it can't be saved", async () => {
+    const { api } = fakeApi();
+    api.updateSettings = async () => fail();
+    render(<App api={api} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Got it" }));
+    expect(await screen.findByText(/Couldn't save that you've read the notice/)).toBeTruthy();
+    expect(screen.getByText(/Demios lets you chat with AI models you choose/)).toBeTruthy();
+  });
+
+  it("shows a model-list error with Retry instead of a stale catalog", async () => {
+    const { api } = fakeApi();
+    const list = api.listModels;
+    let broken = true;
+    api.listModels = async () => (broken ? fail() : list());
+    render(<App api={api} />);
+    const banner = await screen.findByTestId("catalog-error");
+    expect(banner.textContent).toContain("Couldn't load your models.");
+    broken = false;
+    fireEvent.click(within(banner).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(screen.queryByTestId("catalog-error")).toBeNull());
+  });
+
+  it("says so when the saved answer can't be loaded after it finishes", async () => {
+    const { api, emit } = fakeApi();
+    render(<App api={api} />);
+    const box = await screen.findByLabelText("Message");
+    fireEvent.change(box, { target: { value: "Hello" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    await screen.findByRole("button", { name: "Stop answer" });
+    api.listMessages = async () => fail();
+    act(() => {
+      emit({ type: "text_delta", message_id: "id-3", offset: 0, text: "Hi" });
+      emit({ type: "done", message_id: "id-3", finish_reason: "stop", usage: { input_tokens: 1, output_tokens: 1 } });
+    });
+    expect(await screen.findByText(/Couldn't load the saved answer/)).toBeTruthy();
+  });
+
+  it("says demios:// links can't open when watching for them fails", async () => {
+    const { api } = fakeApi();
+    api.watchAddLinks = async () => fail();
+    render(<App api={api} />);
+    expect(await screen.findByText(/demios:\/\/ links can't open in this window/)).toBeTruthy();
+  });
+
+  it("shows an error with Retry when the models on this device can't be loaded", async () => {
+    const { api } = fakeApi();
+    const watch = api.watchLocalModels;
+    let broken = true;
+    api.watchLocalModels = async (cb) => (broken ? fail() : watch(cb));
+    render(<App api={api} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Models" }));
+    expect(await screen.findByText(/Couldn't load the models on this device/)).toBeTruthy();
+    expect(screen.queryByText("No models in the catalogue.")).toBeNull();
+    broken = false;
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(screen.queryByText(/Couldn't load the models on this device/)).toBeNull());
   });
 });

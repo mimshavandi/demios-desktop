@@ -29,6 +29,8 @@ pub mod state;
 pub mod support;
 pub mod tool_review;
 pub mod updates;
+pub mod window_fit;
+pub mod window_state;
 
 use std::path::PathBuf;
 
@@ -186,6 +188,8 @@ pub fn run() {
     let builder = builder.plugin(updates::plugin());
     builder
         .manage(updates::Updates::default())
+        .manage(window_state::Tracker::default())
+        .on_window_event(window_state::on_event)
         .setup(|app| {
             use tauri::Manager;
             let dir = data_dir().ok_or("no home directory to keep app data in")?;
@@ -206,6 +210,9 @@ pub fn run() {
             })?;
             install_add_links(app.handle(), &state);
             knowledge::start(&state);
+            // The window starts hidden: fit it to the screen's work area (or put it back
+            // where it was), then show it (#172).
+            window_state::restore(app.handle(), &state);
             app.manage(state);
             app.manage(artifact_child::ChildState::default());
             Ok(())
@@ -291,14 +298,20 @@ pub fn run() {
             commands::pause_download,
             updates::check_for_update,
             updates::install_update,
+            updates::launch_update_check,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Demios Desktop")
         .run(|app, event| {
             // Tauri exits without dropping managed state: stop MCP servers (and their
             // process trees) explicitly, with a bound so a stuck server can't hang quit.
+            // Save the window while it still exists (⌘Q on macOS closes it before Exit).
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                window_state::persist(app);
+            }
             if let tauri::RunEvent::Exit = event {
                 use tauri::Manager;
+                window_state::persist(app);
                 // Downloads stop; their partial files resume next time.
                 if let Some(local) = app
                     .try_state::<std::sync::Arc<state::AppState>>()

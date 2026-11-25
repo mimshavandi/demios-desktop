@@ -7,7 +7,7 @@
 import { Copy, Cpu, Download, Pause, Play, Plus, RotateCcw, TriangleAlert } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Api } from "../ipc/commands";
-import { errorMessage, type AddModelLink, type FitStatus, type LocalModelRow } from "../ipc/types";
+import { errorMessage, type AddModelLink, type FitStatus, type LocalCompute, type LocalModelRow } from "../ipc/types";
 import { Badge, Button, ICON, IconButton, InlineMessage } from "./primitives";
 import { useToast } from "./toast";
 import { AddFromHub } from "./AddFromHub";
@@ -42,9 +42,12 @@ export function LocalModelsCard({
   onReady,
   link = null,
   onLinkClosed,
+  compute = null,
 }: {
   api: Api;
   initial: LocalModelRow[];
+  /** Where local models run; on the processor it is shown as a notice, not hidden. */
+  compute?: LocalCompute | null;
   /** A model finished downloading: refresh pickers and the composer state. */
   onReady: () => void;
   /** A demios:// link to confirm (opens the add panel on it). */
@@ -55,12 +58,16 @@ export function LocalModelsCard({
   const [adding, setAdding] = useState(false);
   const addRef = useRef<HTMLButtonElement>(null);
   const [announce, setAnnounce] = useState("");
+  // Following downloads failed: say so (with Retry) rather than show frozen rows (#141).
+  const [watchError, setWatchError] = useState<string | null>(null);
+  const [watchTry, setWatchTry] = useState(0);
   // Rows updated by events before the snapshot arrived: the snapshot must not undo them.
   const fresh = useRef<Set<string>>(new Set());
   const prev = useRef<Map<string, string>>(new Map(initial.map((r) => [r.id, r.state.state])));
 
   useEffect(() => {
     let alive = true;
+    setWatchError(null);
     void api
       .watchLocalModels((ev) => {
         if (!alive) return;
@@ -88,11 +95,13 @@ export function LocalModelsCard({
         );
         for (const r of list) if (!fresh.current.has(r.id)) prev.current.set(r.id, r.state.state);
       })
-      .catch(() => {});
+      .catch((e: unknown) => {
+        if (alive) setWatchError(errorMessage(e));
+      });
     return () => {
       alive = false;
     };
-  }, [api, onReady]);
+  }, [api, onReady, watchTry]);
 
   return (
     <section className="card" aria-labelledby="local-h">
@@ -108,6 +117,16 @@ export function LocalModelsCard({
         Runs on this computer; nothing leaves it. Downloads resume if interrupted and are checked
         against their published checksum.
       </p>
+      {compute !== null &&
+        (compute.mode === "cpu" ? (
+          <div data-testid="local-compute" data-mode="cpu">
+            <InlineMessage tone="info">{compute.description}</InlineMessage>
+          </div>
+        ) : (
+          <p className="dn-help local-compute" data-testid="local-compute" data-mode={compute.mode}>
+            <Cpu {...SMALL} aria-hidden="true" /> {compute.description}
+          </p>
+        ))}
       {link !== null && (
         <AddFromHub
           api={api}
@@ -127,7 +146,19 @@ export function LocalModelsCard({
           }}
         />
       )}
-      {rows.length === 0 && <p className="dn-help">No models in the catalogue.</p>}
+      {watchError !== null && (
+        <InlineMessage
+          tone="error"
+          action={
+            <Button size="sm" onClick={() => setWatchTry((n) => n + 1)}>
+              Retry
+            </Button>
+          }
+        >
+          Couldn't load the models on this device, so downloads may look out of date. {watchError}
+        </InlineMessage>
+      )}
+      {watchError === null && rows.length === 0 && <p className="dn-help">No models in the catalogue.</p>}
       {rows.map((r) => (
         <LocalModelRowView key={r.id} api={api} row={r} />
       ))}
