@@ -714,7 +714,18 @@ fn print_fit(
             .unwrap_or_else(|| "all".into()),
         r.placement.moe_cpu_layers
     );
-    let split = r.placement.moe_cpu_layers > 0 || r.placement.gpu_layers.is_some();
+    if let Some(p) = report.moe_preset {
+        println!(
+            "preset    {} (experts of {} of {} layers in CPU RAM; attention and shared layers on the GPU)",
+            match p {
+                dn_models::fit::MoePreset::ExpertsInRam => "MoE: experts in RAM",
+                dn_models::fit::MoePreset::SomeExpertsInRam => "MoE: some experts in RAM",
+            },
+            r.placement.moe_cpu_layers,
+            fp.n_layer
+        );
+    }
+    let split = r.placement.is_split();
     println!(
         "memory    weights {} + kv {} + overhead {} = {}; {}budget {} ({:.0}% used)",
         gib(r.weight_bytes),
