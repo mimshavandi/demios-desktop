@@ -807,6 +807,9 @@ function Shell({ api }: { api: Api }) {
   }, [copyLastAnswer, newChat, stop, toggleSidebar]);
 
   const goSettings = (section: SettingsSection) => setView({ kind: "settings", section });
+  // Artifacts belong to the open chat. Settings and project pages get the full width; the
+  // pane comes back as it was when a chat is shown again.
+  const showArtifacts = artifactsOpen && view.kind === "chat";
   const otherApprovals = approvals.filter(
     (a) => a.scope.startsWith("conv:") && (view.kind !== "chat" || a.scope !== `conv:${chat.conversationId ?? ""}`),
   );
@@ -825,7 +828,7 @@ function Shell({ api }: { api: Api }) {
 
   return (
     <div
-      className={`app${sidebarOpen ? "" : " sidebar-collapsed"}${artifactsOpen ? " artifacts-open" : ""}${isMac ? " os-mac" : ""}`}
+      className={`app${sidebarOpen ? "" : " sidebar-collapsed"}${showArtifacts ? " artifacts-open" : ""}${isMac ? " os-mac" : ""}`}
     >
       <header className="titlebar" data-tauri-drag-region>
         <IconButton
@@ -841,13 +844,15 @@ function Shell({ api }: { api: Api }) {
         <div className="titlebar-end">
           {view.kind === "chat" && <ModelBadge info={describeModel(model, catalog)} />}
           {devFake && model === "local:dev-fake" && <Badge tone="warning">Dev build</Badge>}
-          <IconButton
-            label={artifactsOpen ? "Hide artifacts" : "Show artifacts"}
-            onClick={toggleArtifacts}
-            aria-pressed={artifactsOpen}
-          >
-            <PanelRight {...ICON} aria-hidden="true" />
-          </IconButton>
+          {view.kind === "chat" && (
+            <IconButton
+              label={artifactsOpen ? "Hide artifacts" : "Show artifacts"}
+              onClick={toggleArtifacts}
+              aria-pressed={artifactsOpen}
+            >
+              <PanelRight {...ICON} aria-hidden="true" />
+            </IconButton>
+          )}
         </div>
       </header>
       {sidebarOpen && (
@@ -1035,7 +1040,7 @@ function Shell({ api }: { api: Api }) {
           />
         )}
       </main>
-      {artifactsOpen && (
+      {showArtifacts && (
         <ArtifactPane
           artifacts={artifacts}
           detail={openArtifact === null ? null : (artifactDetails[openArtifact] ?? null)}
