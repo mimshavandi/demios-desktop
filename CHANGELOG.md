@@ -21,6 +21,7 @@ Only changes people using the app or the `dn` command-line tool can notice are l
 
 ### Changed
 
+- Settings is split into **General**, **Models**, **Tools** and **Skills**, listed on the left (a drop-down on narrow windows), and opens on the page you used last. **Models** has tabs for **On this device** and **Providers**. **Add a model** opens a window to search Hugging Face; Download closes it and the download shows in the list, and keeps going if you leave Settings. demios:// links open the same window on their model. Tool servers' less common actions are in a **More actions** menu ([#PRNUM](https://github.com/mimshavandi/demios-desktop/pull/PRNUM)).
 - When something fails to load or save, the app now says so, with **Retry** where that helps, instead of quietly carrying on: the chat list, your models, models on this device, a saved Hugging Face token, the AI notice and demios:// links. If its assistant instructions can't load, chats don't start and a message says why ([#164](https://github.com/mimshavandi/demios-desktop/pull/164)).
 - Models on this device now write their prompts with their own chat template, from the model file or from its Hugging Face repository. A model without a chat template can't be used for chat: its row says so, and choosing it gives "This model has no chat template, so it can't be used for chat. Pick another model." ([#150](https://github.com/mimshavandi/demios-desktop/pull/150)).
 
