@@ -41,6 +41,8 @@ dn-providers = { path = "crates/dn-providers", version = "0.1.0" }
 dn-inference = { path = "crates/dn-inference", version = "0.1.0", default-features = false }
 dn-models = { path = "crates/dn-models", version = "0.1.0" }
 llama-cpp-2 = { version = "0.1.161", default-features = false, features = ["common"] }
+minijinja = { version = "3.1", default-features = false, features = ["builtins", "serde", "json", "fuel", "macros"] }
+minijinja-contrib = { version = "3.1", default-features = false, features = ["pycompat"] }
 sha2 = "0.11"
 sysinfo = { version = "0.36", default-features = false, features = ["system"] }
 clap = { version = "4", features = ["derive"] }
