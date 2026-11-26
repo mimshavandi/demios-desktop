@@ -293,6 +293,25 @@ pub enum Message {
     JoinAnswer {
         accepted: bool,
     },
+    /// A paired device asks for the Node's status (Settings › Node).
+    StatusRequest,
+    /// The Node's status, as every client shows it.
+    Status(NodeStatus),
+}
+
+/// What a Node reports about itself (ADR-0014 §7, §8): its version, the secret store in
+/// use, and how many devices are paired.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeStatus {
+    pub name: String,
+    pub version: String,
+    /// Stable id of the store, e.g. `systemd_credential` or `insecure_plaintext`.
+    pub secret_store: String,
+    /// What the status screen says, e.g. "Encrypted file, key from a systemd credential".
+    pub secret_store_label: String,
+    /// `false` for a plaintext store: every client shows a warning.
+    pub protected_at_rest: bool,
+    pub devices: u32,
 }
 
 /// An open, authenticated channel whose versions match.
