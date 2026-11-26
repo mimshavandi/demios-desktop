@@ -831,9 +831,11 @@ mod tests {
 
     impl Dev {
         fn new() -> Self {
+            let conn = dn_store::open_in_memory(&[MigrationSet::new("sync", crate::migrations())])
+                .unwrap();
+            dn_store::sync_rows::enable(&conn).unwrap();
             Self {
-                conn: dn_store::open_in_memory(&[MigrationSet::new("sync", crate::migrations())])
-                    .unwrap(),
+                conn,
                 keys: DeviceKeys::generate().unwrap(),
                 sent: 0,
             }
