@@ -9,6 +9,9 @@ const COMMANDS: &[&str] = &[
     "list_mcp_servers",
     "save_mcp_server",
     "remove_mcp_server",
+    // Connect (ADR-0018): the reviewed services, and adding one as a tool server.
+    "connect_catalogue",
+    "connect_service",
     "restore_mcp_server",
     "reconnect_mcp_server",
     "sign_in_mcp_server",
@@ -183,6 +186,12 @@ fn main() {
     println!("cargo::rerun-if-env-changed=DEMIOS_BUILD_COMMIT");
     println!("cargo::rerun-if-env-changed=DEMIOS_BUILD_CHANNEL");
     // The dev fake model (T-SHELL-03) exists only with the feature *and* in debug builds.
+    println!("cargo::rustc-check-cfg=cfg(connect_test_key)");
+    if std::env::var_os("CARGO_FEATURE_CONNECT_TEST_KEY").is_some()
+        && std::env::var_os("CARGO_CFG_DEBUG_ASSERTIONS").is_some()
+    {
+        println!("cargo::rustc-cfg=connect_test_key");
+    }
     println!("cargo::rustc-check-cfg=cfg(fake_model)");
     if std::env::var_os("CARGO_FEATURE_DEV_FAKE_MODEL").is_some()
         && std::env::var_os("CARGO_CFG_DEBUG_ASSERTIONS").is_some()

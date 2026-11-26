@@ -80,6 +80,8 @@ jobs:
       - run: cargo test -p demios-desktop --features updater
       # The Flatpak build (packaging/flatpak): remote MCP servers only.
       - run: cargo test -p demios-desktop --features flatpak
+      # Connect (ADR-0018): debug builds that trust the test key read the signed catalogue.
+      - run: cargo test -p demios-desktop --features connect-test-key
   design-tokens:
     runs-on: ubuntu-latest
     steps:

@@ -515,6 +515,11 @@ pre.code .code-copy { position: absolute; top: var(--dn-space-1); right: var(--d
 .card-head { display: flex; align-items: center; justify-content: space-between; gap: var(--dn-space-3); }
 .mcp-where { font-family: var(--dn-font-mono); font-size: var(--dn-text-xs); overflow-wrap: anywhere; }
 .mcp-actions { padding-top: 0; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
+.connect-details { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: baseline; gap: var(--dn-space-1) var(--dn-space-4); margin: 0 0 var(--dn-space-3); padding: var(--dn-space-3) var(--dn-space-4); border-radius: var(--dn-radius-md); background: var(--dn-color-surface-sunken); font-size: var(--dn-text-sm); line-height: var(--dn-leading-sm); }
+.connect-details dt { color: var(--dn-color-text-muted); }
+.connect-details dd { margin: 0; overflow-wrap: anywhere; }
+.connect-details code { font-family: var(--dn-font-mono); font-size: var(--dn-text-xs); }
+.connect-status { display: inline-flex; align-items: center; gap: var(--dn-space-2); }
 .mcp-form { display: grid; gap: var(--dn-space-4); }
 .mcp-form h2 { font-size: var(--dn-text-base); line-height: var(--dn-leading-base); font-weight: var(--dn-weight-semibold); }
 .mcp-form h2:focus { outline: none; }

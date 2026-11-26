@@ -29,6 +29,7 @@ import {
 } from "./primitives";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Licences } from "./Licences";
+import { ConnectCard } from "./Connect";
 import { McpServersCard } from "./McpServers";
 import { RemoteServersCard } from "./RemoteServers";
 import { SkillsCard } from "./Skills";
@@ -124,6 +125,9 @@ export function SettingsView({
 }: Props) {
   const toast = useToast();
   const [load, setLoad] = useState<Load>({ kind: "loading" });
+  // Settings › Tools: Connect and Tool servers reload when the other changes the servers.
+  const [toolsVersion, setToolsVersion] = useState(0);
+  const toolsChanged = useCallback(() => setToolsVersion((v) => v + 1), []);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const navRef = useRef<HTMLUListElement>(null);
   const section = route.section;
@@ -292,7 +296,12 @@ export function SettingsView({
             </>
           )}
 
-          {section === "tools" && <McpServersCard api={api} live={servers} />}
+          {section === "tools" && (
+            <>
+              <ConnectCard api={api} live={servers} version={toolsVersion} onChanged={toolsChanged} />
+              <McpServersCard api={api} live={servers} version={toolsVersion} onChanged={toolsChanged} />
+            </>
+          )}
 
           {section === "skills" && <SkillsCard api={api} />}
         </div>
