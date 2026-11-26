@@ -577,7 +577,7 @@ pub async fn read_join<S: AsyncRead + AsyncWrite + Unpin>(
     db: &Mutex<Connection>,
     channel: &mut Channel<S>,
     offer: &mut PairingOffer,
-    now: u64,
+    now: impl Fn() -> u64,
 ) -> Result<JoinRequest> {
     let result = check_join(db, channel, offer, now).await;
     if result.is_err() {
@@ -591,7 +591,7 @@ async fn check_join<S: AsyncRead + AsyncWrite + Unpin>(
     db: &Mutex<Connection>,
     channel: &mut Channel<S>,
     offer: &mut PairingOffer,
-    now: u64,
+    now: impl Fn() -> u64,
 ) -> Result<JoinRequest> {
     let Message::Join {
         x25519,
@@ -617,7 +617,10 @@ async fn check_join<S: AsyncRead + AsyncWrite + Unpin>(
         ed25519: channel.peer,
         x25519,
     };
-    let numbers = offer.accept(&identity, &proof, &channel.binding, now)?;
+    // The name is shown to the person before the device is added: same rules as the list.
+    let name = crate::devices::clean_name(&name)?;
+    // The time the request arrived, not when the Node started waiting for it.
+    let numbers = offer.accept(&identity, &proof, &channel.binding, now())?;
     Ok(JoinRequest {
         identity,
         name,
@@ -691,7 +694,9 @@ mod tests {
                 authorize_member(&conn_guard(), &ch),
                 Err(SyncError::UnknownDevice)
             ));
-            let req = read_join(&db, &mut ch, &mut offer, NOW + 5).await.unwrap();
+            let req = read_join(&db, &mut ch, &mut offer, || NOW + 5)
+                .await
+                .unwrap();
             let device = finish_join(&db, &mut ch, &req, None, true, 1)
                 .await
                 .unwrap()
@@ -760,7 +765,7 @@ mod tests {
         let (a, b) = pipe();
         let node_side = async {
             let mut ch = accept(b, &node).await.unwrap();
-            read_join(&db, &mut ch, &mut offer, NOW).await
+            read_join(&db, &mut ch, &mut offer, || NOW).await
         };
         let relay_side = async {
             // Same keys as the laptop (as if it had them), but a proof from another channel.
@@ -815,7 +820,7 @@ mod tests {
         let (a, b) = pipe();
         let node_side = async {
             let mut ch = accept(b, &node).await.unwrap();
-            read_join(&db, &mut ch, &mut offer, NOW).await
+            read_join(&db, &mut ch, &mut offer, || NOW).await
         };
         let joiner_side = async {
             join(a, &phone, &link, "Work phone", DeviceKind::Phone)
@@ -840,7 +845,7 @@ mod tests {
         let (a, b) = pipe();
         let node_side = async {
             let mut ch = accept(b, &node).await.unwrap();
-            let req = read_join(&db, &mut ch, &mut offer, NOW).await.unwrap();
+            let req = read_join(&db, &mut ch, &mut offer, || NOW).await.unwrap();
             finish_join(&db, &mut ch, &req, None, false, 1)
                 .await
                 .unwrap()

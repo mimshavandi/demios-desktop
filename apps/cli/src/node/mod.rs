@@ -43,6 +43,9 @@ use tokio::sync::{Notify, Semaphore};
 const HANDSHAKE_SECS: u64 = 10;
 /// A paired device that sends nothing for this long is disconnected; it reconnects.
 const IDLE_SECS: u64 = 15 * 60;
+/// An unpaired device must send its pairing request within this time after the handshake.
+/// No person waits on this step (the check numbers come after it).
+const JOIN_SECS: u64 = 30;
 /// Connections handled at once; more wait for a slot.
 const MAX_CONNECTIONS: usize = 64;
 
@@ -518,23 +521,33 @@ async fn pair_device(
     let taken = {
         let mut slot = pairing.lock().await;
         slot.as_mut()
-            .and_then(|p| p.offer.take().map(|o| (o, p.joining.clone())))
+            .and_then(|p| p.offer.take().map(|o| (o, p.joining.clone(), p.id)))
     };
-    let Some((mut offer, joining_tx)) = taken else {
+    let Some((mut offer, joining_tx, pairing_id)) = taken else {
         eprintln!("dn node: refused {peer}: not a paired device, and no pairing is open");
         let _ = channel.close().await;
         return;
     };
-    let request = transport::read_join(db, &mut channel, &mut offer, now_secs() as u64).await;
+    let request = tokio::time::timeout(
+        Duration::from_secs(JOIN_SECS),
+        transport::read_join(db, &mut channel, &mut offer, || now_secs() as u64),
+    )
+    .await
+    .unwrap_or(Err(SyncError::Protocol("no pairing request in time")));
     let request = match request {
         Ok(r) => r,
         Err(e) => {
             eprintln!("dn node: pairing from {peer} refused: {e}");
-            if matches!(e, SyncError::WrongProof) {
-                // Wrong proofs count on the offer; it stays open until too many.
-                if let Some(p) = pairing.lock().await.as_mut() {
-                    p.offer = Some(offer);
-                }
+            // Wrong proofs and late or bad requests count against the offer; it goes back
+            // only into the same pairing, and only while that pairing is still open.
+            if matches!(
+                e,
+                SyncError::WrongProof | SyncError::Protocol(_) | SyncError::BadName
+            ) && let Some(p) = pairing.lock().await.as_mut()
+                && p.id == pairing_id
+                && p.offer.is_none()
+            {
+                p.offer = Some(offer);
             }
             return;
         }

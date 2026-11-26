@@ -74,7 +74,7 @@ impl Device {
     }
 }
 
-fn clean_name(name: &str) -> Result<String> {
+pub(crate) fn clean_name(name: &str) -> Result<String> {
     let name = name.trim();
     let len = name.chars().count();
     if len == 0 || len > NAME_MAX || name.chars().any(char::is_control) {

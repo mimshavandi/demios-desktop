@@ -71,12 +71,21 @@ pub struct Joining {
 
 /// The pairing that is open, shared between the control session and device connections.
 pub struct OpenPairing {
+    /// Tells this pairing from a later one, so an offer is only ever put back into the
+    /// pairing it was taken from.
+    pub id: u64,
     /// Taken by the device connection that is checking a proof; put back on a wrong proof.
     pub offer: Option<PairingOffer>,
     pub joining: mpsc::Sender<Joining>,
 }
 
 pub type PairingState = Arc<Mutex<Option<OpenPairing>>>;
+
+static NEXT_PAIRING: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn next_pairing_id() -> u64 {
+    NEXT_PAIRING.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
 
 pub fn kind_name(kind: DeviceKind) -> &'static str {
     match kind {
@@ -233,10 +242,15 @@ mod unix {
             let link = offer.link().to_url().to_string();
             let expires_at = offer.link().expires_at;
             *slot = Some(OpenPairing {
+                id: next_pairing_id(),
                 offer: Some(offer),
                 joining: tx,
             });
-            write_line(&mut write, &Reply::Offer { link, expires_at }).await?;
+            if let Err(e) = write_line(&mut write, &Reply::Offer { link, expires_at }).await {
+                // `dn node pair` went away before seeing the code: close it again.
+                *slot = None;
+                return Err(e);
+            }
             expires_at
         };
         let result = pair_once(&mut reader, &mut write, &mut rx, expires_at).await;
