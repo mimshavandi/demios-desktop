@@ -994,6 +994,14 @@ impl<B: InferenceBackend> LocalModels<B> {
             .get(id)
             .cloned()
             .ok_or_else(|| format!("Unknown model `{id}`."))?;
+        // Removed with Undo still possible (#176): the end of the window would delete a fresh
+        // download, so it waits for Undo or the window to end.
+        if lock(&self.removing).contains_key(id) {
+            return Err(format!(
+                "{} is being removed. Select Undo to keep it, or download it again in a few seconds.",
+                e.name
+            ));
+        }
         if self.is_ready(id) {
             return Ok(());
         }
@@ -1414,7 +1422,8 @@ impl<B: InferenceBackend> LocalModels<B> {
             task.handle.abort();
         }
         let _files = self.model_lock(id).lock_owned().await;
-        if self.is_ready(id) {
+        // A downloaded model, or one being removed (its removal deletes the files), is left alone.
+        if self.is_ready(id) || lock(&self.removing).contains_key(id) {
             return Ok(());
         }
         let p = self.path(&e);
@@ -2526,6 +2535,22 @@ mod tests {
         assert_eq!(row.state, DownloadState::NotDownloaded);
         assert!(!row.removing);
         assert!(!lm.undo_remove("m"), "too late for Undo");
+    }
+
+    /// While a model is being removed, a new download of it waits: the end of the undo window
+    /// would delete the fresh file. Cancel leaves it to the removal.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn no_download_or_cancel_while_a_model_is_being_removed() {
+        let (dir, lm) = owned_with_ready("redownload");
+        let lm = Arc::new(lm);
+        let token = lm.begin_remove("m").unwrap();
+        let err = lm.download("m").unwrap_err();
+        assert!(err.contains("is being removed"), "{err}");
+        lm.cancel_download("m").await.unwrap();
+        assert!(lm.rows()[0].removing);
+        assert_eq!(lm.rows()[0].state, DownloadState::Ready);
+        lm.finish_remove("m", token).await.unwrap().unwrap();
+        assert!(!dir.0.join("m.gguf").exists());
     }
 
     /// Remove, Undo, Remove again: the first removal's timer never finishes the second early.
