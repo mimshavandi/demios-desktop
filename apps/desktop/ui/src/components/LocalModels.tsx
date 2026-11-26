@@ -4,7 +4,7 @@
 // model card are shown before download, with a warning for missing / non-commercial /
 // custom licences (any licence is allowed).
 
-import { Copy, Cpu, Download, Pause, Play, Plus, RotateCcw, TriangleAlert } from "lucide-react";
+import { Copy, Cpu, Download, Pause, Play, Plus, RotateCcw, ThumbsUp, TriangleAlert } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Api } from "../ipc/commands";
 import { errorMessage, type AddModelLink, type FitStatus, type LocalCompute, type LocalModelRow } from "../ipc/types";
@@ -16,6 +16,15 @@ import { Dialog } from "./Dialog";
 import { onHubDownloadFinished, pauseHubDownload, startHubDownload, useHubDownloads } from "../hubDownloads";
 
 export const SMALL = { size: 12, strokeWidth: 1.5 } as const;
+
+/** One of the models we recommend, from the catalogue's flag (#219). */
+export function RecommendedBadge() {
+  return (
+    <Badge tone="neutral" icon={<ThumbsUp {...SMALL} aria-hidden="true" />}>
+      Recommended
+    </Badge>
+  );
+}
 
 export function formatBytes(b: number): string {
   if (b >= 1e9) return `${(b / 1e9).toFixed(1)} GB`;
@@ -43,7 +52,6 @@ export function LocalModelsCard({
   api,
   initial,
   onReady,
-  onStateChange,
   link = null,
   onLinkClosed,
   compute = null,
@@ -54,8 +62,6 @@ export function LocalModelsCard({
   compute?: LocalCompute | null;
   /** A model finished downloading: refresh pickers and the composer state. */
   onReady: () => void;
-  /** A model's download state changed (queued, downloading, ready, failed…), from any button. */
-  onStateChange?: (row: LocalModelRow) => void;
   /** A demios:// link to confirm (opens the add panel on it). */
   link?: AddModelLink | null;
   onLinkClosed?: () => void;
@@ -87,7 +93,6 @@ export function LocalModelsCard({
         setRows((list) => (list.some((r) => r.id === ev.row.id) ? list.map((r) => (r.id === ev.row.id ? ev.row : r)) : [...list, ev.row]));
         const was = prev.current.get(ev.row.id);
         prev.current.set(ev.row.id, ev.row.state.state);
-        if (ev.row.state.state !== was) onStateChange?.(ev.row);
         if (ev.row.state.state === "ready" && was !== "ready") {
           onReady();
           // Polite, once per finished download (design-system §7).
@@ -108,7 +113,7 @@ export function LocalModelsCard({
     return () => {
       alive = false;
     };
-  }, [api, onReady, onStateChange, watchTry]);
+  }, [api, onReady, watchTry]);
 
   // Hugging Face downloads started from the dialog. They run outside this list (hubDownloads),
   // so they keep going, and show here again, after Settings is closed and opened.
@@ -294,6 +299,12 @@ function LocalModelRowView({ api, row }: { api: Api; row: LocalModelRow }) {
       <div className="row-main">
         <span className="row-title" id={nameId}>
           {row.name} <span className="dn-help">{row.quant} · {formatBytes(row.size)}</span>
+          {row.recommended && (
+            <>
+              {" "}
+              <RecommendedBadge />
+            </>
+          )}
         </span>
         {row.origin !== "catalog" && (
           <span className="dn-help local-origin">

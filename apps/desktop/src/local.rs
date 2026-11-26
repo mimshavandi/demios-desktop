@@ -116,6 +116,8 @@ pub struct LocalModelRow {
     pub traits: Option<dn_models::kind::TraitsView>,
     /// Why "Remove" can't delete this model, in the user's words (#176); `None` when it can.
     pub remove_blocked: Option<String>,
+    /// One of the models we recommend (#219): a "Recommended" chip on its row.
+    pub recommended: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -351,6 +353,7 @@ fn external_entry(
     let name = repo.rsplit('/').next().unwrap_or(repo).to_string();
     let variant = id.rsplit('/').next().unwrap_or("").to_string();
     CatalogEntry {
+        recommended: false,
         quant: dn_models::hub::quant_label(&variant).unwrap_or_default(),
         id,
         name,
@@ -846,6 +849,7 @@ impl<B: InferenceBackend> LocalModels<B> {
                 })
                 .map(Into::into),
             remove_blocked: self.remove_blocked(&e.id),
+            recommended: ext.is_none() && e.recommended,
         }
     }
 
@@ -1635,6 +1639,7 @@ mod tests {
 
     fn entry(id: &str, size: u64, sha: &str) -> CatalogEntry {
         CatalogEntry {
+            recommended: false,
             id: id.into(),
             name: format!("Model {id}"),
             repo: "org/repo".into(),

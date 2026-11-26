@@ -1,7 +1,7 @@
 // The embedding-model offer (#171). The model isn't bundled: it is offered once, the first time
 // a project has files and no embedding model is installed ("Not now" is remembered and never
-// asked again), and always under the Project search slot in Settings › Models. On "Download",
-// the normal verified download runs, then the project's existing passages are embedded in the background, from the stored
+// asked again). In Settings › Models the search model is picked like any other model
+// (Project search slot, Set as default). On "Download", the normal verified download runs, then the project's existing passages are embedded in the background, from the stored
 // chunks (no file is read again). Keyword search keeps answering meanwhile.
 //
 // #201 made nomic-embed-text v2 the search model. Someone who accepted the earlier model (v1.5)
@@ -34,11 +34,6 @@ export function upgradeText(m: Pick<OfferedModel, "size" | "license">): string {
 
 export function licenceText(license: string): string {
   return `Licence: ${license === "" ? "not stated" : license}.`;
-}
-
-/** The earlier search model, still downloaded but no longer used. */
-export function unusedText(m: Pick<OfferedModel, "name" | "size">): string {
-  return `${m.name} (${formatBytes(m.size)}) is no longer used for search. You can remove it from the model list.`;
 }
 
 /** What is going on, for a progress line: downloading, improving search, or nothing. */
@@ -123,69 +118,6 @@ export function BetterSearchOffer({ api, hasFiles }: { api: Api; hasFiles: boole
       >
         {status.offer === "upgrade" ? upgradeText(status.model) : offerText(status.model)}
       </InlineMessage>
-      {error !== null && <InlineMessage tone="error">{error}</InlineMessage>}
-    </div>
-  );
-}
-
-/** The note under the Project search slot in Settings › Models: the recommended model's offer
- * (also after "Not now"), its download, and the earlier model once it is no longer used. The
- * page reads the status (it also names the model in the slot's "Not set" text). */
-export function ProjectSearchNote({
-  api,
-  knowledge,
-}: {
-  api: Api;
-  knowledge: { status: KnowledgeStatus | null; failed: boolean; refresh: () => Promise<void> };
-}) {
-  const { status, failed, refresh } = knowledge;
-  const [error, setError] = useState<string | null>(null);
-  if (failed) return <InlineMessage tone="error">Project search status couldn't be loaded.</InlineMessage>;
-  if (status?.model == null) return null;
-  const st = status.model.state;
-  const progress = progressText(status);
-  const download = async () => {
-    setError(null);
-    try {
-      await api.knowledgeOffer(true);
-      await refresh();
-    } catch (e) {
-      console.error("knowledge offer", e);
-      setError("The search model couldn't be downloaded. Try again.");
-    }
-  };
-  const downloadButton = (
-    <Button size="sm" onClick={() => void download()} data-testid="project-search-download">
-      {st.state === "failed" ? "Try again" : "Download"}
-    </Button>
-  );
-  const offer =
-    status.offer === "upgrade"
-      ? upgradeText(status.model)
-      : `Recommended: ${status.model.name}, a ${formatBytes(status.model.size)} download. It also finds passages by meaning. ${licenceText(status.model.license)}`;
-  return (
-    <div className="row-note" data-testid="project-search-note">
-      {progress !== null ? (
-        <p className="dn-help" role="status" data-testid="project-search-progress">
-          {progress} Keyword search works meanwhile.
-        </p>
-      ) : st.state === "failed" ? (
-        <InlineMessage tone="error" action={downloadButton}>
-          {status.model.name}: {st.message}
-        </InlineMessage>
-      ) : st.state !== "ready" ? (
-        <div className="row-note-offer">
-          <p className="dn-help" data-testid="project-search-offer">
-            {offer}
-          </p>
-          {downloadButton}
-        </div>
-      ) : null}
-      {status.unused !== null && (
-        <p className="dn-help" data-testid="project-search-unused">
-          {unusedText(status.unused)}
-        </p>
-      )}
       {error !== null && <InlineMessage tone="error">{error}</InlineMessage>}
     </div>
   );

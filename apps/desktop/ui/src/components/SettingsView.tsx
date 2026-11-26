@@ -7,7 +7,6 @@ import {
   type AppInfo,
   type KeychainStatus,
   type LocalDataSummary,
-  type LocalModelRow,
   type McpServerStatus,
   type ModelCatalog,
   type ProviderInfo,
@@ -35,7 +34,6 @@ import { RemoteServersCard } from "./RemoteServers";
 import { SkillsCard } from "./Skills";
 import { Updates } from "./Updates";
 import { LocalModelsCard, formatBytes } from "./LocalModels";
-import { ProjectSearchNote, useKnowledgeStatus } from "./BetterSearch";
 import { DefaultsContext, SetDefault, type Defaults } from "./SetDefault";
 import { useToast } from "./toast";
 
@@ -336,37 +334,6 @@ function ModelsPage({
         toast({ tone: "error", title: `Couldn't refresh the model list. ${errorMessage(e)}` }),
       );
   }, [api, onCatalog, toast]);
-  // The Project search slot's model: its offer and download show under the slot.
-  const knowledge = useKnowledgeStatus(api.knowledgeStatus);
-  const searchModel = knowledge.status?.model ?? null;
-  const searchReady = searchModel?.state.state === "ready";
-  // The model list can download it too (#219): its row's state changes refresh the status,
-  // which then follows the download until it is done.
-  const searchId = useRef<string | null>(null);
-  searchId.current = searchModel?.id ?? null;
-  const { refresh: refreshKnowledge } = knowledge;
-  const onLocalState = useCallback(
-    (row: LocalModelRow) => {
-      if (row.id === searchId.current) void refreshKnowledge();
-    },
-    [refreshKnowledge],
-  );
-  // A new model list or a changed slot (#219) can change it too.
-  const embedSlot = s.slots["embed"] ?? "";
-  const firstList = useRef(true);
-  useEffect(() => {
-    if (firstList.current) {
-      firstList.current = false;
-      return;
-    }
-    void refreshKnowledge();
-  }, [catalog.local_models, embedSlot, refreshKnowledge]);
-  // Once it is downloaded, the pickers should list it.
-  const wasReady = useRef(searchReady);
-  useEffect(() => {
-    if (searchReady && !wasReady.current) refreshCatalog();
-    wasReady.current = searchReady;
-  }, [searchReady, refreshCatalog]);
   // A demios:// add-model link opens On this device, where the add panel is.
   const shown: ModelsTab = addLink !== null ? "device" : tab;
   const defaults: Defaults = {
@@ -384,7 +351,9 @@ function ModelsPage({
             key={slot.slot_id}
             slot={slot}
             catalog={catalog}
-            {...(slot.slot_id === "embed" ? { note: <ProjectSearchNote api={api} knowledge={knowledge} /> } : {})}
+            {...(slot.slot_id === "embed" && (s.slots["embed"] ?? "") === ""
+              ? { note: <p className="dn-help row-note">No model chosen: project files are searched by keywords.</p> }
+              : {})}
             onChange={(model) => {
               const slots = { ...s.slots };
               if (model === "") delete slots[slot.slot_id];
@@ -404,7 +373,6 @@ function ModelsPage({
               initial={catalog.local_models}
               compute={catalog.compute}
               onReady={refreshCatalog}
-              onStateChange={onLocalState}
               link={addLink}
               {...(onAddLinkClosed !== undefined ? { onLinkClosed: onAddLinkClosed } : {})}
             />

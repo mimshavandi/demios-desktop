@@ -7,7 +7,6 @@ import type {
   ArtifactDetail,
   ChatEvent,
   Conversation,
-  KnowledgeStatus,
   ModelCatalog,
   Project,
   ProjectFile,
@@ -185,7 +184,7 @@ function fakeApi() {
     artifactChildFocus: async () => null,
     artifactChildClose: async () => null,
     messageSources: async () => null,
-    knowledgeStatus: async () => ({ offer: "ask", model: null, embedding: null, unused: null }),
+    knowledgeStatus: async () => ({ offer: "ask", model: null, embedding: null }),
     knowledgeOffer: async () => null,
     appInfo: async () => ({ version: "0.1.0", dev_fake_model: true, data_dir: "/tmp", models_dir: "/tmp/models", updates: launch.mode }),
     checkForUpdate: async () => ({ status: "up_to_date", current: "0.1.0" }) as const,
@@ -823,85 +822,42 @@ describe("App", () => {
     expect(deletes).toBe(1);
   });
 
-  it("Models shows the project search model under its slot, with no separate card", async () => {
+  it("the Project search slot is a picker like Chat; while empty it says search uses keywords", async () => {
     const { api } = fakeApi();
-    const v2 = { id: "nomic-embed-text-v2-moe-q5_k_m", name: "Nomic Embed Text v2 MoE", size: 370_828_256, license: "apache-2.0" };
-    let status: KnowledgeStatus = { offer: "ask", model: { ...v2, state: { state: "not_downloaded" } }, embedding: null, unused: null };
-    api.knowledgeStatus = async () => status;
-    api.knowledgeOffer = async () => {
-      status = { ...status, offer: "accepted", model: { ...v2, state: { state: "ready" } } };
-      return null;
-    };
     const list = api.listModels;
-    let lists = 0;
     api.listModels = async () => {
-      lists += 1;
       const c = await list();
       const slot = { slot_id: "embed", label: "Project search", description: "Finds passages by meaning.", capability: "embedding" as const };
-      return { ...c, slots: [...c.slots, slot] };
+      const v2 = { model_ref: "local:nomic-embed-text-v2-moe-q5_k_m", label: "Nomic Embed Text v2 MoE · Q5_K_M", source: "local" as const, capabilities: ["embedding" as const], available: true, note: null };
+      return { ...c, slots: [...c.slots, slot], models: [...c.models, v2] };
     };
     render(<App api={api} />);
     await openSettings("Models");
-    expect(await screen.findByLabelText("Project search")).toBeTruthy();
-    expect((await screen.findByTestId("project-search-offer")).textContent).toContain("371 MB download");
+    const picker = await screen.findByRole("combobox", { name: "Project search" });
+    expect(picker.textContent).toContain("Not set");
+    expect(screen.getByText("No model chosen: project files are searched by keywords.")).toBeTruthy();
+    // No separate offer or card: the model is downloaded and chosen like any other.
+    expect(screen.queryByText(/Recommended:/)).toBeNull();
     expect(screen.queryByRole("heading", { name: "Project search" })).toBeNull();
-    const before = lists;
-    fireEvent.click(screen.getByTestId("project-search-download"));
-    // Once it's downloaded, the model list (and the slot the backend filled) is read again.
-    await waitFor(() => expect(lists).toBeGreaterThan(before));
-    await waitFor(() => expect(screen.queryByTestId("project-search-offer")).toBeNull());
-  });
-
-  it("a search model downloaded from the model list shows in the Project search row, with no Download offer", async () => {
-    const f = fakeApi();
-    const { api } = f;
-    const v2 = { id: "nomic-embed-text-v2-moe-q5_k_m", name: "Nomic Embed Text v2 MoE", size: 370_828_256, license: "apache-2.0" };
-    let state: LocalModelRow["state"] = { state: "not_downloaded" };
-    api.knowledgeStatus = async () => ({ offer: "declined", model: { ...v2, state }, embedding: null, unused: null });
-    const list = api.listModels;
-    api.listModels = async () => {
-      const c = await list();
-      const slot = { slot_id: "embed", label: "Project search", description: "Finds passages by meaning.", capability: "embedding" as const };
-      return { ...c, slots: [...c.slots, slot] };
-    };
-    render(<App api={api} />);
-    await openSettings("Models");
-    expect(await screen.findByTestId("project-search-offer")).toBeTruthy();
-    // Downloaded with the list's own button: the row follows it, then names the model.
-    const row = { ...f.localRows[0]!, ...v2, model_ref: `local:${v2.id}`, capabilities: ["embedding" as const] };
-    state = { state: "downloading", done: 100_000_000, total: v2.size, bytes_per_sec: 0 };
-    act(() => f.local({ type: "changed", row: { ...row, state } }));
-    expect((await screen.findByTestId("project-search-progress")).textContent).toContain("Downloading the search model: 100 MB of 371 MB.");
-    state = { state: "ready" };
-    act(() => f.local({ type: "changed", row: { ...row, state } }));
-    await waitFor(() => expect(screen.queryByTestId("project-search-progress")).toBeNull());
-    expect(screen.queryByTestId("project-search-offer")).toBeNull();
-    expect(screen.queryByTestId("project-search-download")).toBeNull();
-  });
-
-  it("choosing the search model for the Project search slot reads its status again", async () => {
-    const { api } = fakeApi();
-    const v2 = { id: "nomic-embed-text-v2-moe-q5_k_m", name: "Nomic Embed Text v2 MoE", size: 370_828_256, license: "apache-2.0" };
-    let state: LocalModelRow["state"] = { state: "not_downloaded" };
-    api.knowledgeStatus = async () => ({ offer: "ask", model: { ...v2, state }, embedding: null, unused: null });
-    const list = api.listModels;
-    api.listModels = async () => {
-      const c = await list();
-      const slot = { slot_id: "embed", label: "Project search", description: "Finds passages by meaning.", capability: "embedding" as const };
-      const model = { model_ref: `local:${v2.id}`, label: "Nomic Embed Text v2 MoE · Q5_K_M", source: "local" as const, capabilities: ["embedding" as const], available: true, note: null };
-      return { ...c, slots: [...c.slots, slot], models: [...c.models, model] };
-    };
-    render(<App api={api} />);
-    await openSettings("Models");
-    expect(await screen.findByTestId("project-search-offer")).toBeTruthy();
-    // It finished downloading while this page showed the offer, and then it is picked.
-    state = { state: "ready" };
-    const picker = screen.getByRole("combobox", { name: "Project search" });
     picker.focus();
     fireEvent.keyDown(picker, { key: "ArrowDown" });
     fireEvent.click(await screen.findByRole("option", { name: "Nomic Embed Text v2 MoE · Q5_K_M" }));
-    await waitFor(() => expect(screen.queryByTestId("project-search-offer")).toBeNull());
-    expect(screen.queryByTestId("project-search-download")).toBeNull();
+    await waitFor(() => expect(screen.queryByText("No model chosen: project files are searched by keywords.")).toBeNull());
+    expect((await api.getSettings()).slots["embed"]).toBe("local:nomic-embed-text-v2-moe-q5_k_m");
+    // One line in the select; the full name is its tooltip and stays in the text.
+    const chosen = screen.getByRole("combobox", { name: "Project search" });
+    expect(chosen.getAttribute("title")).toBe("Nomic Embed Text v2 MoE · Q5_K_M");
+    expect(chosen.querySelector(".dn-select-value")?.textContent).toBe("Nomic Embed Text v2 MoE · Q5_K_M");
+  });
+
+  it("recommended catalogue models carry a Recommended chip, from the catalogue's flag", async () => {
+    const f = fakeApi();
+    f.localRows[0]!.recommended = true;
+    render(<App api={f.api} />);
+    await openSettings("Models");
+    const rows = await screen.findAllByTestId("local-model-row");
+    expect(within(rows[0]!).getByText("Recommended")).toBeTruthy();
+    expect(rows.slice(1).every((r) => within(r).queryByText("Recommended") === null)).toBe(true);
   });
 
   it("several chat models and no choice: the chat asks for one, never an automatic pick", async () => {

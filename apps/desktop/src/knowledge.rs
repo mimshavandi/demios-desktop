@@ -29,8 +29,8 @@ type AppStateRef<'a> = tauri::State<'a, Arc<AppState>>;
 /// The catalog's embedding model, used when the Project search slot is empty: nomic-embed-text v2
 /// MoE at Q5_K_M (#201; chosen by the evaluation in #128 and #194).
 pub const DEFAULT_EMBED_MODEL: &str = "nomic-embed-text-v2-moe-q5_k_m";
-/// The default before #201. Never used unless the user picks it for the Project search slot; if
-/// it is still downloaded, Settings says it is no longer used, so it can be removed.
+/// The default before #201. Never used unless the user picks it for the Project search slot,
+/// and never fills it (#219); its catalogue row says it is no longer the default.
 pub const PREVIOUS_EMBED_MODEL: &str = "nomic-embed-text-v1.5-q4_k_m";
 /// Excerpts given to the model per question.
 const TOP_K: usize = 6;
@@ -481,9 +481,6 @@ pub struct KnowledgeStatus {
     pub model: Option<OfferedModel>,
     /// While the model is installed and the index isn't fully embedded by it yet.
     pub embedding: Option<EmbedProgress>,
-    /// The earlier default (nomic v1.5), while it is still downloaded but no longer used for
-    /// search: Settings says so, and it can be removed there.
-    pub unused: Option<OfferedModel>,
 }
 
 /// The offer and progress. If the model is installed and chunks still wait for it (e.g. it
@@ -510,14 +507,6 @@ pub fn status(state: &AppState) -> Result<KnowledgeStatus, String> {
         model.as_ref().map(|m| &m.state),
         Some(crate::local::DownloadState::Ready)
     );
-    let unused = rows
-        .into_iter()
-        .find(|r| {
-            r.id == PREVIOUS_EMBED_MODEL
-                && r.id != id
-                && r.state == crate::local::DownloadState::Ready
-        })
-        .map(OfferedModel::of);
     let offer = offer(&*state.db().map_err(|e| e.message)?, &id, ready)?;
     let embedding = if ready {
         let (done, total) = dn_knowledge::embedding_counts(
@@ -538,7 +527,6 @@ pub fn status(state: &AppState) -> Result<KnowledgeStatus, String> {
         offer,
         model,
         embedding,
-        unused,
     })
 }
 
@@ -856,7 +844,6 @@ mod tests {
         assert_eq!(m.id, DEFAULT_EMBED_MODEL);
         assert_eq!((m.size, m.license.as_str()), (370_828_256, "apache-2.0"));
         assert_eq!(m.state, crate::local::DownloadState::NotDownloaded);
-        assert_eq!(s.unused.unwrap().id, PREVIOUS_EMBED_MODEL);
         assert!(s.embedding.is_none());
 
         // After the user's download: v2 is used, and the stored chunks are re-embedded with
@@ -881,11 +868,6 @@ mod tests {
         );
         let s = status(&st).unwrap();
         assert!(s.embedding.is_none());
-        assert_eq!(
-            s.unused.map(|m| m.id).as_deref(),
-            Some(PREVIOUS_EMBED_MODEL),
-            "the old file is pointed out, so it can be removed"
-        );
         // "Download" records the model it was for.
         answer_offer(&st, true).unwrap();
         assert_eq!(

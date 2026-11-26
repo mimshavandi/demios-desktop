@@ -26,6 +26,10 @@ pub struct CatalogEntry {
     /// models and models outside the catalogue.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_support: Option<crate::kind::ToolSupport>,
+    /// One of the models we recommend (#219): shown with a "Recommended" chip in the model
+    /// list and in Hugging Face search results for its repo.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub recommended: bool,
 }
 
 impl CatalogEntry {
@@ -58,6 +62,14 @@ impl Catalog {
 
     pub fn get(&self, id: &str) -> Option<&CatalogEntry> {
         self.models.iter().find(|m| m.id == id)
+    }
+
+    /// Whether a recommended entry comes from Hugging Face repo `repo` (any file when `file`
+    /// is `None`). Repo ids compare without case, as the Hub does.
+    pub fn recommends(&self, repo: &str, file: Option<&str>) -> bool {
+        self.models.iter().any(|m| {
+            m.recommended && m.repo.eq_ignore_ascii_case(repo) && file.is_none_or(|f| f == m.file)
+        })
     }
 }
 
@@ -171,6 +183,31 @@ mod tests {
             }
         }
         assert!(missing.is_empty(), "no chat template in: {missing:?}");
+    }
+
+    /// The recommended models (#219): today the default search model only. Every one is a
+    /// pinned entry like the others; the chip comes from this flag, not from the UI.
+    #[test]
+    fn the_recommended_search_model_is_the_default_one() {
+        let c = Catalog::builtin();
+        let ids: Vec<_> = c
+            .models
+            .iter()
+            .filter(|m| m.recommended)
+            .map(|m| m.id.as_str())
+            .collect();
+        assert_eq!(ids, ["nomic-embed-text-v2-moe-q5_k_m"]);
+        assert!(c.recommends("nomic-ai/nomic-embed-text-v2-moe-GGUF", None));
+        assert!(c.recommends(
+            "NOMIC-AI/nomic-embed-text-v2-moe-gguf",
+            Some("nomic-embed-text-v2-moe.Q5_K_M.gguf")
+        ));
+        // The same repo's other file isn't the recommended one.
+        assert!(!c.recommends(
+            "nomic-ai/nomic-embed-text-v2-moe-GGUF",
+            Some("nomic-embed-text-v2-moe.Q8_0.gguf")
+        ));
+        assert!(!c.recommends("Qwen/Qwen2.5-0.5B-Instruct-GGUF", None));
     }
 
     #[test]

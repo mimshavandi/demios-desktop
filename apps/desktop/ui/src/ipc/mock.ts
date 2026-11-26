@@ -99,6 +99,27 @@ export function createMockApi(): Api {
       remove_blocked: null,
     },
     {
+      id: "nomic-embed-text-v2-moe-q5_k_m",
+      origin: "catalog",
+      location: null,
+      model_ref: "local:nomic-embed-text-v2-moe-q5_k_m",
+      name: "Nomic Embed Text v2 MoE",
+      repo: "nomic-ai/nomic-embed-text-v2-moe-GGUF",
+      quant: "Q5_K_M",
+      size: 370_828_256,
+      params_b: 0.5,
+      capabilities: ["embedding"],
+      license: "apache-2.0",
+      license_warning: false,
+      card_url: "https://huggingface.co/nomic-ai/nomic-embed-text-v2-moe-GGUF",
+      notes: "The default search model for project files: multilingual, finds passages across languages.",
+      state: { state: "not_downloaded" },
+      fit: fit("ready", "Fits this computer with room to spare.", true),
+      traits: null,
+      remove_blocked: null,
+      recommended: true,
+    },
+    {
       id: "llama-3.2-3b-instruct-q4_k_m",
       origin: "catalog",
       location: null,
@@ -472,7 +493,7 @@ export function createMockApi(): Api {
       const t = k.started === null ? 0 : Date.now() - k.started - 3000;
       const embedding = k.state.state === "ready" && t < 3000 ? { done: Math.max(0, Math.round((48 * t) / 3000)), total: 48 } : null;
       const model = { id: "nomic-embed-text-v2-moe-q5_k_m", name: "Nomic Embed Text v2 MoE", size: 370_828_256, license: "apache-2.0", state: k.state };
-      return { offer: k.offer, model, embedding, unused: null };
+      return { offer: k.offer, model, embedding };
     },
     knowledgeOffer: async (accept) => {
       knowledge.offer = accept ? "accepted" : "declined";

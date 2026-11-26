@@ -178,6 +178,7 @@
       "params_b": 0.5,
       "capabilities": ["embedding"],
       "license": "apache-2.0",
+      "recommended": true,
       "notes": "The default search model for project files: multilingual, finds passages across languages. Same results as Q8_0 in the benchmark (docs/benchmarks/embeddings.md)."
     },
     {

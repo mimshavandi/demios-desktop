@@ -38,8 +38,6 @@ To download a model, select **Download model**. While it downloads you see the p
 
 When the download finishes, the app checks the file against its published checksum. Then the row shows **On this device** and the model can answer. If a model file is in the models folder but doesn't match its published checksum, the row says so, with **Retry** to download it again; the file isn't used.
 
-A search model you download here is also shown in the **Project search** row at the top of the page.
-
 Models are stored in a folder shared with the `dn` command-line tool. **Settings → General → About** shows where.
 
 ## Add a model from Hugging Face
@@ -131,9 +129,6 @@ If a task has no model and you have several that suit it (for example after upda
 
 **Set as default:** each model you can use, under **On this device**, **Model servers** and **Providers** (once its key is saved), has **Set as default** for the task it suits. Selecting it makes that model the task's choice and says so ("Now used for Chat"); the row then shows **Default for Chat**. A search model shows it only if it runs on this device, since project search uses models on this device.
 
-**Project search** is the model that finds passages in your project files by meaning (see [Projects](projects.md)). Without one, project files are searched by keywords only. When the recommended search model isn't downloaded, the row shows:
+**Project search** is the model that finds passages in your project files by meaning (see [Projects](projects.md)). It's chosen like **Chat**: pick a downloaded embedding model in the menu, or select **Set as default** on its row. While none is chosen, the row says "No model chosen: project files are searched by keywords." A search model's download, its progress and any problem show on its own row under **On this device**, like any other model.
 
-- The recommended model, its download size and its licence, with **Download**.
-- While it downloads and your project files are prepared, the progress. Keyword search works meanwhile.
-- If the download failed, or a downloaded file doesn't match its published checksum, why, with **Try again**.
-- If you used the earlier search model, that it's no longer used and you can remove it from the model list.
+**Recommended:** models we recommend have a **Recommended** chip, in the **On this device** list and in **Add a model** results. Today that's Nomic Embed Text v2 MoE (Q5_K_M), the search model for project files.

@@ -149,6 +149,7 @@ kbd { font-family: var(--dn-font-sans); font-size: var(--dn-text-xs); color: var
 
 .dn-select { display: inline-flex; align-items: center; justify-content: space-between; gap: var(--dn-space-2); width: calc(var(--dn-space-16) * 4 + var(--dn-space-8)); flex: none; cursor: pointer; text-align: left; }
 .dn-select:hover { border-color: var(--dn-color-text-subtle); }
+.dn-select-value { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dn-select[data-placeholder] { color: var(--dn-color-text-subtle); }
 .dn-select-content {
   z-index: var(--dn-z-popover); min-width: var(--radix-select-trigger-width);

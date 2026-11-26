@@ -316,6 +316,8 @@ export type ModelOrigin = "catalog" | "hub" | "hf_cache";
 
 export interface LocalModelRow {
   id: string;
+  /** One of the models we recommend, from the catalogue (#219): a "Recommended" chip. */
+  recommended?: boolean;
   origin: ModelOrigin;
   /** Hub and cache models: where the file is. */
   location: string | null;
@@ -369,6 +371,8 @@ export interface HubRepoSummary {
   tags: string[];
   /** From pipeline_tag and tags only (source "hint"); null when the Hub doesn't say. */
   traits_hint: ModelTraits | null;
+  /** A recommended catalogue model comes from this repo (#219). */
+  recommended?: boolean;
 }
 
 export interface HubSearchPage {
@@ -397,6 +401,8 @@ export interface HubVariant {
   downloaded: string | null;
   /** Downloading now (started earlier): the latest progress. */
   progress: HubPullProgress | null;
+  /** The file of a recommended catalogue model (#219). */
+  recommended?: boolean;
 }
 
 export interface HubRepoView {
@@ -682,8 +688,6 @@ export interface KnowledgeStatus {
   model: OfferedModel | null;
   /** While the installed model hasn't embedded every passage yet. */
   embedding: { done: number; total: number } | null;
-  /** The earlier search model, still downloaded but no longer used (it can be removed). */
-  unused: OfferedModel | null;
 }
 
 /** What an answer in a project chat was given (`message_sources`). */

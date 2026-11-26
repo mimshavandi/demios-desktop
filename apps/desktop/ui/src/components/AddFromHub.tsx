@@ -17,7 +17,7 @@ import {
   type HubVariant,
   type ModelTraits,
 } from "../ipc/types";
-import { FIT, SMALL, formatBytes } from "./LocalModels";
+import { FIT, RecommendedBadge, SMALL, formatBytes } from "./LocalModels";
 import { Badge, Button, ICON, IconButton, InlineMessage, Skeleton, TextField } from "./primitives";
 import { useToast } from "./toast";
 
@@ -203,6 +203,7 @@ export function AddFromHub({
                   >
                     <span className="hub-name">
                       {r.id} <TypeBadge traits={r.traits_hint} />
+                      {r.recommended === true && <RecommendedBadge />}
                     </span>
                     <span className="hub-meta">
                       {r.downloads.toLocaleString()} downloads · {r.likes.toLocaleString()} likes
@@ -355,6 +356,7 @@ function RepoDetail({
                       <span className="row-title" id={nameId}>
                         {v.quant ?? v.name}{" "}
                         {v.name === view.selected && <Badge tone="accent">Chosen by the link</Badge>}{" "}
+                        {v.recommended && <RecommendedBadge />}{" "}
                         <span className="dn-help">
                           {formatBytes(v.total_size)}
                           {v.parts > 1 ? ` · ${v.parts} files` : ""}

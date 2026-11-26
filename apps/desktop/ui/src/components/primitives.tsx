@@ -271,10 +271,14 @@ export function Select({
   "aria-describedby"?: string;
 }) {
   const nonEmpty = groups.filter((g) => g.options.length > 0);
+  // One line: a long choice ends in "…" and its full text is the tooltip (#219).
+  const shown = value === "" ? placeholder : (groups.flatMap((g) => g.options).find((o) => o.value === value)?.label ?? value);
   return (
     <RSelect.Root value={value === "" ? NONE : value} onValueChange={(v) => onValueChange(v === NONE ? "" : v)}>
-      <RSelect.Trigger id={id} className="dn-select" aria-describedby={describedBy}>
-        <RSelect.Value placeholder={placeholder} />
+      <RSelect.Trigger id={id} className="dn-select" aria-describedby={describedBy} title={shown}>
+        <span className="dn-select-value">
+          <RSelect.Value placeholder={placeholder} />
+        </span>
         <RSelect.Icon>
           <ChevronDown {...ICON} aria-hidden="true" />
         </RSelect.Icon>

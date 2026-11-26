@@ -32,6 +32,8 @@ pub struct VariantView {
     pub downloaded: Option<String>,
     /// Downloading now (started from this screen earlier): the latest progress.
     pub progress: Option<PullProgress>,
+    /// The file of a recommended catalogue model (#219): a "Recommended" chip.
+    pub recommended: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -212,6 +214,16 @@ pub fn client(keys: &Keys) -> IpcResult<HubClient> {
     HubClient::new(cfg).map_err(hub_error)
 }
 
+/// Search hits from a repo of a recommended catalogue model get the chip (#219), from the
+/// built-in catalogue only.
+fn mark_recommended(mut page: SearchPage) -> SearchPage {
+    let catalog = dn_models::Catalog::builtin();
+    for item in &mut page.items {
+        item.recommended = catalog.recommends(&item.id, None);
+    }
+    page
+}
+
 pub async fn search(
     hub: &HubClient,
     text: &str,
@@ -233,6 +245,7 @@ pub async fn search(
         }
     }
     .map_err(hub_error)
+    .map(mark_recommended)
 }
 
 /// The base variant whose header is read for the fit: the smallest model variant (cheapest
@@ -321,6 +334,8 @@ fn build_view(
             fit,
             downloaded: downloaded.get(&v.name).cloned(),
             progress: pulls.progress_of(&pull_key(&info.id, &info.sha, &v.name)),
+            recommended: v.files.len() == 1
+                && dn_models::Catalog::builtin().recommends(&info.id, Some(&v.files[0].path)),
         })
         .collect();
     RepoView {
@@ -445,6 +460,32 @@ pub async fn pull(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn search_hits_from_a_recommended_model_repo_get_the_chip() {
+        let hit = |id: &str| dn_models::hub::RepoSummary {
+            id: id.into(),
+            author: id.split('/').next().unwrap_or_default().into(),
+            downloads: 0,
+            likes: 0,
+            last_modified: None,
+            gated: false,
+            pipeline_tag: None,
+            license: None,
+            tags: vec![],
+            traits_hint: None,
+            recommended: false,
+        };
+        let page = mark_recommended(SearchPage {
+            items: vec![
+                hit("nomic-ai/nomic-embed-text-v2-moe-GGUF"),
+                hit("Qwen/Qwen2.5-0.5B-Instruct-GGUF"),
+            ],
+            next: None,
+        });
+        let marked: Vec<_> = page.items.iter().map(|i| i.recommended).collect();
+        assert_eq!(marked, [true, false]);
+    }
 
     fn v(name: &str, size: u64, kind: VariantKind) -> GgufVariant {
         GgufVariant {
