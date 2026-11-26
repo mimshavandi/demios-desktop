@@ -53,7 +53,7 @@ CREATE TRIGGER store_sync_message_update AFTER UPDATE ON store_messages
 WHEN NEW.status <> 'streaming' AND (SELECT enabled FROM store_sync_state) = 1
 BEGIN INSERT INTO store_sync_log (kind, id, deleted) VALUES ('message', NEW.id, 0); END;
 CREATE TRIGGER store_sync_message_delete AFTER DELETE ON store_messages
-WHEN (SELECT enabled FROM store_sync_state) = 1
+WHEN OLD.status <> 'streaming' AND (SELECT enabled FROM store_sync_state) = 1
 BEGIN INSERT INTO store_sync_log (kind, id, deleted) VALUES ('message', OLD.id, 1); END;
 
 CREATE TRIGGER store_sync_project_insert AFTER INSERT ON store_projects
@@ -99,6 +99,19 @@ pub fn disable(conn: &Connection) -> Result<()> {
 
 pub fn enabled(conn: &Connection) -> Result<bool> {
     Ok(conn.query_row("SELECT enabled FROM store_sync_state", [], |r| r.get(0))?)
+}
+
+/// Checks that `text` is an id in the one form this app writes (lowercase, hyphenated
+/// UUID). Ids from other devices must be in that form: another spelling of the same UUID
+/// would make a second row the app can never address, and slip past a tombstone.
+pub fn canonical_id(text: &str) -> Result<Id> {
+    let id = parse_id(text)?;
+    if id.to_string() != text {
+        return Err(StoreError::Invalid(format!(
+            "id `{text}` isn't in canonical form"
+        )));
+    }
+    Ok(id)
 }
 
 /// Which table a log entry is about.
@@ -200,7 +213,10 @@ pub fn chat(conn: &Connection, id: &str) -> Result<Option<ChatRow>> {
 
 /// Writes a chat from another device: inserts it, or updates the given row.
 pub fn put_chat(conn: &Connection, row: &ChatRow) -> Result<()> {
-    parse_id(&row.id)?;
+    canonical_id(&row.id)?;
+    if let Some(p) = &row.project_id {
+        canonical_id(p)?;
+    }
     conn.execute(
         "INSERT INTO store_conversations
             (id, title, model, project_id, deleted_at, created_at, updated_at)
@@ -225,6 +241,7 @@ pub fn put_chat(conn: &Connection, row: &ChatRow) -> Result<()> {
 /// Deletes a chat for good, from another device: its messages go, a tombstone stays
 /// (as [`crate::chat::purge_deleted`] does). Run it inside the caller's transaction.
 pub fn purge_chat(tx: &Connection, id: &str, deleted_at: i64) -> Result<()> {
+    canonical_id(id)?;
     tx.execute(
         "INSERT OR REPLACE INTO store_tombstones (id, deleted_at, kind) VALUES (?1, ?2, 'conversation')",
         params![id, deleted_at],
@@ -276,7 +293,7 @@ pub fn project(conn: &Connection, id: &str) -> Result<Option<ProjectRow>> {
 }
 
 pub fn put_project(conn: &Connection, row: &ProjectRow) -> Result<()> {
-    parse_id(&row.id)?;
+    canonical_id(&row.id)?;
     conn.execute(
         "INSERT INTO store_projects (id, name, instructions, deleted_at, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)
@@ -300,6 +317,7 @@ pub fn put_project(conn: &Connection, row: &ProjectRow) -> Result<()> {
 /// changes; its files' rows go with it (their local copies are cleaned up at start). Run it
 /// inside the caller's transaction.
 pub fn purge_project(tx: &Connection, id: &str, deleted_at: i64) -> Result<()> {
+    canonical_id(id)?;
     tx.execute(
         "INSERT OR REPLACE INTO store_tombstones (id, deleted_at, kind) VALUES (?1, ?2, 'project')",
         params![id, deleted_at],
@@ -359,8 +377,17 @@ pub fn message(conn: &Connection, id: &str) -> Result<Option<MessageRow>> {
 /// Writes a finished message from another device. Its chat must exist; a message already
 /// here is left as it is (messages never change once finished).
 pub fn insert_message(conn: &Connection, row: &MessageRow) -> Result<bool> {
-    parse_id(&row.id)?;
-    let chat = parse_id(&row.conversation_id)?;
+    canonical_id(&row.id)?;
+    let chat = canonical_id(&row.conversation_id)?;
+    // Every field must be what this app writes, so the chat still reads afterwards.
+    let typed = |v: &str| serde_json::Value::String(v.to_owned());
+    serde_json::from_value::<dn_core::chat::Role>(typed(&row.role))?;
+    serde_json::from_value::<crate::chat::MessageStatus>(typed(&row.status))?;
+    if let Some(f) = &row.finish_reason {
+        serde_json::from_value::<dn_core::chat::FinishReason>(typed(f))?;
+    }
+    serde_json::from_str::<Vec<dn_core::chat::ContentPart>>(&row.content)?;
+    serde_json::from_str::<Vec<dn_core::chat::ToolCall>>(&row.tool_calls)?;
     if row.status == "streaming" {
         return Err(StoreError::Invalid(
             "a streaming message isn't synced".into(),
@@ -377,9 +404,6 @@ pub fn insert_message(conn: &Connection, row: &MessageRow) -> Result<bool> {
     if here.is_none() {
         return Err(StoreError::NotFound(format!("conversation {chat}")));
     }
-    // The JSON columns must be what this app writes.
-    serde_json::from_str::<serde_json::Value>(&row.content)?;
-    serde_json::from_str::<serde_json::Value>(&row.tool_calls)?;
     let n = conn.execute(
         "INSERT OR IGNORE INTO store_messages
            (id, conversation_id, role, content, tool_calls, tool_call_id, model, status,
@@ -580,6 +604,85 @@ mod tests {
         assert!(insert_message(&conn, &m).is_err());
         purge_project(&conn, &p.id, 10).unwrap();
         assert!(project(&conn, &p.id).unwrap().is_none());
+    }
+
+    #[test]
+    fn ids_in_another_form_and_messages_this_app_wouldnt_write_are_refused() {
+        let conn = db();
+        let id = Id::new().to_string();
+        for bad in [
+            id.to_uppercase(),
+            format!("{{{id}}}"),
+            id.replace('-', ""),
+            format!("urn:uuid:{id}"),
+        ] {
+            let row = ChatRow {
+                id: bad.clone(),
+                title: "x".into(),
+                model: None,
+                project_id: None,
+                deleted_at: None,
+                created_at: 1,
+                updated_at: 1,
+            };
+            assert!(put_chat(&conn, &row).is_err(), "{bad}");
+            assert!(purge_chat(&conn, &bad, 1).is_err(), "{bad}");
+        }
+        let c = chat::create_conversation(&conn, "c").unwrap();
+        let ok = MessageRow {
+            id: Id::new().to_string(),
+            conversation_id: c.id.to_string(),
+            role: "user".into(),
+            content: "[{\"type\":\"text\",\"text\":\"hi\"}]".into(),
+            tool_calls: "[]".into(),
+            tool_call_id: None,
+            model: None,
+            status: "complete".into(),
+            finish_reason: None,
+            error: None,
+            created_at: 5,
+            updated_at: 5,
+        };
+        for bad in [
+            MessageRow {
+                role: "root".into(),
+                ..ok.clone()
+            },
+            MessageRow {
+                status: "done".into(),
+                ..ok.clone()
+            },
+            MessageRow {
+                content: "{\"not\":\"parts\"}".into(),
+                ..ok.clone()
+            },
+            MessageRow {
+                tool_calls: "[1]".into(),
+                ..ok.clone()
+            },
+            MessageRow {
+                finish_reason: Some("whenever".into()),
+                ..ok.clone()
+            },
+        ] {
+            assert!(insert_message(&conn, &bad).is_err(), "{bad:?}");
+        }
+        assert!(insert_message(&conn, &ok).unwrap());
+    }
+
+    #[test]
+    fn a_streaming_placeholder_removed_here_isnt_logged() {
+        let conn = db();
+        let c = chat::create_conversation(&conn, "c").unwrap();
+        let rev = log_since(&conn, 0).unwrap().last().unwrap().rev;
+        let m = chat::add_message(&conn, c.id, NewMessage::assistant_placeholder(None)).unwrap();
+        chat::truncate_from(&conn, c.id, m.id).unwrap();
+        assert!(
+            log_since(&conn, rev)
+                .unwrap()
+                .iter()
+                .all(|e| e.kind != Kind::Message)
+        );
     }
 
     #[test]
