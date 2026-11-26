@@ -161,6 +161,15 @@ impl DeviceKeys {
         out
     }
 
+    /// The Ed25519 private key as PKCS#8 v1, for rustls's signing key. Zeroized on drop.
+    pub(crate) fn signing_pkcs8(&self) -> Result<Zeroizing<Vec<u8>>> {
+        let doc = self
+            .signing
+            .to_pkcs8v1()
+            .map_err(|_| SyncError::Crypto("ed25519 pkcs8"))?;
+        Ok(Zeroizing::new(doc.as_ref().to_vec()))
+    }
+
     /// The X25519 private key, for key agreement (HPKE comes with sync).
     pub fn agreement_key(&self) -> &agreement::PrivateKey {
         &self.agreement
