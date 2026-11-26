@@ -12,6 +12,7 @@
 pub mod b64;
 pub mod devices;
 pub mod identity;
+pub mod link;
 pub mod pairing;
 pub mod transport;
 

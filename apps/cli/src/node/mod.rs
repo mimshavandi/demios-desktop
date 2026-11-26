@@ -425,6 +425,56 @@ fn status(base: &StatusBase, db: &Mutex<Connection>) -> Result<NodeStatus, SyncE
     })
 }
 
+fn devices(
+    db: &Mutex<Connection>,
+    asking: &dn_sync::Device,
+) -> Result<Vec<transport::DeviceInfo>, SyncError> {
+    Ok(DeviceList::members(&lock(db))?
+        .into_iter()
+        .map(|d| transport::DeviceInfo {
+            id: d.id.to_hex(),
+            name: d.name,
+            kind: transport::kind_name(d.kind).to_owned(),
+            last_synced_at: d.last_synced_at,
+            this_device: d.id == asking.id,
+        })
+        .collect())
+}
+
+/// A paired device removes a device, or itself to unpair (ADR-0014 §2). The Node can't be
+/// removed: that's `dn node delete-all` on the Node. The removed device is refused at its
+/// next request; the group key rotation comes with sync (docs/design/dn-sync.md §8).
+fn remove_device(
+    db: &Mutex<Connection>,
+    keys: &DeviceKeys,
+    asking: &dn_sync::Device,
+    id: &str,
+) -> Message {
+    let refused = |reason: &str| Message::Refused {
+        reason: reason.to_owned(),
+    };
+    let Some(id) = dn_sync::DeviceId::from_hex(id) else {
+        return refused("That isn't a device id.");
+    };
+    if id == keys.id() {
+        return refused("The Node can't be removed from a device. Use dn node on the Node.");
+    }
+    match DeviceList::remove(&lock(db), id, dn_store::now_ms()) {
+        Ok(()) => {
+            eprintln!(
+                "dn node: {} ({}) removed device {id}",
+                asking.name, asking.id
+            );
+            Message::Done
+        }
+        Err(SyncError::UnknownDevice) => refused("That device isn't paired with this Node."),
+        Err(e) => {
+            eprintln!("dn node: removing {id} failed: {e}");
+            refused("The Node couldn't remove that device. Try again.")
+        }
+    }
+}
+
 /// One device's connection. Logs events and errors only, never message content.
 async fn handle(
     stream: TcpStream,
@@ -494,6 +544,14 @@ async fn handle(
                     break;
                 }
             },
+            Message::DevicesRequest => match devices(db, &device) {
+                Ok(devices) => Message::Devices { devices },
+                Err(e) => {
+                    eprintln!("dn node: device list failed: {e}");
+                    break;
+                }
+            },
+            Message::RemoveDevice { id } => remove_device(db, keys, &device, &id),
             _ => {
                 eprintln!(
                     "dn node: {} ({}) sent a message this Node doesn't expect",
@@ -688,6 +746,100 @@ mod tests {
         let stranger = DeviceKeys::generate().unwrap();
         assert!(ask_status(addr, &stranger, &node_key).await.is_err());
 
+        stop.notify_waiters();
+        serving.await.unwrap().unwrap();
+    }
+
+    async fn request(
+        addr: SocketAddr,
+        keys: &DeviceKeys,
+        node: &[u8; 32],
+        messages: &[Message],
+    ) -> Result<Vec<Message>, SyncError> {
+        let stream = TcpStream::connect(addr).await.unwrap();
+        let mut ch = transport::connect(stream, keys, node).await?;
+        let mut out = Vec::new();
+        for m in messages {
+            ch.send(m).await?;
+            out.push(ch.recv().await?);
+        }
+        Ok(out)
+    }
+
+    #[tokio::test]
+    async fn a_paired_device_lists_devices_and_removes_one_but_not_the_node() {
+        let dir = TempDir::new("devices");
+        init(&dir.0, SecretsConfig::InsecurePlaintext);
+        let laptop = DeviceKeys::generate().unwrap();
+        let phone = DeviceKeys::generate().unwrap();
+        let node = started(&dir.0).await;
+        let node_key = DeviceList::members(&lock(&node.db)).unwrap()[0]
+            .keys
+            .ed25519;
+        let node_id = node.device_id();
+        {
+            let conn = lock(&node.db);
+            DeviceList::add(
+                &conn,
+                &laptop.public(),
+                "Laptop",
+                DeviceKind::Desktop,
+                None,
+                1,
+            )
+            .unwrap();
+            DeviceList::add(
+                &conn,
+                &phone.public(),
+                "Work phone",
+                DeviceKind::Phone,
+                None,
+                2,
+            )
+            .unwrap();
+        }
+        let addr = node.local_addr().unwrap();
+        let stop = Arc::new(Notify::new());
+        let serving = tokio::spawn(node.serve(stop.clone()));
+
+        let replies = request(
+            addr,
+            &laptop,
+            &node_key,
+            &[
+                Message::DevicesRequest,
+                Message::RemoveDevice {
+                    id: node_id.to_hex(),
+                },
+                Message::RemoveDevice {
+                    id: phone.id().to_hex(),
+                },
+                Message::DevicesRequest,
+            ],
+        )
+        .await
+        .unwrap();
+        let Message::Devices { devices: before } = &replies[0] else {
+            panic!("{:?}", replies[0])
+        };
+        assert_eq!(before.len(), 3);
+        assert!(before.iter().any(|d| d.this_device && d.name == "Laptop"));
+        assert!(before.iter().any(|d| d.kind == "node"));
+        assert!(
+            matches!(&replies[1], Message::Refused { .. }),
+            "the Node stays"
+        );
+        assert_eq!(replies[2], Message::Done);
+        let Message::Devices { devices: after } = &replies[3] else {
+            panic!()
+        };
+        assert_eq!(after.len(), 2);
+        // The removed phone is refused from now on.
+        assert!(
+            request(addr, &phone, &node_key, &[Message::StatusRequest])
+                .await
+                .is_err()
+        );
         stop.notify_waiters();
         serving.await.unwrap().unwrap();
     }

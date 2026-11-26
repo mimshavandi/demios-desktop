@@ -297,6 +297,37 @@ pub enum Message {
     StatusRequest,
     /// The Node's status, as every client shows it.
     Status(NodeStatus),
+    /// A paired device asks for the device list (Settings › Node).
+    DevicesRequest,
+    /// The current members, the Node included.
+    Devices {
+        devices: Vec<DeviceInfo>,
+    },
+    /// A paired device removes a device (itself included, to unpair). The Node can't be
+    /// removed this way.
+    RemoveDevice {
+        id: String,
+    },
+    /// The request was done.
+    Done,
+    /// The request was refused; the reason is shown as plain text.
+    Refused {
+        reason: String,
+    },
+}
+
+/// One device in the list a client shows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceInfo {
+    /// The device id (hex).
+    pub id: String,
+    pub name: String,
+    /// `desktop`, `node` or `phone`.
+    pub kind: String,
+    /// Unix milliseconds.
+    pub last_synced_at: Option<i64>,
+    /// The device that asked.
+    pub this_device: bool,
 }
 
 /// What a Node reports about itself (ADR-0014 §7, §8): its version, the secret store in
@@ -507,7 +538,7 @@ fn parse_kind(kind: &str) -> Option<DeviceKind> {
     })
 }
 
-fn kind_name(kind: DeviceKind) -> &'static str {
+pub fn kind_name(kind: DeviceKind) -> &'static str {
     match kind {
         DeviceKind::Desktop => "desktop",
         DeviceKind::Node => "node",
