@@ -250,6 +250,13 @@ pub async fn overview(state: &std::sync::Arc<AppState>) -> IpcResult<NodeOvervie
             view.status = Some(status);
             view.devices = devices;
         }
+        // The Node says why it refuses this computer (it was removed).
+        (Ok(Message::Refused { reason }), _) => {
+            view.problem = Some(format!(
+                "Your Node refused this computer: {reason}. Forget the Node here, then pair \
+                 again."
+            ));
+        }
         // The Node closed right after the handshake: it most likely removed this device.
         (Err(SyncError::Io(_)), _) => {
             view.problem = Some(

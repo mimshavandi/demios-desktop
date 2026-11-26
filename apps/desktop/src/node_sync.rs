@@ -150,7 +150,7 @@ fn message(e: &SyncError) -> String {
         SyncError::Removed => {
             "Your Node removed this computer. Forget the Node here, then pair again.".into()
         }
-        SyncError::Refused(reason) => format!("Your Node refused to sync: {reason}"),
+        SyncError::Refused(reason) => format!("Your Node refused to sync: {reason}."),
         SyncError::NodeKeyMismatch => "The device at your Node's address isn't your Node. \
              Sync stopped; check the Node, then choose Sync now."
             .into(),
