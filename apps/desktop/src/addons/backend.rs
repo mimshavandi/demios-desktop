@@ -458,6 +458,10 @@ pub struct ToolBridge {
     state: Weak<AppState>,
     manifest: PluginManifest,
     capability_id: String,
+    /// The tier the add-on declared (at least its floor). The handler's access follows this,
+    /// never the person's override: raising a tool's tier makes it ask more, and must not
+    /// give its handler more access.
+    declared: dn_plugin_api::RiskTier,
     handler: Arc<dyn ToolHandler>,
     grants: GrantsHandle,
 }
@@ -467,6 +471,7 @@ impl ToolBridge {
         state: &Arc<AppState>,
         manifest: PluginManifest,
         capability_id: String,
+        declared: dn_plugin_api::RiskTier,
         handler: Arc<dyn ToolHandler>,
         grants: GrantsHandle,
     ) -> Self {
@@ -474,6 +479,7 @@ impl ToolBridge {
             state: Arc::downgrade(state),
             manifest,
             capability_id,
+            declared,
             handler,
             grants,
         }
@@ -492,17 +498,10 @@ impl dn_tools::InProcessTool for ToolBridge {
                 .state
                 .upgrade()
                 .ok_or_else(|| ToolError::new(id, ToolErrorKind::Unavailable, "closing"))?;
-            // The tier the executor runs it at now (the person may have raised it).
-            let tier = state
-                .executor
-                .as_ref()
-                .and_then(|e| e.resolve(id))
-                .map(|c| c.spec.risk)
-                .ok_or_else(|| ToolError::new(id, ToolErrorKind::NotFound, "add-on removed"))?;
             let caller = Caller::for_tool(
                 &self.manifest,
                 id.clone(),
-                tier,
+                self.declared,
                 ctx.run_id,
                 ctx.allowed_tools.clone(),
             );

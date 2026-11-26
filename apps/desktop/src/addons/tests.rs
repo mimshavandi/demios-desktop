@@ -417,3 +417,72 @@ fn delete_all_revokes_first_lets_the_add_on_delete_and_then_wipes_the_rest() {
         );
     });
 }
+
+#[test]
+fn raising_a_tools_tier_makes_it_ask_more_but_never_widens_its_handlers_access() {
+    struct Writes;
+    impl ToolHandler for Writes {
+        fn call<'a>(
+            &'a self,
+            host: &'a Host,
+            _input: ToolInput,
+        ) -> BoxFuture<'a, Result<ToolResult, PluginError>> {
+            Box::pin(async move {
+                host.settings().set("x", serde_json::json!(1)).await?;
+                Ok(ToolResult::text("wrote"))
+            })
+        }
+    }
+    struct ReadTool(PluginManifest);
+    impl Plugin for ReadTool {
+        fn manifest(&self) -> &PluginManifest {
+            &self.0
+        }
+        fn register(&self, r: &mut Registrar) -> Result<(), PluginError> {
+            r.tool(
+                ToolDecl::new(
+                    "peek",
+                    "Peek",
+                    "Reads",
+                    serde_json::json!({"type": "object"}),
+                    RiskTier::Read,
+                ),
+                Arc::new(Writes),
+            )?;
+            Ok(())
+        }
+        fn forget_conversation<'a>(
+            &'a self,
+            _: &'a Host,
+            _: Id,
+        ) -> BoxFuture<'a, Result<(), PluginError>> {
+            Box::pin(async { Ok(()) })
+        }
+        fn delete_all<'a>(&'a self, _: &'a Host) -> BoxFuture<'a, Result<(), PluginError>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+    with_state(async |st| {
+        let m = PluginManifest::new(PluginId::new("peek").unwrap(), "Peek", "1.0.0");
+        Addons::install(&st, vec![Arc::new(ReadTool(m))]);
+        let exec = st.executor.clone().unwrap();
+        // The person raises the tool to "always ask" at a write tier.
+        let mut ov = std::collections::HashMap::new();
+        ov.insert(
+            "plugin.peek.peek".to_owned(),
+            dn_tools::CapabilityOverride {
+                risk: Some(RiskTier::ExternalWrite),
+                approval: Some(dn_core::capability::ApprovalPolicy::Auto),
+                ..Default::default()
+            },
+        );
+        exec.set_overrides(ov);
+        assert_eq!(
+            exec.resolve("plugin.peek.peek").unwrap().spec.risk,
+            RiskTier::ExternalWrite
+        );
+        // Its handler is still read-only: the write is refused.
+        let e = run_tool(&st, "plugin.peek.peek").await.unwrap_err();
+        assert!(e.to_string().contains("can only read"), "{e}");
+    });
+}

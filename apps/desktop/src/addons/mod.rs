@@ -268,6 +268,7 @@ impl Addons {
                         state,
                         e.manifest.clone(),
                         t.capability_id.clone(),
+                        t.decl.risk,
                         Arc::clone(&t.handler),
                         e.grants.clone(),
                     )),
