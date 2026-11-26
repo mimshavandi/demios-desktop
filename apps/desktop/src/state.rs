@@ -183,6 +183,8 @@ pub struct AppState {
     db: Mutex<Connection>,
     pub models: ModelRegistry,
     pub keys: Keys,
+    /// The keychain check Settings › Models waits for (#200).
+    pub key_checks: crate::secrets::KeyChecks,
     pub agent: Agent,
     /// Chat skills the user can pick per chat (T-SKL-01).
     pub skills: crate::skills::Library,
@@ -214,6 +216,14 @@ pub struct AppState {
     /// Local copies of project files (`<data dir>/project-files`). `None` in tests that
     /// don't use them.
     pub project_files: Option<std::path::PathBuf>,
+}
+
+/// [`AppState::keychain_entries`]: what was found, and why the list may be incomplete.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct KeychainEntries {
+    pub entries: Vec<String>,
+    /// The keychain failed: the entries may be incomplete, and this says why.
+    pub problem: Option<String>,
 }
 
 /// A reserved generation slot. Dropping it without [`Reservation::into_parts`] releases
@@ -258,6 +268,7 @@ impl AppState {
             db: Mutex::new(conn),
             models,
             keys,
+            key_checks: Default::default(),
             agent: Agent::empty(),
             skills: Default::default(),
             tools: Arc::new(NoTools),
@@ -602,15 +613,30 @@ impl AppState {
     }
 
     /// What "Delete all local data" would remove from the keychain, in the user's words
-    /// (provider names, "Hugging Face token", tool-server secrets). Blocking.
-    pub fn keychain_entries(&self) -> Vec<String> {
+    /// (provider names, "Hugging Face token", tool-server secrets). Blocking. If the keychain
+    /// fails, the list stops there and `problem` says why (#200): never "none saved".
+    pub fn keychain_entries(&self) -> KeychainEntries {
+        use dn_secrets::SecretId;
+        let mut problem: Option<crate::secrets::KeychainStatus> = None;
+        let mut has = |id: SecretId| -> bool {
+            if problem.is_some() {
+                return false;
+            }
+            match self.keys.store.get(&id) {
+                Ok(v) => v.is_some(),
+                Err(e) => {
+                    problem = Some(crate::secrets::KeychainStatus::from_error(&e));
+                    false
+                }
+            }
+        };
         let mut out = Vec::new();
         for p in crate::models::PROVIDERS {
-            if self.keys.has(p.id).unwrap_or(false) {
+            if has(SecretId::provider(p.id)) {
                 out.push(format!("{} key", p.name));
             }
         }
-        if self.keys.has(HF_TOKEN_PROVIDER_ID).unwrap_or(false) {
+        if has(SecretId::provider(HF_TOKEN_PROVIDER_ID)) {
             out.push("Hugging Face token".into());
         }
         for r in self
@@ -618,7 +644,7 @@ impl AppState {
             .map(|s| s.remote_servers)
             .unwrap_or_default()
         {
-            if self.keys.has(&r.key_id()).unwrap_or(false) {
+            if has(SecretId::provider(r.key_id())) {
                 out.push(format!("{} server key", r.name));
             }
         }
@@ -631,21 +657,16 @@ impl AppState {
         }
         ids.sort();
         ids.dedup();
-        let mcp = ids
-            .into_iter()
-            .filter(|id| {
-                self.keys
-                    .store
-                    .get(&dn_secrets::SecretId::mcp(id))
-                    .is_ok_and(|v| v.is_some())
-            })
-            .count();
+        let mcp = ids.into_iter().filter(|id| has(SecretId::mcp(id))).count();
         match mcp {
             0 => {}
             1 => out.push("1 tool-server secret or sign-in".into()),
             n => out.push(format!("{n} tool-server secrets or sign-ins")),
         }
-        out
+        KeychainEntries {
+            entries: out,
+            problem: problem.and_then(|p| p.message().map(String::from)),
+        }
     }
 
     /// "Delete all local data" for everything this state owns: chats, tombstones,
@@ -1526,6 +1547,27 @@ mod tests {
     }
 
     #[test]
+    fn keychain_list_says_when_the_keychain_failed_instead_of_none_saved() {
+        use crate::secrets::{SecretError, tests::failing};
+        for (err, word) in [
+            (
+                (|| SecretError::Unavailable("no secret service".into())) as fn() -> SecretError,
+                "keychain",
+            ),
+            (|| SecretError::Denied("locked".into()), "wasn't allowed"),
+        ] {
+            let conn = dn_store::open_in_memory(&migration_sets()).unwrap();
+            let st = AppState::new(conn, ModelRegistry::default(), failing(err));
+            let e = st.keychain_entries();
+            assert!(e.entries.is_empty());
+            assert!(e.problem.expect("says why").contains(word));
+        }
+        let conn = dn_store::open_in_memory(&migration_sets()).unwrap();
+        let st = AppState::new(conn, ModelRegistry::default(), Keys::memory());
+        assert_eq!(st.keychain_entries(), KeychainEntries::default());
+    }
+
+    #[test]
     fn removed_servers_wait_for_undo_and_delete_all_drops_them_and_their_keys() {
         let keys = Keys::memory();
         let conn = dn_store::open_in_memory(&migration_sets()).unwrap();
@@ -1554,7 +1596,7 @@ mod tests {
         })
         .unwrap();
         st.remember_removed_server(server.clone(), None, vec![]);
-        assert_eq!(st.keychain_entries(), ["Box server key"]);
+        assert_eq!(st.keychain_entries().entries, ["Box server key"]);
         assert!(st.wipe_local_data().is_empty());
         assert!(!keys.has(&server.key_id()).unwrap());
         assert!(st.take_removed_server("box").is_none());
@@ -1640,7 +1682,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            st.keychain_entries(),
+            st.keychain_entries().entries,
             [
                 "OpenAI key",
                 "Hugging Face token",
@@ -1681,7 +1723,7 @@ mod tests {
             );
             assert!(dn_knowledge::sources_for(&db, "m").unwrap().is_none());
         }
-        assert!(st.keychain_entries().is_empty());
+        assert!(st.keychain_entries().entries.is_empty());
         assert!(
             store::list_conversations(&st.db().unwrap())
                 .unwrap()
@@ -1833,7 +1875,10 @@ mod tests {
         assert!(has("mcp.a.oauth"));
         assert!(!has("mcp.b.oauth"));
 
-        assert_eq!(st.keychain_entries(), ["2 tool-server secrets or sign-ins"]);
+        assert_eq!(
+            st.keychain_entries().entries,
+            ["2 tool-server secrets or sign-ins"]
+        );
         assert!(st.wipe_local_data().is_empty());
         assert!(!has("mcp.a.oauth"));
         assert!(

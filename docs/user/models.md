@@ -87,6 +87,8 @@ On the **Providers** tab there's a field for each provider: Anthropic, OpenAI an
 
 The key is stored in your system keychain (Keychain on macOS, Credential Manager on Windows, Secret Service on Linux), not in a file. After saving, the app never shows the key again. To replace it, paste a new one. To remove it, select **Remove key**; you can undo that for 10 seconds.
 
+If the app can't read your system keychain (none is installed, it is locked, or access was refused), Settings › Models says so above the keys, with what to do and a **Retry** button, instead of showing "No key yet". If the keychain asks for a password, answer it; the list updates once it has.
+
 Once a key is saved, that provider's models appear in the model lists:
 
 | Provider | Models |

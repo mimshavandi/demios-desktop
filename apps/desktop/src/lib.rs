@@ -275,6 +275,7 @@ pub fn run() {
             commands::get_settings,
             commands::update_settings,
             commands::list_models,
+            commands::check_keys,
             commands::set_provider_key,
             remote::add_remote_server,
             remote::refresh_remote_server,

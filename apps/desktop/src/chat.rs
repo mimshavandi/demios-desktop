@@ -116,10 +116,11 @@ fn model_for_turn(state: &AppState) -> IpcResult<(ModelRef, Arc<dyn ChatModel>)>
     state.agent.ready()?;
     let mut settings = state.settings()?;
     let chosen = settings.slot("chat");
-    let model = match state
-        .agent
-        .resolve_model(&settings, &state.models, &state.keys)
-    {
+    let model = match state.agent.resolve_model(
+        &settings,
+        &state.models,
+        &crate::models::provider_keys(&state.keys),
+    ) {
         Ok(m) => m,
         // The resolver only knows "disabled"; say why when it's a local model too big here.
         Err(e) => return Err(chosen.and_then(|m| wont_fit_error(state, &m)).unwrap_or(e)),

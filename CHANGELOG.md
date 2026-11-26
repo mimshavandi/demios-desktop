@@ -32,6 +32,7 @@ Only changes people using the app or the `dn` command-line tool can notice are l
 
 ### Fixed
 
+- Settings › Models no longer says "No key yet" when your system keychain can't be read. Providers and Model servers say why (on Linux, for example, that no system keychain is installed) and what to do, with **Retry**. The Models list shows right away even while a locked keychain waits for its password, and chat says the keychain can't be read instead of "No model connected" ([#213](https://github.com/mimshavandi/demios-desktop/pull/213)).
 - Skills work in the installed app: the Skills page, the skill picker under the message box and each chat's skill used to fail with "list_skills not allowed", because the app didn't let its window call the skills commands ([#211](https://github.com/mimshavandi/demios-desktop/pull/211)).
 - Settings uses the whole window: the artifact pane is hidden while Settings or a project page is open, and comes back with the chat. If your models can't be loaded, only the Models page says so; General still works ([#185](https://github.com/mimshavandi/demios-desktop/pull/185)).
 - The window always opens inside the screen's free area, so its bottom, including the message box, is never hidden behind the Windows taskbar or the macOS Dock. Demios remembers the window's size, position and maximised state for each monitor, and pulls it back on screen if a monitor is gone or its scaling changed ([#180](https://github.com/mimshavandi/demios-desktop/pull/180)).

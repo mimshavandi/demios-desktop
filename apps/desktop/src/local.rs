@@ -2448,8 +2448,10 @@ mod tests {
         // The resolver never picks it for chat, even as the only ready local model.
         let mut reg = crate::models::ModelRegistry::default();
         reg.local = Some(Arc::new(lm));
-        let keys = crate::secrets::Keys::memory();
-        let src = reg.sources(&keys);
+        let src = reg.sources(&crate::secrets::KeyCheck::run(
+            &crate::secrets::Keys::memory(),
+            [""; 0],
+        ));
         let s = src
             .iter()
             .find(|s| s.model.to_string() == "local:emb")
@@ -2494,8 +2496,10 @@ mod tests {
 
         let mut reg = crate::models::ModelRegistry::default();
         reg.local = Some(Arc::new(lm));
-        let keys = crate::secrets::Keys::memory();
-        let src = reg.sources(&keys);
+        let src = reg.sources(&crate::secrets::KeyCheck::run(
+            &crate::secrets::Keys::memory(),
+            [""; 0],
+        ));
         let s = src
             .iter()
             .find(|s| s.model.to_string() == "local:huge")

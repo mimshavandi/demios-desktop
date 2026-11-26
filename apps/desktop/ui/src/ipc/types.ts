@@ -271,10 +271,22 @@ export interface ModelOption {
   note: string | null;
 }
 
+/** Whether a key is saved. `unknown`: the keychain didn't answer; `ModelCatalog.keychain` says why. */
+export type KeyState = "saved" | "none" | "unknown";
+
+/** The system keychain as a whole (#200); anything but `ok` is shown in Settings › Models with what to do. */
+export type KeychainStatus =
+  | { state: "ok" }
+  /** Still waiting for the keychain (it may be showing an unlock prompt): `checkKeys` gets the answer. */
+  | { state: "checking" }
+  | { state: "unavailable"; message: string }
+  | { state: "denied"; message: string }
+  | { state: "failed"; message: string };
+
 export interface ProviderInfo {
   id: string;
   name: string;
-  has_key: boolean;
+  key: KeyState;
 }
 
 /** Where a catalogue model is (design-system §4, Download row). */
@@ -441,7 +453,7 @@ export interface RemoteServerView {
   id: string;
   name: string;
   base_url: string;
-  has_key: boolean;
+  key: KeyState;
   models: RemoteModelView[];
 }
 
@@ -452,6 +464,7 @@ export interface ModelCatalog {
   remote_servers: RemoteServerView[];
   local_models: LocalModelRow[];
   key_store: string;
+  keychain: KeychainStatus;
   settings: Settings;
   /** The model chat uses now (chosen or picked automatically); null if none is usable. */
   chat_model: string | null;
@@ -566,7 +579,8 @@ export interface LocalDataSummary {
   models_dir: string | null;
   models_bytes: number;
   /** Keychain entries in the user's words ("OpenAI key", "Hugging Face token", …). */
-  keychain: string[];
+  /** Keychain entries in the user's words; `problem` says why the list may be incomplete. */
+  keychain: { entries: string[]; problem: string | null };
 }
 
 export interface IpcError {

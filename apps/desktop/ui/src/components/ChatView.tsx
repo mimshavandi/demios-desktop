@@ -40,6 +40,8 @@ interface Props {
   onStop: () => void;
   onRegenerate: () => void;
   onConnect: () => void;
+  /** Settings › Models › Providers, where the keychain problem is explained (#200). */
+  onKeychain: () => void;
   /** Approval requests of this conversation (shown inline, never auto-allowed). */
   approvals: ApprovalPrompt[];
   onDecide: (requestId: string, d: ApprovalDecision) => Promise<void>;
@@ -163,17 +165,33 @@ export function ChatView(p: Props) {
               {AI_FIRST_RUN_NOTICE}
             </InlineMessage>
           )}
-          {!p.ready && (
+          {!p.ready && p.catalog !== null && p.catalog.keychain.state !== "ok" ? (
+            // Keys can't be read yet or at all (#200): say that, not "add a provider key".
             <InlineMessage
-              tone="warning"
+              tone={p.catalog.keychain.state === "checking" ? "info" : "warning"}
               action={
-                <Button size="sm" onClick={p.onConnect}>
-                  Connect a model
+                <Button size="sm" onClick={p.onKeychain}>
+                  Open Providers
                 </Button>
               }
             >
-              No model connected. Download a model or add a provider key to start chatting.
+              {p.catalog.keychain.state === "checking"
+                ? "Checking your system keychain for saved API keys…"
+                : p.catalog.keychain.message}
             </InlineMessage>
+          ) : (
+            !p.ready && (
+              <InlineMessage
+                tone="warning"
+                action={
+                  <Button size="sm" onClick={p.onConnect}>
+                    Connect a model
+                  </Button>
+                }
+              >
+                No model connected. Download a model or add a provider key to start chatting.
+              </InlineMessage>
+            )
           )}
           {p.loading && (
             <div className="msg-skeleton" aria-busy="true" aria-label="Loading messages">

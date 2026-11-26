@@ -20,6 +20,8 @@ import type {
   UpdateMode,
 } from "../ipc/types";
 import { App } from "./App";
+import { KEYCHAIN_SLOW_MS, KeychainNotice } from "./SettingsView";
+import { ToastProvider } from "./toast";
 
 afterEach(() => {
   cleanup();
@@ -161,10 +163,11 @@ function fakeApi() {
     models: [
       { model_ref: "local:dev-fake", label: "Dev fake", source: "dev", capabilities: ["chat"], available: true, note: null },
     ],
-    providers: [{ id: "openai", name: "OpenAI", has_key: false }],
+    providers: [{ id: "openai", name: "OpenAI", key: "none" }],
     remote_servers: [],
     local_models: localRows,
     key_store: "memory",
+    keychain: { state: "ok" },
     settings,
     chat_model: null,
     chat_model_tools: true,
@@ -225,7 +228,7 @@ function fakeApi() {
       models_dir: "/tmp/models",
       models_bytes: 4_200_000_000,
       projects: projects.length,
-      keychain: ["OpenAI key"],
+      keychain: { entries: ["OpenAI key"], problem: null },
     }),
     deleteAllLocalData: async () => {
       convs.length = 0;
@@ -369,6 +372,7 @@ function fakeApi() {
       return s;
     },
     listModels: async () => catalog(),
+    checkKeys: async () => catalog(),
     setProviderKey: async () => catalog(),
     addRemoteServer: async () => catalog(),
     refreshRemoteServer: async () => catalog(),
@@ -1762,5 +1766,114 @@ describe("Settings sections (#174)", () => {
     const side = await screen.findByRole("navigation", { name: "Chats" });
     expect(within(side).queryByRole("button", { name: "Models" })).toBeNull();
     expect(within(side).getByRole("button", { name: /^Settings/ })).toBeTruthy();
+  });
+});
+
+describe("System keychain state in Settings (#200)", () => {
+  const NO_KEYCHAIN = "No system keychain found. Install GNOME Keyring or KWallet to save API keys.";
+
+  /** A catalog whose keychain failed: every key state unknown, the reason once. */
+  function failing(api: Api, keychain: ModelCatalog["keychain"]) {
+    const list = api.listModels;
+    const broken = async () => {
+      const c = await list();
+      return {
+        ...c,
+        keychain,
+        providers: c.providers.map((p) => ({ ...p, key: "unknown" as const })),
+      };
+    };
+    api.listModels = broken;
+    api.checkKeys = broken;
+  }
+
+  for (const [state, message] of [
+    ["unavailable", NO_KEYCHAIN],
+    ["denied", "Demios wasn't allowed to read your system keychain, so it can't tell which API keys are saved."],
+  ] as const) {
+    it(`says why keys can't be checked when the keychain is ${state}, never "No key yet"`, async () => {
+      const { api } = fakeApi();
+      failing(api, { state, message });
+      render(<App api={api} />);
+      await openSettings("Models");
+      fireEvent.click(screen.getByRole("tab", { name: "Providers" }));
+      expect(await screen.findByText(message)).toBeTruthy();
+      expect(screen.getByText(/Can't tell whether a key is saved/)).toBeTruthy();
+      expect(screen.queryByText("No key yet.")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Remove key" })).toBeNull();
+      // The same message on the Model servers tab, with Retry.
+      fireEvent.click(screen.getByRole("tab", { name: "Model servers" }));
+      expect(await screen.findByText(message)).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    });
+  }
+
+  it("shows the list at once while the keychain is checked, then the keychain's answer", async () => {
+    const { api } = fakeApi();
+    const list = api.listModels;
+    api.listModels = async () => {
+      const c = await list();
+      return { ...c, keychain: { state: "checking" }, providers: c.providers.map((p) => ({ ...p, key: "unknown" as const })) };
+    };
+    let answer: () => void = () => {};
+    api.checkKeys = () => new Promise((resolve) => (answer = () => void list().then(resolve)));
+    render(<App api={api} />);
+    await openSettings("Models");
+    fireEvent.click(screen.getByRole("tab", { name: "Providers" }));
+    expect(await screen.findByText("Checking your system keychain for saved keys…")).toBeTruthy();
+    expect(screen.getByLabelText("OpenAI")).toBeTruthy();
+    await act(async () => answer());
+    expect(await screen.findByText("No key yet.")).toBeTruthy();
+    expect(screen.queryByText(/Checking your system keychain/)).toBeNull();
+  });
+
+  it("chat says the keychain can't be read instead of \"No model connected\"", async () => {
+    const { api } = fakeApi();
+    failing(api, { state: "unavailable", message: NO_KEYCHAIN });
+    const broken = api.listModels;
+    api.appInfo = async () => ({ version: "0.1.0", dev_fake_model: false, data_dir: "/tmp", models_dir: "/tmp/models", updates: "off" });
+    api.listModels = api.checkKeys = async () => ({ ...(await broken()), models: [] });
+    render(<App api={api} />);
+    expect(await screen.findByText(NO_KEYCHAIN)).toBeTruthy();
+    expect(screen.queryByText(/No model connected/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Open Providers" }));
+    expect(await screen.findByRole("heading", { level: 1, name: "Models" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Providers" }).getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("lists what it found in the keychain and says when it couldn't check the rest", async () => {
+    const { api } = fakeApi();
+    const summary = api.localDataSummary;
+    api.localDataSummary = async () => ({ ...(await summary()), keychain: { entries: [], problem: NO_KEYCHAIN } });
+    render(<App api={api} />);
+    await openSettings("General");
+    fireEvent.click(await screen.findByRole("button", { name: "Delete all local data" }));
+    expect(await screen.findByText(new RegExp(`Couldn't check all of them. ${NO_KEYCHAIN}`))).toBeTruthy();
+    expect(screen.queryByText(/none saved/)).toBeNull();
+  });
+});
+
+describe("KeychainNotice (#200)", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("says the keychain is locked or not answering after a while, and Retry asks again", async () => {
+    vi.useFakeTimers();
+    const { api } = fakeApi();
+    const answered = await api.checkKeys();
+    const checkKeys = vi.fn(async () => answered);
+    api.checkKeys = checkKeys;
+    const onCatalog = vi.fn();
+    render(
+      <ToastProvider>
+        <KeychainNotice api={api} status={{ state: "checking" }} onCatalog={onCatalog} />
+      </ToastProvider>,
+    );
+    expect(screen.getByText("Checking your system keychain for saved keys…")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    act(() => vi.advanceTimersByTime(KEYCHAIN_SLOW_MS));
+    expect(screen.getByText(/locked or not answering/)).toBeTruthy();
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Retry" })));
+    expect(checkKeys).toHaveBeenCalledTimes(1);
+    expect(onCatalog).toHaveBeenCalledWith(answered);
   });
 });

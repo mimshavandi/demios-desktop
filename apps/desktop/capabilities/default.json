@@ -49,6 +49,7 @@
     "allow-get-settings",
     "allow-update-settings",
     "allow-list-models",
+    "allow-check-keys",
     "allow-set-provider-key",
     "allow-delete-provider-key",
     "allow-restore-conversation",

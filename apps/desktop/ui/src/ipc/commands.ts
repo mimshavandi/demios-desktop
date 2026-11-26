@@ -110,6 +110,7 @@ interface Commands {
   get_settings: { args: Record<string, never>; ret: Settings };
   update_settings: { args: { settings: Settings }; ret: Settings };
   list_models: { args: Record<string, never>; ret: ModelCatalog };
+  check_keys: { args: Record<string, never>; ret: ModelCatalog };
   set_provider_key: { args: { providerId: string; apiKey: string }; ret: ModelCatalog };
   delete_provider_key: { args: { providerId: string }; ret: ModelCatalog };
   add_remote_server: { args: { name: string; baseUrl: string; apiKey: string | null }; ret: ModelCatalog };
@@ -286,6 +287,8 @@ export const api = {
   getSettings: () => call("get_settings", {}),
   updateSettings: (settings: Settings) => call("update_settings", { settings }),
   listModels: () => call("list_models", {}),
+  /** The catalog once the keychain has answered, however long that takes (an unlock prompt). */
+  checkKeys: () => call("check_keys", {}),
   setProviderKey: (providerId: string, apiKey: string) =>
     call("set_provider_key", { providerId, apiKey }),
   deleteProviderKey: (providerId: string) => call("delete_provider_key", { providerId }),

@@ -3,7 +3,7 @@
 
 use crate::error::IpcError;
 use crate::models::ModelRegistry;
-use crate::secrets::Keys;
+use crate::secrets::KeyCheck;
 use crate::settings::Settings;
 use dn_agent::{AgentManifest, BoxFuture, PromptRegistry, ToolContext, ToolExecutor, ToolOutput};
 use dn_core::CoreError;
@@ -143,12 +143,14 @@ impl Agent {
     }
 
     /// Which model answers: the user's chat choice, the manifest default, then the first
-    /// ready source. Never falls back past a model the user named. Blocking (keychain).
+    /// ready source. Never falls back past a model the user named. `keys` says which provider
+    /// keys are saved; when the keychain didn't answer and a provider model could have been
+    /// the answer, the error is the keychain's, not "add a key" (#200).
     pub fn resolve_model(
         &self,
         settings: &Settings,
         models: &ModelRegistry,
-        keys: &Keys,
+        keys: &KeyCheck,
     ) -> Result<ModelRef, IpcError> {
         let slot = self.chat_slot();
         let preference = settings.slot("chat");
@@ -160,7 +162,15 @@ impl Agent {
                 slot_preference: preference.as_ref(),
             })
             .map(|r| r.model)
-            .map_err(model_error)
+            .map_err(|e| {
+                let byok_possible = preference
+                    .as_ref()
+                    .is_none_or(|m| matches!(m, ModelRef::Byok { .. }));
+                match keys.status.error() {
+                    Some(keychain) if byok_possible => keychain,
+                    _ => model_error(e),
+                }
+            })
     }
 }
 
@@ -302,22 +312,45 @@ mod tests {
     #[test]
     fn resolves_user_choice_and_reports_missing_key() {
         let agent = Agent::load(skills_dir(None).as_deref());
-        let keys = Keys::memory();
+        let keys = crate::secrets::Keys::memory();
+        let check = |k: &crate::secrets::Keys| KeyCheck::run(k, ["anthropic"]);
         let models = ModelRegistry::default();
         let mut s = Settings::default();
         // Nothing configured, nothing ready.
-        let e = agent.resolve_model(&s, &models, &keys).unwrap_err();
+        let e = agent.resolve_model(&s, &models, &check(&keys)).unwrap_err();
         assert_eq!(e.code, "model_source_required");
         // User picked a model whose key is missing: no fallback, a fix instead.
         s.slots
             .insert("chat".into(), "byok:anthropic:claude-sonnet-5-5".into());
-        let e = agent.resolve_model(&s, &models, &keys).unwrap_err();
+        let e = agent.resolve_model(&s, &models, &check(&keys)).unwrap_err();
         assert_eq!(e.code, "model_unavailable");
         assert!(e.recovery.contains(&RecoveryAction::AddProviderKey));
         // With the key, it resolves to exactly that model.
         keys.set("anthropic", &crate::secrets::Secret::new("test-key"))
             .unwrap();
-        let m = agent.resolve_model(&s, &models, &keys).unwrap();
+        let m = agent.resolve_model(&s, &models, &check(&keys)).unwrap();
         assert_eq!(m.to_string(), "byok:anthropic:claude-sonnet-5-5");
+    }
+
+    #[test]
+    fn a_keychain_failure_is_reported_as_itself_not_as_a_missing_key() {
+        use crate::secrets::{SecretError, tests::failing};
+        let agent = Agent::load(skills_dir(None).as_deref());
+        let models = ModelRegistry::default();
+        let mut s = Settings::default();
+        s.slots
+            .insert("chat".into(), "byok:anthropic:claude-sonnet-5-5".into());
+        let keys = failing(|| SecretError::Denied("locked".into()));
+        let e = agent
+            .resolve_model(&s, &models, &KeyCheck::run(&keys, ["anthropic"]))
+            .unwrap_err();
+        assert_eq!(e.code, "key_store_denied");
+        assert!(!e.recovery.contains(&RecoveryAction::AddProviderKey));
+        // A chosen model that isn't a provider's keeps its own error.
+        s.slots.insert("chat".into(), "local:not-there".into());
+        let e = agent
+            .resolve_model(&s, &models, &KeyCheck::run(&keys, ["anthropic"]))
+            .unwrap_err();
+        assert_ne!(e.code, "key_store_denied");
     }
 }

@@ -35,7 +35,7 @@ import { ChatView, type ArtifactCardInfo } from "./ChatView";
 import { ModelBadge } from "./ModelBadge";
 import { NewProjectView, ProjectView, type ProjectDraft } from "./ProjectView";
 import { Badge, Button, ICON, IconButton, InlineMessage, TooltipProvider } from "./primitives";
-import { SettingsView, lastSettingsRoute, type SettingsRoute } from "./SettingsView";
+import { SettingsView, lastSettingsRoute, useKeychainAnswer, type SettingsRoute } from "./SettingsView";
 import { Sidebar, type ListState } from "./Sidebar";
 import { ToastProvider, useToast } from "./toast";
 
@@ -259,6 +259,8 @@ function Shell({ api }: { api: Api }) {
     }
   }, [api]);
   refreshCatalogRef.current = refreshCatalog;
+  // The list came back before the keychain answered (#200): take its answer when it comes.
+  useKeychainAnswer(api, catalog, setCatalog, setCatalogError);
 
   const refreshUnknowns = useCallback(
     async (id: Id | null) => {
@@ -988,6 +990,7 @@ function Shell({ api }: { api: Api }) {
             onStop={() => void stop()}
             onRegenerate={() => void regenerate()}
             onConnect={() => goSettings({ section: "models", tab: "device" })}
+            onKeychain={() => goSettings({ section: "models", tab: "providers" })}
             approvals={approvals.filter((a) => a.scope === `conv:${chat.conversationId ?? ""}`)}
             onDecide={decide}
             unknowns={unknowns}
