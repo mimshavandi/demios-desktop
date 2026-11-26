@@ -8,6 +8,7 @@ Only changes people using the app or the `dn` command-line tool can notice are l
 
 ### Added
 
+- **`dn node` (early preview):** `dn node init` and `dn node run` start a Demios Node, the engine running as a service on a machine you own. It keeps keys in the secret store you choose (a systemd credential, a container secret, a key file on another disk, or the system keychain), refuses to start with API keys in environment variables, and accepts only devices already paired with it. Pairing from the Node comes next ([#PRNUM](https://github.com/mimshavandi/demios-desktop/pull/PRNUM)).
 - **Settings → Models → On this device:** **Remove** on a downloaded model frees its space. It takes effect at once, with Undo for 10 seconds; a task that used the model then asks you to choose one. Models in your Hugging Face cache or a folder you chose are never deleted. **Cancel download** stops a running or paused download and deletes the part already downloaded ([#231](https://github.com/mimshavandi/demios-desktop/pull/231)).
 
 ### Changed

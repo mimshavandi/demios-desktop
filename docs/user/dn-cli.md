@@ -46,6 +46,29 @@ A `demios://models/add?…` link names a Hugging Face model, and can name one ve
 
 `dn run` and `dn bench` pick the context size, cache type and GPU layers that fit your machine, using the same estimate as `dn fit`. For a mixture-of-experts model that doesn't fit on the GPU, they keep some or all of its experts in CPU memory (`dn fit` prints this as the `preset` line); `--moe-cpu all` or `--moe-cpu <layers>` sets it yourself. Any option you set yourself wins. A model that won't fit is refused; pass `--force` to try anyway. `--no-auto` turns the automatic choice off.
 
+## Demios Node (early preview)
+
+A Node is the Demios engine running as a service on a machine you own, such as a home PC, a Mac mini or a server, so background work can go on while the app is closed. It keeps your data on that machine, unencrypted while it works on it, so only run one on hardware you control.
+
+```sh
+dn node init --data-dir /var/lib/demios --name "Home server" --secrets systemd-credential:demios-node --utc-offset +01:00
+dn node run --data-dir /var/lib/demios
+```
+
+- `--secrets` chooses where the Node keeps keys. The options are:
+  - `keychain`: the system keychain or Windows Credential Manager of the Node's account;
+  - `systemd-credential:<name>`: an encrypted file whose key comes from a systemd credential, sealed to the TPM by the unit;
+  - `container-secret:<name>`: a Docker or Podman secret;
+  - `key-file:<path>`: a key file on another disk;
+  - `insecure-plaintext`: test setups only, and every device shows a warning.
+
+  The key for an encrypted file is 32 random bytes, for example `openssl rand -hex 32`.
+- The Node refuses to start if API keys or tokens are set in environment variables (for example `OPENAI_API_KEY`), and refuses a secret store it can't open. It never falls back to another one.
+- Not there yet:
+  - pairing devices from the Node (`dn node pair`);
+  - a passphrase-protected store (`dn node unlock`);
+  - encrypting the Node's database file. Until then, use full-disk encryption on the Node.
+
 ## Examples
 
 ```sh
