@@ -66,7 +66,7 @@ This ADR decides the Node's shape: pairing, sync, models, approvals, secrets, op
   - the user's own VPN or overlay network, such as WireGuard or Tailscale;
   - a port the user forwards, or their own reverse proxy. TLS is still end to end with the pinned keys, so a proxy that terminates TLS breaks pairing on purpose.
 - **The Demios Relay is optional** (ADR-0016). It's an encrypted store-and-forward mailbox service: when two devices aren't online at the same time, a device delivers its sealed changes, approvals or notifications to the other's mailbox there. It holds ciphertext only (§3), never decrypts and holds no keys. ADR-0016 states what it can still see: mailbox ids, timing and sizes.
-  - **A Node's machine can run its own Relay** next to the Node (the separate `demios-relay` program, ADR-0016 §7), so even store-and-forward needs no Demios server.
+  - **A Node can run its own Relay** (ADR-0016 §7), so even store-and-forward needs no Demios server.
   - **Without any Relay,** devices sync only when they reach the Node directly, and Settings › Node says so.
 - **Push to a phone is the one exception the platforms impose.** iOS and Android deliver background notifications only through Apple's and Google's push services, which need a sender that holds the app's push credentials. So:
   - **Without push, nothing breaks.** Approvals wait until a device connects. The desktop app keeps a live connection while it runs.

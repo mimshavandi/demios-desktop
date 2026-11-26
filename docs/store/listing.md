@@ -14,7 +14,7 @@ Chat with AI models on your own computer, or with your own provider API keys.
 
 ## Long description
 
-Demios Desktop is an open-source app for chatting with AI models.
+Demios Desktop is a source-available app for chatting with AI models.
 
 - **Run models on your computer.** Download a model from the built-in list, or GGUF models from Hugging Face, and chat with them through llama.cpp. The app shows whether it fits in your computer's memory and its licence before you download it.
 - **Or bring your own key.** Add an API key for Anthropic, OpenAI or Google Gemini and chat with their models under your own account and their terms.

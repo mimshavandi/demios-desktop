@@ -8,6 +8,7 @@ Only changes people using the app or the `dn` command-line tool can notice are l
 
 ### Changed
 
+- Demios Desktop and `dn` are now licensed under the PolyForm Shield License 1.0.0 instead of Apache-2.0. You can still read, build, change and use the code for anything except a product that competes with Demios. Versions up to and including 0.1.0-preview.8cd482c stay under Apache-2.0 ([#217](https://github.com/mimshavandi/demios-desktop/pull/217)).
 - **Settings → Models** shows the project search model at the top, in **Model for each task**: the **Embeddings** row is now **Project search**. When the recommended search model isn't downloaded, the row shows its size and licence with **Download**, then the download's progress, and **Try again** if it failed. The separate **Project search** card further down is gone ([#219](https://github.com/mimshavandi/demios-desktop/pull/219)).
 
 ### Fixed
