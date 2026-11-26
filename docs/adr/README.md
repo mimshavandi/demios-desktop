@@ -21,3 +21,4 @@ Format: Context → Decision → Options (table) → Trade-offs → Consequences
 | [0015](0015-encrypted-sharing-and-forms.md) | Sharing artifacts through encrypted links, and forms that collect encrypted responses | Accepted |
 | [0016](0016-demios-relay.md) | Demios Relay: encrypted store-and-forward mailboxes, addressed by public key | Accepted |
 | [0017](0017-licence-polyform-shield.md) | Licence: PolyForm Shield 1.0.0 for the app, `dn`, the Node and the shared crates | Accepted |
+| [0018](0018-connect-catalogue.md) | Connect: a curated catalogue of tool servers, with no connector code to maintain | Proposed |
