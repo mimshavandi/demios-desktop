@@ -131,4 +131,7 @@ If a task has no model and you have several that suit it (for example after upda
 
 **Project search** is the model that finds passages in your project files by meaning (see [Projects](projects.md)). It's chosen like **Chat**: pick a downloaded embedding model in the menu, or select **Set as default** on its row. While none is chosen, the row says "No model chosen: project files are searched by keywords." A search model's download, its progress and any problem show on its own row under **On this device**, like any other model.
 
-**Recommended:** models we recommend have a **Recommended** chip, in the **On this device** list and in **Add a model** results. Today that's Nomic Embed Text v2 MoE (Q5_K_M), the search model for project files.
+**Recommended:** models we recommend have a **Recommended** chip, in the **On this device** list and in **Add a model** results:
+
+- **Project search:** Nomic Embed Text v2 MoE (Q5_K_M), on every computer.
+- **Chat:** one model for your computer's memory. With 8 GB up to 15 GB, that's Llama 3.2 3B Instruct; with 16 GB or more, Qwen3 8B. Computers with less than 8 GB get no chat recommendation. You only ever see one chat model marked **Recommended**.

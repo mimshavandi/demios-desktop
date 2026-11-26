@@ -27,9 +27,21 @@ pub struct CatalogEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_support: Option<crate::kind::ToolSupport>,
     /// One of the models we recommend (#219): shown with a "Recommended" chip in the model
-    /// list and in Hugging Face search results for its repo.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub recommended: bool,
+    /// list and in Hugging Face search results for its repo, on the machines
+    /// [`Catalog::recommended_for`] picks it for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recommended: Option<Recommendation>,
+}
+
+/// For which machines a catalogue model is recommended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Recommendation {
+    /// `true`: on every machine (the search model). `false` is the same as no flag.
+    Always(bool),
+    /// `{"memory_gb": 8}`: on machines with at least this much memory, unless a pick for a
+    /// bigger tier applies too (one chat pick per memory size).
+    ForMemory { memory_gb: u32 },
 }
 
 impl CatalogEntry {
@@ -64,12 +76,39 @@ impl Catalog {
         self.models.iter().find(|m| m.id == id)
     }
 
-    /// Whether a recommended entry comes from Hugging Face repo `repo` (any file when `file`
-    /// is `None`). Repo ids compare without case, as the Hub does.
-    pub fn recommends(&self, repo: &str, file: Option<&str>) -> bool {
-        self.models.iter().any(|m| {
-            m.recommended && m.repo.eq_ignore_ascii_case(repo) && file.is_none_or(|f| f == m.file)
-        })
+    /// The entries recommended on a machine with `total_ram` bytes of memory: every
+    /// `Always` pick, and the memory pick for the largest tier the machine reaches. Memory is
+    /// rounded to whole GiB first, so an "8 GB" machine that reports a little less (memory the
+    /// firmware keeps) still counts as 8 GB. Below the smallest tier there is no memory pick.
+    pub fn recommended_for(&self, total_ram: u64) -> Vec<&CatalogEntry> {
+        let gb = (total_ram + crate::fit::GIB / 2) / crate::fit::GIB;
+        let tier = self
+            .models
+            .iter()
+            .filter_map(|m| match m.recommended {
+                Some(Recommendation::ForMemory { memory_gb }) if u64::from(memory_gb) <= gb => {
+                    Some(memory_gb)
+                }
+                _ => None,
+            })
+            .max();
+        self.models
+            .iter()
+            .filter(|m| match m.recommended {
+                Some(Recommendation::Always(on)) => on,
+                Some(Recommendation::ForMemory { memory_gb }) => Some(memory_gb) == tier,
+                None => false,
+            })
+            .collect()
+    }
+
+    /// Whether an entry recommended on this machine (see [`Self::recommended_for`]) comes
+    /// from Hugging Face repo `repo` (any file when `file` is `None`). Repo ids compare
+    /// without case, as the Hub does.
+    pub fn recommends(&self, repo: &str, file: Option<&str>, total_ram: u64) -> bool {
+        self.recommended_for(total_ram)
+            .iter()
+            .any(|m| m.repo.eq_ignore_ascii_case(repo) && file.is_none_or(|f| f == m.file))
     }
 }
 
@@ -185,29 +224,53 @@ mod tests {
         assert!(missing.is_empty(), "no chat template in: {missing:?}");
     }
 
-    /// The recommended models (#219): today the default search model only. Every one is a
-    /// pinned entry like the others; the chip comes from this flag, not from the UI.
+    /// The recommended models (#219): the search model on every machine, and the chat
+    /// default the notes already name for 8 GB and 16 GB machines. The chip comes from this
+    /// data, not from the UI.
     #[test]
-    fn the_recommended_search_model_is_the_default_one() {
+    fn the_recommended_models_follow_the_machine_memory() {
         let c = Catalog::builtin();
-        let ids: Vec<_> = c
-            .models
-            .iter()
-            .filter(|m| m.recommended)
-            .map(|m| m.id.as_str())
-            .collect();
-        assert_eq!(ids, ["nomic-embed-text-v2-moe-q5_k_m"]);
-        assert!(c.recommends("nomic-ai/nomic-embed-text-v2-moe-GGUF", None));
+        let gb = |n: u64| n * crate::fit::GIB;
+        let ids = |ram: u64| -> Vec<&str> {
+            c.recommended_for(ram)
+                .iter()
+                .map(|m| m.id.as_str())
+                .collect()
+        };
+        let search = "nomic-embed-text-v2-moe-q5_k_m";
+        // Below 8 GB: the search model only, no chat pick.
+        assert_eq!(ids(gb(4)), [search]);
+        // 8 GB (also as reported with some memory kept by the firmware), and up to 15 GB.
+        let eight = ["llama-3.2-3b-instruct-q4_k_m", search];
+        assert_eq!(ids(gb(8)), eight);
+        assert_eq!(ids(gb(8) - gb(1) / 4), eight);
+        assert_eq!(ids(gb(12)), eight);
+        // 16 GB and more: the 16 GB pick only, never two chat picks.
+        assert_eq!(ids(gb(16)), ["qwen3-8b-q4_k_m", search]);
+        assert_eq!(ids(gb(64)), ["qwen3-8b-q4_k_m", search]);
+        // Each memory pick is the model its notes call the default for that size.
+        for m in &c.models {
+            if let Some(Recommendation::ForMemory { memory_gb }) = m.recommended {
+                assert!(m.capabilities.contains(&Capability::Chat), "{}", m.id);
+                assert!(m.notes.contains(&format!("{memory_gb} GB")), "{}", m.id);
+            }
+        }
+
+        assert!(c.recommends("nomic-ai/nomic-embed-text-v2-moe-GGUF", None, gb(4)));
         assert!(c.recommends(
             "NOMIC-AI/nomic-embed-text-v2-moe-gguf",
-            Some("nomic-embed-text-v2-moe.Q5_K_M.gguf")
+            Some("nomic-embed-text-v2-moe.Q5_K_M.gguf"),
+            gb(4)
         ));
         // The same repo's other file isn't the recommended one.
         assert!(!c.recommends(
             "nomic-ai/nomic-embed-text-v2-moe-GGUF",
-            Some("nomic-embed-text-v2-moe.Q8_0.gguf")
+            Some("nomic-embed-text-v2-moe.Q8_0.gguf"),
+            gb(4)
         ));
-        assert!(!c.recommends("Qwen/Qwen2.5-0.5B-Instruct-GGUF", None));
+        assert!(c.recommends("Qwen/Qwen3-8B-GGUF", None, gb(16)));
+        assert!(!c.recommends("Qwen/Qwen3-8B-GGUF", None, gb(8)));
+        assert!(!c.recommends("Qwen/Qwen2.5-0.5B-Instruct-GGUF", None, gb(16)));
     }
 
     #[test]

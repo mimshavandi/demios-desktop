@@ -1047,8 +1047,14 @@ pub async fn hub_search(
     sort: dn_models::hub::SearchSort,
     cursor: Option<String>,
 ) -> IpcResult<dn_models::hub::SearchPage> {
-    let hub = blocking(&state, |s| crate::hub::client(&s.keys)).await?;
-    crate::hub::search(&hub, &text, sort, cursor.as_deref()).await
+    // This machine's memory picks the recommended chat model; a build without local models
+    // has no local downloads to recommend one for.
+    let (hub, total_ram) = blocking(&state, |s| {
+        let ram = s.models.local.as_ref().map_or(0, |l| l.machine().total_ram);
+        crate::hub::client(&s.keys).map(|h| (h, ram))
+    })
+    .await?;
+    crate::hub::search(&hub, &text, sort, cursor.as_deref(), total_ram).await
 }
 
 #[tauri::command]
