@@ -182,9 +182,8 @@ pub fn put_chat(conn: &Connection, row: &ChatRow) -> Result<()> {
 }
 
 /// Deletes a chat for good, from another device: its messages go, a tombstone stays
-/// (as [`crate::chat::purge_deleted`] does).
-pub fn purge_chat(conn: &Connection, id: &str, deleted_at: i64) -> Result<()> {
-    let tx = conn.unchecked_transaction()?;
+/// (as [`crate::chat::purge_deleted`] does). Run it inside the caller's transaction.
+pub fn purge_chat(tx: &Connection, id: &str, deleted_at: i64) -> Result<()> {
     tx.execute(
         "INSERT OR REPLACE INTO store_tombstones (id, deleted_at, kind) VALUES (?1, ?2, 'conversation')",
         params![id, deleted_at],
@@ -194,8 +193,14 @@ pub fn purge_chat(conn: &Connection, id: &str, deleted_at: i64) -> Result<()> {
         [id],
     )?;
     tx.execute("DELETE FROM store_conversations WHERE id = ?1", [id])?;
-    tx.commit()?;
     Ok(())
+}
+
+/// The ids of a chat's messages (to record them as gone when the chat is purged).
+pub fn chat_message_ids(conn: &Connection, chat_id: &str) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare("SELECT id FROM store_messages WHERE conversation_id = ?1")?;
+    let rows = stmt.query_map([chat_id], |r| r.get::<_, String>(0))?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
 /// A project's synced fields (its files sync later, with their contents).
@@ -251,9 +256,9 @@ pub fn put_project(conn: &Connection, row: &ProjectRow) -> Result<()> {
 }
 
 /// Deletes a project for good, from another device. Its chats were purged by their own
-/// changes; its files' rows go with it (their local copies are cleaned up at start).
-pub fn purge_project(conn: &Connection, id: &str, deleted_at: i64) -> Result<()> {
-    let tx = conn.unchecked_transaction()?;
+/// changes; its files' rows go with it (their local copies are cleaned up at start). Run it
+/// inside the caller's transaction.
+pub fn purge_project(tx: &Connection, id: &str, deleted_at: i64) -> Result<()> {
     tx.execute(
         "INSERT OR REPLACE INTO store_tombstones (id, deleted_at, kind) VALUES (?1, ?2, 'project')",
         params![id, deleted_at],
@@ -263,7 +268,6 @@ pub fn purge_project(conn: &Connection, id: &str, deleted_at: i64) -> Result<()>
         [id],
     )?;
     tx.execute("DELETE FROM store_projects WHERE id = ?1", [id])?;
-    tx.commit()?;
     Ok(())
 }
 
