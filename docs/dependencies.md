@@ -6,10 +6,10 @@ Every direct dependency is listed here with why and its licence (ADR-0009). Anyt
 |---|---|---|---|---|
 | serde, serde_json | all | (de)serialisation of contracts | MIT/Apache-2.0 | T-CORE-01 |
 | thiserror | all | typed errors | MIT/Apache-2.0 | T-CORE-01 |
-| uuid (v7) | dn-core | time-ordered, sync-safe ids | MIT/Apache-2.0 | T-CORE-01 |
+| uuid (v7) | dn-core, dn-jobs | time-ordered, sync-safe ids | MIT/Apache-2.0 | T-CORE-01 |
 | futures-core | dn-core | `Stream` trait for `ChatModel::chat` | MIT/Apache-2.0 | T-CORE-01 |
 | keyring 3 | dn-secrets | OS keychain for BYOK keys and MCP tokens (ADR-0007). Features `apple-native`, `windows-native`, `async-secret-service` + `tokio` + `crypto-rust`, so there are no C deps (libdbus/openssl) | MIT/Apache-2.0 | T-PRV-03 |
-| tokio | dn-agent, dn-secrets, dn-providers, dn-sync | async runtime; `sync` for streams/cancellation, `rt` for `AsyncSecrets::spawn_blocking`; dn-providers also `time` for SSE first-byte/idle timeouts (T-PRV-04); approved wave-1 dependency | MIT | T-AGT-02 |
+| tokio | dn-agent, dn-secrets, dn-providers, dn-sync, dn-jobs | async runtime; `sync` for streams/cancellation, `rt` for `AsyncSecrets::spawn_blocking`; dn-providers also `time` for SSE first-byte/idle timeouts (T-PRV-04); approved wave-1 dependency | MIT | T-AGT-02 |
 | reqwest 0.13 | dn-providers | HTTPS client for BYOK providers. `rustls` (aws-lc-rs, platform verifier) + `http2` + `charset`; no OpenSSL. SSE parsing is hand-rolled (`dn_providers::sse`) | MIT/Apache-2.0 | T-PRV-01 |
 | zeroize 1 | dn-secrets | wipe `Secret` buffers on drop (`Zeroizing<String>`); already a transitive dep of keyring | MIT/Apache-2.0 | T-PRV-03 |
 | aws-lc-rs 1.19 (no default features; `aws-lc-sys`) | dn-sync, dn-secrets | dn-sync: device identity and pairing (ADR-0014 §2): Ed25519 signatures, X25519 keys, HMAC-SHA256 pairing proof, SHA-256, system RNG. dn-secrets: a Node's encrypted secrets file (ADR-0014 §7): AES-256-GCM, HKDF-SHA256, PBKDF2-HMAC-SHA256 for a passphrase. Already built into the app as rustls's crypto provider, same version, so no new code is compiled; approved by the owner (2026-11-26) | ISC AND (Apache-2.0 OR ISC) | #233, #238 |
@@ -18,7 +18,7 @@ Every direct dependency is listed here with why and its licence (ADR-0009). Anyt
 | ts-rs 12 (optional, `ts` feature; `serde-compat`, no default features) | dn-core | TypeScript bindings for the UI in `crates/dn-core/bindings/`; not in the default build | MIT | T-CORE-04 |
 | serde_yaml_ng 0.10 | dn-agent | YAML manifests (`agent.yaml`, `skill.yaml`, prompt `manifest.yaml`). Maintained fork of the archived `serde_yaml` (chosen as the maintained successor) | MIT | T-AGT-01 |
 | jsonschema 0.63 (`default-features = false`) | dn-agent | validate manifests against bundled Draft 2020-12 schemas; no remote/file `$ref` resolution (approved by lead) | MIT | T-AGT-01 |
-| rusqlite 0.43 (`bundled`) | dn-store, dn-tools, dn-artifacts, dn-knowledge | SQLite store and migration runner (ADR-0007); bundled SQLite so all three OSes build the same. dn-tools: side-effect ledger (`tool_ledger_*`). dn-artifacts: artifact store (`artifact_*`, ADR-0004). dn-knowledge: knowledge index (`knowledge_*`, FTS5 from the bundled SQLite, #116) | MIT (SQLite: public domain) | T-CORE-02 |
+| rusqlite 0.43 (`bundled`) | dn-store, dn-tools, dn-artifacts, dn-knowledge, dn-jobs | SQLite store and migration runner (ADR-0007); bundled SQLite so all three OSes build the same. dn-tools: side-effect ledger (`tool_ledger_*`). dn-artifacts: artifact store (`artifact_*`, ADR-0004). dn-knowledge: knowledge index (`knowledge_*`, FTS5 from the bundled SQLite, #116) | MIT (SQLite: public domain) | T-CORE-02 |
 | rmcp 3.11 (client, transport-async-rw, streamable-http-client-reqwest, auth) | dn-tools | MCP client over stdio + Streamable HTTP; OAuth (PKCE, discovery, DCR) via its `auth` feature (pulls `oauth2`, `url`). Dev: `server`, `transport-io`, `transport-streamable-http-server` for test servers | Apache-2.0 | T-CON-01 |
 | tokio | dn-tools | async runtime, child processes, timeouts, approval channels | MIT | T-CON-01 |
 | reqwest 0.13 (rustls) | dn-tools | HTTP client handed to rmcp (no redirects for MCP traffic) | MIT/Apache-2.0 | T-CON-01 |
@@ -28,7 +28,7 @@ Every direct dependency is listed here with why and its licence (ADR-0009). Anyt
 | llama-cpp-2 (+ llama-cpp-sys-2, builds llama.cpp) | dn-inference | in-process llama.cpp backend; `metal` on macOS, `cuda`/`vulkan` features | MIT/Apache-2.0 (llama.cpp: MIT) | T-INF-02 |
 | minijinja 3.1 (`builtins`, `serde`, `json`, `fuel`, `macros`; no default features), minijinja-contrib 3.1 (`pycompat`) | dn-inference (`llamacpp`) | renders a GGUF's own Jinja chat template (llama-cpp-2 doesn't expose llama.cpp's). Templates are untrusted: no loader (no includes or file access), a fuel budget, a recursion limit and an output cap | Apache-2.0 | T-INF-23 |
 | reqwest 0.13 (rustls) | dn-models, dn-inference | resumable model downloads (HTTPS only, read timeout); `/v1/embeddings` for OpenAI-compatible servers (chat goes through dn-providers) | MIT/Apache-2.0 | T-INF-05, T-INF-06 |
-| sha2 | dn-models, demios-desktop, dn-knowledge | SHA-256 verification of downloads; fingerprints of MCP tools; knowledge index: skip unchanged files | MIT/Apache-2.0 | T-INF-05 |
+| sha2 | dn-models, demios-desktop, dn-knowledge, dn-jobs | SHA-256 verification of downloads; fingerprints of MCP tools; knowledge index: skip unchanged files | MIT/Apache-2.0 | T-INF-05 |
 | sysinfo (`system`; `disk` in dn-models) | dn-models, dn | RAM detection for the fit estimator; free disk space before a model download; peak RSS in `dn bench` | MIT | T-INF-03 |
 | clap (derive) | dn | `dn` command-line parsing | MIT/Apache-2.0 | T-INF-04 |
 | tauri 2, tauri-build 2 | apps/desktop | desktop shell, typed IPC, capabilities (ADR-0002). Pinned to `tauri ~2.11` / `tauri-build ~2.6` with the `unstable` feature (multiwebview) for the Windows artifact webview (ADR-0012, owner approved); every upgrade must pass `e2e-windows` | MIT/Apache-2.0 | T-SHELL-01, #75 |
