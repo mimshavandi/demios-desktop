@@ -20,6 +20,9 @@ CREATE TABLE sync_devices (
     removed_at     INTEGER,
     last_synced_at INTEGER
 );
+-- One row per signing key, removed rows included, so a removed device can't come back
+-- with the same signing key and a new agreement key.
+CREATE UNIQUE INDEX sync_devices_ed25519 ON sync_devices (ed25519);
 "];
 
 /// Longest device name, in characters.
@@ -134,7 +137,14 @@ impl DeviceList {
     ) -> Result<Device> {
         let name = clean_name(name)?;
         let id = keys.id();
-        if let Some(existing) = Self::get(conn, id)? {
+        let same_signing_key = conn
+            .query_row(
+                "SELECT * FROM sync_devices WHERE ed25519 = ?1",
+                [keys.ed25519.as_slice()],
+                from_row,
+            )
+            .optional()?;
+        if let Some(existing) = same_signing_key.or(Self::get(conn, id)?) {
             return Err(if existing.is_member() {
                 SyncError::AlreadyPaired
             } else {
@@ -323,6 +333,13 @@ mod tests {
                 None,
                 7
             ),
+            Err(SyncError::Removed)
+        ));
+        // Nor can it come back with its signing key and a new agreement key.
+        let mut reused = phone.public();
+        reused.x25519 = DeviceKeys::generate().unwrap().public().x25519;
+        assert!(matches!(
+            DeviceList::add(&conn, &reused, "Work phone", DeviceKind::Phone, None, 8),
             Err(SyncError::Removed)
         ));
         assert!(matches!(
