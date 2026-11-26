@@ -10,6 +10,8 @@
 //! panics inside a Tokio runtime. Use [`AsyncSecrets`], which runs each call in
 //! `spawn_blocking`.
 
+pub mod server;
+
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, Mutex};
@@ -115,7 +117,7 @@ impl fmt::Display for SecretId {
 /// A secret value. `Debug` and `Display` print `***`; call [`expose`](Self::expose) to use it.
 /// The buffer is zeroed on drop, including for clones (each clone owns a zeroizing copy).
 #[derive(Clone, PartialEq, Eq)]
-pub struct Secret(Zeroizing<String>);
+pub struct Secret(pub(crate) Zeroizing<String>);
 
 impl Secret {
     pub fn new(value: impl Into<String>) -> Self {
@@ -168,6 +170,9 @@ pub enum SecretError {
     /// No usable OS keychain (e.g. no Secret Service on a headless Linux box).
     #[error("OS keychain unavailable: {0}")]
     Unavailable(String),
+    /// A Node's passphrase-protected store hasn't been unlocked yet (`dn node unlock`).
+    #[error("the secret store is locked; unlock it with `dn node unlock`")]
+    Locked,
     #[error("OS keychain error for `{id}`: {message}")]
     Backend { id: String, message: String },
 }
@@ -182,7 +187,7 @@ pub trait SecretStore: Send + Sync {
     fn delete(&self, id: &SecretId) -> Result<bool, SecretError>;
 }
 
-fn check(id: &SecretId, value: Option<&Secret>) -> Result<(), SecretError> {
+pub(crate) fn check(id: &SecretId, value: Option<&Secret>) -> Result<(), SecretError> {
     id.validate()?;
     if let Some(v) = value {
         if v.0.is_empty() {

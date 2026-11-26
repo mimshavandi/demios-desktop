@@ -228,6 +228,7 @@ function fakeApi() {
     listMcpServers: async () => ({ servers: [], local_servers_allowed: true }),
     saveMcpServer: async () => ({ servers: [], local_servers_allowed: true }),
     removeMcpServer: async () => ({ servers: [], local_servers_allowed: true }),
+    restoreMcpServer: async () => ({ servers: [], local_servers_allowed: true }),
     reconnectMcpServer: async () => null,
     signInMcpServer: async () => null,
     signOutMcpServer: async () => ({ servers: [], local_servers_allowed: true }),

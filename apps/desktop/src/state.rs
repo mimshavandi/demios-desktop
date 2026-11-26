@@ -201,6 +201,8 @@ pub struct AppState {
     live: Mutex<HashMap<Id, Live>>,
     removed_keys: Mutex<HashMap<String, RemovedKey>>,
     removed_servers: Mutex<HashMap<String, RemovedServer>>,
+    /// Removed tool servers, held for [`KEY_UNDO_WINDOW`] so Undo can put them back (#189).
+    pub(crate) removed_mcp: Mutex<HashMap<String, crate::mcp::RemovedMcpServer>>,
     /// Local models removed with Undo still possible (#176): the tasks they were the model
     /// for, put back by Undo.
     local_removals: Mutex<HashMap<String, Vec<(String, String)>>>,
@@ -263,7 +265,7 @@ impl Drop for Reservation {
     }
 }
 
-fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     // These maps only hold handles and buffers; recover rather than fail chats.
     m.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
@@ -290,6 +292,7 @@ impl AppState {
             live: Mutex::new(HashMap::new()),
             removed_keys: Mutex::new(HashMap::new()),
             removed_servers: Mutex::new(HashMap::new()),
+            removed_mcp: Mutex::new(HashMap::new()),
             local_removals: Mutex::new(HashMap::new()),
             next_token: AtomicU64::new(1),
             mcp_epoch: AtomicU64::new(0),
@@ -746,6 +749,7 @@ impl AppState {
         }
         lock(&self.removed_keys).clear();
         lock(&self.removed_servers).clear();
+        lock(&self.removed_mcp).clear();
         if !keys_ok {
             failed.push("keys in the system keychain");
         }
@@ -891,9 +895,14 @@ impl AppState {
         if req.is_closed() {
             return;
         }
+        // Store and announce under the same lock, so an answer (which removes the request
+        // under this lock) can't emit `Resolved` before `Requested` reaches the UI. The
+        // UI sink only sends on a channel; it never takes this lock.
         let prompt = req.prompt.clone();
-        lock(&self.approvals).insert(prompt.request_id, req);
+        let mut approvals = lock(&self.approvals);
+        approvals.insert(prompt.request_id, req);
         self.emit_approval(ToolEvent::Requested { prompt });
+        drop(approvals);
     }
 
     /// Requests whose call is gone (timed out, stopped, run ended) leave the UI as expired.

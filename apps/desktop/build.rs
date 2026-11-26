@@ -9,6 +9,7 @@ const COMMANDS: &[&str] = &[
     "list_mcp_servers",
     "save_mcp_server",
     "remove_mcp_server",
+    "restore_mcp_server",
     "reconnect_mcp_server",
     "sign_in_mcp_server",
     "list_mcp_tools",

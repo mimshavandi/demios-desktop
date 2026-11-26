@@ -251,6 +251,7 @@ pub fn run_with_addons(addons: Vec<std::sync::Arc<dyn dn_plugin_api::Plugin>>) {
             commands::list_mcp_servers,
             commands::save_mcp_server,
             commands::remove_mcp_server,
+            commands::restore_mcp_server,
             commands::reconnect_mcp_server,
             commands::sign_in_mcp_server,
             commands::list_mcp_tools,

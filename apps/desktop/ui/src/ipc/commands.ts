@@ -78,6 +78,7 @@ interface Commands {
   list_mcp_servers: { args: Record<string, never>; ret: McpServersView };
   save_mcp_server: { args: { input: McpServerInput; editing: string | null }; ret: McpServersView };
   remove_mcp_server: { args: { serverId: string }; ret: McpServersView };
+  restore_mcp_server: { args: { serverId: string }; ret: McpServersView };
   reconnect_mcp_server: { args: { serverId: string }; ret: null };
   sign_in_mcp_server: { args: { serverId: string }; ret: null };
   sign_out_mcp_server: { args: { serverId: string }; ret: McpServersView };
@@ -227,6 +228,7 @@ export const api = {
   saveMcpServer: (input: McpServerInput, editing: string | null) => call("save_mcp_server", { input, editing }),
   /** Deletes the server with its secrets and sign-in. Can't be undone. */
   removeMcpServer: (serverId: string) => call("remove_mcp_server", { serverId }),
+  restoreMcpServer: (serverId: string) => call("restore_mcp_server", { serverId }),
   reconnectMcpServer: (serverId: string) => call("reconnect_mcp_server", { serverId }),
   /** Opens the server's sign-in page in the browser and waits (up to 5 minutes). */
   signInMcpServer: (serverId: string) => call("sign_in_mcp_server", { serverId }),
