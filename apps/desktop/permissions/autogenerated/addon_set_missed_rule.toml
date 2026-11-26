@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-addon-set-missed-rule"
+description = "Enables the addon_set_missed_rule command without any pre-configured scope."
+commands.allow = ["addon_set_missed_rule"]
+
+[[permission]]
+identifier = "deny-addon-set-missed-rule"
+description = "Denies the addon_set_missed_rule command without any pre-configured scope."
+commands.deny = ["addon_set_missed_rule"]

@@ -17,6 +17,18 @@ pub struct ConversationSummary {
     pub updated_at: i64,
 }
 
+impl ConversationSummary {
+    /// A conversation (built by the host).
+    pub fn new(id: Id, project_id: Option<Id>, title: impl Into<String>, updated_at: i64) -> Self {
+        Self {
+            id,
+            project_id,
+            title: title.into(),
+            updated_at,
+        }
+    }
+}
+
 /// Who wrote a message.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -42,6 +54,18 @@ pub struct ChatMessage {
     pub created_at: i64,
 }
 
+impl ChatMessage {
+    /// A message copy (built by the host).
+    pub fn new(id: Id, role: Role, text: impl Into<String>, created_at: i64) -> Self {
+        Self {
+            id,
+            role,
+            text: text.into(),
+            created_at,
+        }
+    }
+}
+
 /// An item in the add-on's memory. The user sees every item and can delete it.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,6 +80,25 @@ pub struct MemoryItem {
     pub created_at: i64,
     /// When it last changed, Unix seconds.
     pub updated_at: i64,
+}
+
+impl MemoryItem {
+    /// A memory item (built by the host).
+    pub fn new(
+        id: Id,
+        text: impl Into<String>,
+        sources: Vec<Id>,
+        created_at: i64,
+        updated_at: i64,
+    ) -> Self {
+        Self {
+            id,
+            text: text.into(),
+            sources,
+            created_at,
+            updated_at,
+        }
+    }
 }
 
 /// A new memory item.
@@ -92,6 +135,25 @@ pub struct KnowledgeHit {
     pub end_line: u32,
     /// The passage.
     pub text: String,
+}
+
+impl KnowledgeHit {
+    /// A search hit (built by the host).
+    pub fn new(
+        project_id: Id,
+        file: impl Into<String>,
+        start_line: u32,
+        end_line: u32,
+        text: impl Into<String>,
+    ) -> Self {
+        Self {
+            project_id,
+            file: file.into(),
+            start_line,
+            end_line,
+            text: text.into(),
+        }
+    }
 }
 
 /// Which of the user's model choices a prompt runs on.

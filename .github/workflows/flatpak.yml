@@ -58,6 +58,12 @@ jobs:
             --install-deps-from=flathub --ccache \
             --mirror-screenshots-url=https://dl.flathub.org/media/ \
             --repo=repo build-dir io.demios.app.yml
+      # #190: the app is built with llama.cpp's Vulkan backend, so it links the Vulkan loader.
+      # A build that silently fell back to the CPU-only backend would not.
+      - name: Check the Vulkan build
+        working-directory: packaging/flatpak
+        run: |
+          readelf -d build-dir/files/bin/demios-desktop | tee needed.txt | grep -F 'libvulkan.so.1'
       # As Flathub does: commit the screenshots and icons --mirror-screenshots-url fetched into
       # the repo's screenshots branch, so the repo lint sees them mirrored.
       - name: Commit mirrored media

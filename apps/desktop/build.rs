@@ -9,6 +9,9 @@ const COMMANDS: &[&str] = &[
     "list_mcp_servers",
     "save_mcp_server",
     "remove_mcp_server",
+    // Connect (ADR-0018): the reviewed services, and adding one as a tool server.
+    "connect_catalogue",
+    "connect_service",
     "restore_mcp_server",
     "reconnect_mcp_server",
     "sign_in_mcp_server",
@@ -81,6 +84,21 @@ const COMMANDS: &[&str] = &[
     "undo_remove_local_model",
     "cancel_download",
     "check_model_tools",
+    // Settings › Add-ons and the consent dialog (addons/commands.rs, ADR-0013).
+    "addons_list",
+    "addons_watch",
+    "addon_detail",
+    "addons_pending_consent",
+    "addon_consent",
+    "addon_set_permission",
+    "addon_set_enabled",
+    "addons_set_utc_offset",
+    "addons_paused",
+    "addons_set_paused",
+    "addon_set_job_enabled",
+    "addon_set_missed_rule",
+    "addon_answer_question",
+    "addon_answer_held",
     "check_for_update",
     "install_update",
     "launch_update_check",
@@ -183,6 +201,24 @@ fn main() {
     println!("cargo::rerun-if-env-changed=DEMIOS_BUILD_COMMIT");
     println!("cargo::rerun-if-env-changed=DEMIOS_BUILD_CHANNEL");
     // The dev fake model (T-SHELL-03) exists only with the feature *and* in debug builds.
+    // Connect (ADR-0018): the owner's catalogue key, compiled in. Empty (no key yet) or 64 hex
+    // digits; anything else would make every catalogue fail, so refuse to build.
+    println!("cargo::rerun-if-changed=connect/catalogue.pub");
+    let pub_key = std::fs::read_to_string("connect/catalogue.pub").expect("connect/catalogue.pub");
+    let pub_key = pub_key.trim();
+    if !(pub_key.is_empty()
+        || (pub_key.len() == 64 && pub_key.bytes().all(|b| b.is_ascii_hexdigit())))
+    {
+        panic!(
+            "connect/catalogue.pub must be empty or 64 hex digits (scripts/connect/new-key.mjs)"
+        );
+    }
+    println!("cargo::rustc-check-cfg=cfg(connect_test_key)");
+    if std::env::var_os("CARGO_FEATURE_CONNECT_TEST_KEY").is_some()
+        && std::env::var_os("CARGO_CFG_DEBUG_ASSERTIONS").is_some()
+    {
+        println!("cargo::rustc-cfg=connect_test_key");
+    }
     println!("cargo::rustc-check-cfg=cfg(fake_model)");
     if std::env::var_os("CARGO_FEATURE_DEV_FAKE_MODEL").is_some()
         && std::env::var_os("CARGO_CFG_DEBUG_ASSERTIONS").is_some()

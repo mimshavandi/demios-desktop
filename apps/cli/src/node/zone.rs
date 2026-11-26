@@ -85,10 +85,10 @@ pub fn system_name(
     #[cfg(windows)]
     {
         let _ = localtime;
-        return TimeZone::try_system()
+        TimeZone::try_system()
             .ok()
             .and_then(|tz| tz.iana_name().map(str::to_owned))
-            .ok_or_else(|| "couldn't read the system time zone; pass --time-zone".to_owned());
+            .ok_or_else(|| "couldn't read the system time zone; pass --time-zone".to_owned())
     }
     #[cfg(not(windows))]
     {
@@ -274,9 +274,9 @@ mod tests {
     fn the_system_zone_comes_from_tz_or_else_etc_localtime() {
         let dir = std::env::temp_dir().join(format!("dn-zone-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let none = |_: &str| None;
         #[cfg(unix)]
         {
+            let none = |_: &str| None::<OsString>;
             let link = dir.join("localtime");
             let _ = std::fs::remove_file(&link);
             std::os::unix::fs::symlink("/usr/share/zoneinfo/America/New_York", &link).unwrap();

@@ -65,8 +65,9 @@ dn node run --data-dir /var/lib/demios
   The key for an encrypted file is 32 random bytes, for example `openssl rand -hex 32`.
 - `--time-zone` is the IANA time zone for jobs at a time of day, such as `Europe/Berlin`; a 07:00 job stays at 07:00 when daylight saving starts or ends. Without it, `dn node init` uses this system's time zone (`TZ`, or where `/etc/localtime` points). It's kept in `node.json` as `"time_zone"`, and an unknown name is refused.
 - The Node refuses to start if API keys or tokens are set in environment variables (for example `OPENAI_API_KEY`), and refuses a secret store it can't open. It never falls back to another one.
+- **Pairing a device:** while `dn node run` is running, run `dn node pair --data-dir /var/lib/demios --address 192.168.1.20:7443` on the Node, as the same user. It shows a link that works once, for 10 minutes; open it on the device. When the device connects, `dn node pair` shows check numbers. Compare them with the device's screen, and type `yes` only if they match. Anything else, or closing `dn node pair`, adds nothing. On Windows this isn't available yet.
 - Not there yet:
-  - pairing devices from the Node (`dn node pair`);
+  - a QR code in the terminal (the link holds the same thing);
   - a passphrase-protected store (`dn node unlock`);
   - encrypting the Node's database file. Until then, use full-disk encryption on the Node.
 
