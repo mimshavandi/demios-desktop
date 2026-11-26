@@ -202,6 +202,13 @@ impl DeviceList {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// Every device ever added, removed ones included, oldest first.
+    pub fn all(conn: &Connection) -> Result<Vec<Device>> {
+        let mut stmt = conn.prepare("SELECT * FROM sync_devices ORDER BY added_at, id")?;
+        let rows = stmt.query_map([], from_row)?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// Removes a device: its keys are refused from now on. Removing it again changes
     /// nothing.
     pub fn remove(conn: &Connection, id: DeviceId, now_ms: i64) -> Result<()> {

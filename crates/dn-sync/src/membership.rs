@@ -633,8 +633,23 @@ CREATE TABLE sync_membership (
 ";
 
 /// Stores the entries of `chain` not stored yet. Entries are append-only.
+///
+/// Runs in a savepoint, so it joins the caller's transaction when there is one.
 pub fn save(conn: &rusqlite::Connection, chain: &Chain) -> Result<()> {
-    let tx = conn.unchecked_transaction()?;
+    conn.execute_batch("SAVEPOINT sync_membership_save")?;
+    match save_entries(conn, chain) {
+        Ok(()) => {
+            conn.execute_batch("RELEASE sync_membership_save")?;
+            Ok(())
+        }
+        Err(e) => {
+            conn.execute_batch("ROLLBACK TO sync_membership_save; RELEASE sync_membership_save")?;
+            Err(e)
+        }
+    }
+}
+
+fn save_entries(tx: &rusqlite::Connection, chain: &Chain) -> Result<()> {
     let mut stmt = tx.prepare("SELECT n, bytes, signature FROM sync_membership ORDER BY n")?;
     let stored = stmt
         .query_map([], |r| {
@@ -661,7 +676,6 @@ pub fn save(conn: &rusqlite::Connection, chain: &Chain) -> Result<()> {
             rusqlite::params![n as i64, e.bytes, e.signature.as_slice()],
         )?;
     }
-    tx.commit()?;
     Ok(())
 }
 

@@ -24,11 +24,13 @@ use dn_jobs::JobKey;
 use dn_jobs::scheduler::{Clock, Event, JobHost, Scheduler};
 use dn_plugin_api::{BoxFuture, JobContext, PluginError};
 use dn_secrets::SecretStore;
-use dn_secrets::server::{self, StoreReport};
+use dn_secrets::server::{self, ServerStore, StoreReport};
 use dn_store::{Connection, MigrationSet};
 use dn_sync::SyncError;
 use dn_sync::devices::{DeviceKind, DeviceList};
+use dn_sync::group::NodeGroup;
 use dn_sync::identity::DeviceKeys;
+use dn_sync::session::NodeSync;
 use dn_sync::transport::{self, Message, NodeStatus};
 use std::ffi::OsString;
 use std::net::SocketAddr;
@@ -232,6 +234,8 @@ pub struct Node {
     control: tokio::net::UnixListener,
     keys: Arc<DeviceKeys>,
     db: Arc<Mutex<Connection>>,
+    secrets: Arc<dyn SecretStore>,
+    group: Arc<Mutex<NodeGroup>>,
     store: StoreReport,
     name: String,
     listener: TcpListener,
@@ -260,8 +264,10 @@ impl Node {
         }
         config::check_private_dir(data_dir)?;
         let config = NodeConfig::load(data_dir)?;
-        let store = server::open(&config.secrets.choice(), data_dir, env)
-            .map_err(|e| format!("couldn't open the secret store: {e}"))?;
+        let store: Arc<dyn ServerStore> = Arc::from(
+            server::open(&config.secrets.choice(), data_dir, env)
+                .map_err(|e| format!("couldn't open the secret store: {e}"))?,
+        );
         let report = store.report();
         if report.locked {
             return Err(
@@ -303,6 +309,7 @@ impl Node {
             }
             Err(e) => return Err(format!("couldn't read the device list: {e}")),
         }
+        let group = node_group(&conn, store_ref, &keys, &config.name)?;
         let listener = TcpListener::bind(config.listen)
             .await
             .map_err(|e| format!("couldn't listen on {}: {e}", config.listen))?;
@@ -329,6 +336,8 @@ impl Node {
             control,
             keys: Arc::new(keys),
             db,
+            secrets: store.clone() as Arc<dyn SecretStore>,
+            group: Arc::new(Mutex::new(group)),
             store: report,
             name: config.name,
             listener,
@@ -385,14 +394,16 @@ impl Node {
                     Err(_) => break,
                 },
             };
-            let (keys, db, base, pairing) = (
-                self.keys.clone(),
-                self.db.clone(),
-                base.clone(),
-                self.pairing.clone(),
-            );
+            let shared = Shared {
+                keys: self.keys.clone(),
+                db: self.db.clone(),
+                base: base.clone(),
+                pairing: self.pairing.clone(),
+                secrets: self.secrets.clone(),
+                group: self.group.clone(),
+            };
             tokio::spawn(async move {
-                handle(stream, peer, &keys, &db, &base, &pairing).await;
+                handle(stream, peer, &shared).await;
                 drop(permit);
             });
         }
@@ -406,6 +417,56 @@ impl Node {
             Err(e) => Err(format!("the job scheduler failed: {e}")),
         }
     }
+}
+
+/// What every connection uses.
+struct Shared {
+    keys: Arc<DeviceKeys>,
+    db: Arc<Mutex<Connection>>,
+    base: Arc<StatusBase>,
+    pairing: control::PairingState,
+    secrets: Arc<dyn SecretStore>,
+    group: Arc<Mutex<NodeGroup>>,
+}
+
+/// Loads the group (creating it on first start), and brings it in line with the device
+/// list: devices paired before sync came are added, devices removed are removed (which
+/// rotates the key).
+fn node_group(
+    conn: &Connection,
+    store: &dyn SecretStore,
+    keys: &DeviceKeys,
+    name: &str,
+) -> Result<NodeGroup, String> {
+    let fail = |e: SyncError| format!("couldn't load the device group: {e}");
+    let mut group = NodeGroup::load_or_create(conn, store, keys, name).map_err(fail)?;
+    let all = DeviceList::all(conn).map_err(fail)?;
+    for d in all {
+        if d.id == keys.id() {
+            continue;
+        }
+        let in_chain = group.chain().member(d.id).map(|m| m.removed.is_none());
+        if in_chain.is_none() {
+            group
+                .add(conn, store, keys, &d.keys, &d.name, d.kind, d.approved_by)
+                .map_err(fail)?;
+        }
+        if !d.is_member()
+            && group
+                .chain()
+                .member(d.id)
+                .is_some_and(|m| m.removed.is_none())
+        {
+            group
+                .remove(conn, store, keys, d.id, keys.id())
+                .map_err(fail)?;
+        }
+    }
+    Ok(group)
+}
+
+fn lock_group(group: &Mutex<NodeGroup>) -> std::sync::MutexGuard<'_, NodeGroup> {
+    group.lock().unwrap_or_else(|p| p.into_inner())
 }
 
 struct StatusBase {
@@ -443,13 +504,10 @@ fn devices(
 
 /// A paired device removes a device, or itself to unpair (ADR-0014 §2). The Node can't be
 /// removed: that's `dn node delete-all` on the Node. The removed device is refused at its
-/// next request; the group key rotation comes with sync (docs/design/dn-sync.md §8).
-fn remove_device(
-    db: &Mutex<Connection>,
-    keys: &DeviceKeys,
-    asking: &dn_sync::Device,
-    id: &str,
-) -> Message {
+/// next request, its changes after the last one the Node holds are refused, and the group
+/// key rotates to the remaining devices (docs/design/dn-sync.md §8).
+fn remove_device(shared: &Shared, asking: &dn_sync::Device, id: &str) -> Message {
+    let (db, keys) = (&*shared.db, &*shared.keys);
     let refused = |reason: &str| Message::Refused {
         reason: reason.to_owned(),
     };
@@ -459,7 +517,29 @@ fn remove_device(
     if id == keys.id() {
         return refused("The Node can't be removed from a device. Use dn node on the Node.");
     }
-    match DeviceList::remove(&lock(db), id, dn_store::now_ms()) {
+    let removed = {
+        let mut group = lock_group(&shared.group);
+        let conn = lock(db);
+        // Both lists change together, or neither does.
+        let done = conn
+            .unchecked_transaction()
+            .map_err(SyncError::from)
+            .and_then(|tx| {
+                DeviceList::remove(&tx, id, dn_store::now_ms())?;
+                group.remove(&tx, &*shared.secrets, keys, id, asking.id)?;
+                tx.commit()?;
+                Ok(())
+            });
+        if done.is_err() {
+            // The chain in memory may be ahead of the database: read it again.
+            match NodeGroup::load_or_create(&conn, &*shared.secrets, keys, &shared.base.name) {
+                Ok(g) => *group = g,
+                Err(e) => eprintln!("dn node: couldn't reload the device group: {e}"),
+            }
+        }
+        done
+    };
+    match removed {
         Ok(()) => {
             eprintln!(
                 "dn node: {} ({}) removed device {id}",
@@ -476,14 +556,8 @@ fn remove_device(
 }
 
 /// One device's connection. Logs events and errors only, never message content.
-async fn handle(
-    stream: TcpStream,
-    peer: SocketAddr,
-    keys: &DeviceKeys,
-    db: &Mutex<Connection>,
-    base: &StatusBase,
-    pairing: &control::PairingState,
-) {
+async fn handle(stream: TcpStream, peer: SocketAddr, shared: &Shared) {
+    let (keys, db, base) = (&*shared.keys, &*shared.db, &*shared.base);
     let mut channel = match tokio::time::timeout(
         Duration::from_secs(HANDSHAKE_SECS),
         transport::accept(stream, keys),
@@ -517,8 +591,15 @@ async fn handle(
         }
     };
     let Some(device) = device else {
-        pair_device(channel, peer, keys, db, pairing).await;
+        pair_device(channel, peer, shared).await;
         return;
+    };
+    // A checked member may send sync-sized frames.
+    channel.allow_sync_frames();
+    let sync = NodeSync {
+        db,
+        store: &*shared.secrets,
+        group: &shared.group,
     };
     loop {
         let message =
@@ -537,6 +618,21 @@ async fn handle(
             break;
         }
         let reply = match message {
+            Message::Done => break,
+            m if NodeSync::handles(&m) => {
+                match sync.answer(device.id, m, dn_store::now_ms() as u64) {
+                    Ok(reply) => reply,
+                    Err(e) => {
+                        eprintln!(
+                            "dn node: sync with {} ({}) refused: {e}",
+                            device.name, device.id
+                        );
+                        Message::Refused {
+                            reason: e.to_string(),
+                        }
+                    }
+                }
+            }
             Message::StatusRequest => match status(base, db) {
                 Ok(s) => Message::Status(s),
                 Err(e) => {
@@ -551,7 +647,7 @@ async fn handle(
                     break;
                 }
             },
-            Message::RemoveDevice { id } => remove_device(db, keys, &device, &id),
+            Message::RemoveDevice { id } => remove_device(shared, &device, &id),
             _ => {
                 eprintln!(
                     "dn node: {} ({}) sent a message this Node doesn't expect",
@@ -572,10 +668,9 @@ async fn handle(
 async fn pair_device(
     mut channel: transport::Channel<TcpStream>,
     peer: SocketAddr,
-    keys: &DeviceKeys,
-    db: &Mutex<Connection>,
-    pairing: &control::PairingState,
+    shared: &Shared,
 ) {
+    let (keys, db, pairing) = (&*shared.keys, &*shared.db, &shared.pairing);
     let taken = {
         let mut slot = pairing.lock().await;
         slot.as_mut()
@@ -635,8 +730,31 @@ async fn pair_device(
     .await;
     let outcome = match finished {
         Ok(Some(device)) => {
-            eprintln!("dn node: paired {} ({})", device.name, device.id);
-            Ok(device.name)
+            // The device joins the group: the chain gives it every epoch's key.
+            let added = {
+                let mut group = lock_group(&shared.group);
+                let conn = lock(db);
+                group.add(
+                    &conn,
+                    &*shared.secrets,
+                    keys,
+                    &device.keys,
+                    &device.name,
+                    device.kind,
+                    device.approved_by,
+                )
+            };
+            match added {
+                Ok(()) => {
+                    eprintln!("dn node: paired {} ({})", device.name, device.id);
+                    Ok(device.name)
+                }
+                Err(e) => {
+                    eprintln!("dn node: couldn't add {} to the group: {e}", device.id);
+                    let _ = DeviceList::remove(&lock(db), device.id, dn_store::now_ms());
+                    Err(format!("couldn't add the device to the group: {e}"))
+                }
+            }
         }
         Ok(None) => Err("declined".to_owned()),
         Err(e) => Err(format!("couldn't add the device: {e}")),
@@ -798,6 +916,10 @@ mod tests {
             )
             .unwrap();
         }
+        // As pairing does: the devices join the group too.
+        let regrouped =
+            node_group(&lock(&node.db), &*node.secrets, &node.keys, "Home server").unwrap();
+        *lock_group(&node.group) = regrouped;
         let addr = node.local_addr().unwrap();
         let stop = Arc::new(Notify::new());
         let serving = tokio::spawn(node.serve(stop.clone()));
