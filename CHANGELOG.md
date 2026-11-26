@@ -6,6 +6,10 @@ Only changes people using the app or the `dn` command-line tool can notice are l
 
 ## [Unreleased]
 
+### Changed
+
+- Text fields, menus and other control outlines are darker in both light and dark appearance, so they're easier to see: they now meet the 3:1 contrast that accessibility guidelines ask of control borders ([#220](https://github.com/mimshavandi/demios-desktop/pull/220)).
+
 ## [0.1.0-preview.8cd482c] - 2026-11-26
 
 Second preview build, not signed: installers for macOS, Windows and Linux on the [GitHub release](https://github.com/mimshavandi/demios-desktop/releases/tag/v0.1.0-preview.8cd482c) and [demios.io/download](https://demios.io/download/). It doesn't update itself; install it over the first preview. Everything below is new since the [first preview](#010-preview454e01b---2026-11-25).
