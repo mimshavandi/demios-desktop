@@ -16,6 +16,12 @@ sdk-extensions:
   - org.freedesktop.Sdk.Extension.node22
   # libclang for llama.cpp's bindgen step (llama-cpp-sys-2).
   - org.freedesktop.Sdk.Extension.llvm20
+# Local models run on the GPU through Vulkan (#190). The SDK (freedesktop 25.08) has what
+# llama.cpp's Vulkan backend needs to build: the Vulkan headers and loader, and glslc
+# (shaderc) for its shaders. At run time the GNOME runtime's Vulkan loader finds the GPU
+# driver in the GL extension (Mesa for AMD and Intel, the NVIDIA extension for NVIDIA),
+# through --device=dri below. Without a usable GPU the app runs models on the processor
+# and says so.
 command: demios-desktop
 
 finish-args:
@@ -27,7 +33,7 @@ finish-args:
   # The window: WebKitGTK on Wayland, X11 only where Wayland is not available.
   - --socket=wayland
   - --socket=fallback-x11
-  # GPU acceleration for WebKitGTK rendering.
+  # The GPU: WebKitGTK rendering, and local models through Vulkan.
   - --device=dri
   # Provider keys, the Hugging Face token and MCP secrets go in the user's keyring through the
   # Secret Service D-Bus API (keyring crate, async-secret-service). It has no Secret-portal
@@ -85,7 +91,7 @@ modules:
       - cd apps/desktop && npm ci --offline --no-audit --no-fund
       # prebuild builds the artifact sandbox; build writes the licences list and the UI.
       - cd apps/desktop && PATH="/app/bin:$PATH" npm run build
-      - cargo build --release --locked --offline -p demios-desktop --features custom-protocol,flatpak
+      - cargo build --release --locked --offline -p demios-desktop --features custom-protocol,flatpak,vulkan
       - install -Dm755 target/release/demios-desktop /app/bin/demios-desktop
       - install -Dm644 apps/desktop/icons/32x32.png /app/share/icons/hicolor/32x32/apps/io.demios.app.png
       - install -Dm644 apps/desktop/icons/128x128.png /app/share/icons/hicolor/128x128/apps/io.demios.app.png
