@@ -1830,6 +1830,7 @@ describe("Settings sections (#174)", () => {
         "Models",
         "Tools",
         "Skills",
+        "Node",
         "Add-ons",
       ]),
     );
