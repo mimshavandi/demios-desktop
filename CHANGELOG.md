@@ -6,6 +6,10 @@ Only changes people using the app or the `dn` command-line tool can notice are l
 
 ## [Unreleased]
 
+## [0.1.0-preview.8cd482c] - 2026-11-26
+
+Second preview build, not signed: installers for macOS, Windows and Linux on the [GitHub release](https://github.com/mimshavandi/demios-desktop/releases/tag/v0.1.0-preview.8cd482c) and [demios.io/download](https://demios.io/download/). It doesn't update itself; install it over the first preview. Everything below is new since the [first preview](#010-preview454e01b---2026-11-25).
+
 ### Added
 
 #### Desktop app
@@ -102,5 +106,6 @@ Preview build, not signed: installers for macOS, Windows and Linux on the [GitHu
 - The app's commands are available only to the app's own page, not to any other view in its window ([#85](https://github.com/mimshavandi/demios-desktop/pull/85)).
 - Problem and answer reports carry only the app version, your operating system and, for an answer, the model's name. No chat content is sent; you add what you choose in the form ([#42](https://github.com/mimshavandi/demios-desktop/pull/42)).
 
-[Unreleased]: https://github.com/mimshavandi/demios-desktop/compare/v0.1.0-preview.454e01b...main
+[Unreleased]: https://github.com/mimshavandi/demios-desktop/compare/v0.1.0-preview.8cd482c...main
+[0.1.0-preview.8cd482c]: https://github.com/mimshavandi/demios-desktop/compare/v0.1.0-preview.454e01b...v0.1.0-preview.8cd482c
 [0.1.0-preview.454e01b]: https://github.com/mimshavandi/demios-desktop/releases/tag/v0.1.0-preview.454e01b

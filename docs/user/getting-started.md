@@ -4,7 +4,7 @@
 
 ### Download the preview
 
-A preview build of Demios Desktop 0.1.0 is available for macOS (Apple silicon and Intel), Windows 10 and 11, and Linux (AppImage, `.deb` and `.rpm`). Download it from [demios.io/download](https://demios.io/download/) or from the [GitHub release](https://github.com/mimshavandi/demios-desktop/releases/tag/v0.1.0-preview.454e01b). The release notes say which file is for your system.
+A preview build of Demios Desktop 0.1.0 is available for macOS (Apple silicon and Intel), Windows 10 and 11, and Linux (AppImage, `.deb` and `.rpm`). Download it from [demios.io/download](https://demios.io/download/) or from the [GitHub release](https://github.com/mimshavandi/demios-desktop/releases/tag/v0.1.0-preview.8cd482c). The release notes say which file is for your system.
 
 The preview isn't signed, so your system warns you the first time you open it:
 
