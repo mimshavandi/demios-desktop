@@ -121,9 +121,24 @@ pub fn next_change(
     now_ms: u64,
 ) -> Result<Change> {
     let tx = conn.unchecked_transaction()?;
-    let deps = vector(&tx)?;
+    let change = next_change_in(&tx, me, group, epoch, ops, now_ms)?;
+    tx.commit()?;
+    Ok(change)
+}
+
+/// [`next_change`] inside the caller's transaction, so numbering a change and keeping its
+/// envelope commit together (a gap in this device's numbers would stall every other device).
+pub(crate) fn next_change_in(
+    tx: &Connection,
+    me: DeviceId,
+    group: GroupId,
+    epoch: u32,
+    ops: Vec<Op>,
+    now_ms: u64,
+) -> Result<Change> {
+    let deps = vector(tx)?;
     let seq = deps.get(me) + 1;
-    let mut c = clock(&tx)?;
+    let mut c = clock(tx)?;
     let hlc = c.send(now_ms);
     let change = Change {
         group,
@@ -141,9 +156,8 @@ pub fn next_change(
         "INSERT INTO sync_seen (author, seq, hash) VALUES (?1, ?2, ?3)",
         params![hex(me), seq as i64, hash.as_slice()],
     )?;
-    save_clock(&tx, c)?;
-    set_vector(&tx, me, seq)?;
-    tx.commit()?;
+    save_clock(tx, c)?;
+    set_vector(tx, me, seq)?;
     Ok(change)
 }
 
@@ -294,21 +308,27 @@ pub fn next_ready(conn: &Connection, now_ms: u64) -> Result<Option<(DeviceId, u6
 /// clock takes the change's time into account.
 pub fn applied(conn: &Connection, change: &Change, now_ms: u64) -> Result<()> {
     let tx = conn.unchecked_transaction()?;
-    let v = vector(&tx)?;
+    applied_in(&tx, change, now_ms)?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// [`applied`] inside the caller's transaction (with the change's effects).
+pub(crate) fn applied_in(tx: &Connection, change: &Change, now_ms: u64) -> Result<()> {
+    let v = vector(tx)?;
     if v.get(change.author) + 1 != change.seq || !v.covers(&change.deps) {
         return Err(SyncError::Protocol("applied out of order"));
     }
-    set_vector(&tx, change.author, change.seq)?;
+    set_vector(tx, change.author, change.seq)?;
     tx.execute(
         "DELETE FROM sync_inbox WHERE author = ?1 AND seq = ?2",
         params![hex(change.author), change.seq as i64],
     )?;
-    let mut c = clock(&tx)?;
+    let mut c = clock(tx)?;
     if c.receive(change.hlc, now_ms).is_err() {
         return Err(SyncError::Protocol("applied a change from the future"));
     }
-    save_clock(&tx, c)?;
-    tx.commit()?;
+    save_clock(tx, c)?;
     Ok(())
 }
 

@@ -10,6 +10,7 @@ rust-version.workspace = true
 [dependencies]
 aws-lc-rs.workspace = true
 dn-secrets.workspace = true
+dn-store.workspace = true
 hpke.workspace = true
 rusqlite.workspace = true
 rustls.workspace = true
@@ -21,7 +22,7 @@ tokio-rustls.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
-dn-store.workspace = true
+dn-core.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "rt"] }
 
 [lints]
