@@ -1391,6 +1391,14 @@ dependencies = [
 [[package]]
 name = "dn-sync"
 version = "0.1.0"
+dependencies = [
+ "aws-lc-rs",
+ "dn-secrets",
+ "dn-store",
+ "rusqlite",
+ "thiserror 2.0.21",
+ "zeroize",
+]
 
 [[package]]
 name = "dn-tools"
