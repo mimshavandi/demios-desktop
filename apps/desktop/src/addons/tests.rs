@@ -348,8 +348,32 @@ fn a_jobs_tool_call_is_held_and_runs_once_after_the_person_allows_it() {
                 .await
                 .is_err()
         );
-        // The job must be on for the approved call to run.
+        // Turned off meanwhile: allowing it doesn't run it.
+        st.addons.set_enabled(&st, "notes", false).unwrap();
         let key = dn_jobs::JobKey::new(manifest.id.clone(), "daily");
+        st.addons.jobs.set_enabled(&st, &key, true).unwrap();
+        let e = st
+            .addons
+            .jobs
+            .answer_held(&st, h.id, true, h.arguments_sha256.clone())
+            .await
+            .unwrap_err();
+        assert!(e.contains("is off"), "{e}");
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        st.addons.set_enabled(&st, "notes", true).unwrap();
+        // A fresh held call, allowed while everything is on, runs once.
+        let host = Addons::job_host(
+            &st,
+            &manifest,
+            st.addons.loaded()[0].1.clone(),
+            "daily",
+            Id::new(),
+        );
+        let _ = host
+            .tools()
+            .call("plugin.notes.save", serde_json::json!({"x": 1}))
+            .await;
+        let h = st.addons.detail(&st, "notes").unwrap().held[0].clone();
         st.addons.jobs.set_enabled(&st, &key, true).unwrap();
         st.addons
             .jobs

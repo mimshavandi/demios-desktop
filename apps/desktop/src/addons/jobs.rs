@@ -315,6 +315,30 @@ fn owned_job(state: &AppState, key: &JobKey) -> Result<(), String> {
 /// Runs a held call the person allowed: through the executor, with this answer as its only
 /// approval for this one call.
 async fn run_approved(state: &Arc<AppState>, call: &HeldApproval) -> Result<(), String> {
+    // What was turned off since the call was held takes effect now too: the add-on must
+    // still be running and on, and still hold `tools.call` for a tool that isn't its own.
+    let plugin = &call.job.plugin;
+    let (manifest, _, _) = state
+        .addons
+        .loaded()
+        .into_iter()
+        .find(|(m, _, _)| &m.id == plugin)
+        .ok_or_else(|| "The add-on isn't running, so the call wasn't run.".to_owned())?;
+    let st = super::store::state(&*state.db().map_err(|e| e.message)?, plugin)
+        .map_err(|e| e.to_string())?;
+    if !st.enabled {
+        return Err(format!("{} is off, so the call wasn't run.", manifest.name));
+    }
+    let own = call
+        .tool
+        .strip_prefix(&format!("plugin.{plugin}."))
+        .is_some_and(|n| !n.contains('.'));
+    if !own && !st.allowed.contains(&Permission::ToolsCall) {
+        return Err(format!(
+            "{} can't use other tools any more, so the call wasn't run.",
+            manifest.name
+        ));
+    }
     let exec = state
         .executor
         .clone()

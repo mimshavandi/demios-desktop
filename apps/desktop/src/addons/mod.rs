@@ -602,8 +602,10 @@ pub fn wipe(state: &AppState) -> Vec<String> {
     let plugins = store::known_plugins(&db).unwrap_or_default();
     for p in plugins {
         if let Ok(id) = PluginId::new(&p) {
-            for name in store::owned(&db, store::Owned::Secret, &id).unwrap_or_default() {
-                let sid = dn_secrets::SecretId::addon(id.as_str(), &name);
+            for key in store::owned(&db, store::Owned::Secret, &id).unwrap_or_default() {
+                // Keys are `<add-on id>/<name>`.
+                let name = key.rsplit('/').next().unwrap_or(&key);
+                let sid = dn_secrets::SecretId::addon(id.as_str(), name);
                 if let Err(e) = state.keys.store.delete(&sid) {
                     eprintln!("could not delete an add-on secret: {e}");
                     failed.push("add-on secrets in the system keychain".into());

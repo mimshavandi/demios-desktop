@@ -310,7 +310,7 @@ impl HostBackend for AppBackend {
                 Ok::<_, rusqlite::Error>(store::claim(
                     db,
                     store::Owned::Secret,
-                    &name,
+                    &format!("{}/{name}", caller.plugin_id),
                     &caller.plugin_id,
                 ))
             })
