@@ -732,17 +732,113 @@ pub async fn pause_download(state: AppStateRef<'_>, model_id: String) -> IpcResu
     Ok(())
 }
 
-/// Removes a downloaded model and everything Demios wrote for it (#176). Refused, with a
-/// user message and nothing deleted, for Hugging Face cache models, a folder the user chose
-/// (the row's `remove_blocked` says why) and a model that is answering. The row update
-/// arrives through `watch_local_models`.
+/// How long a removed local model can still be restored (#176). A little longer than the
+/// 10 s Undo on the toast, so a click at the last moment still lands.
+pub const LOCAL_REMOVE_UNDO: std::time::Duration = std::time::Duration::from_secs(12);
+
+/// Removes a downloaded model with Undo (#176). At once: the model is no longer offered or
+/// loaded, and every task it was the model for is emptied (the task then asks for a choice
+/// instead of quietly using another model). When the undo window ends, its files are deleted
+/// (everything Demios wrote for it, nothing else). Refused, with a user message and nothing
+/// changed, for Hugging Face cache models and a folder the user chose (the row's
+/// `remove_blocked` says why). Row updates arrive through `watch_local_models`.
 #[tauri::command]
 pub async fn remove_local_model(state: AppStateRef<'_>, model_id: String) -> IpcResult<()> {
-    let local = local(&state)?;
-    local
-        .remove(&model_id)
-        .await
-        .map_err(crate::agent::model_error)
+    let id = model_id.clone();
+    let token = blocking(&state, move |s| begin_local_removal(s, &id)).await?;
+    let st = Arc::clone(state.inner());
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(LOCAL_REMOVE_UNDO).await;
+        finish_local_removal(&st, &model_id, token).await;
+    });
+    Ok(())
+}
+
+/// Undo for [`remove_local_model`]: the model is offered again and its tasks come back.
+#[tauri::command]
+pub async fn undo_remove_local_model(state: AppStateRef<'_>, model_id: String) -> IpcResult<()> {
+    blocking(&state, move |s| undo_local_removal(s, &model_id)).await
+}
+
+/// The model's tasks, emptied and remembered for Undo; then the model is marked removed.
+pub(crate) fn begin_local_removal(s: &AppState, model_id: &str) -> IpcResult<u64> {
+    let local = local_models(s)?;
+    let token = local
+        .begin_remove(model_id)
+        .map_err(crate::agent::model_error)?;
+    let model_ref = format!("local:{model_id}");
+    let cleared = (|| {
+        let mut settings = s.settings()?;
+        let cleared: Vec<(String, String)> = settings
+            .slots
+            .iter()
+            .filter(|(_, m)| **m == model_ref)
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        if !cleared.is_empty() {
+            settings.slots.retain(|_, m| *m != model_ref);
+            // An emptied task is never filled again on its own (#219): it asks for a choice.
+            for (slot, _) in &cleared {
+                settings.slots_filled.insert(slot.clone());
+            }
+            s.save_settings(&settings)?;
+        }
+        Ok::<_, IpcError>(cleared)
+    })();
+    match cleared {
+        Ok(cleared) => {
+            s.remember_local_removal(model_id, cleared);
+            Ok(token)
+        }
+        Err(e) => {
+            local.undo_remove(model_id);
+            Err(e)
+        }
+    }
+}
+
+pub(crate) fn undo_local_removal(s: &AppState, model_id: &str) -> IpcResult<()> {
+    let local = local_models(s)?;
+    if !local.undo_remove(model_id) {
+        return Err(IpcError::new(
+            "expired",
+            "The model was already removed. Download it again to use it.",
+        ));
+    }
+    restore_slots(s, s.take_local_removal(model_id))
+}
+
+/// A task emptied by the removal gets its model back, unless one was chosen meanwhile.
+fn restore_slots(s: &AppState, slots: Vec<(String, String)>) -> IpcResult<()> {
+    if slots.is_empty() {
+        return Ok(());
+    }
+    let mut settings = s.settings()?;
+    for (slot, model) in slots {
+        settings.slots.entry(slot).or_insert(model);
+    }
+    s.save_settings(&settings)
+}
+
+/// The end of the undo window: deletes the files. If that fails, nothing was deleted, so
+/// the tasks get the model back and its row says why.
+pub(crate) async fn finish_local_removal(st: &Arc<AppState>, model_id: &str, token: u64) {
+    let Ok(local) = local_models(st) else { return };
+    match local.finish_remove(model_id, token).await {
+        Some(Ok(())) => {
+            st.take_local_removal(model_id);
+        }
+        Some(Err(_)) => {
+            let slots = st.take_local_removal(model_id);
+            if let Err(e) = restore_slots(st, slots) {
+                eprintln!(
+                    "remove {model_id}: could not restore its tasks: {}",
+                    e.message
+                );
+            }
+        }
+        None => {}
+    }
 }
 
 /// The one-time tool-call check for a local chat model with "unknown" tool support
@@ -1179,4 +1275,80 @@ pub async fn hub_resolve_link(
     let hub = blocking(&state, |s| crate::hub::client(&s.keys)).await?;
     let local = local_models(&state)?;
     crate::hub::resolve_link(&hub, &local, &state.hub_pulls, &link).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dn_core::Id;
+
+    fn chat_entry(id: &str) -> dn_models::CatalogEntry {
+        dn_models::CatalogEntry {
+            recommended: None,
+            id: id.into(),
+            name: format!("Model {id}"),
+            repo: "o/r".into(),
+            revision: "x".into(),
+            file: format!("{id}.gguf"),
+            size: 5,
+            sha256: "aa".into(),
+            quant: "Q4_K_M".into(),
+            params_b: 0.1,
+            capabilities: vec![dn_core::model::Capability::Chat],
+            license: "mit".into(),
+            notes: String::new(),
+            tool_support: None,
+        }
+    }
+
+    /// Removing the Chat model empties the task at once, Undo puts it back, and once the
+    /// window ends the task asks for a choice instead of quietly using the other model (#176).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn removing_a_tasks_model_empties_the_task_and_undo_restores_it() {
+        let dir = std::env::temp_dir().join(format!("dn-cmd-remove-{}", Id::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for id in ["m", "other"] {
+            std::fs::write(dir.join(format!("{id}.gguf")), b"12345").unwrap();
+            std::fs::write(dir.join(format!("{id}.gguf.sha256")), "aa").unwrap();
+        }
+        let mut local = crate::local::LocalModels::new(
+            dir.clone(),
+            dn_models::Catalog {
+                version: 1,
+                models: vec![chat_entry("m"), chat_entry("other")],
+            },
+            dn_models::Machine::cpu_only(16 << 30),
+        );
+        local.set_owns_dir(true);
+        let mut s = AppState::in_memory().unwrap();
+        s.models.local = Some(Arc::new(local));
+        let st = Arc::new(s);
+        let mut settings = st.settings().unwrap();
+        settings.slots.insert("chat".into(), "local:m".into());
+        st.save_settings(&settings).unwrap();
+        let chat = |st: &AppState| st.settings().unwrap().slots.get("chat").cloned();
+
+        // Remove, then Undo: the task has its model again and nothing was deleted.
+        begin_local_removal(&st, "m").unwrap();
+        assert_eq!(chat(&st), None);
+        undo_local_removal(&st, "m").unwrap();
+        assert_eq!(chat(&st).as_deref(), Some("local:m"));
+        assert!(dir.join("m.gguf").exists());
+
+        // Remove and let the window end: the file is gone and the task stays empty.
+        let token = begin_local_removal(&st, "m").unwrap();
+        finish_local_removal(&st, "m", token).await;
+        assert!(!dir.join("m.gguf").exists());
+        assert_eq!(chat(&st), None);
+        let err = undo_local_removal(&st, "m").unwrap_err();
+        assert_eq!(err.code, "expired");
+
+        // The other chat model is never used on its own: the next turn asks for a choice.
+        let conv = st.create_conversation().unwrap();
+        let err = crate::chat::send(&st, conv.id, "hi".into(), |_: crate::chat::ChatEvent| {})
+            .unwrap_err();
+        assert_eq!(err.code, "model_choice_required", "{}", err.message);
+        assert_eq!(chat(&st), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

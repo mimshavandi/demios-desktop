@@ -261,6 +261,7 @@ export function createMockApi(): Api {
   // OpenAI-compatible servers: an Ollama-like server on localhost has two models.
   let remotes: RemoteServerView[] = [];
   const removedRemotes = new Map<string, RemoteServerView>();
+  const removals = new Map<string, { slots: [string, string][]; timer: number }>();
   let settings: Settings = { slots: {}, telemetry_enabled: false };
   const timers = new Map<string, number>();
   const id = () => crypto.randomUUID();
@@ -290,7 +291,7 @@ export function createMockApi(): Api {
       { model_ref: "local:dev-fake", label: "Dev fake model (canned replies)", source: "dev", capabilities: ["chat"], available: true, note: null },
       // Downloaded models are choosable, as in the app.
       ...localRows
-        .filter((r) => r.state.state === "ready")
+        .filter((r) => r.state.state === "ready" && r.removing !== true)
         .map((r) => ({
           model_ref: r.model_ref,
           label: `${r.name} · ${r.quant}`,
@@ -1020,11 +1021,41 @@ export function createMockApi(): Api {
       }
       return null;
     },
+    // Remove with Undo, as the app does (#176): offered no more at once, its tasks emptied,
+    // the file gone after the undo window.
     removeLocalModel: async (id) => {
       const r = localRows.find((x) => x.id === id);
       if (r === undefined) throw { code: "model_unavailable", message: "That model isn't on this computer." };
       if (r.remove_blocked !== null) throw { code: "model_unavailable", message: r.remove_blocked };
-      r.state = { state: "not_downloaded" };
+      const cleared = Object.entries(settings.slots).filter(([, m]) => m === r.model_ref);
+      settings = {
+        ...settings,
+        slots: Object.fromEntries(Object.entries(settings.slots).filter(([, m]) => m !== r.model_ref)),
+        slots_filled: [...new Set([...(settings.slots_filled ?? []), ...cleared.map(([s]) => s)])],
+      };
+      r.removing = true;
+      emitRow(r);
+      removals.set(id, {
+        slots: cleared,
+        timer: window.setTimeout(() => {
+          removals.delete(id);
+          r.removing = false;
+          r.state = { state: "not_downloaded" };
+          emitRow(r);
+        }, 12_000),
+      });
+      return null;
+    },
+    undoRemoveLocalModel: async (id) => {
+      const r = localRows.find((x) => x.id === id);
+      const p = removals.get(id);
+      if (r === undefined || p === undefined) {
+        throw { code: "expired", message: "The model was already removed. Download it again to use it." };
+      }
+      window.clearTimeout(p.timer);
+      removals.delete(id);
+      r.removing = false;
+      settings = { ...settings, slots: { ...Object.fromEntries(p.slots), ...settings.slots } };
       emitRow(r);
       return null;
     },
