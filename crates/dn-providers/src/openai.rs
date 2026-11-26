@@ -300,7 +300,7 @@ impl ProviderAdapter for OpenAi {
             let data = v["data"]
                 .as_array()
                 .ok_or_else(|| bad_response(id, "models: missing `data`"))?;
-            Ok(data
+            let mut models: Vec<ModelInfo> = data
                 .iter()
                 .filter_map(|m| m["id"].as_str())
                 .map(|m| ModelInfo {
@@ -308,8 +308,15 @@ impl ProviderAdapter for OpenAi {
                     display_name: None,
                     context_window: None,
                     methods: vec![],
+                    tool_calls: None,
+                    embedding: None,
                 })
-                .collect())
+                .collect();
+            if self.0.cfg.kind == ProviderKind::OpenAiCompatible {
+                let owned_by = data.iter().find_map(|m| m["owned_by"].as_str());
+                crate::servers::annotate(&self.0, &mut models, owned_by).await;
+            }
+            Ok(models)
         })
     }
 }
