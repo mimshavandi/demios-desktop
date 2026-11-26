@@ -114,6 +114,8 @@ pub struct LocalModelRow {
     /// What the model is for (T-INF-26): from the file once it's on disk, else from the
     /// catalogue; `None` when unknown.
     pub traits: Option<dn_models::kind::TraitsView>,
+    /// Why "Remove" can't delete this model, in the user's words (#176); `None` when it can.
+    pub remove_blocked: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -235,6 +237,8 @@ pub struct LocalModels<B: InferenceBackend = LlamaCppBackend> {
     hf_cache: Option<PathBuf>,
     /// Kind and tool support read from files on disk (T-INF-26), by model id.
     traits: Mutex<HashMap<String, dn_models::kind::ModelTraits>>,
+    /// Results of the user-started tool-call check for "unknown" models (T-INF-26).
+    probes: Mutex<crate::tool_probe::Store>,
     /// Where local models run (graphics card, shared graphics or processor), for the UI;
     /// `None` when not detected (tests).
     compute: Mutex<Option<dn_models::compute::Compute>>,
@@ -466,6 +470,19 @@ fn options_for(rec: &dn_models::fit::Estimate, n_layer: u32) -> LoadOptions {
     }
 }
 
+/// The largest context an embedding model is loaded with.
+const EMBED_CTX: u32 = 2048;
+
+/// The context to load the embedding model at `path` with: its training context, at most
+/// [`EMBED_CTX`]; [`EMBED_CTX`] when the header can't be read or doesn't say.
+fn embedding_ctx(path: &Path) -> u32 {
+    Gguf::open(path)
+        .ok()
+        .map(|g| ModelFootprint::from_gguf(&g).n_ctx_train)
+        .filter(|&n| n > 0)
+        .map_or(EMBED_CTX, |n| n.min(EMBED_CTX))
+}
+
 /// Before download only the file size and parameter count are known: estimate with the
 /// weights and runtime overhead (the KV cache is left out, so this is optimistic).
 fn estimated_footprint(e: &CatalogEntry) -> ModelFootprint {
@@ -542,6 +559,9 @@ impl LocalModels {
             dn_models::detect_machine(),
         );
         lm.owns_dir = std::env::var_os("DN_MODELS_DIR").is_none();
+        lm.probes = Mutex::new(crate::tool_probe::Store::open(
+            crate::data_dir().map(|d| d.join("tool-probes.json")),
+        ));
         lm.hf_cache = dn_models::cache::hf_cache_dir();
         let lm = Arc::new(lm);
         let bg = Arc::clone(&lm);
@@ -583,6 +603,7 @@ impl<B: InferenceBackend> LocalModels<B> {
             externals: Mutex::new(Vec::new()),
             hf_cache: None,
             traits: Mutex::new(HashMap::new()),
+            probes: Mutex::new(crate::tool_probe::Store::default()),
             compute: Mutex::new(None),
         };
         lm.scan();
@@ -804,7 +825,14 @@ impl<B: InferenceBackend> LocalModels<B> {
                 .get(&e.id)
                 .copied()
                 .or_else(|| ext.is_none().then(|| dn_models::kind::of_catalog(e)))
+                .map(|t| match lock(&self.probes).get(&e.id) {
+                    Some(calls) if t.tool_support == dn_models::kind::ToolSupport::Unknown => {
+                        t.checked(calls)
+                    }
+                    _ => t,
+                })
                 .map(Into::into),
+            remove_blocked: self.remove_blocked(&e.id),
         }
     }
 
@@ -1040,6 +1068,259 @@ impl<B: InferenceBackend> LocalModels<B> {
         );
     }
 
+    /// Why `id` can't be removed, in the user's words (#176); `None` when it can. Demios never
+    /// deletes files in the user's Hugging Face cache or in a models folder the user chose.
+    pub fn remove_blocked(&self, id: &str) -> Option<String> {
+        if self
+            .external(id)
+            .is_some_and(|x| x.origin == ModelOrigin::HfCache)
+        {
+            return Some(
+                "This model is in your Hugging Face cache. Demios uses it there but never \
+                 deletes files in it; remove it with the Hugging Face tools."
+                    .into(),
+            );
+        }
+        if !self.owns_dir {
+            return Some(format!(
+                "This model is in a folder you chose ({}). Demios doesn't delete files there; \
+                 remove it in your file manager.",
+                self.dir.display()
+            ));
+        }
+        None
+    }
+
+    /// Everything Demios wrote for `e`: the GGUF (every part of a Hub download), its checksum,
+    /// partial and lock files, a Hub download's manifest and a stored chat template. Only
+    /// paths inside the models folder.
+    fn files_of(&self, e: &CatalogEntry) -> Vec<PathBuf> {
+        let mut parts = vec![];
+        let mut extra = vec![];
+        match self.external(&e.id) {
+            Some(x) => {
+                match dn_models::hub::SourceManifest::read(&x.path) {
+                    Some(m) => {
+                        for f in &m.files {
+                            if let Ok(p) =
+                                dn_models::hub::HubClient::local_path(&self.dir, &m.repo, &f.path)
+                            {
+                                parts.push(p);
+                            }
+                        }
+                    }
+                    None => parts.push(x.path.clone()),
+                }
+                extra.push(dn_models::hub::SourceManifest::path_for(&x.path));
+                extra.push(dn_models::template::sidecar_path(&x.path));
+            }
+            None => {
+                let p = self.path(e);
+                extra.push(dn_models::template::sidecar_path(&p));
+                parts.push(p);
+            }
+        }
+        let mut out = vec![];
+        for p in parts {
+            for suffix in [".part", ".sha256", ".lock"] {
+                out.push(suffixed(&p, suffix));
+            }
+            out.push(p);
+        }
+        out.extend(extra);
+        // `starts_with` compares components without resolving `..`, so refuse those too.
+        out.retain(|p| {
+            p.starts_with(&self.dir)
+                && !p
+                    .components()
+                    .any(|c| matches!(c, std::path::Component::ParentDir))
+        });
+        out
+    }
+
+    /// Lets go of `id` if it is the loaded chat or embedding model and nothing uses it.
+    async fn release(&self, id: &str, name: &str) -> Result<(), CoreError> {
+        let busy = || CoreError::ModelUnavailable {
+            user_message: format!("{name} is answering. Try again when it finishes."),
+            developer_message: format!("{id}: in use, not removed"),
+            recovery: vec![],
+        };
+        let mut loaded = self.loaded.lock().await;
+        if let Some((cur, m)) = loaded.take() {
+            if cur != id {
+                *loaded = Some((cur, m));
+            } else {
+                match Arc::try_unwrap(m) {
+                    Ok(idle) => idle.unload_now().await,
+                    Err(in_use) => {
+                        *loaded = Some((cur, in_use));
+                        return Err(busy());
+                    }
+                }
+            }
+        }
+        drop(loaded);
+        let mut emb = self.embedding.lock().await;
+        if let Some((cur, m)) = emb.take() {
+            if cur != id {
+                *emb = Some((cur, m));
+            } else {
+                match Arc::try_unwrap(m) {
+                    Ok(idle) => {
+                        if let Err(e) = idle.unload().await {
+                            eprintln!("could not unload the embedding model: {e}");
+                        }
+                    }
+                    Err(in_use) => {
+                        *emb = Some((cur, in_use));
+                        return Err(busy());
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Removes a downloaded model from this computer (#176): stops its download, unloads it
+    /// if nothing is using it, and deletes what Demios wrote for it ([`Self::files_of`]).
+    /// Refused, with nothing deleted, for models in the Hugging Face cache or a folder the
+    /// user chose ([`Self::remove_blocked`]) and for a model a reply is using.
+    pub async fn remove(&self, id: &str) -> Result<(), CoreError> {
+        let e = self.find(id).ok_or_else(|| CoreError::ModelUnavailable {
+            user_message: format!("`local:{id}` isn't a model this app knows."),
+            developer_message: format!("unknown model id {id}"),
+            recovery: vec![],
+        })?;
+        if let Some(reason) = self.remove_blocked(id) {
+            return Err(CoreError::ModelUnavailable {
+                user_message: reason,
+                developer_message: format!("{id}: removal refused (not Demios's folder)"),
+                recovery: vec![],
+            });
+        }
+        if let Some(task) = lock(&self.tasks).remove(id) {
+            task.handle.abort();
+        }
+        // Wait until a download of it has let go of its files.
+        let _files = self.model_lock(id).lock_owned().await;
+        self.release(id, &e.name).await?;
+        for p in self.files_of(&e) {
+            match std::fs::remove_file(&p) {
+                Err(err) if err.kind() != std::io::ErrorKind::NotFound => {
+                    return Err(CoreError::ModelUnavailable {
+                        user_message: format!(
+                            "{} couldn't be removed: {}. Close other apps using it and try again.",
+                            e.name,
+                            std::io::Error::from(err.kind())
+                        ),
+                        developer_message: format!("remove {}: {err}", p.display()),
+                        recovery: vec![],
+                    });
+                }
+                _ => {}
+            }
+        }
+        lock(&self.traits).remove(id);
+        if let Err(err) = lock(&self.probes).remove(id) {
+            eprintln!("tool-probes.json: {err}");
+        }
+        if self.is_external(id) {
+            // Empty Hub folders go too; refresh_externals sends the row's removal.
+            if let Some(x) = self.external(id) {
+                let hf = self.dir.join("hf");
+                let mut d = x.path.parent().map(Path::to_path_buf);
+                while let Some(dir) = d {
+                    if dir == hf || !dir.starts_with(&hf) || std::fs::remove_dir(&dir).is_err() {
+                        break;
+                    }
+                    d = dir.parent().map(Path::to_path_buf);
+                }
+            }
+            self.refresh_externals();
+        } else {
+            lock(&self.fits).insert(e.id.clone(), self.estimated_fit(&e));
+            self.set(id, DownloadState::NotDownloaded);
+        }
+        Ok(())
+    }
+
+    /// The one-time tool-call check (T-INF-26) for a local chat model whose chat template
+    /// doesn't say whether it makes tool calls. Started by the user: loads the model and sends
+    /// it one tiny request with one tool ([`crate::tool_probe`]); the answer is stored as
+    /// "checked" and the row updates. Local models only; nothing goes to a provider.
+    pub async fn check_tools(&self, id: &str) -> Result<dn_models::kind::TraitsView, CoreError> {
+        use dn_models::kind::{ModelKind, ToolSupport};
+        let e = self.find(id).ok_or_else(|| CoreError::ModelUnavailable {
+            user_message: format!("`local:{id}` isn't a model this app knows."),
+            developer_message: format!("check_tools: unknown model id {id}"),
+            recovery: vec![],
+        })?;
+        let traits = self.row(&e).traits.map(|t| t.traits);
+        let Some(t) = traits.filter(|t| t.kind == ModelKind::Chat) else {
+            return Err(CoreError::ModelUnavailable {
+                user_message: format!("{} isn't a chat model, so it makes no tool calls.", e.name),
+                developer_message: format!("check_tools: {id} is not a chat model"),
+                recovery: vec![],
+            });
+        };
+        if t.tool_support == ToolSupport::Supported {
+            return Ok(t.into());
+        }
+        let model = self.chat_model(id).await?;
+        let calls = crate::tool_probe::probe(
+            &*model,
+            ModelRef::Local {
+                model_id: id.to_string(),
+            },
+        )
+        .await?;
+        if let Err(err) = lock(&self.probes).set(id, calls) {
+            eprintln!("tool-probes.json: {err}");
+        }
+        self.emit(&e);
+        Ok(t.checked(calls).into())
+    }
+
+    /// Cancels a catalogue download (#176): stops it and deletes the partial file, so the row
+    /// is back to "not downloaded". A finished download is left alone.
+    pub async fn cancel_download(&self, id: &str) -> Result<(), CoreError> {
+        let e = self
+            .catalog
+            .get(id)
+            .cloned()
+            .ok_or_else(|| CoreError::ModelUnavailable {
+                user_message: format!("`local:{id}` isn't a catalogue model."),
+                developer_message: format!("cancel_download: unknown catalogue id {id}"),
+                recovery: vec![],
+            })?;
+        if let Some(task) = lock(&self.tasks).remove(id) {
+            task.handle.abort();
+        }
+        let _files = self.model_lock(id).lock_owned().await;
+        if self.is_ready(id) {
+            return Ok(());
+        }
+        let p = self.path(&e);
+        for suffix in [".part", ".lock"] {
+            let f = suffixed(&p, suffix);
+            if let Err(err) = std::fs::remove_file(&f)
+                && err.kind() != std::io::ErrorKind::NotFound
+            {
+                return Err(CoreError::ModelUnavailable {
+                    user_message: format!(
+                        "The partial download of {} couldn't be deleted: {}.",
+                        e.name,
+                        std::io::Error::from(err.kind())
+                    ),
+                    developer_message: format!("remove {}: {err}", f.display()),
+                    recovery: vec![],
+                });
+            }
+        }
+        self.set(id, DownloadState::NotDownloaded);
+        Ok(())
+    }
+
     /// Stops every download (app exit). Partial files stay for the next start.
     pub fn pause_all(&self) {
         let ids: Vec<String> = lock(&self.tasks).keys().cloned().collect();
@@ -1160,6 +1441,9 @@ impl<B: InferenceBackend> LocalModels<B> {
         self.scan();
         // Traits read from deleted files go; externals that remain are read again below.
         lock(&self.traits).clear();
+        if let Err(err) = lock(&self.probes).clear() {
+            eprintln!("tool-probes.json: {err}");
+        }
         // Hub downloads went with the folder; cache models (not ours) stay listed.
         self.refresh_externals();
         for e in &self.catalog.models {
@@ -1304,24 +1588,28 @@ impl<B: InferenceBackend> LocalModels<B> {
         {
             eprintln!("could not unload the embedding model: {err}");
         }
-        // nomic-embed-text v1.5's training context; longer chunks are cut at the batch size
-        // anyway. A small embedding model needs no GPU/CPU split (`load_options`).
+        // At most the model's training context (512 tokens for nomic-embed-text v2 MoE, 2048
+        // for v1.5): text past it is cut rather than embedded at positions the model never
+        // saw. A small embedding model needs no GPU/CPU split (`load_options`).
+        let path = self.path(&e);
+        let n_ctx = {
+            let path = path.clone();
+            tauri::async_runtime::spawn_blocking(move || embedding_ctx(&path))
+                .await
+                .unwrap_or(EMBED_CTX)
+        };
         let opts = LoadOptions {
-            n_ctx: Some(2048),
+            n_ctx: Some(n_ctx),
             ..Default::default()
         };
-        let m = LoadedModel::load(
-            Arc::clone(&self.backend),
-            &ModelSpec::gguf(self.path(&e)),
-            &opts,
-        )
-        .await
-        .map_err(|err| {
-            unavailable(
-                format!("{} couldn't be loaded.", e.name),
-                format!("load {id}: {err}"),
-            )
-        })?;
+        let m = LoadedModel::load(Arc::clone(&self.backend), &ModelSpec::gguf(path), &opts)
+            .await
+            .map_err(|err| {
+                unavailable(
+                    format!("{} couldn't be loaded.", e.name),
+                    format!("load {id}: {err}"),
+                )
+            })?;
         let m = Arc::new(m);
         *slot = Some((id.to_string(), Arc::clone(&m)));
         Ok(m)
@@ -1873,6 +2161,156 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn remove_deletes_only_what_demios_wrote_and_unloads_the_model() {
+        let (d, rec, mut lm) = two_ready_models();
+        lm.set_owns_dir(true);
+        std::fs::write(d.0.join("a.gguf.chat_template.jinja"), "{{ x }}").unwrap();
+        std::fs::write(d.0.join("unrelated.txt"), "keep").unwrap();
+        drop(lm.chat_model("a").await.unwrap());
+        assert_eq!(lm.rows()[0].remove_blocked, None);
+        lm.remove("a").await.unwrap();
+        settle().await;
+        assert!(
+            lock(&rec.0).iter().any(|l| l == "unload a"),
+            "{:?}",
+            lock(&rec.0)
+        );
+        for gone in ["a.gguf", "a.gguf.sha256", "a.gguf.chat_template.jinja"] {
+            assert!(!d.0.join(gone).exists(), "{gone} still there");
+        }
+        assert!(d.0.join("b.gguf").exists() && d.0.join("unrelated.txt").exists());
+        let row = lm.rows().into_iter().find(|r| r.id == "a").unwrap();
+        assert_eq!(row.state, DownloadState::NotDownloaded);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn remove_refuses_a_folder_the_user_chose_and_a_model_that_is_answering() {
+        // A user-chosen folder ($DN_MODELS_DIR): nothing is deleted.
+        let (d, _rec, lm) = two_ready_models();
+        let reason = lm.rows()[0].remove_blocked.clone().expect("blocked");
+        assert!(reason.contains("folder you chose"), "{reason}");
+        let err = lm.remove("a").await.unwrap_err();
+        assert!(
+            matches!(err, CoreError::ModelUnavailable { ref user_message, .. } if *user_message == reason)
+        );
+        assert!(d.0.join("a.gguf").exists());
+
+        // A reply still uses the model: refused, the model stays loaded and on disk.
+        let (d, rec, mut lm) = two_ready_models();
+        lm.set_owns_dir(true);
+        let in_reply = lm.chat_model("a").await.unwrap();
+        let err = lm.remove("a").await.unwrap_err();
+        assert!(
+            matches!(err, CoreError::ModelUnavailable { ref user_message, .. } if user_message.contains("is answering"))
+        );
+        assert!(d.0.join("a.gguf").exists());
+        assert!(!lock(&rec.0).iter().any(|l| l == "unload a"));
+        drop(in_reply);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_hugging_face_cache_model_is_never_removed() {
+        let (d, _rec, mut lm) = two_ready_models();
+        lm.set_owns_dir(true);
+        let cached = d.0.join("cache-model.gguf");
+        std::fs::write(&cached, b"12345").unwrap();
+        lm.set_externals(vec![External {
+            entry: external_entry(
+                "hfcache/o/n/m".into(),
+                "o/n",
+                "c".repeat(40).as_str(),
+                5,
+                String::new(),
+                "",
+            ),
+            path: cached.clone(),
+            origin: ModelOrigin::HfCache,
+            card_url: String::new(),
+        }]);
+        let row = lm
+            .rows()
+            .into_iter()
+            .find(|r| r.id == "hfcache/o/n/m")
+            .unwrap();
+        assert!(row.remove_blocked.unwrap().contains("Hugging Face cache"));
+        assert!(lm.remove("hfcache/o/n/m").await.is_err());
+        assert!(cached.exists());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn removing_a_hub_download_deletes_its_parts_and_manifest() {
+        let (d, _rec, mut lm) = two_ready_models();
+        lm.set_owns_dir(true);
+        let p = fake_hub_download(&d.0, "org/Tiny-GGUF", "Tiny-Q4_K_M.gguf", b"1234567");
+        lm.refresh_externals();
+        let id = "hf/org/Tiny-GGUF/Tiny-Q4_K_M";
+        assert!(lm.rows().iter().any(|r| r.id == id));
+        lm.remove(id).await.unwrap();
+        assert!(!p.exists());
+        assert!(!dn_models::hub::SourceManifest::path_for(&p).exists());
+        assert!(!suffixed(&p, ".sha256").exists());
+        // The emptied repo folder goes too; the row is gone.
+        assert!(!p.parent().unwrap().exists());
+        assert!(lm.rows().iter().all(|r| r.id != id));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_checked_tool_probe_settles_unknown_and_goes_with_the_model() {
+        let lm = LocalModels::new(
+            std::env::temp_dir().join(format!("dn-local-probe-{}", dn_core::Id::new())),
+            Catalog::builtin(),
+            Machine::cpu_only(16 << 30),
+        );
+        let traits = |id: &str| {
+            lm.rows()
+                .into_iter()
+                .find(|r| r.id == id)
+                .and_then(|r| r.traits)
+                .unwrap()
+        };
+        assert_eq!(traits("phi-4-mini-instruct-q4_k_m").label, "Chat");
+        lock(&lm.probes)
+            .set("phi-4-mini-instruct-q4_k_m", true)
+            .unwrap();
+        let t = traits("phi-4-mini-instruct-q4_k_m");
+        assert_eq!(t.label, "Chat · Tools");
+        assert_eq!(t.traits.source, dn_models::kind::TraitsSource::Checked);
+        // A model the template already marks as tool-capable isn't changed by a stored result.
+        lock(&lm.probes).set("qwen3-8b-q4_k_m", false).unwrap();
+        assert_eq!(traits("qwen3-8b-q4_k_m").label, "Chat · Tools");
+        // Only chat models are checked; nothing is sent for an embedding model.
+        let err = lm
+            .check_tools("nomic-embed-text-v1.5-q4_k_m")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, CoreError::ModelUnavailable { ref user_message, .. } if user_message.contains("isn't a chat model"))
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cancel_download_deletes_the_partial_file() {
+        let dir = Dir(std::env::temp_dir().join(format!("dn-local-cancel-{}", dn_core::Id::new())));
+        std::fs::create_dir_all(&dir.0).unwrap();
+        std::fs::write(dir.0.join("half.gguf.part"), b"12").unwrap();
+        let lm = LocalModels::new(
+            dir.0.clone(),
+            Catalog {
+                version: 1,
+                models: vec![entry("half", 5, "aa")],
+            },
+            Machine::cpu_only(16 << 30),
+        );
+        assert!(matches!(
+            lm.rows()[0].state,
+            DownloadState::Paused { done: 2, .. }
+        ));
+        lm.cancel_download("half").await.unwrap();
+        assert!(!dir.0.join("half.gguf.part").exists());
+        assert_eq!(lm.rows()[0].state, DownloadState::NotDownloaded);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn the_embedding_model_has_its_own_slot_and_never_unloads_the_chat_model() {
         let dir = Dir(std::env::temp_dir().join(format!("dn-local-embed-{}", dn_core::Id::new())));
         std::fs::create_dir_all(&dir.0).unwrap();
@@ -2234,6 +2672,40 @@ mod tests {
             label("nomic-embed-text-v1.5-q4_k_m").as_deref(),
             Some("Embedding")
         );
+    }
+
+    #[test]
+    fn an_unreadable_embedding_model_loads_with_the_largest_context() {
+        assert_eq!(embedding_ctx(Path::new("/nonexistent.gguf")), EMBED_CTX);
+    }
+
+    /// nomic-embed-text v2 MoE is loaded at its 512-token training context, and a chunk
+    /// longer than that is embedded (cut), not an error:
+    /// `DN_TEST_EMBED_GGUF=.../nomic-embed-text-v2-moe.Q5_K_M.gguf cargo test -p
+    /// demios-desktop --lib long_chunk -- --ignored`.
+    #[tokio::test]
+    #[ignore = "needs DN_TEST_EMBED_GGUF"]
+    async fn a_long_chunk_embeds_at_the_training_context() {
+        let path = PathBuf::from(std::env::var("DN_TEST_EMBED_GGUF").unwrap());
+        let n_ctx = embedding_ctx(&path);
+        assert_eq!(n_ctx, 512);
+        let m = LoadedModel::load(
+            Arc::new(LlamaCppBackend::new()),
+            &ModelSpec::gguf(path),
+            &LoadOptions {
+                n_ctx: Some(n_ctx),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let long = "search_document: ".to_owned() + &"Der Start ist im Mai. ".repeat(200);
+        let v = m
+            .embed(&[long, "search_query: Wann ist der Start?".into()])
+            .await
+            .unwrap();
+        assert_eq!(v.len(), 2);
+        assert_eq!(v[0].len(), 768);
     }
 
     #[test]

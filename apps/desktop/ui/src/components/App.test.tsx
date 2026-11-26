@@ -131,6 +131,7 @@ function fakeApi() {
       state: { state: "not_downloaded" },
       fit: { status: "caution", estimated: true, reason: "Fits, with little memory left for other apps.", suggested_quant: null },
       traits: null,
+      remove_blocked: null,
     },
   ];
   const msgs = new Map<string, StoredMessage[]>();
@@ -179,7 +180,7 @@ function fakeApi() {
     artifactChildFocus: async () => null,
     artifactChildClose: async () => null,
     messageSources: async () => null,
-    knowledgeStatus: async () => ({ offer: "ask", model: null, embedding: null }),
+    knowledgeStatus: async () => ({ offer: "ask", model: null, embedding: null, unused: null }),
     knowledgeOffer: async () => null,
     appInfo: async () => ({ version: "0.1.0", dev_fake_model: true, data_dir: "/tmp", models_dir: "/tmp/models", updates: launch.mode }),
     checkForUpdate: async () => ({ status: "up_to_date", current: "0.1.0" }) as const,
@@ -389,6 +390,9 @@ function fakeApi() {
       pauses.push(id);
       return null;
     },
+    removeLocalModel: async () => null,
+    cancelDownload: async () => null,
+    checkModelTools: async () => ({ kind: "chat", tool_support: "supported", source: "checked", label: "Chat · Tools" }),
     watchTools: async (onEvent) => {
       approvalSink = onEvent;
       return { approvals: [], servers: [] };

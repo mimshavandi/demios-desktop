@@ -5,6 +5,7 @@
 import type { Api } from "./commands";
 import type {
   DownloadState,
+  KnowledgeStatus,
   ApprovalDecision,
   ApprovalPrompt,
   ArtifactDetail,
@@ -95,6 +96,7 @@ export function createMockApi(): Api {
       state: { state: "ready" },
       fit: fit("ready", "Fits this computer with room to spare.", false),
       traits: { kind: "chat", tool_support: "supported", source: "header", label: "Chat · Tools" },
+      remove_blocked: null,
     },
     {
       id: "llama-3.2-3b-instruct-q4_k_m",
@@ -114,6 +116,7 @@ export function createMockApi(): Api {
       state: { state: "not_downloaded" },
       fit: fit("ready", "Fits this computer with room to spare."),
       traits: { kind: "chat", tool_support: "supported", source: "header", label: "Chat · Tools" },
+      remove_blocked: null,
     },
     {
       id: "example-70b-nc",
@@ -133,6 +136,7 @@ export function createMockApi(): Api {
       state: { state: "failed", message: "Not enough disk space: needs 42.5 GB, 12.0 GB free. Free up space, then retry.", done: 0, total: 42_500_000_000 },
       fit: fit("memory_blocked", "Won't fit in this computer's memory."),
       traits: { kind: "chat", tool_support: "supported", source: "header", label: "Chat · Tools" },
+      remove_blocked: null,
     },
   ];
   // MCP servers (T-SHELL-08): one local server that works, one remote one that needs sign-in.
@@ -407,7 +411,7 @@ export function createMockApi(): Api {
     return x;
   };
 
-  const knowledge: { offer: "ask" | "declined" | "accepted"; started: number | null; state: DownloadState } = {
+  const knowledge: { offer: KnowledgeStatus["offer"]; started: number | null; state: DownloadState } = {
     offer: "ask",
     started: null,
     state: { state: "not_downloaded" },
@@ -429,12 +433,13 @@ export function createMockApi(): Api {
         const t = Date.now() - k.started;
         k.state =
           t < 3000
-            ? { state: "downloading", done: Math.round((84_000_000 * t) / 3000), total: 84_000_000, bytes_per_sec: 28_000_000 }
+            ? { state: "downloading", done: Math.round((370_828_256 * t) / 3000), total: 370_828_256, bytes_per_sec: 120_000_000 }
             : { state: "ready" };
       }
       const t = k.started === null ? 0 : Date.now() - k.started - 3000;
       const embedding = k.state.state === "ready" && t < 3000 ? { done: Math.max(0, Math.round((48 * t) / 3000)), total: 48 } : null;
-      return { offer: k.offer, model: { id: "nomic-embed-text-v1.5-q4_k_m", name: "nomic-embed-text v1.5", size: 84_000_000, state: k.state }, embedding };
+      const model = { id: "nomic-embed-text-v2-moe-q5_k_m", name: "Nomic Embed Text v2 MoE", size: 370_828_256, license: "apache-2.0", state: k.state };
+      return { offer: k.offer, model, embedding, unused: null };
     },
     knowledgeOffer: async (accept) => {
       knowledge.offer = accept ? "accepted" : "declined";
@@ -951,6 +956,33 @@ export function createMockApi(): Api {
       window.clearTimeout(timersDl.get(id));
       if (r !== undefined && r.state.state === "downloading") {
         r.state = { state: "paused", done: r.state.done, total: r.state.total };
+        emitRow(r);
+      }
+      return null;
+    },
+    removeLocalModel: async (id) => {
+      const r = localRows.find((x) => x.id === id);
+      if (r === undefined) throw { code: "model_unavailable", message: "That model isn't on this computer." };
+      if (r.remove_blocked !== null) throw { code: "model_unavailable", message: r.remove_blocked };
+      r.state = { state: "not_downloaded" };
+      emitRow(r);
+      return null;
+    },
+    checkModelTools: async (id) => {
+      await new Promise((r) => setTimeout(r, 800));
+      const r = localRows.find((x) => x.id === id);
+      if (r === undefined || r.traits === null || r.traits.kind !== "chat") {
+        throw { code: "model_unavailable", message: "That isn't a chat model, so it makes no tool calls." };
+      }
+      r.traits = { kind: "chat", tool_support: "supported", source: "checked", label: "Chat · Tools" };
+      emitRow(r);
+      return r.traits;
+    },
+    cancelDownload: async (id) => {
+      const r = localRows.find((x) => x.id === id);
+      window.clearTimeout(timersDl.get(id));
+      if (r !== undefined && r.state.state !== "ready") {
+        r.state = { state: "not_downloaded" };
         emitRow(r);
       }
       return null;

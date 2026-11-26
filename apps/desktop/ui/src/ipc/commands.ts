@@ -38,6 +38,7 @@ import type {
   HubPullEvent,
   HubRepoView,
   HubSearchPage,
+  ModelTraits,
   HubSort,
   HubPullProgress,
   AddModelLink,
@@ -131,6 +132,9 @@ interface Commands {
   watch_local_models: { args: { onEvent: Channel<LocalModelEvent> }; ret: LocalModelRow[] };
   download_model: { args: { modelId: string }; ret: null };
   pause_download: { args: { modelId: string }; ret: null };
+  remove_local_model: { args: { modelId: string }; ret: null };
+  cancel_download: { args: { modelId: string }; ret: null };
+  check_model_tools: { args: { modelId: string }; ret: ModelTraits };
   // Windows artifact webview (artifactWebview.ts, ADR-0012).
   artifact_child_open: { args: { token: string; background: string | null; events: Channel<ChildEvent> }; ret: null };
   artifact_child_render: { args: { seq: number; html: string; nonce: string; net: boolean; title: string }; ret: null };
@@ -311,6 +315,15 @@ export const api = {
     call("watch_local_models", { onEvent: channel(onEvent) }),
   downloadModel: (modelId: string) => call("download_model", { modelId }),
   pauseDownload: (modelId: string) => call("pause_download", { modelId }),
+  /** Removes a downloaded model (#176); refused with a user message when `remove_blocked` is set. */
+  removeLocalModel: (modelId: string) => call("remove_local_model", { modelId }),
+  /** Cancels a catalogue download and deletes its partial file (#176). */
+  cancelDownload: (modelId: string) => call("cancel_download", { modelId }),
+  /**
+   * The one-time tool-call check for a local chat model with tool_support "unknown": one tiny
+   * local request; the result comes back (source "checked") and the row updates.
+   */
+  checkModelTools: (modelId: string) => call("check_model_tools", { modelId }),
 };
 
 export type Api = typeof api;
