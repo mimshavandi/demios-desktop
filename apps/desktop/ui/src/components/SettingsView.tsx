@@ -1,4 +1,4 @@
-import { Boxes, Cpu, ExternalLink, KeyRound, SlidersHorizontal, Sparkles, Trash2, Wrench } from "lucide-react";
+import { Blocks, Boxes, Cpu, ExternalLink, KeyRound, SlidersHorizontal, Sparkles, Trash2, Wrench } from "lucide-react";
 import { Fragment, useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { Api } from "../ipc/commands";
 import {
@@ -28,6 +28,7 @@ import {
   type TabItem,
 } from "./primitives";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { AddonsPage } from "./Addons";
 import { Licences } from "./Licences";
 import { ConnectCard } from "./Connect";
 import { McpServersCard } from "./McpServers";
@@ -38,7 +39,7 @@ import { LocalModelsCard, formatBytes } from "./LocalModels";
 import { DefaultsContext, SetDefault, type Defaults } from "./SetDefault";
 import { useToast } from "./toast";
 
-export type SettingsSection = "general" | "models" | "tools" | "skills";
+export type SettingsSection = "general" | "models" | "tools" | "skills" | "addons";
 export type ModelsTab = "device" | "servers" | "providers";
 
 /** Where Settings opens: a section, and for Models which tab. Banners and hints link here. */
@@ -52,6 +53,8 @@ const SECTIONS: { id: SettingsSection; label: string; icon: typeof Cpu }[] = [
   { id: "models", label: "Models", icon: Boxes },
   { id: "tools", label: "Tools", icon: Wrench },
   { id: "skills", label: "Skills", icon: Sparkles },
+  // Only in a build with add-ons (ADR-0013); the regular build never shows it.
+  { id: "addons", label: "Add-ons", icon: Blocks },
 ];
 
 const MODEL_TABS: TabItem<ModelsTab>[] = [
@@ -130,7 +133,19 @@ export function SettingsView({
   const toolsChanged = useCallback(() => setToolsVersion((v) => v + 1), []);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const navRef = useRef<HTMLUListElement>(null);
-  const section = route.section;
+  // Add-ons: only when this build has some. A failure to ask hides the entry and says so.
+  const [hasAddons, setHasAddons] = useState(false);
+  useEffect(() => {
+    api
+      .addonsList()
+      .then((l) => setHasAddons(l.length > 0))
+      .catch((e: unknown) => {
+        setHasAddons(false);
+        toast({ tone: "error", title: `Couldn't check for add-ons. ${errorMessage(e)}` });
+      });
+  }, [api, toast]);
+  const sections = SECTIONS.filter((x) => x.id !== "addons" || hasAddons);
+  const section = sections.some((x) => x.id === route.section) ? route.section : "general";
   const tab: ModelsTab = route.tab ?? "device";
   const title = SECTIONS.find((x) => x.id === section)?.label ?? "Settings";
 
@@ -185,16 +200,16 @@ export function SettingsView({
 
   // Up/Down (and Home/End) move between sections and open them; Tab leaves the list.
   const onNavKey = (e: KeyboardEvent<HTMLUListElement>) => {
-    const i = SECTIONS.findIndex((x) => x.id === section);
+    const i = sections.findIndex((x) => x.id === section);
     const to =
-      e.key === "ArrowDown" ? Math.min(i + 1, SECTIONS.length - 1)
+      e.key === "ArrowDown" ? Math.min(i + 1, sections.length - 1)
       : e.key === "ArrowUp" ? Math.max(i - 1, 0)
       : e.key === "Home" ? 0
-      : e.key === "End" ? SECTIONS.length - 1
+      : e.key === "End" ? sections.length - 1
       : null;
     if (to === null) return;
     e.preventDefault();
-    const next = SECTIONS[to];
+    const next = sections[to];
     if (next === undefined || next.id === section) return;
     keyNav.current = true;
     go(next.id);
@@ -232,7 +247,7 @@ export function SettingsView({
       <div className="settings-layout">
         <nav className="settings-nav" aria-label="Settings sections">
           <ul ref={navRef} onKeyDown={onNavKey}>
-            {SECTIONS.map(({ id, label, icon: Icon }) => (
+            {sections.map(({ id, label, icon: Icon }) => (
               <li key={id}>
                 <button
                   type="button"
@@ -262,7 +277,7 @@ export function SettingsView({
               value={section}
               onChange={(e) => go(e.target.value as SettingsSection)}
             >
-              {SECTIONS.map((x) => (
+              {sections.map((x) => (
                 <option key={x.id} value={x.id}>
                   {x.label}
                 </option>
@@ -304,6 +319,8 @@ export function SettingsView({
           )}
 
           {section === "skills" && <SkillsCard api={api} />}
+
+          {section === "addons" && <AddonsPage api={api} />}
         </div>
       </div>
     </section>

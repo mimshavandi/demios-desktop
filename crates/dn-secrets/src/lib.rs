@@ -35,6 +35,9 @@ pub enum SecretKind {
     /// This device's own private keys for pairing and sync (ADR-0014 §2), e.g.
     /// `device/identity`. Never leaves the device.
     DeviceKey,
+    /// A secret an add-on keeps (ADR-0013 §4), `addon/<add-on id>/<name>`. The host owns
+    /// these ids and deletes them with the add-on's data.
+    AddonSecret,
 }
 
 impl SecretKind {
@@ -43,6 +46,7 @@ impl SecretKind {
             Self::ProviderKey => "provider",
             Self::McpToken => "mcp",
             Self::DeviceKey => "device",
+            Self::AddonSecret => "addon",
         }
     }
 }
@@ -73,6 +77,14 @@ impl SecretId {
         Self {
             kind: SecretKind::DeviceKey,
             id: id.into(),
+        }
+    }
+
+    /// One of an add-on's secrets: `addon/<plugin_id>/<name>`.
+    pub fn addon(plugin_id: &str, name: &str) -> Self {
+        Self {
+            kind: SecretKind::AddonSecret,
+            id: format!("{plugin_id}/{name}"),
         }
     }
 
