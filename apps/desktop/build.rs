@@ -77,6 +77,7 @@ const COMMANDS: &[&str] = &[
     "download_model",
     "pause_download",
     "remove_local_model",
+    "undo_remove_local_model",
     "cancel_download",
     "check_model_tools",
     "check_for_update",

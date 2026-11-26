@@ -6,6 +6,10 @@ Only changes people using the app or the `dn` command-line tool can notice are l
 
 ## [Unreleased]
 
+### Added
+
+- **Settings → Models → On this device:** **Remove** on a downloaded model frees its space. It takes effect at once, with Undo for 10 seconds; a task that used the model then asks you to choose one. Models in your Hugging Face cache or a folder you chose are never deleted. **Cancel download** stops a running or paused download and deletes the part already downloaded ([#PR](https://github.com/mimshavandi/demios-desktop/pull/PR)).
+
 ### Changed
 
 - Demios Desktop and `dn` are now licensed under the PolyForm Shield License 1.0.0 instead of Apache-2.0. You can still read, build, change and use the code for anything except a product that competes with Demios. Versions up to and including 0.1.0-preview.8cd482c stay under Apache-2.0 ([#217](https://github.com/mimshavandi/demios-desktop/pull/217)).

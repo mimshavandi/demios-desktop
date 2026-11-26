@@ -339,6 +339,10 @@ export interface LocalModelRow {
   traits: ModelTraits | null;
   /** Why "Remove" can't delete this model, in the user's words (#176); null when it can. */
   remove_blocked: string | null;
+  /** Removed, with Undo still possible (#176): the file goes when the undo window ends. */
+  removing?: boolean;
+  /** Why the last removal failed (the file is still there). */
+  remove_error?: string | null;
 }
 
 /**

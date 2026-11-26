@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-undo-remove-local-model"
+description = "Enables the undo_remove_local_model command without any pre-configured scope."
+commands.allow = ["undo_remove_local_model"]
+
+[[permission]]
+identifier = "deny-undo-remove-local-model"
+description = "Denies the undo_remove_local_model command without any pre-configured scope."
+commands.deny = ["undo_remove_local_model"]
