@@ -117,8 +117,8 @@ pub const SLOTS: &[SlotInfo] = &[
     },
     SlotInfo {
         slot_id: "embed",
-        label: "Embeddings",
-        description: "Knowledge search in projects. Without one, it searches by keywords only.",
+        label: "Project search",
+        description: "Finds passages in your project files by meaning. Without a model, it searches by keywords only.",
         capability: Capability::Embedding,
         shown: true,
     },

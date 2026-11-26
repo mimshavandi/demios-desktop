@@ -1,5 +1,5 @@
 import { Boxes, Cpu, ExternalLink, KeyRound, SlidersHorizontal, Sparkles, Trash2, Wrench } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { Api } from "../ipc/commands";
 import {
   errorMessage,
@@ -34,7 +34,7 @@ import { RemoteServersCard } from "./RemoteServers";
 import { SkillsCard } from "./Skills";
 import { Updates } from "./Updates";
 import { LocalModelsCard, formatBytes } from "./LocalModels";
-import { BetterSearchSetting } from "./BetterSearch";
+import { ProjectSearchNote, useKnowledgeStatus } from "./BetterSearch";
 import { useToast } from "./toast";
 
 export type SettingsSection = "general" | "models" | "tools" | "skills";
@@ -334,6 +334,16 @@ function ModelsPage({
         toast({ tone: "error", title: `Couldn't refresh the model list. ${errorMessage(e)}` }),
       );
   }, [api, onCatalog, toast]);
+  // The Project search slot's model: its offer and download show under the slot.
+  const knowledge = useKnowledgeStatus(api.knowledgeStatus);
+  const searchModel = knowledge.status?.model ?? null;
+  const searchReady = searchModel?.state.state === "ready";
+  // Once it is downloaded, the pickers should list it.
+  const wasReady = useRef(searchReady);
+  useEffect(() => {
+    if (searchReady && !wasReady.current) refreshCatalog();
+    wasReady.current = searchReady;
+  }, [searchReady, refreshCatalog]);
   // A demios:// add-model link opens On this device, where the add panel is.
   const shown: ModelsTab = addLink !== null ? "device" : tab;
   return (
@@ -347,6 +357,12 @@ function ModelsPage({
             slot={slot}
             catalog={catalog}
             devFake={info?.dev_fake_model ?? false}
+            {...(slot.slot_id === "embed"
+              ? {
+                  autoName: searchReady ? (searchModel?.name ?? null) : null,
+                  note: <ProjectSearchNote api={api} knowledge={knowledge} />,
+                }
+              : {})}
             onChange={(model) => {
               const slots = { ...s.slots };
               if (model === "") delete slots[slot.slot_id];
@@ -372,7 +388,6 @@ function ModelsPage({
             {info?.models_dir != null && (
               <p className="dn-help settings-note">Downloaded models are stored in {info.models_dir}</p>
             )}
-            <BetterSearchSetting api={api} />
             {info?.dev_fake_model === true && (
               <section className="card" aria-labelledby="dev-h">
                 <h2 id="dev-h">Development</h2>
@@ -505,11 +520,17 @@ function SlotRow({
   slot,
   catalog,
   devFake,
+  autoName = null,
+  note,
   onChange,
 }: {
   slot: SlotInfo;
   catalog: ModelCatalog;
   devFake: boolean;
+  /** A model the task uses while the slot is empty, when it isn't the chat fallback. */
+  autoName?: string | null;
+  /** Shown under the selector (the Project search model's offer and download). */
+  note?: ReactNode;
   onChange: (model: string) => void;
 }) {
   const current = catalog.settings.slots[slot.slot_id] ?? "";
@@ -541,7 +562,8 @@ function SlotRow({
   ];
   const id = `slot-${slot.slot_id}`;
   const auto = slot.slot_id === "chat" ? catalog.chat_model : null;
-  const autoLabel = auto === null ? null : (catalog.models.find((m) => m.model_ref === auto)?.label ?? auto);
+  const autoLabel =
+    auto === null ? autoName : (catalog.models.find((m) => m.model_ref === auto)?.label ?? auto);
   const fallback =
     autoLabel !== null && current === ""
       ? `Not set (uses ${autoLabel} automatically)`
@@ -567,6 +589,7 @@ function SlotRow({
         aria-describedby={`${id}-d`}
         onValueChange={onChange}
       />
+      {note}
     </div>
   );
 }

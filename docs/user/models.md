@@ -9,7 +9,7 @@ You can do both and switch between them.
 
 ## On this device
 
-The **On this device** card lists 13 open models in a built-in catalogue, from small ones to large ones: 11 for chat and 2 embedding models.
+The **On this device** card lists 14 open models in a built-in catalogue, from small ones to large ones: 11 for chat and 3 embedding models.
 
 Under its title, a line says where local models run on this computer:
 
@@ -123,4 +123,9 @@ Select **Refresh** after loading or removing models on the server. **Remove** de
 
 If you don't choose a Chat model, the app picks one that is ready and says which: "Not set (uses … automatically)". Models on your computer are listed under **On this device**, the others under their provider.
 
-The **Fast** and **Embeddings** rows are for features that aren't in the app yet. You can leave them unset.
+**Project search** is the model that finds passages in your project files by meaning (see [Projects](projects.md)). Without one, project files are searched by keywords only. If you leave it unset and the recommended search model is downloaded, it's used automatically: "Not set (uses … automatically)". When it isn't downloaded, the row shows:
+
+- The recommended model, its download size and its licence, with **Download**.
+- While it downloads and your project files are prepared, the progress. Keyword search works meanwhile.
+- If the download failed, why, with **Try again**.
+- If you used the earlier search model, that it's no longer used and you can remove it from the model list.

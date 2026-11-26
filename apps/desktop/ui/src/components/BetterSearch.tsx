@@ -1,7 +1,7 @@
 // The embedding-model offer (#171). The model isn't bundled: it is offered once, the first time
 // a project has files and no embedding model is installed ("Not now" is remembered and never
-// asked again), and always in Settings › Models. On "Download", the normal verified download
-// runs, then the project's existing passages are embedded in the background, from the stored
+// asked again), and always under the Project search slot in Settings › Models. On "Download",
+// the normal verified download runs, then the project's existing passages are embedded in the background, from the stored
 // chunks (no file is read again). Keyword search keeps answering meanwhile.
 //
 // #201 made nomic-embed-text v2 the search model. Someone who accepted the earlier model (v1.5)
@@ -128,13 +128,21 @@ export function BetterSearchOffer({ api, hasFiles }: { api: Api; hasFiles: boole
   );
 }
 
-/** The same choice in Settings › Models, always available (also after "Not now"). */
-export function BetterSearchSetting({ api }: { api: Api }) {
-  const { status, failed, refresh } = useKnowledgeStatus(api.knowledgeStatus);
+/** The note under the Project search slot in Settings › Models: the recommended model's offer
+ * (also after "Not now"), its download, and the earlier model once it is no longer used. The
+ * page reads the status (it also names the model in the slot's "Not set" text). */
+export function ProjectSearchNote({
+  api,
+  knowledge,
+}: {
+  api: Api;
+  knowledge: { status: KnowledgeStatus | null; failed: boolean; refresh: () => Promise<void> };
+}) {
+  const { status, failed, refresh } = knowledge;
   const [error, setError] = useState<string | null>(null);
   if (failed) return <InlineMessage tone="error">Project search status couldn't be loaded.</InlineMessage>;
   if (status?.model == null) return null;
-  const st = status.model.state.state;
+  const st = status.model.state;
   const progress = progressText(status);
   const download = async () => {
     setError(null);
@@ -146,33 +154,39 @@ export function BetterSearchSetting({ api }: { api: Api }) {
       setError("The search model couldn't be downloaded. Try again.");
     }
   };
+  const downloadButton = (
+    <Button size="sm" onClick={() => void download()} data-testid="project-search-download">
+      {st.state === "failed" ? "Try again" : "Download"}
+    </Button>
+  );
+  const offer =
+    status.offer === "upgrade"
+      ? upgradeText(status.model)
+      : `Recommended: ${status.model.name}, a ${formatBytes(status.model.size)} download. It also finds passages by meaning. ${licenceText(status.model.license)}`;
   return (
-    <section className="card" aria-labelledby="better-search-h" data-testid="better-search-setting">
-      <h2 id="better-search-h">Project search</h2>
-      {st === "ready" && progress === null ? (
-        <p className="dn-help">Searching project files uses {status.model.name}: keywords and meaning.</p>
-      ) : progress !== null ? (
-        <p className="dn-help" role="status">
+    <div className="row-note" data-testid="project-search-note">
+      {progress !== null ? (
+        <p className="dn-help" role="status" data-testid="project-search-progress">
           {progress} Keyword search works meanwhile.
         </p>
-      ) : (
-        <div className="row-actions">
-          <p className="dn-help" data-testid="better-search-setting-text">
-            {status.offer === "upgrade"
-              ? upgradeText(status.model)
-              : `Project files are searched by keywords. Download the ${formatBytes(status.model.size)} search model to also find passages by meaning. ${licenceText(status.model.license)}`}
+      ) : st.state === "failed" ? (
+        <InlineMessage tone="error" action={downloadButton}>
+          The search model couldn't be downloaded: {st.message}
+        </InlineMessage>
+      ) : st.state !== "ready" ? (
+        <div className="row-note-offer">
+          <p className="dn-help" data-testid="project-search-offer">
+            {offer}
           </p>
-          <Button size="sm" onClick={() => void download()} data-testid="better-search-setting-download">
-            {st === "failed" ? "Try again" : "Download"}
-          </Button>
+          {downloadButton}
         </div>
-      )}
+      ) : null}
       {status.unused !== null && (
-        <p className="dn-help" data-testid="better-search-unused">
+        <p className="dn-help" data-testid="project-search-unused">
           {unusedText(status.unused)}
         </p>
       )}
       {error !== null && <InlineMessage tone="error">{error}</InlineMessage>}
-    </section>
+    </div>
   );
 }

@@ -261,7 +261,7 @@ export function createMockApi(): Api {
   const catalog = (): ModelCatalog => ({
     slots: [
       { slot_id: "chat", label: "Chat", description: "Answers in conversations.", capability: "chat" },
-      { slot_id: "embed", label: "Embeddings", description: "Knowledge search in projects. Without one, it searches by keywords only.", capability: "embedding" },
+      { slot_id: "embed", label: "Project search", description: "Finds passages in your project files by meaning. Without a model, it searches by keywords only.", capability: "embedding" },
     ],
     models: [
       { model_ref: "local:dev-fake", label: "Dev fake model (canned replies)", source: "dev", capabilities: ["chat"], available: true, note: null },

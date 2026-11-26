@@ -7,6 +7,7 @@ import type {
   ArtifactDetail,
   ChatEvent,
   Conversation,
+  KnowledgeStatus,
   ModelCatalog,
   Project,
   ProjectFile,
@@ -819,6 +820,36 @@ describe("App", () => {
     expect(await screen.findByRole("button", { name: "More actions for “New chat”" })).toBeTruthy();
     expect(restores).toBe(1);
     expect(deletes).toBe(1);
+  });
+
+  it("Models shows the project search model under its slot, with no separate card", async () => {
+    const { api } = fakeApi();
+    const v2 = { id: "nomic-embed-text-v2-moe-q5_k_m", name: "Nomic Embed Text v2 MoE", size: 370_828_256, license: "apache-2.0" };
+    let status: KnowledgeStatus = { offer: "ask", model: { ...v2, state: { state: "not_downloaded" } }, embedding: null, unused: null };
+    api.knowledgeStatus = async () => status;
+    api.knowledgeOffer = async () => {
+      status = { ...status, offer: "accepted", model: { ...v2, state: { state: "ready" } } };
+      return null;
+    };
+    const list = api.listModels;
+    let lists = 0;
+    api.listModels = async () => {
+      lists += 1;
+      const c = await list();
+      const slot = { slot_id: "embed", label: "Project search", description: "Finds passages by meaning.", capability: "embedding" as const };
+      return { ...c, slots: [...c.slots, slot] };
+    };
+    render(<App api={api} />);
+    await openSettings("Models");
+    expect(await screen.findByLabelText("Project search")).toBeTruthy();
+    expect((await screen.findByTestId("project-search-offer")).textContent).toContain("371 MB download");
+    expect(screen.queryByRole("heading", { name: "Project search" })).toBeNull();
+    const before = lists;
+    fireEvent.click(screen.getByTestId("project-search-download"));
+    // Once it's downloaded, the slot names it and the model list is read again for the pickers.
+    expect(await screen.findByText("Not set (uses Nomic Embed Text v2 MoE automatically)")).toBeTruthy();
+    await waitFor(() => expect(lists).toBeGreaterThan(before));
+    expect(screen.queryByTestId("project-search-offer")).toBeNull();
   });
 
   it("shows models and settings with telemetry off", async () => {

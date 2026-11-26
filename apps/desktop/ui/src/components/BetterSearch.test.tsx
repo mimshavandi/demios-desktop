@@ -2,7 +2,20 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Api } from "../ipc/commands";
 import type { KnowledgeStatus } from "../ipc/types";
-import { BetterSearchOffer, BetterSearchSetting, offerText, progressText, unusedText, upgradeText } from "./BetterSearch";
+import {
+  BetterSearchOffer,
+  ProjectSearchNote,
+  offerText,
+  progressText,
+  unusedText,
+  upgradeText,
+  useKnowledgeStatus,
+} from "./BetterSearch";
+
+/** The note as Settings › Models renders it under the Project search slot. */
+function Note({ api }: { api: Api }) {
+  return <ProjectSearchNote api={api} knowledge={useKnowledgeStatus(api.knowledgeStatus)} />;
+}
 
 afterEach(cleanup);
 
@@ -94,25 +107,57 @@ describe("the embedding-model offer", () => {
     expect(offer).toHaveBeenCalledWith(true);
   });
 
-  it("Settings › Models offers it even after 'Not now'", async () => {
+  it("the Project search slot offers it even after 'Not now', with its size and licence", async () => {
     const { api, offer } = fakeApi({ ...ask, offer: "declined" });
-    render(<BetterSearchSetting api={api} />);
-    expect((await screen.findByTestId("better-search-setting-text")).textContent).toContain("Licence: apache-2.0.");
-    fireEvent.click(screen.getByTestId("better-search-setting-download"));
+    render(<Note api={api} />);
+    expect((await screen.findByTestId("project-search-offer")).textContent).toBe(
+      "Recommended: Nomic Embed Text v2 MoE, a 371 MB download. It also finds passages by meaning. Licence: apache-2.0.",
+    );
+    fireEvent.click(screen.getByTestId("project-search-download"));
+    await waitFor(() => expect(offer).toHaveBeenCalledWith(true));
+    expect((await screen.findByTestId("project-search-progress")).textContent).toBe(
+      "Downloading the search model: 1 KB of 1 KB. Keyword search works meanwhile.",
+    );
+  });
+
+  it("a failed download says why, with Try again", async () => {
+    const { api, offer } = fakeApi({
+      ...ask,
+      model: model({ state: "failed", message: "checksum mismatch", done: 5, total: 100 }),
+    });
+    render(<Note api={api} />);
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "The search model couldn't be downloaded: checksum mismatch",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     await waitFor(() => expect(offer).toHaveBeenCalledWith(true));
   });
 
-  it("Settings explains the upgrade, and points out the old model once it is no longer used", async () => {
+  it("shows nothing once the model is ready and nothing is left to do", async () => {
+    const { api } = fakeApi({ offer: "accepted", model: model({ state: "ready" }), embedding: null, unused: null });
+    const { container } = render(<Note api={api} />);
+    await waitFor(() => expect(screen.getByTestId("project-search-note")).toBeTruthy());
+    expect(container.textContent).toBe("");
+  });
+
+  it("explains the upgrade, and points out the old model once it is no longer used", async () => {
     const up = fakeApi({ ...ask, offer: "upgrade", unused: previous });
-    render(<BetterSearchSetting api={up.api} />);
-    expect((await screen.findByTestId("better-search-setting-text")).textContent).toBe(upgradeText(ask.model!));
+    render(<Note api={up.api} />);
+    expect((await screen.findByTestId("project-search-offer")).textContent).toBe(upgradeText(ask.model!));
     cleanup();
     const done = fakeApi({ offer: "accepted", model: model({ state: "ready" }), embedding: null, unused: previous });
-    render(<BetterSearchSetting api={done.api} />);
-    expect((await screen.findByTestId("better-search-unused")).textContent).toBe(unusedText(previous));
+    render(<Note api={done.api} />);
+    expect((await screen.findByTestId("project-search-unused")).textContent).toBe(unusedText(previous));
     expect(unusedText(previous)).toBe(
       "Nomic Embed Text v1.5 (84 MB) is no longer used for search. You can remove it from the model list.",
     );
+  });
+
+  it("says so when the status can't be read", async () => {
+    const api = { knowledgeStatus: async () => Promise.reject(new Error("no")), knowledgeOffer: vi.fn() } as unknown as Api;
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    render(<Note api={api} />);
+    expect((await screen.findByRole("alert")).textContent).toBe("Project search status couldn't be loaded.");
   });
 });
 

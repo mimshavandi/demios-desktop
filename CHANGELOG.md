@@ -6,6 +6,10 @@ Only changes people using the app or the `dn` command-line tool can notice are l
 
 ## [Unreleased]
 
+### Changed
+
+- **Settings → Models** shows the project search model at the top, in **Model for each task**: the **Embeddings** row is now **Project search**. When the recommended search model isn't downloaded, the row shows its size and licence with **Download**, then the download's progress, and **Try again** if it failed. The separate **Project search** card further down is gone ([#PR](https://github.com/mimshavandi/demios-desktop/pull/PR)).
+
 ## [0.1.0-preview.8cd482c] - 2026-11-26
 
 Second preview build, not signed: installers for macOS, Windows and Linux on the [GitHub release](https://github.com/mimshavandi/demios-desktop/releases/tag/v0.1.0-preview.8cd482c) and [demios.io/download](https://demios.io/download/). It doesn't update itself; install it over the first preview. Everything below is new since the [first preview](#010-preview454e01b---2026-11-25).

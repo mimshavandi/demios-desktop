@@ -5,7 +5,7 @@
 //!   (`<data dir>/project-files`, through [`dn_store::project::file_path`]); files are
 //!   immutable, so a file id identifies its bytes. Files over dn-knowledge's size cap are not
 //!   read at all.
-//! - **Embeddings.** With an embedding model downloaded (the Embeddings slot, or the catalog's
+//! - **Embeddings.** With an embedding model downloaded (the Project search slot, or the catalog's
 //!   nomic-embed-text v2 MoE, #201), chunks are embedded in batches, outside the database lock,
 //!   with nomic's task prefixes. Vectors of different models are never compared: a new model
 //!   re-embeds the stored chunks (no file is read again). Without one, search is **keyword only**, and the sources under
@@ -24,10 +24,10 @@ use std::sync::{Arc, OnceLock, mpsc};
 
 type AppStateRef<'a> = tauri::State<'a, Arc<AppState>>;
 
-/// The catalog's embedding model, used when the Embeddings slot is empty: nomic-embed-text v2
+/// The catalog's embedding model, used when the Project search slot is empty: nomic-embed-text v2
 /// MoE at Q5_K_M (#201; chosen by the evaluation in #128 and #194).
 pub const DEFAULT_EMBED_MODEL: &str = "nomic-embed-text-v2-moe-q5_k_m";
-/// The default before #201. Never used unless the user picks it for the Embeddings slot; if
+/// The default before #201. Never used unless the user picks it for the Project search slot; if
 /// it is still downloaded, Settings says it is no longer used, so it can be removed.
 pub const PREVIOUS_EMBED_MODEL: &str = "nomic-embed-text-v1.5-q4_k_m";
 /// Excerpts given to the model per question.
@@ -276,7 +276,7 @@ impl dn_knowledge::Embedder for LocalEmbedder {
     }
 }
 
-/// Which embedding model to use: the Embeddings slot if set to a local model, else the
+/// Which embedding model to use: the Project search slot if set to a local model, else the
 /// catalog's default once it is downloaded. `None`: keyword search only.
 fn embed_model_id(state: &AppState) -> Result<Option<String>, String> {
     let Some(local) = state.models.local.as_ref() else {
@@ -405,7 +405,7 @@ fn offer(db: &Connection, model_id: &str, ready: bool) -> Result<Offer, String> 
     })
 }
 
-/// The embedding model the offer is about: the Embeddings slot's local model, or the
+/// The embedding model the offer is about: the Project search slot's local model, or the
 /// catalog default.
 fn offered_model_id(state: &AppState) -> Result<String, String> {
     let settings = state.settings().map_err(|e| e.message)?;
