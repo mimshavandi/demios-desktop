@@ -22,7 +22,19 @@ const UNDO_MS = 10_000;
  * sign in and out, and per-server status. Secret values are never shown: a saved secret reads
  * "Saved"; typing a new value replaces it.
  */
-export function McpServersCard({ api, live }: { api: Api; live: McpServerStatus[] }) {
+export function McpServersCard({
+  api,
+  live,
+  version = 0,
+  onChanged,
+}: {
+  api: Api;
+  live: McpServerStatus[];
+  /** Changes when Connect added or removed a server: the list loads again. */
+  version?: number;
+  /** Called after this card added, changed or removed a server. */
+  onChanged?: () => void;
+}) {
   const toast = useToast();
   const [view, setView] = useState<McpServersView | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -66,7 +78,7 @@ export function McpServersCard({ api, live }: { api: Api; live: McpServerStatus[
 
   useEffect(() => {
     void load();
-  }, [load]);
+  }, [load, version]);
 
   const status = (s: McpServerView): McpServerStatus | null =>
     live.find((l) => l.server_id === s.id) ?? s.status;
@@ -101,6 +113,7 @@ export function McpServersCard({ api, live }: { api: Api; live: McpServerStatus[
   /** Removes at once; Undo on the toast puts it back (#189). Errors go to the menu's toast. */
   const remove = async (s: McpServerView) => {
     setView(await api.removeMcpServer(s.id));
+    onChanged?.();
     toast({
       tone: "info",
       title: `Removed “${s.name}”`,
@@ -112,6 +125,7 @@ export function McpServersCard({ api, live }: { api: Api; live: McpServerStatus[
             .restoreMcpServer(s.id)
             .then((v) => {
               setView(v);
+              onChanged?.();
               toast({ tone: "success", title: `Restored “${s.name}”` });
             })
             .catch((e: unknown) => toast({ tone: "error", title: `Couldn't restore ${s.name}. ${errorMessage(e)}` }));
@@ -143,6 +157,7 @@ export function McpServersCard({ api, live }: { api: Api; live: McpServerStatus[
           onSave={async (input) => {
             const v = await api.saveMcpServer(input, editing.server?.id ?? null);
             setView(v);
+            onChanged?.();
             closeForm();
             toast({ tone: "success", title: `${input.name ?? input.id} saved. Connecting…` });
           }}

@@ -377,7 +377,7 @@ pre.code .code-copy { position: absolute; top: var(--dn-space-1); right: var(--d
 }
 .approval-card:focus-visible { outline-offset: 2px; }
 .approval-head { display: flex; align-items: center; justify-content: space-between; gap: var(--dn-space-2); }
-.approval-head h3 { font-size: var(--dn-text-base); line-height: var(--dn-leading-base); font-weight: var(--dn-weight-semibold); }
+.approval-head h3, .approval-head h4 { font-size: var(--dn-text-base); line-height: var(--dn-leading-base); font-weight: var(--dn-weight-semibold); }
 .approval-actions { display: flex; flex-wrap: wrap; gap: var(--dn-space-2); }
 .approval-actions kbd { color: inherit; opacity: 0.75; }
 .unknown-card { border-color: var(--dn-color-border-strong); }
@@ -515,6 +515,11 @@ pre.code .code-copy { position: absolute; top: var(--dn-space-1); right: var(--d
 .card-head { display: flex; align-items: center; justify-content: space-between; gap: var(--dn-space-3); }
 .mcp-where { font-family: var(--dn-font-mono); font-size: var(--dn-text-xs); overflow-wrap: anywhere; }
 .mcp-actions { padding-top: 0; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
+.connect-details { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: baseline; gap: var(--dn-space-1) var(--dn-space-4); margin: 0 0 var(--dn-space-3); padding: var(--dn-space-3) var(--dn-space-4); border-radius: var(--dn-radius-md); background: var(--dn-color-surface-sunken); font-size: var(--dn-text-sm); line-height: var(--dn-leading-sm); }
+.connect-details dt { color: var(--dn-color-text-muted); }
+.connect-details dd { margin: 0; overflow-wrap: anywhere; }
+.connect-details code { font-family: var(--dn-font-mono); font-size: var(--dn-text-xs); }
+.connect-status { display: inline-flex; align-items: center; gap: var(--dn-space-2); }
 .mcp-form { display: grid; gap: var(--dn-space-4); }
 .mcp-form h2 { font-size: var(--dn-text-base); line-height: var(--dn-leading-base); font-weight: var(--dn-weight-semibold); }
 .mcp-form h2:focus { outline: none; }
@@ -684,3 +689,22 @@ pre.code .code-copy { position: absolute; top: var(--dn-space-1); right: var(--d
 .node-device > svg { color: var(--dn-color-text-muted); flex: none; }
 .pd-numbers { font-family: var(--dn-font-mono); font-size: var(--dn-text-xl); line-height: var(--dn-leading-xl); letter-spacing: 0.08em; text-align: center; padding: var(--dn-space-4); border-radius: var(--dn-radius-lg); background: var(--dn-color-surface-sunken); margin: 0; }
 .pd-live { color: var(--dn-color-text-muted); }
+/* ---------- add-ons (ADR-0013; design system: AddonsSettings, AddonConsent) ---------- */
+.addon-list { list-style: none; margin: 0; padding: 0; }
+.addon-page { display: grid; gap: var(--dn-space-4); justify-items: start; }
+.addon-page > .card, .addon-page > .dn-inline { justify-self: stretch; }
+.addon-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--dn-space-4); justify-self: stretch; }
+.addon-title { margin: 0; font-size: var(--dn-text-xl); line-height: var(--dn-leading-xl); font-weight: var(--dn-weight-semibold); }
+.addon-title:focus { outline: none; }
+.addon-title:focus-visible { outline: 2px solid var(--dn-color-focus); outline-offset: 2px; }
+.addon-job .row-main { gap: var(--dn-space-1); }
+.addon-job-controls { display: flex; align-items: center; gap: var(--dn-space-3); flex-wrap: wrap; }
+.addon-history { margin: 0; padding-left: var(--dn-space-4); display: grid; gap: var(--dn-space-1); }
+.addon-who { margin: 0; color: var(--dn-color-text-muted); font-size: var(--dn-text-sm); line-height: var(--dn-leading-sm); }
+.addon-consent-list { list-style: none; margin: var(--dn-space-3) 0; padding: 0; display: grid; gap: var(--dn-space-4); }
+.addon-check-item { display: grid; grid-template-columns: max-content 1fr; gap: var(--dn-space-1) var(--dn-space-3); align-items: start; }
+.addon-check-item > input { margin-top: var(--dn-space-1); }
+.addon-check-item > label { font-weight: var(--dn-weight-medium); }
+.addon-check-more { grid-column: 2; display: grid; gap: var(--dn-space-2); min-width: 0; overflow-wrap: anywhere; }
+.addon-projects { border: 0; margin: 0; padding: 0; display: grid; gap: var(--dn-space-1); }
+.addon-check { display: inline-flex; align-items: center; gap: var(--dn-space-2); }

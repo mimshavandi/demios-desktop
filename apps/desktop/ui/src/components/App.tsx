@@ -20,6 +20,7 @@ import {
   type ProjectSummary,
   type ReportKind,
   type AddModelLink,
+  type AddonConsentRequest,
   type Settings,
   type UnknownOutcome,
   type UpdateCheck,
@@ -29,6 +30,7 @@ import { onHubDownloadFinished } from "../hubDownloads";
 import { chatModel, chatModelReady, describeModel, modelName } from "../models";
 import { artifactFrameUrl, isMac, mod } from "../platform";
 import { chatReducer, initialChat } from "../state/chat";
+import { AddonConsent } from "./AddonConsent";
 import { ArtifactPane, NO_ARTIFACT_TOOLS } from "./ArtifactPane";
 import { configureSources } from "./Sources";
 import { ChatView, type ArtifactCardInfo } from "./ChatView";
@@ -160,6 +162,28 @@ function Shell({ api }: { api: Api }) {
       alive = false;
     };
   }, [api, info?.updates]);
+
+  // Add-ons (ADR-0013): the local time offset starts their background jobs, and an add-on
+  // never answered (or a new version asking for more) opens its consent dialog. The
+  // regular build has none, so neither does anything there.
+  const [consents, setConsents] = useState<AddonConsentRequest[]>([]);
+  useEffect(() => {
+    let alive = true;
+    void api.addonsSetUtcOffset(-new Date().getTimezoneOffset()).catch((e: unknown) => {
+      if (alive) toast({ tone: "error", title: `Background jobs couldn't start. ${errorMessage(e)}` });
+    });
+    void api
+      .addonsPendingConsent()
+      .then((c) => {
+        if (alive) setConsents(c);
+      })
+      .catch((e: unknown) => {
+        if (alive) toast({ tone: "error", title: `Couldn't check your add-ons. ${errorMessage(e)}` });
+      });
+    return () => {
+      alive = false;
+    };
+  }, [api, toast]);
 
   // The composer's draft survives a switch to Settings (a link, ⌘,) and back.
   const [draft, setDraft] = useState("");
@@ -1082,6 +1106,14 @@ function Shell({ api }: { api: Api }) {
           mark={(type, v) => markArtifact(type, v.content, v.model, v.created_at)}
           onClose={toggleArtifacts}
           notice={catalog?.chat_model_tools === false ? NO_ARTIFACT_TOOLS : null}
+        />
+      )}
+      {consents[0] !== undefined && (
+        <AddonConsent
+          key={consents[0].id}
+          api={api}
+          request={consents[0]}
+          onDone={() => setConsents((c) => c.slice(1))}
         />
       )}
       <div className="dn-visually-hidden" role="status" aria-live="polite">

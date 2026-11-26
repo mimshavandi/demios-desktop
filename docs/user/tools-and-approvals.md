@@ -2,6 +2,14 @@
 
 Tools let a model do things beyond writing an answer, like reading a file or calling a service. They come from tool servers that use the Model Context Protocol (MCP).
 
+## Connect a service
+
+**Settings → Tools → Connect** lists services that run their own tool server, reviewed by Demios. Each row says who runs the server; **Details** shows its address, what it asks for, where your data goes, the service's terms and when it was last reviewed.
+
+Select **Connect** to add the service as one of your tool servers, then finish signing in to the service in your browser. Its tools then work like any other tool server's: they ask before they act, as described below, and you can change each one. Your data goes between the service and this app; Demios's servers never see it. **Cancel** while you sign in removes the server again.
+
+Demios checks the list's signature before showing it. If the check fails, the list isn't shown at all; servers you already added keep working. A service Demios no longer reviews is marked **No longer reviewed** and offered for removal; it's never removed for you.
+
 ## Add a tool server
 
 Go to **Settings → Tools** and select **Add tool server**. Give it a name; the ID is suggested from the name and can't change later. Then choose where it runs:
