@@ -1385,6 +1385,7 @@ dependencies = [
 name = "dn-secrets"
 version = "0.1.0"
 dependencies = [
+ "aws-lc-rs",
  "dn-core",
  "keyring",
  "thiserror 2.0.21",
