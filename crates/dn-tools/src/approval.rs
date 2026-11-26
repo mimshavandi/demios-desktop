@@ -5,7 +5,7 @@
 //! answer is remembered for the conversation), `auto`.
 
 use dn_core::Id;
-use dn_core::capability::{ApprovalPolicy, RiskTier};
+use dn_core::capability::{ApprovalPolicy, ApprovalRequester, RiskTier};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::Mutex;
@@ -42,6 +42,10 @@ pub struct ApprovalPrompt {
     /// The exact arguments the tool will receive. The UI must show these: the model may have
     /// been prompt-injected (docs/security/mcp-tools.md).
     pub arguments: serde_json::Value,
+    /// Who asked: the chat's model, or an add-on (and its job). The UI names an add-on on
+    /// the prompt, so its request never looks like the model's own (ADR-0013 §4).
+    #[serde(default)]
+    pub requester: ApprovalRequester,
 }
 
 /// A pending approval. Dropping it without answering counts as `Deny`.
@@ -142,6 +146,29 @@ impl ApprovalGate {
         }
     }
 
+    /// Like [`Self::clear_capability_prefix`], and returns the grants it forgot as
+    /// `(scope, capability)` pairs, so an Undo can put them back ([`Self::restore_grants`]).
+    /// A poisoned lock forgets nothing it can return: the calls then ask again.
+    pub fn take_capability_prefix(&self, prefix: &str) -> Vec<(String, String)> {
+        let Ok(mut g) = self.grants.lock() else {
+            return Vec::new();
+        };
+        let taken: Vec<(String, String)> = g
+            .iter()
+            .filter(|(_, cap)| cap.starts_with(prefix))
+            .cloned()
+            .collect();
+        g.retain(|(_, cap)| !cap.starts_with(prefix));
+        taken
+    }
+
+    /// Puts back grants returned by [`Self::take_capability_prefix`] (Undo of a removal).
+    pub fn restore_grants(&self, grants: impl IntoIterator<Item = (String, String)>) {
+        if let Ok(mut g) = self.grants.lock() {
+            g.extend(grants);
+        }
+    }
+
     /// Forget every "allow for this chat" grant ("Delete all local data").
     pub fn clear_all(&self) {
         if let Ok(mut g) = self.grants.lock() {
@@ -218,6 +245,7 @@ mod tests {
             risk: RiskTier::LowWrite,
             policy,
             arguments: serde_json::json!({}),
+            requester: ApprovalRequester::Model,
         }
     }
 

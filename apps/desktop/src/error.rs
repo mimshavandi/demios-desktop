@@ -53,6 +53,11 @@ impl From<crate::secrets::SecretError> for IpcError {
                 "key_store_unavailable",
                 "Your system keychain isn't available, so the key can't be stored.",
             ),
+            // Only a Node's passphrase store locks; the app uses the system keychain.
+            E::Locked => Self::new(
+                "key_store_locked",
+                "The secret store is locked. Unlock it, then try again.",
+            ),
             E::TooLarge { .. } | E::EmptyValue(_) | E::InvalidId(_) => Self::invalid(e.to_string()),
             E::Backend { .. } => {
                 eprintln!("keychain error: {e}");

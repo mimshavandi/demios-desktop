@@ -98,7 +98,11 @@ impl ToolExecutor for Narrowed {
                     call.name
                 )));
             }
-            self.inner.execute(call, ctx).await
+            // Pass the allowlist on, so a tool that calls other tools (an add-on handler)
+            // stays inside it too (ADR-0013 §4).
+            let mut ctx = ctx.clone();
+            ctx.allowed_tools.push(self.allow.patterns().to_vec());
+            self.inner.execute(call, &ctx).await
         })
     }
 }

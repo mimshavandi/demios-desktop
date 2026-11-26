@@ -554,6 +554,113 @@ impl AppState {
         }
     }
 
+    /// Everything a removal deletes, read before it does: the server's settings and place
+    /// in the list, its keychain secrets and sign-in, its tool choices and review, its start
+    /// approvals and its "allow in this chat" grants (taken from the gate). Blocking.
+    fn snapshot_mcp_server(&self, id: &str) -> IpcResult<RemovedMcpServer> {
+        let settings = self.settings()?;
+        let index = settings
+            .mcp_servers
+            .iter()
+            .position(|s| s.id == id)
+            .ok_or_else(|| IpcError::new("not_found", "That server no longer exists."))?;
+        let config = settings.mcp_servers[index].clone();
+        let mut ids = crate::state::mcp_secret_ids(std::slice::from_ref(&config));
+        ids.push(oauth_secret_id(id));
+        ids.sort();
+        ids.dedup();
+        let mut secrets = Vec::new();
+        for sid in ids {
+            if let Some(v) = self.keys.store.get(&dn_secrets::SecretId::mcp(&sid))? {
+                secrets.push((sid, v));
+            }
+        }
+        let prefix = format!("mcp.{id}.");
+        Ok(RemovedMcpServer {
+            index,
+            config,
+            secrets,
+            reviewed: settings.reviewed_tools.get(id).cloned(),
+            overrides: settings
+                .tool_overrides
+                .iter()
+                .filter(|(cap, _)| cap.starts_with(&prefix))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+            launches: crate::settings::mcp_launches(&*self.db()?, id)?,
+            grants: Vec::new(),
+            at: std::time::Instant::now(),
+        })
+    }
+
+    /// Removes a server so that [`Self::restore_mcp_server_config`] can put it back within
+    /// [`crate::state::KEY_UNDO_WINDOW`] (#189). Everything is deleted at once, from settings,
+    /// the database and the keychain, and held only in memory: after the window, on quit or
+    /// after a crash nothing of it is left. Blocking; the caller stops the running client.
+    pub fn remove_mcp_server_for_undo(&self, id: &str) -> IpcResult<()> {
+        let mut held = self.snapshot_mcp_server(id)?;
+        if let Some(exec) = &self.executor {
+            held.grants = exec.gate().take_capability_prefix(&format!("mcp.{id}."));
+        }
+        if let Err(e) = self.remove_mcp_server_config(id) {
+            // Nothing is held for Undo of a removal that failed; give the grants back.
+            if let Some(exec) = &self.executor {
+                exec.gate().restore_grants(held.grants);
+            }
+            return Err(e);
+        }
+        let mut m = crate::state::lock(&self.removed_mcp);
+        m.retain(|_, r| r.at.elapsed() < crate::state::KEY_UNDO_WINDOW);
+        m.insert(id.to_owned(), held);
+        Ok(())
+    }
+
+    /// Undo of [`Self::remove_mcp_server_for_undo`]: puts the settings, secrets, sign-in, tool
+    /// choices, start approvals and grants back. Returns the config to connect. Blocking.
+    pub fn restore_mcp_server_config(&self, id: &str) -> IpcResult<McpServerConfig> {
+        let held = {
+            let mut m = crate::state::lock(&self.removed_mcp);
+            m.retain(|_, r| r.at.elapsed() < crate::state::KEY_UNDO_WINDOW);
+            m.remove(id)
+        }
+        .ok_or_else(|| {
+            IpcError::new(
+                "expired",
+                "The server can no longer be restored. Add it again.",
+            )
+        })?;
+        let mut servers = self.settings()?.mcp_servers;
+        if servers.iter().any(|s| s.id == id) {
+            return Err(invalid(format!(
+                "A server with the id {id} was added meanwhile, so the removed one can't come back."
+            )));
+        }
+        for (sid, value) in &held.secrets {
+            self.keys
+                .store
+                .set(&dn_secrets::SecretId::mcp(sid), value)?;
+            crate::settings::record_mcp_secret_id(&*self.db()?, sid)?;
+        }
+        servers.insert(held.index.min(servers.len()), held.config.clone());
+        self.set_mcp_servers(servers)?;
+        let mut settings = self.settings()?;
+        if let Some(r) = held.reviewed {
+            settings.reviewed_tools.insert(id.to_owned(), r);
+        }
+        settings.tool_overrides.extend(held.overrides);
+        self.save_settings(&settings)?;
+        {
+            let db = self.db()?;
+            for line in &held.launches {
+                crate::settings::record_mcp_launch(&db, id, line)?;
+            }
+        }
+        if let Some(exec) = &self.executor {
+            exec.gate().restore_grants(held.grants);
+        }
+        Ok(held.config)
+    }
+
     /// Removes a server from the list and deletes its secrets and sign-in. Blocking; the
     /// caller stops the running client.
     pub fn remove_mcp_server_config(&self, id: &str) -> IpcResult<()> {
@@ -589,6 +696,18 @@ impl AppState {
             .find(|s| s.id == id)
             .ok_or_else(|| IpcError::new("not_found", "That server no longer exists."))
     }
+}
+
+/// A removed tool server, held in memory for Undo ([`AppState::remove_mcp_server_for_undo`]).
+pub struct RemovedMcpServer {
+    index: usize,
+    config: McpServerConfig,
+    secrets: Vec<(String, dn_secrets::Secret)>,
+    reviewed: Option<BTreeMap<String, String>>,
+    overrides: Vec<(String, dn_tools::CapabilityOverride)>,
+    launches: Vec<String>,
+    grants: Vec<(String, String)>,
+    at: std::time::Instant,
 }
 
 /// The sign-in page comes from the server's OAuth metadata: open it only if it is https, or
@@ -925,6 +1044,7 @@ mod tests {
             risk: RiskTier::LowWrite,
             policy: ApprovalPolicy::AskOncePerConversation,
             arguments: serde_json::json!({}),
+            requester: Default::default(),
         };
         let (_, req) = tokio::join!(exec.gate().check(prompt), rx.recv());
         let _ = req;
@@ -1010,6 +1130,203 @@ mod tests {
         assert!(!granted(&exec, "conv:a", "mcp.work.write"));
         assert!(granted(&exec, "conv:a", "mcp.other.write"));
         responder.abort();
+    }
+
+    /// A server with secrets, a sign-in, a tool choice, a review and a start approval.
+    fn removable(st: &Arc<AppState>) {
+        st.save_mcp_server(
+            &http(
+                "work",
+                vec![secret("Authorization", Some("Bearer t0k"))],
+                true,
+            ),
+            None,
+        )
+        .unwrap();
+        st.save_mcp_server(&http("other", vec![], false), None)
+            .unwrap();
+        st.keys
+            .store
+            .set(
+                &dn_secrets::SecretId::mcp("mcp.work.oauth"),
+                &dn_secrets::Secret::new("{\"token\":1}"),
+            )
+            .unwrap();
+        crate::settings::record_mcp_secret_id(&st.db().unwrap(), "mcp.work.oauth").unwrap();
+        let mut settings = st.settings().unwrap();
+        settings.tool_overrides.insert(
+            "mcp.work.write".into(),
+            dn_tools::CapabilityOverride {
+                disabled: true,
+                ..Default::default()
+            },
+        );
+        settings.reviewed_tools.insert(
+            "work".into(),
+            BTreeMap::from([("write".to_string(), "fp".to_string())]),
+        );
+        st.save_settings(&settings).unwrap();
+        crate::settings::record_mcp_launch(&st.db().unwrap(), "work", "npx work").unwrap();
+    }
+
+    /// Nothing of `work` is left in settings, the database or the keychain.
+    fn gone(st: &Arc<AppState>, keys: &crate::secrets::Keys) {
+        let settings = st.settings().unwrap();
+        assert!(!settings.mcp_servers.iter().any(|s| s.id == "work"));
+        assert!(!settings.reviewed_tools.contains_key("work"));
+        assert!(!settings.tool_overrides.contains_key("mcp.work.write"));
+        assert!(!has(keys, "mcp.work.header.authorization"));
+        assert!(!has(keys, "mcp.work.oauth"));
+        let db = st.db().unwrap();
+        assert!(
+            crate::settings::mcp_launches(&db, "work")
+                .unwrap()
+                .is_empty()
+        );
+        let known = crate::settings::known_mcp_secret_ids(&db).unwrap();
+        assert!(
+            !known.iter().any(|id| id.starts_with("mcp.work.")),
+            "{known:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_removed_server_comes_back_with_undo_as_it_was() {
+        let (st, exec, keys, mut rx) = app_with_exec();
+        let responder = tokio::spawn(async move {
+            while let Some(r) = rx.recv().await {
+                r.respond(dn_tools::ApprovalDecision::ApproveForConversation);
+            }
+        });
+        removable(&st);
+        let mut dummy = tokio::sync::mpsc::channel(1).1;
+        grant(&exec, &mut dummy, "conv:a", "mcp.work.write").await;
+        grant(&exec, &mut dummy, "conv:a", "mcp.other.write").await;
+        let order = |st: &Arc<AppState>| -> Vec<String> {
+            st.settings()
+                .unwrap()
+                .mcp_servers
+                .into_iter()
+                .map(|s| s.id)
+                .collect()
+        };
+        assert_eq!(order(&st), ["work", "other"]);
+        let before = st.mcp_server("work").unwrap();
+
+        // Removed at once: nothing of it is stored any more, and its grants are gone.
+        st.remove_mcp_server_for_undo("work").unwrap();
+        gone(&st, &keys);
+        assert!(!granted(&exec, "conv:a", "mcp.work.write"));
+        assert!(granted(&exec, "conv:a", "mcp.other.write"));
+
+        // Undo: everything is back, in its place.
+        assert_eq!(st.restore_mcp_server_config("work").unwrap(), before);
+        assert_eq!(order(&st), ["work", "other"]);
+        assert_eq!(st.mcp_server("work").unwrap(), before);
+        assert!(has(&keys, "mcp.work.header.authorization"));
+        assert_eq!(
+            keys.store
+                .get(&dn_secrets::SecretId::mcp("mcp.work.oauth"))
+                .unwrap()
+                .unwrap()
+                .expose(),
+            "{\"token\":1}",
+            "the sign-in is back"
+        );
+        let settings = st.settings().unwrap();
+        assert!(
+            settings.tool_overrides["mcp.work.write"].disabled,
+            "the tool choice is back"
+        );
+        assert_eq!(settings.reviewed_tools["work"]["write"], "fp");
+        let db = st.db().unwrap();
+        assert_eq!(
+            crate::settings::mcp_launches(&db, "work").unwrap(),
+            ["npx work"]
+        );
+        let known = crate::settings::known_mcp_secret_ids(&db).unwrap();
+        assert!(known.contains(&"mcp.work.oauth".to_string()));
+        assert!(known.contains(&"mcp.work.header.authorization".to_string()));
+        drop(db);
+        assert!(
+            granted(&exec, "conv:a", "mcp.work.write"),
+            "the chat grant is back"
+        );
+
+        // Once only.
+        let e = st.restore_mcp_server_config("work").unwrap_err();
+        assert_eq!(e.code, "expired");
+        responder.abort();
+    }
+
+    #[test]
+    fn after_the_window_a_removed_server_stays_gone() {
+        let (st, keys) = app();
+        removable(&st);
+        st.remove_mcp_server_for_undo("work").unwrap();
+        for r in crate::state::lock(&st.removed_mcp).values_mut() {
+            r.at = std::time::Instant::now()
+                .checked_sub(crate::state::KEY_UNDO_WINDOW + std::time::Duration::from_secs(1))
+                .unwrap();
+        }
+        let e = st.restore_mcp_server_config("work").unwrap_err();
+        assert_eq!(e.code, "expired");
+        assert!(e.message.contains("Add it again"), "{}", e.message);
+        gone(&st, &keys);
+    }
+
+    #[test]
+    fn undo_refuses_when_the_id_was_taken_meanwhile() {
+        let (st, _keys) = app();
+        removable(&st);
+        st.remove_mcp_server_for_undo("work").unwrap();
+        st.save_mcp_server(&http("work", vec![], false), None)
+            .unwrap();
+        let e = st.restore_mcp_server_config("work").unwrap_err();
+        assert!(e.message.contains("added meanwhile"), "{}", e.message);
+        // The new one is left as it is.
+        assert_eq!(st.settings().unwrap().mcp_servers.len(), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn delete_all_during_the_window_leaves_nothing_to_undo() {
+        let (st, _exec, keys, _rx) = app_with_exec();
+        removable(&st);
+        st.remove_mcp_server_for_undo("work").unwrap();
+        let failed = st.delete_all_local_data().await;
+        assert!(failed.is_empty(), "{failed:?}");
+        let e = st.restore_mcp_server_config("work").unwrap_err();
+        assert_eq!(e.code, "expired");
+        gone(&st, &keys);
+        assert!(st.settings().unwrap().mcp_servers.is_empty());
+    }
+
+    #[test]
+    fn a_restart_during_the_window_finishes_the_removal() {
+        let dir = std::env::temp_dir().join(format!("dn-mcp-undo-{}", dn_core::Id::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("demios.db");
+        let keys = crate::secrets::Keys::memory();
+        let start = || {
+            let conn = dn_store::open(&path, &crate::state::migration_sets()).unwrap();
+            let mut st = AppState::new(conn, crate::models::ModelRegistry::default(), keys.clone());
+            st.local_servers = true;
+            Arc::new(st)
+        };
+        let st = start();
+        removable(&st);
+        st.remove_mcp_server_for_undo("work").unwrap();
+        drop(st); // the app stops (or crashes) inside the window
+
+        let st = start();
+        gone(&st, &keys);
+        assert_eq!(
+            st.restore_mcp_server_config("work").unwrap_err().code,
+            "expired"
+        );
+        assert!(st.mcp_server("other").is_ok());
+        drop(st);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

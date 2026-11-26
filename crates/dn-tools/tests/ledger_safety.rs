@@ -373,6 +373,7 @@ async fn unknown_outcome_blocks_ask_once_grant_and_fresh_call_ids() {
         run_id: run,
         step: 1,
         cancel: CancelToken::new(),
+        allowed_tools: Vec::new(),
     };
     let out = ToolExecutor::execute(
         ex.as_ref(),

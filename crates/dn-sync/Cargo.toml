@@ -8,6 +8,20 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+aws-lc-rs.workspace = true
+dn-secrets.workspace = true
+rusqlite.workspace = true
+rustls.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-util"] }
+tokio-rustls.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+dn-store.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "rt"] }
 
 [lints]
 workspace = true

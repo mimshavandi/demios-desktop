@@ -30,6 +30,7 @@ const tracker: McpServersView["servers"][number] = {
 function fake(initial: McpServersView) {
   let view = initial;
   const calls: [string, unknown][] = [];
+  const removed = new Map<string, { server: McpServersView["servers"][number]; at: number }>();
   const api = {
     listMcpServers: async () => view,
     saveMcpServer: async (input: McpServerInput, editing: string | null) => {
@@ -46,7 +47,19 @@ function fake(initial: McpServersView) {
     },
     removeMcpServer: async (id: string) => {
       calls.push(["remove", id]);
+      if (id === "stuck") throw { code: "keychain", message: "Couldn't delete the secret from your system keychain." };
+      const at = view.servers.findIndex((s) => s.id === id);
+      const gone = view.servers[at];
+      if (gone !== undefined) removed.set(id, { server: gone, at });
       view = { ...view, servers: view.servers.filter((s) => s.id !== id) };
+      return view;
+    },
+    restoreMcpServer: async (id: string) => {
+      calls.push(["restore", id]);
+      const r = removed.get(id);
+      if (r === undefined) throw { code: "expired", message: "The server can no longer be restored. Add it again." };
+      removed.delete(id);
+      view = { ...view, servers: [...view.servers.slice(0, r.at), r.server, ...view.servers.slice(r.at)] };
       return view;
     },
     reconnectMcpServer: async (id: string) => (calls.push(["reconnect", id]), null),
@@ -142,7 +155,7 @@ describe("McpServersCard", () => {
     expect(screen.getByRole("heading", { name: "Add a tool server" })).toBeTruthy();
   });
 
-  it("signs in and out, follows live status, and removes only after a confirm", async () => {
+  it("signs in and out, follows live status, and removes at once with Undo", async () => {
     const { api, calls } = fake({ servers: [tracker], local_servers_allowed: true });
     const { rerender } = ui(api);
     const row = await screen.findByTestId("mcp-server-row");
@@ -163,20 +176,16 @@ describe("McpServersCard", () => {
     expect(await screen.findByText("2 tools")).toBeTruthy();
     expect(screen.getByText("Connected")).toBeTruthy();
 
+    // Removed at once, no confirm; Undo puts it back.
     await menuItem("Issue tracker", "Remove");
-    const dialog = await screen.findByRole("alertdialog", { name: "Remove Issue tracker?" });
-    expect(dialog.textContent).toContain("1 secret saved for it in your system keychain");
-    expect(dialog.textContent).toContain("can't be undone");
-    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
-    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
-    expect(after.calls.some((c) => c[0] === "remove")).toBe(false);
-
-    await menuItem("Issue tracker", "Remove");
-    const confirm = (await screen.findByRole("button", { name: "Remove server" })) as HTMLButtonElement;
-    await waitFor(() => expect(confirm.disabled).toBe(false), { timeout: 1500 });
-    fireEvent.click(confirm);
     await waitFor(() => expect(after.calls).toContainEqual(["remove", "tracker"]));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(await screen.findByText("No tool servers yet")).toBeTruthy();
+    expect(screen.getByText("Removed “Issue tracker”")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(after.calls).toContainEqual(["restore", "tracker"]));
+    expect(await screen.findByTestId("mcp-server-row")).toBeTruthy();
+    expect(await screen.findByText("Restored “Issue tracker”")).toBeTruthy();
   });
 
   it("returns focus to the trigger, asks before discarding changes, and asks to retype secrets for a new address", async () => {
@@ -217,13 +226,26 @@ describe("McpServersCard", () => {
     expect(secret.placeholder).toBe("Type it again");
   });
 
-  it("the remove confirm lists the chat approvals that go too", async () => {
-    const { api } = fake({ servers: [tracker], local_servers_allowed: true });
+  it("after Remove, focus goes to the next server, or to Add tool server", async () => {
+    const other = { ...tracker, id: "wiki", name: "Wiki", status: null };
+    const { api } = fake({ servers: [tracker, other], local_servers_allowed: true });
     ui(api);
     await menuItem("Issue tracker", "Remove");
-    const dialog = await screen.findByRole("alertdialog");
-    expect(dialog.textContent).toContain("This stops the server");
-    expect(dialog.textContent).toContain('"Allow in this chat" approvals for its tools');
+    await waitFor(() => expect(document.activeElement?.getAttribute("aria-label")).toBe("More actions for Wiki"));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "More actions for Issue tracker" })).toBeNull());
+    await menuItem("Wiki", "Remove");
+    await waitFor(() => expect(document.activeElement?.textContent).toContain("Add tool server"));
+  });
+
+  it("a removal that fails says why and keeps the server", async () => {
+    const stuck = { ...tracker, id: "stuck", name: "Stuck", status: null };
+    const { api, calls } = fake({ servers: [stuck], local_servers_allowed: true });
+    ui(api);
+    await menuItem("Stuck", "Remove");
+    expect(await screen.findByText(/Couldn't remove Stuck\. Couldn't delete the secret/)).toBeTruthy();
+    expect(calls).toContainEqual(["remove", "stuck"]);
+    expect(screen.getByTestId("mcp-server-row")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
   });
 
   it("offers only remote servers where local programs can't run", async () => {

@@ -72,6 +72,17 @@ pub fn mcp_launch_approved(conn: &Connection, server_id: &str, command_line: &st
         .is_some())
 }
 
+/// The command lines a server was allowed to start with (kept for an Undo of its removal).
+pub fn mcp_launches(conn: &Connection, server_id: &str) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT command_line FROM app_mcp_launch_approvals WHERE server_id = ?1 ORDER BY command_line",
+    )?;
+    let lines = stmt
+        .query_map([server_id], |r| r.get(0))?
+        .collect::<rusqlite::Result<Vec<String>>>()?;
+    Ok(lines)
+}
+
 pub fn forget_mcp_launches(conn: &Connection, server_id: &str) -> Result<()> {
     conn.execute(
         "DELETE FROM app_mcp_launch_approvals WHERE server_id = ?1",

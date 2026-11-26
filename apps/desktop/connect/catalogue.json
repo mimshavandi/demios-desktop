@@ -1,0 +1,117 @@
+{
+  "format": 1,
+  "serial": 1,
+  "published": "2026-11-26",
+  "entries": [
+    {
+      "id": "linear",
+      "service": "Linear",
+      "vendor": "Linear",
+      "kind": "vendor_remote",
+      "summary": "Read and create issues, projects, comments and documents",
+      "server": {
+        "url": "https://mcp.linear.app/mcp"
+      },
+      "sign_in": {
+        "type": "oauth"
+      },
+      "scopes": [],
+      "tools": [],
+      "terms_url": "https://linear.app/terms",
+      "data": "Goes between Linear and this app; Demios's servers never see it.",
+      "review": {
+        "date": "2026-11-26",
+        "source": "https://linear.app/docs/mcp",
+        "status": "reviewed"
+      }
+    },
+    {
+      "id": "notion",
+      "service": "Notion",
+      "vendor": "Notion",
+      "kind": "vendor_remote",
+      "summary": "Search and read pages and databases; create and edit pages and comments",
+      "server": {
+        "url": "https://mcp.notion.com/mcp"
+      },
+      "sign_in": {
+        "type": "oauth"
+      },
+      "scopes": [],
+      "tools": [],
+      "terms_url": "https://www.notion.com/terms",
+      "data": "Goes between Notion and this app; Demios's servers never see it.",
+      "review": {
+        "date": "2026-11-26",
+        "source": "https://developers.notion.com/guides/mcp/get-started-with-mcp",
+        "status": "reviewed"
+      }
+    },
+    {
+      "id": "sentry",
+      "service": "Sentry",
+      "vendor": "Sentry",
+      "kind": "vendor_remote",
+      "summary": "Search errors and performance issues, and help triage them",
+      "server": {
+        "url": "https://mcp.sentry.dev/mcp"
+      },
+      "sign_in": {
+        "type": "oauth"
+      },
+      "scopes": [],
+      "tools": [],
+      "terms_url": "https://sentry.io/terms/",
+      "data": "Goes between Sentry and this app; Demios's servers never see it.",
+      "review": {
+        "date": "2026-11-26",
+        "source": "https://mcp.sentry.dev/",
+        "status": "reviewed"
+      }
+    },
+    {
+      "id": "cloudflare",
+      "service": "Cloudflare",
+      "vendor": "Cloudflare",
+      "kind": "vendor_remote",
+      "summary": "Read and change your Cloudflare account through its API",
+      "server": {
+        "url": "https://mcp.cloudflare.com/mcp"
+      },
+      "sign_in": {
+        "type": "oauth"
+      },
+      "scopes": [],
+      "tools": [],
+      "terms_url": "https://www.cloudflare.com/terms/",
+      "data": "Goes between Cloudflare and this app; Demios's servers never see it.",
+      "review": {
+        "date": "2026-11-26",
+        "source": "https://developers.cloudflare.com/agents/model-context-protocol/mcp-servers-for-cloudflare/",
+        "status": "reviewed"
+      }
+    },
+    {
+      "id": "hugging-face",
+      "service": "Hugging Face",
+      "vendor": "Hugging Face",
+      "kind": "vendor_remote",
+      "summary": "Search models, datasets, Spaces and docs on the Hub",
+      "server": {
+        "url": "https://huggingface.co/mcp?login"
+      },
+      "sign_in": {
+        "type": "oauth"
+      },
+      "scopes": [],
+      "tools": [],
+      "terms_url": "https://huggingface.co/terms-of-service",
+      "data": "Goes between Hugging Face and this app; Demios's servers never see it.",
+      "review": {
+        "date": "2026-11-26",
+        "source": "https://github.com/huggingface/hf-mcp-server",
+        "status": "reviewed"
+      }
+    }
+  ]
+}

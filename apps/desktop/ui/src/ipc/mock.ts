@@ -4,6 +4,8 @@
 
 import type { Api } from "./commands";
 import type {
+  ConnectEntryView,
+  ConnectView,
   DownloadState,
   KnowledgeStatus,
   ApprovalDecision,
@@ -229,6 +231,31 @@ export function createMockApi(): Api {
     connected: mcpStatus.get(id)?.state === "connected",
     tools: id === "files" && mcpStatus.get(id)?.state === "connected" ? mcpTools.map(toolApproval) : [],
   });
+  // Connect (ADR-0018): made-up services, like the design reference.
+  const connectEntries: ConnectEntryView[] = [
+    ["northwind", "Northwind Issues", "Northwind", "Read and create issues, projects and comments", "https://mcp.northwind.example/mcp"],
+    ["paperlane", "Paperlane Docs", "Paperlane", "Search and read pages; create and edit pages", "https://mcp.paperlane.example/mcp"],
+    ["signalbox", "Signalbox Monitoring", "Signalbox", "Read errors, issues and releases", "https://mcp.signalbox.example/mcp"],
+  ].map(([id, service, vendor, summary, url]) => ({
+    id: id!,
+    service: service!,
+    vendor: vendor!,
+    summary: summary!,
+    url: url!,
+    scopes: [],
+    terms_url: `https://${id}.example/terms`,
+    data: `Goes between ${vendor} and this app; Demios's servers never see it.`,
+    review_date: "2026-11-26",
+    review_source: `https://${id}.example/docs/mcp`,
+    reviewed: true,
+    server_id: null,
+  }));
+  const connectView = (): ConnectView => ({
+    entries: connectEntries.map((e) => ({
+      ...e,
+      server_id: mcpServers.find((s) => s.transport.type === "streamable_http" && s.transport.url === e.url)?.id ?? null,
+    })),
+  });
   const mcpView = (): McpServersView => ({
     servers: mcpServers.map((s) => ({ ...s, status: mcpStatus.get(s.id) ?? null })),
     local_servers_allowed: true,
@@ -261,6 +288,7 @@ export function createMockApi(): Api {
   // OpenAI-compatible servers: an Ollama-like server on localhost has two models.
   let remotes: RemoteServerView[] = [];
   const removedRemotes = new Map<string, RemoteServerView>();
+  const removedMcp = new Map<string, { server: McpServerView; at: number }>();
   const removals = new Map<string, { slots: [string, string][]; timer: number }>();
   let settings: Settings = { slots: {}, telemetry_enabled: false };
   const timers = new Map<string, number>();
@@ -409,6 +437,7 @@ export function createMockApi(): Api {
       risk: "low_write",
       policy: "ask_once_per_conversation",
       arguments: args,
+      requester: { kind: "model" },
     };
     const finish = (text: string, isError: boolean) => {
       onEvent({ type: "tool_call_finished", message_id: a.id, call_id: callId, is_error: isError, summary: isError ? "The user denied this." : "Wrote 1 file." });
@@ -881,6 +910,21 @@ export function createMockApi(): Api {
     setHfToken: async () => (hfToken = true),
     deleteHfToken: async () => (hfToken = false),
     listMcpServers: async () => mcpView(),
+    connectCatalogue: async () => connectView(),
+    connectService: async (entryId) => {
+      const e = connectEntries.find((x) => x.id === entryId);
+      if (e === undefined) throw { code: "not_found", message: "That service isn't in the list any more." };
+      if (mcpServers.some((s) => s.id === e.id)) throw { code: "invalid_input", message: `${e.service} is already one of your tool servers.` };
+      const server: McpServerView = {
+        id: e.id,
+        name: e.service,
+        status: null,
+        transport: { type: "streamable_http", url: e.url, headers: [], oauth: { scopes: [], client_id: null, signed_in: false } },
+      };
+      mcpServers = [...mcpServers, server];
+      mcpSet(server, "needs_auth");
+      return connectView();
+    },
     saveMcpServer: async (input, editing) => {
       if (editing === null && mcpServers.some((s) => s.id === input.id)) {
         throw { code: "invalid_input", message: `A server with the id ${input.id} already exists. Choose another id.` };
@@ -914,9 +958,20 @@ export function createMockApi(): Api {
       return mcpView();
     },
     removeMcpServer: async (id) => {
+      const at = mcpServers.findIndex((s) => s.id === id);
+      const gone = mcpServers[at];
+      if (gone !== undefined) removedMcp.set(id, { server: gone, at });
       mcpServers = mcpServers.filter((s) => s.id !== id);
       mcpStatus.delete(id);
       approvalSink?.({ type: "mcp_server_removed", server_id: id });
+      return mcpView();
+    },
+    restoreMcpServer: async (id) => {
+      const r = removedMcp.get(id);
+      if (r === undefined) throw { code: "expired", message: "The server can no longer be restored. Add it again." };
+      removedMcp.delete(id);
+      mcpServers = [...mcpServers.slice(0, r.at), r.server, ...mcpServers.slice(r.at)];
+      mcpSet(r.server, "connected");
       return mcpView();
     },
     reconnectMcpServer: async (id) => {

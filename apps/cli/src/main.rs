@@ -3,6 +3,7 @@
 
 mod bench;
 mod embed_eval;
+mod node;
 mod quality;
 mod report;
 
@@ -52,6 +53,11 @@ enum Cmd {
     Models {
         #[command(subcommand)]
         cmd: ModelsCmd,
+    },
+    /// The Demios Node: the engine run as a service on your own machine.
+    Node {
+        #[command(subcommand)]
+        cmd: node::NodeCmd,
     },
 }
 
@@ -1183,6 +1189,7 @@ async fn main() -> ExitCode {
         Cmd::BenchReport(a) => report::run(a),
         Cmd::BenchEmbed(a) => embed_eval::run(a).await,
         Cmd::Models { cmd } => models_cmd(cmd).await,
+        Cmd::Node { cmd } => node::command(cmd).await,
     };
     match r {
         Ok(()) => ExitCode::SUCCESS,

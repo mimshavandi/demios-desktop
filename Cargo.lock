@@ -1091,6 +1091,7 @@ dependencies = [
 name = "demios-desktop"
 version = "0.1.0"
 dependencies = [
+ "aws-lc-rs",
  "dn-agent",
  "dn-artifacts",
  "dn-core",
@@ -1253,8 +1254,12 @@ dependencies = [
  "clap",
  "dn-core",
  "dn-inference",
+ "dn-jobs",
  "dn-models",
+ "dn-plugin-api",
  "dn-secrets",
+ "dn-store",
+ "dn-sync",
  "serde",
  "serde_json",
  "sysinfo",
@@ -1318,6 +1323,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "dn-jobs"
+version = "0.1.0"
+dependencies = [
+ "dn-core",
+ "dn-plugin-api",
+ "dn-store",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "thiserror 2.0.21",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "dn-knowledge"
 version = "0.1.0"
 dependencies = [
@@ -1369,6 +1390,7 @@ dependencies = [
 name = "dn-secrets"
 version = "0.1.0"
 dependencies = [
+ "aws-lc-rs",
  "dn-core",
  "keyring",
  "thiserror 2.0.21",
@@ -1391,6 +1413,19 @@ dependencies = [
 [[package]]
 name = "dn-sync"
 version = "0.1.0"
+dependencies = [
+ "aws-lc-rs",
+ "dn-secrets",
+ "dn-store",
+ "rusqlite",
+ "rustls",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-rustls",
+ "zeroize",
+]
 
 [[package]]
 name = "dn-tools"

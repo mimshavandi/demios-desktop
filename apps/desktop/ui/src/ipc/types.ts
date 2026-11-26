@@ -5,6 +5,7 @@
 //   app:       apps/desktop/src/{chat,commands,models,settings,error}.rs
 
 import type { ApprovalPolicy } from "@dn-core/ApprovalPolicy";
+import type { ApprovalRequester } from "@dn-core/ApprovalRequester";
 import type { ArtifactType } from "@dn-core/ArtifactType";
 import type { ArtifactVersion } from "@dn-core/ArtifactVersion";
 import type { Capability } from "@dn-core/Capability";
@@ -199,6 +200,8 @@ export interface ApprovalPrompt {
   policy: ApprovalPolicy;
   /** Exactly what the tool will receive; always shown. */
   arguments: unknown;
+  /** Who asked: the chat's model, or an add-on (ADR-0013). */
+  requester: ApprovalRequester;
 }
 
 /** Connection state of a configured MCP server. */
@@ -546,6 +549,29 @@ export interface McpServerView {
   name: string;
   transport: McpTransportView;
   status: McpServerStatus | null;
+}
+
+/** Settings › Tools › Connect (ADR-0018): one reviewed service. */
+export interface ConnectEntryView {
+  id: string;
+  service: string;
+  vendor: string;
+  summary: string;
+  url: string;
+  scopes: string[];
+  terms_url: string;
+  /** Where the person's data goes, in their words. */
+  data: string;
+  review_date: string;
+  review_source: string;
+  /** False: no longer reviewed (shown only when added, to offer removal). */
+  reviewed: boolean;
+  /** The tool server it is added as, if it is. */
+  server_id: string | null;
+}
+
+export interface ConnectView {
+  entries: ConnectEntryView[];
 }
 
 export interface McpServersView {

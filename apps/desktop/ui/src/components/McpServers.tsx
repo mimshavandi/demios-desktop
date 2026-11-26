@@ -9,25 +9,37 @@ import {
   type McpServersView,
   type McpValueView,
 } from "../ipc/types";
-import { ConfirmDialog } from "./ConfirmDialog";
 import { DropdownMenu } from "./DropdownMenu";
 import { McpToolsPanel } from "./McpTools";
 import { Badge, Button, EmptyState, ICON, IconButton, InlineMessage, Skeleton, Switch, TextField } from "./primitives";
 import { useToast } from "./toast";
+
+/** How long Undo stays on the toast after a server is removed (the backend keeps it 15 s). */
+const UNDO_MS = 10_000;
 
 /**
  * Settings › Tools (#174) (T-SHELL-08, issue #49): add, edit and remove MCP servers,
  * sign in and out, and per-server status. Secret values are never shown: a saved secret reads
  * "Saved"; typing a new value replaces it.
  */
-export function McpServersCard({ api, live }: { api: Api; live: McpServerStatus[] }) {
+export function McpServersCard({
+  api,
+  live,
+  version = 0,
+  onChanged,
+}: {
+  api: Api;
+  live: McpServerStatus[];
+  /** Changes when Connect added or removed a server: the list loads again. */
+  version?: number;
+  /** Called after this card added, changed or removed a server. */
+  onChanged?: () => void;
+}) {
   const toast = useToast();
   const [view, setView] = useState<McpServersView | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [editing, setEditing] = useState<{ server: McpServerView | null } | null>(null);
-  const [removing, setRemoving] = useState<McpServerView | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const [removeError, setRemoveError] = useState<string | null>(null);
   // Servers whose Tools section is open (T-SHELL-11).
   const [openTools, setOpenTools] = useState<ReadonlySet<string>>(new Set());
   const toggleTools = (id: string) =>
@@ -37,7 +49,6 @@ export function McpServersCard({ api, live }: { api: Api; live: McpServerStatus[
       return next;
     });
   const addRef = useRef<HTMLButtonElement>(null);
-  const removeTrigger = useRef<HTMLButtonElement | null>(null);
   const cardRef = useRef<HTMLElement>(null);
   // Where focus goes when the form closes: the button that opened it (§7).
   const returnFocus = useRef<string | null>(null);
@@ -67,7 +78,7 @@ export function McpServersCard({ api, live }: { api: Api; live: McpServerStatus[
 
   useEffect(() => {
     void load();
-  }, [load]);
+  }, [load, version]);
 
   const status = (s: McpServerView): McpServerStatus | null =>
     live.find((l) => l.server_id === s.id) ?? s.status;
@@ -99,20 +110,41 @@ export function McpServersCard({ api, live }: { api: Api; live: McpServerStatus[
     }
   };
 
-  const remove = async () => {
-    if (removing === null) return;
-    setBusy(`remove:${removing.id}`);
-    setRemoveError(null);
-    try {
-      setView(await api.removeMcpServer(removing.id));
-      toast({ tone: "success", title: `${removing.name} removed` });
-      setRemoving(null);
-      removeTrigger.current = addRef.current;
-    } catch (e) {
-      setRemoveError(errorMessage(e));
-    } finally {
-      setBusy(null);
-    }
+  /** Removes at once; Undo on the toast puts it back (#189). Errors go to the menu's toast. */
+  const remove = async (s: McpServerView) => {
+    setView(await api.removeMcpServer(s.id));
+    onChanged?.();
+    toast({
+      tone: "info",
+      title: `Removed “${s.name}”`,
+      duration: UNDO_MS,
+      action: {
+        label: "Undo",
+        onAction: () => {
+          void api
+            .restoreMcpServer(s.id)
+            .then((v) => {
+              setView(v);
+              onChanged?.();
+              toast({ tone: "success", title: `Restored “${s.name}”` });
+            })
+            .catch((e: unknown) => toast({ tone: "error", title: `Couldn't restore ${s.name}. ${errorMessage(e)}` }));
+        },
+      },
+    });
+  };
+
+  /** After a removal: the next row's actions, or Add tool server. */
+  const focusAfterRemoving = (s: McpServerView) => (): HTMLElement | null => {
+    const list = view?.servers ?? [];
+    const next = list[list.findIndex((x) => x.id === s.id) + 1];
+    const el =
+      next === undefined
+        ? null
+        : (cardRef.current?.querySelector<HTMLButtonElement>(
+            `button[aria-label="${CSS.escape(`More actions for ${next.name}`)}"]`,
+          ) ?? null);
+    return el ?? addRef.current;
   };
 
   if (editing !== null && view !== null) {
@@ -125,6 +157,7 @@ export function McpServersCard({ api, live }: { api: Api; live: McpServerStatus[
           onSave={async (input) => {
             const v = await api.saveMcpServer(input, editing.server?.id ?? null);
             setView(v);
+            onChanged?.();
             closeForm();
             toast({ tone: "success", title: `${input.name ?? input.id} saved. Connecting…` });
           }}
@@ -287,15 +320,9 @@ export function McpServersCard({ api, live }: { api: Api; live: McpServerStatus[
                         label: "Remove",
                         icon: <Trash2 {...ICON} aria-hidden="true" />,
                         danger: true,
-                        failure: "Couldn't remove the server",
-                        run: () => {
-                          removeTrigger.current =
-                            cardRef.current?.querySelector<HTMLButtonElement>(
-                              `button[aria-label="${CSS.escape(`More actions for ${s.name}`)}"]`,
-                            ) ?? null;
-                          setRemoveError(null);
-                          setRemoving(s);
-                        },
+                        failure: `Couldn't remove ${s.name}`,
+                        run: () => remove(s),
+                        focusAfter: focusAfterRemoving(s),
                       },
                     ]}
                   />
@@ -317,43 +344,10 @@ export function McpServersCard({ api, live }: { api: Api; live: McpServerStatus[
       <div className="dn-visually-hidden" role="status" aria-live="polite">
         {announce}
       </div>
-      <ConfirmDialog
-        open={removing !== null}
-        onOpenChange={(o) => {
-          if (!o && busy === null) setRemoving(null);
-        }}
-        title={`Remove ${removing?.name ?? "server"}?`}
-        confirmLabel="Remove server"
-        busy={busy?.startsWith("remove:") === true}
-        error={removeError}
-        onConfirm={() => void remove()}
-        returnFocusTo={removeTrigger}
-      >
-        <p>This stops the server and deletes, on this computer:</p>
-        <ul>
-          <li>its settings</li>
-          {removing !== null && secretCount(removing) > 0 && (
-            <li>
-              {secretCount(removing)} {secretCount(removing) === 1 ? "secret" : "secrets"} saved for it in your system keychain
-            </li>
-          )}
-          {removing?.transport.type === "streamable_http" && removing.transport.oauth?.signed_in === true && (
-            <li>its sign-in</li>
-          )}
-          <li>"Allow in this chat" approvals for its tools</li>
-        </ul>
-        <p>
-          <strong>This can't be undone.</strong> Chats that used its tools keep their history.
-        </p>
-      </ConfirmDialog>
     </section>
   );
 }
 
-function secretCount(s: McpServerView): number {
-  const vals = s.transport.type === "stdio" ? s.transport.env : s.transport.headers;
-  return vals.filter((v) => v.secret && v.stored).length;
-}
 
 function statusText(st: McpServerStatus | null): string {
   switch (st?.state) {

@@ -899,7 +899,8 @@ pub async fn save_mcp_server(
     blocking(&state, |s| s.mcp_servers_view()).await
 }
 
-/// Stops the server and deletes it with its secrets and sign-in. Can't be undone.
+/// Stops the server and deletes it with its secrets and sign-in, at once. For
+/// [`crate::state::KEY_UNDO_WINDOW`] [`restore_mcp_server`] can put it back (#189).
 #[tauri::command]
 pub async fn remove_mcp_server(
     state: AppStateRef<'_>,
@@ -908,8 +909,54 @@ pub async fn remove_mcp_server(
     if let Some(exec) = &state.executor {
         exec.remove_server(&server_id).await;
     }
-    blocking(&state, move |s| s.remove_mcp_server_config(&server_id)).await?;
+    blocking(&state, move |s| s.remove_mcp_server_for_undo(&server_id)).await?;
     blocking(&state, |s| s.mcp_servers_view()).await
+}
+
+/// Undo of [`remove_mcp_server`]: puts the server back as it was and connects it.
+#[tauri::command]
+pub async fn restore_mcp_server(
+    state: AppStateRef<'_>,
+    server_id: String,
+) -> IpcResult<crate::mcp::ServersView> {
+    let cfg = blocking(&state, move |s| s.restore_mcp_server_config(&server_id)).await?;
+    let st = Arc::clone(state.inner());
+    let exec = tools_executor(&st)?;
+    let epoch = st.mcp_epoch_now();
+    tauri::async_runtime::spawn(async move {
+        st.connect_mcp_server(&exec, cfg, epoch).await;
+    });
+    blocking(&state, |s| s.mcp_servers_view()).await
+}
+
+/// Settings › Tools › Connect (ADR-0018): the reviewed services and whether each is added.
+#[tauri::command]
+pub async fn connect_catalogue(state: AppStateRef<'_>) -> IpcResult<crate::connect::ConnectView> {
+    blocking(&state, |s| s.connect_view()).await
+}
+
+/// Adds a catalogue entry as an ordinary tool server and connects it; sign-in follows with
+/// [`sign_in_mcp_server`].
+#[tauri::command]
+pub async fn connect_service(
+    state: AppStateRef<'_>,
+    entry_id: String,
+) -> IpcResult<crate::connect::ConnectView> {
+    let cat = crate::connect::load().map_err(|e| crate::connect::unavailable(&e))?;
+    let cfg = {
+        let st = Arc::clone(state.inner());
+        let cat = cat.clone();
+        tauri::async_runtime::spawn_blocking(move || st.connect_entry(&cat, &entry_id))
+            .await
+            .map_err(|_| IpcError::new("internal", "Something went wrong. Try again."))??
+    };
+    let st = Arc::clone(state.inner());
+    let exec = tools_executor(&st)?;
+    let epoch = st.mcp_epoch_now();
+    tauri::async_runtime::spawn(async move {
+        st.connect_mcp_server(&exec, cfg, epoch).await;
+    });
+    blocking(&state, |s| s.connect_view()).await
 }
 
 #[tauri::command]
@@ -1039,8 +1086,13 @@ pub async fn sign_in_mcp_server(
             Ok(())
         }
         Err(e) => {
-            // A server removed meanwhile gets no status back.
-            if e.code != "changed" {
+            // A server removed meanwhile (or while the browser was open: Connect's Cancel)
+            // gets no status back.
+            let id = cfg.id.clone();
+            let still_saved = blocking(&state, move |s| Ok(s.mcp_server(&id).is_ok()))
+                .await
+                .unwrap_or(false);
+            if e.code != "changed" && still_saved {
                 set("needs_auth", Some(e.message.clone()));
             }
             Err(e)

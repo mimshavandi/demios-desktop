@@ -8,6 +8,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+aws-lc-rs.workspace = true
 dn-core.workspace = true
 keyring.workspace = true
 thiserror.workspace = true
