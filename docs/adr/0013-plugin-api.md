@@ -1,6 +1,6 @@
 # ADR-0013: Plugin API (`dn-plugin-api`): what add-ons may register, and how they stay inside the app's rules
 
-**Status:** Accepted (owner, 2026-11-26), amendment proposed (§9, owner approval needed) · **Date:** 2026-11-25 (amended 2026-11-25 for [ADR-0014](0014-demios-node.md); amended 2026-11-26: missed-run rules; amendment proposed 2026-11-26: §9) · **Deciders:** project owner, lead · **Extends:** [ADR-0001](0001-repo-and-crate-layout.md), [ADR-0005](0005-agent-skill-manifests.md), [ADR-0006](0006-tools-mcp-capabilities.md), [ADR-0007](0007-local-storage-and-secrets.md), [ADR-0009](0009-security-baseline.md)
+**Status:** Accepted (owner, 2026-11-26), amended (§9, owner 2026-11-26) · **Date:** 2026-11-25 (amended 2026-11-25 for [ADR-0014](0014-demios-node.md); amended 2026-11-26: missed-run rules; amended 2026-11-26: §9) · **Deciders:** project owner, lead · **Extends:** [ADR-0001](0001-repo-and-crate-layout.md), [ADR-0005](0005-agent-skill-manifests.md), [ADR-0006](0006-tools-mcp-capabilities.md), [ADR-0007](0007-local-storage-and-secrets.md), [ADR-0009](0009-security-baseline.md)
 
 ## Context
 ADR-0001 reserves `dn-plugin-api` as the "stable trait surface that add-ons plug into". Add-ons, including proprietary ones in a separate repository, build on it. ADR-0001 also sets two constraints:
@@ -207,8 +207,8 @@ Third-party, untrusted add-ons would need a real sandbox: WASM components or a s
 
 This ADR only keeps that path open (§1). It doesn't build it. Until then, third parties extend Demios through **MCP servers** and **skills**.
 
-### 9. Amendment proposed (2026-11-26, owner approval needed): per-tool limits, withdrawing held calls, add-on views, and tools that always need a fresh approval
-> **Status of this section: proposed.** §1–§8 stay as accepted. Where this section changes them, it says so, and it applies only once the owner approves it.
+### 9. Amendment (accepted, owner 2026-11-26): per-tool limits, withdrawing held calls, add-on views, and tools that always need a fresh approval
+> **Status of this section: accepted (owner, 2026-11-26).** §1–§8 stay as accepted. Where this section changes them, it says so, and this section wins.
 
 Why: an add-on that reads mail and drafts replies showed four gaps, each of which would otherwise be handled by a review rule or not at all.
 1. Holding any write tool raises **every** tool of the add-on to `external_write`, so even "show today's summary" asks every time (§2, risk floor).
@@ -325,7 +325,7 @@ Why: an add-on that reads mail and drafts replies showed four gaps, each of whic
 | Add-on screens | Declarative blocks drawn by the host | Add-on HTML in a sandboxed frame like artifacts; native UI per platform | HTML would need a second capability model and couldn't be drawn on a phone without a webview; blocks keep text plain and look native everywhere |
 | Never-without-approval tools | A tool class with one-time tokens checked by the executor | Rely on the user never choosing "run without asking"; a per-add-on switch | A setting can be changed by mistake; a class the catalogue or add-on sets can't |
 
-#### 9.7 Action items (to be filed as issues once approved)
+#### 9.7 Action items (to be filed as issues)
 1. `dn-plugin-api`: per-tier `Access`, `JobDecl::tier`, the new `risk_floor`, and the conformance scenarios.
 2. `dn-plugin-api` and `dn-jobs` (#252): `Host::held()`, the withdrawn and replaced states, and requester ownership.
 3. `dn-plugin-api`: views and the view document. App: the renderer, designed in the design reference first.
