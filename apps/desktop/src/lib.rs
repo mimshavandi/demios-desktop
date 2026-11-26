@@ -5,6 +5,7 @@
 #[cfg(all(fake_model, not(debug_assertions)))]
 compile_error!("the dev fake model must never be in a release build");
 
+pub mod addons;
 pub mod agent;
 pub mod artifact_child;
 pub mod artifacts;
@@ -152,6 +153,12 @@ impl mcp::LaunchApprover for NativeLaunchApprover {
 }
 
 pub fn run() {
+    run_with_addons(Vec::new());
+}
+
+/// [`run`] with add-ons (ADR-0013 §1): an add-on build's `main` passes its registry list.
+/// The regular build passes none, and Settings › Add-ons doesn't appear.
+pub fn run_with_addons(addons: Vec<std::sync::Arc<dyn dn_plugin_api::Plugin>>) {
     let builder = tauri::Builder::default()
         // First: a second launch (e.g. from a demios:// link) hands over to this one. With
         // the `deep-link` feature the link is forwarded to the deep-link plugin below; the
@@ -192,7 +199,7 @@ pub fn run() {
         .manage(updates::Updates::default())
         .manage(window_state::Tracker::default())
         .on_window_event(window_state::on_event)
-        .setup(|app| {
+        .setup(move |app| {
             use tauri::Manager;
             let dir = data_dir().ok_or("no home directory to keep app data in")?;
             let resources = app.path().resource_dir().ok();
@@ -212,6 +219,14 @@ pub fn run() {
             })?;
             install_add_links(app.handle(), &state);
             knowledge::start(&state);
+            {
+                use tauri::Emitter;
+                let handle = app.handle().clone();
+                state.addons.jobs.on_change(std::sync::Arc::new(move || {
+                    let _ = handle.emit("addons-changed", ());
+                }));
+            }
+            addons::Addons::install(&state, addons);
             // The page's first commands need these, so they come before the window.
             app.manage(state.clone());
             app.manage(artifact_child::ChildState::default());
@@ -221,6 +236,19 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            addons::commands::addons_list,
+            addons::commands::addon_detail,
+            addons::commands::addons_pending_consent,
+            addons::commands::addon_consent,
+            addons::commands::addon_set_permission,
+            addons::commands::addon_set_enabled,
+            addons::commands::addons_set_utc_offset,
+            addons::commands::addons_paused,
+            addons::commands::addons_set_paused,
+            addons::commands::addon_set_job_enabled,
+            addons::commands::addon_set_missed_rule,
+            addons::commands::addon_answer_question,
+            addons::commands::addon_answer_held,
             commands::app_info,
             commands::delete_all_local_data,
             commands::local_data_summary,

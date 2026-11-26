@@ -94,6 +94,8 @@ pub fn migration_sets() -> Vec<MigrationSet> {
         MigrationSet::new("tool_ledger", dn_tools::migrations()),
         MigrationSet::new("artifact", dn_artifacts::migrations()),
         MigrationSet::new("knowledge", dn_knowledge::migrations()),
+        MigrationSet::new("app_addons", crate::addons::store::migrations()),
+        MigrationSet::new("jobs", dn_jobs::migrations()),
     ]
 }
 
@@ -219,6 +221,11 @@ pub struct AppState {
     /// Local copies of project files (`<data dir>/project-files`). `None` in tests that
     /// don't use them.
     pub project_files: Option<std::path::PathBuf>,
+    /// The add-ons of this build (none in the regular build) (ADR-0013).
+    pub addons: crate::addons::Addons,
+    /// dn-jobs' own connection to the app database (its scheduler and held calls). `None`
+    /// in tests that don't use jobs.
+    pub jobs_db: Option<Arc<Mutex<Connection>>>,
 }
 
 /// [`AppState::keychain_entries`]: what was found, and why the list may be incomplete.
@@ -292,6 +299,8 @@ impl AppState {
             launch_approver: std::sync::OnceLock::new(),
             tools_settling: Default::default(),
             project_files: None,
+            addons: Default::default(),
+            jobs_db: None,
         }
     }
 
@@ -373,6 +382,7 @@ impl AppState {
         state.executor = Some(Arc::clone(&executor));
         state.tools_settling = settling;
         state.project_files = project_files;
+        state.jobs_db = Some(Arc::new(Mutex::new(dn_store::open_connection(path)?)));
         if let Some(a) = launch_approver {
             let _ = state.launch_approver.set(a);
         }
@@ -590,6 +600,12 @@ impl AppState {
             eprintln!("some replies did not stop in time; deleting anyway");
             failed.push("an answer that was still being written (it may have been saved again)");
         }
+        // Add-ons next (ADR-0013 §5): their jobs stop and every Host is revoked before
+        // anything is deleted, then each add-on deletes its own data, then the host the rest.
+        for what in self.addons.delete_all(self).await {
+            eprintln!("could not delete add-on data: {what}");
+            failed.push("part of an add-on's data");
+        }
         self.mcp_epoch.fetch_add(1, Ordering::SeqCst);
         if let Some(exec) = &self.executor {
             let stuck = exec.remove_all_servers(Duration::from_secs(2)).await;
@@ -782,6 +798,10 @@ impl AppState {
                 }
             }
             Err(_) => failed.push("chats and settings"),
+        }
+        // The host's own add-on data again, so nothing is left even when this runs alone.
+        if !crate::addons::wipe(self).is_empty() {
+            failed.push("part of an add-on's data");
         }
         lock(&self.live).clear();
         failed
