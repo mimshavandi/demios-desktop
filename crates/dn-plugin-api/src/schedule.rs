@@ -14,6 +14,15 @@ pub const MIN_INTERVAL_SECS: u64 = 60;
 
 /// A time zone, as the schedule needs it: from an instant to the local wall-clock time and
 /// back. Local times are written as seconds, as if the local date and time were UTC.
+///
+/// On days when the clocks change, a [`Schedule::DailyAt`] job still runs once:
+/// - **Skipped time** (clocks go forward, e.g. 02:30 on a day that jumps from 02:00 to
+///   03:00): it runs after the gap, at 03:30.
+/// - **Repeated time** (clocks go back, e.g. 02:30 on a day that goes from 03:00 back to
+///   02:00): it runs at the first 02:30 only.
+///
+/// Implementations must follow this in [`LocalTime::to_utc`] (the "compatible" rule of
+/// calendars and RFC 5545), and both methods must be deterministic.
 pub trait LocalTime {
     /// The local wall-clock time at the instant `utc`.
     fn to_local(&self, utc: i64) -> i64;
@@ -71,7 +80,8 @@ impl Schedule {
 
     /// The scheduled times after `since` and at or before `now`: how many there are, and
     /// the latest. `zone` is the local time for [`Schedule::DailyAt`]; daily times are
-    /// counted in local days.
+    /// counted in local days, so a 23- or 25-hour day has one run, and skipped or repeated
+    /// times follow [`LocalTime`].
     pub fn due_between(&self, since: i64, now: i64, zone: &dyn LocalTime) -> Option<Due> {
         if now <= since {
             return None;
