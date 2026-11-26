@@ -708,6 +708,41 @@ mod tests {
         )));
     }
 
+    /// The search model downloaded from the model list (not through the offer), whatever was
+    /// answered before, and with the Project search slot empty or set to it: it is ready, it is
+    /// the one search uses, and nothing offers it again.
+    #[test]
+    fn a_search_model_downloaded_from_the_model_list_is_ready_and_used() {
+        let answers = [None, Some("declined"), Some("accepted")];
+        for (stored, slot) in answers.iter().flat_map(|a| [(*a, false), (*a, true)]) {
+            let dir = std::env::temp_dir().join(format!("dn-knowledge-list-{}", Id::new()));
+            let mut st = AppState::in_memory().unwrap();
+            with_downloaded(&mut st, &dir, &[DEFAULT_EMBED_MODEL]);
+            if let Some(v) = stored {
+                dn_knowledge::set_pref(&st.db().unwrap(), OFFER_KEY, v).unwrap();
+            }
+            if slot {
+                let mut settings = st.settings().unwrap();
+                settings
+                    .slots
+                    .insert("embed".into(), format!("local:{DEFAULT_EMBED_MODEL}"));
+                st.save_settings(&settings).unwrap();
+            }
+            let stored = (stored, slot);
+            let s = status(&st).unwrap();
+            let m = s.model.expect("offered model");
+            assert_eq!(m.id, DEFAULT_EMBED_MODEL, "{stored:?}");
+            assert_eq!(m.state, crate::local::DownloadState::Ready, "{stored:?}");
+            assert_ne!(s.offer, Offer::Upgrade, "{stored:?}");
+            assert_eq!(
+                embed_model_id(&st).unwrap().as_deref(),
+                Some(DEFAULT_EMBED_MODEL),
+                "{stored:?}"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
     #[test]
     fn a_v15_index_is_never_searched_with_v15_and_re_embeds_with_v2_after_the_download() {
         let dir = std::env::temp_dir().join(format!("dn-knowledge-v2-{}", Id::new()));

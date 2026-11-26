@@ -10,6 +10,10 @@ Only changes people using the app or the `dn` command-line tool can notice are l
 
 - **Settings → Models** shows the project search model at the top, in **Model for each task**: the **Embeddings** row is now **Project search**. When the recommended search model isn't downloaded, the row shows its size and licence with **Download**, then the download's progress, and **Try again** if it failed. The separate **Project search** card further down is gone ([#219](https://github.com/mimshavandi/demios-desktop/pull/219)).
 
+### Fixed
+
+- Settings › Models kept offering to download the search model after it was downloaded from the **On this device** list, until Settings was opened again. The **Project search** row now follows a download started from the list. The same happened after choosing the model for the slot: the row now reads the search model's state again whenever the slot or the model list changes. A model file that doesn't match its published checksum is now shown as such, with **Retry**, instead of as not downloaded. A long automatic model name (for example "Not set: uses Qwen2.5 0.5B Instruct · Q4_K_M automatically.") no longer wraps inside the **Chat** menu and spills past it: it is shown under the menu ([#219](https://github.com/mimshavandi/demios-desktop/pull/219)).
+
 ## [0.1.0-preview.8cd482c] - 2026-11-26
 
 Second preview build, not signed: installers for macOS, Windows and Linux on the [GitHub release](https://github.com/mimshavandi/demios-desktop/releases/tag/v0.1.0-preview.8cd482c) and [demios.io/download](https://demios.io/download/). It doesn't update itself; install it over the first preview. Everything below is new since the [first preview](#010-preview454e01b---2026-11-25).

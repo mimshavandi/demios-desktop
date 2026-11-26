@@ -120,15 +120,13 @@ describe("the embedding-model offer", () => {
     );
   });
 
-  it("a failed download says why, with Try again", async () => {
-    const { api, offer } = fakeApi({
-      ...ask,
-      model: model({ state: "failed", message: "checksum mismatch", done: 5, total: 100 }),
-    });
+  it("a failed download, or a downloaded file that fails verification, says why, with Try again", async () => {
+    const message = "The downloaded file doesn't match its published checksum. Download it again to replace it.";
+    const { api, offer } = fakeApi({ ...ask, model: model({ state: "failed", message, done: 0, total: 100 }) });
     render(<Note api={api} />);
-    expect((await screen.findByRole("alert")).textContent).toContain(
-      "The search model couldn't be downloaded: checksum mismatch",
-    );
+    expect((await screen.findByRole("alert")).textContent).toContain(`Nomic Embed Text v2 MoE: ${message}`);
+    // Not offered as a fresh download, as if nothing was there.
+    expect(screen.queryByTestId("project-search-offer")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     await waitFor(() => expect(offer).toHaveBeenCalledWith(true));
   });

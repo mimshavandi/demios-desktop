@@ -470,6 +470,11 @@ fn options_for(rec: &dn_models::fit::Estimate, n_layer: u32) -> LoadOptions {
     }
 }
 
+/// A downloaded file that doesn't match its published size or checksum (or lost its
+/// checksum marker). Shown on the model's row, with Retry, instead of "not downloaded".
+const UNVERIFIED_FILE: &str =
+    "The downloaded file doesn't match its published checksum. Download it again to replace it.";
+
 /// The largest context an embedding model is loaded with.
 const EMBED_CTX: u32 = 2048;
 
@@ -730,7 +735,9 @@ impl<B: InferenceBackend> LocalModels<B> {
     }
 
     /// Reads what is on disk (cheap: sizes and checksum markers, no hashing): verified file →
-    /// Ready; partial file → Paused. Fits start as estimates.
+    /// Ready; partial file → Paused; a file that is there but doesn't match its size or
+    /// checksum marker → Failed, saying so (never shown as not downloaded). Fits start as
+    /// estimates.
     fn scan(&self) {
         let mut state = lock(&self.state);
         let mut fits = lock(&self.fits);
@@ -745,6 +752,12 @@ impl<B: InferenceBackend> LocalModels<B> {
             let partial = self.partial_len(e);
             let s = if verified {
                 DownloadState::Ready
+            } else if p.exists() {
+                DownloadState::Failed {
+                    message: UNVERIFIED_FILE.to_owned(),
+                    done: partial,
+                    total: e.size,
+                }
             } else if partial > 0 {
                 DownloadState::Paused {
                     done: partial,
@@ -1652,12 +1665,21 @@ mod tests {
         std::fs::write(dir.0.join("ready.gguf"), b"12345").unwrap();
         std::fs::write(dir.0.join("ready.gguf.sha256"), "aa\n").unwrap();
         std::fs::write(dir.0.join("half.gguf.part"), b"12").unwrap();
+        // There, but not verified: a wrong size, and a missing or different marker.
+        std::fs::write(dir.0.join("short.gguf"), b"123").unwrap();
+        std::fs::write(dir.0.join("short.gguf.sha256"), "dd").unwrap();
+        std::fs::write(dir.0.join("nomark.gguf"), b"12345").unwrap();
+        std::fs::write(dir.0.join("other.gguf"), b"12345").unwrap();
+        std::fs::write(dir.0.join("other.gguf.sha256"), "ff").unwrap();
         let catalog = Catalog {
             version: 1,
             models: vec![
                 entry("ready", 5, "AA"),
                 entry("half", 10, "bb"),
                 entry("none", 10, "cc"),
+                entry("short", 5, "dd"),
+                entry("nomark", 5, "ee"),
+                entry("other", 5, "ee"),
             ],
         };
         let lm = LocalModels::new(dir.0.clone(), catalog, Machine::cpu_only(16 << 30));
@@ -1667,6 +1689,19 @@ mod tests {
         assert_eq!(rows[2].state, DownloadState::NotDownloaded);
         assert_eq!(rows[2].model_ref, "local:none");
         assert!(rows[2].fit.estimated);
+        // Never "not downloaded" (which would offer a fresh download as if nothing was there).
+        for r in &rows[3..] {
+            assert_eq!(
+                r.state,
+                DownloadState::Failed {
+                    message: UNVERIFIED_FILE.into(),
+                    done: 0,
+                    total: 5
+                },
+                "{}",
+                r.id
+            );
+        }
         assert_eq!(lm.ready().len(), 1);
     }
 

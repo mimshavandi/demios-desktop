@@ -171,7 +171,7 @@ export function ProjectSearchNote({
         </p>
       ) : st.state === "failed" ? (
         <InlineMessage tone="error" action={downloadButton}>
-          The search model couldn't be downloaded: {st.message}
+          {status.model.name}: {st.message}
         </InlineMessage>
       ) : st.state !== "ready" ? (
         <div className="row-note-offer">

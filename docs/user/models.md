@@ -36,7 +36,9 @@ To download a model, select **Download model**. While it downloads you see the p
 - Start it again after the app quit or the connection dropped: it continues from where it stopped instead of starting over.
 - Select **Retry** if it failed.
 
-When the download finishes, the app checks the file against its published checksum. Then the row shows **On this device** and the model can answer.
+When the download finishes, the app checks the file against its published checksum. Then the row shows **On this device** and the model can answer. If a model file is in the models folder but doesn't match its published checksum, the row says so, with **Retry** to download it again; the file isn't used.
+
+A search model you download here is also shown in the **Project search** row at the top of the page.
 
 Models are stored in a folder shared with the `dn` command-line tool. **Settings → General → About** shows where.
 
@@ -121,11 +123,11 @@ Select **Refresh** after loading or removing models on the server. **Remove** de
 
 **Model for each task**, at the top of **Settings → Models**, sets which model does what. **Chat** is the model that answers in conversations.
 
-If you don't choose a Chat model, the app picks one that is ready and says which: "Not set (uses … automatically)". Models on your computer are listed under **On this device**, the others under their provider.
+If you don't choose a Chat model, the app picks one that is ready and says which, under the menu: "Not set: uses … automatically." Models on your computer are listed under **On this device**, the others under their provider.
 
-**Project search** is the model that finds passages in your project files by meaning (see [Projects](projects.md)). Without one, project files are searched by keywords only. If you leave it unset and the recommended search model is downloaded, it's used automatically: "Not set (uses … automatically)". When it isn't downloaded, the row shows:
+**Project search** is the model that finds passages in your project files by meaning (see [Projects](projects.md)). Without one, project files are searched by keywords only. If you leave it unset and the recommended search model is downloaded, it's used automatically, and the row says so: "Not set: uses … automatically." When it isn't downloaded, the row shows:
 
 - The recommended model, its download size and its licence, with **Download**.
 - While it downloads and your project files are prepared, the progress. Keyword search works meanwhile.
-- If the download failed, why, with **Try again**.
+- If the download failed, or a downloaded file doesn't match its published checksum, why, with **Try again**.
 - If you used the earlier search model, that it's no longer used and you can remove it from the model list.

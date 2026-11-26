@@ -847,9 +847,75 @@ describe("App", () => {
     const before = lists;
     fireEvent.click(screen.getByTestId("project-search-download"));
     // Once it's downloaded, the slot names it and the model list is read again for the pickers.
-    expect(await screen.findByText("Not set (uses Nomic Embed Text v2 MoE automatically)")).toBeTruthy();
+    expect(await screen.findByText("Not set: uses Nomic Embed Text v2 MoE automatically.")).toBeTruthy();
     await waitFor(() => expect(lists).toBeGreaterThan(before));
     expect(screen.queryByTestId("project-search-offer")).toBeNull();
+  });
+
+  it("a search model downloaded from the model list shows in the Project search row, with no Download offer", async () => {
+    const f = fakeApi();
+    const { api } = f;
+    const v2 = { id: "nomic-embed-text-v2-moe-q5_k_m", name: "Nomic Embed Text v2 MoE", size: 370_828_256, license: "apache-2.0" };
+    let state: LocalModelRow["state"] = { state: "not_downloaded" };
+    api.knowledgeStatus = async () => ({ offer: "declined", model: { ...v2, state }, embedding: null, unused: null });
+    const list = api.listModels;
+    api.listModels = async () => {
+      const c = await list();
+      const slot = { slot_id: "embed", label: "Project search", description: "Finds passages by meaning.", capability: "embedding" as const };
+      return { ...c, slots: [...c.slots, slot] };
+    };
+    render(<App api={api} />);
+    await openSettings("Models");
+    expect(await screen.findByTestId("project-search-offer")).toBeTruthy();
+    // Downloaded with the list's own button: the row follows it, then names the model.
+    const row = { ...f.localRows[0]!, ...v2, model_ref: `local:${v2.id}`, capabilities: ["embedding" as const] };
+    state = { state: "downloading", done: 100_000_000, total: v2.size, bytes_per_sec: 0 };
+    act(() => f.local({ type: "changed", row: { ...row, state } }));
+    expect((await screen.findByTestId("project-search-progress")).textContent).toContain("Downloading the search model: 100 MB of 371 MB.");
+    state = { state: "ready" };
+    act(() => f.local({ type: "changed", row: { ...row, state } }));
+    expect(await screen.findByText("Not set: uses Nomic Embed Text v2 MoE automatically.")).toBeTruthy();
+    expect(screen.queryByTestId("project-search-offer")).toBeNull();
+    expect(screen.queryByTestId("project-search-download")).toBeNull();
+  });
+
+  it("choosing the search model for the Project search slot reads its status again", async () => {
+    const { api } = fakeApi();
+    const v2 = { id: "nomic-embed-text-v2-moe-q5_k_m", name: "Nomic Embed Text v2 MoE", size: 370_828_256, license: "apache-2.0" };
+    let state: LocalModelRow["state"] = { state: "not_downloaded" };
+    api.knowledgeStatus = async () => ({ offer: "ask", model: { ...v2, state }, embedding: null, unused: null });
+    const list = api.listModels;
+    api.listModels = async () => {
+      const c = await list();
+      const slot = { slot_id: "embed", label: "Project search", description: "Finds passages by meaning.", capability: "embedding" as const };
+      const model = { model_ref: `local:${v2.id}`, label: "Nomic Embed Text v2 MoE · Q5_K_M", source: "local" as const, capabilities: ["embedding" as const], available: true, note: null };
+      return { ...c, slots: [...c.slots, slot], models: [...c.models, model] };
+    };
+    render(<App api={api} />);
+    await openSettings("Models");
+    expect(await screen.findByTestId("project-search-offer")).toBeTruthy();
+    // It finished downloading while this page showed the offer, and then it is picked.
+    state = { state: "ready" };
+    const picker = screen.getByRole("combobox", { name: "Project search" });
+    picker.focus();
+    fireEvent.keyDown(picker, { key: "ArrowDown" });
+    fireEvent.click(await screen.findByRole("option", { name: "Nomic Embed Text v2 MoE · Q5_K_M" }));
+    await waitFor(() => expect(screen.queryByTestId("project-search-offer")).toBeNull());
+    expect(screen.queryByTestId("project-search-download")).toBeNull();
+  });
+
+  it("an empty slot's automatic model is help text under the select, not in it", async () => {
+    const { api } = fakeApi();
+    const list = api.listModels;
+    api.listModels = async () => ({ ...(await list()), chat_model: "local:dev-fake" });
+    render(<App api={api} />);
+    await openSettings("Models");
+    const chat = await screen.findByRole("combobox", { name: "Chat" });
+    expect(chat.textContent).toContain("Not set");
+    expect(chat.textContent).not.toContain("automatically");
+    const hint = document.getElementById("slot-chat-auto");
+    expect(hint?.textContent).toBe("Not set: uses Dev fake automatically.");
+    expect(chat.getAttribute("aria-describedby")).toBe("slot-chat-d slot-chat-auto");
   });
 
   it("shows models and settings with telemetry off", async () => {

@@ -7,6 +7,7 @@ import {
   type AppInfo,
   type KeychainStatus,
   type LocalDataSummary,
+  type LocalModelRow,
   type McpServerStatus,
   type ModelCatalog,
   type ProviderInfo,
@@ -338,6 +339,27 @@ function ModelsPage({
   const knowledge = useKnowledgeStatus(api.knowledgeStatus);
   const searchModel = knowledge.status?.model ?? null;
   const searchReady = searchModel?.state.state === "ready";
+  // The model list can download it too (#219): its row's state changes refresh the status,
+  // which then follows the download until it is done.
+  const searchId = useRef<string | null>(null);
+  searchId.current = searchModel?.id ?? null;
+  const { refresh: refreshKnowledge } = knowledge;
+  const onLocalState = useCallback(
+    (row: LocalModelRow) => {
+      if (row.id === searchId.current) void refreshKnowledge();
+    },
+    [refreshKnowledge],
+  );
+  // A new model list or a changed slot (#219) can change it too.
+  const embedSlot = s.slots["embed"] ?? "";
+  const firstList = useRef(true);
+  useEffect(() => {
+    if (firstList.current) {
+      firstList.current = false;
+      return;
+    }
+    void refreshKnowledge();
+  }, [catalog.local_models, embedSlot, refreshKnowledge]);
   // Once it is downloaded, the pickers should list it.
   const wasReady = useRef(searchReady);
   useEffect(() => {
@@ -382,6 +404,7 @@ function ModelsPage({
               initial={catalog.local_models}
               compute={catalog.compute}
               onReady={refreshCatalog}
+              onStateChange={onLocalState}
               link={addLink}
               {...(onAddLinkClosed !== undefined ? { onLinkClosed: onAddLinkClosed } : {})}
             />
@@ -564,12 +587,16 @@ function SlotRow({
   const auto = slot.slot_id === "chat" ? catalog.chat_model : null;
   const autoLabel =
     auto === null ? autoName : (catalog.models.find((m) => m.model_ref === auto)?.label ?? auto);
-  const fallback =
-    autoLabel !== null && current === ""
-      ? `Not set (uses ${autoLabel} automatically)`
-      : slot.slot_id === "chat" && devFake
-        ? "Not set (uses the dev fake model)"
-        : "Not set";
+  // What an empty slot uses, as help text under the select: a long model name would not fit
+  // in the select on one line.
+  const autoHint =
+    current !== ""
+      ? null
+      : autoLabel !== null
+        ? `Not set: uses ${autoLabel} automatically.`
+        : slot.slot_id === "chat" && devFake
+          ? "Not set: uses the dev fake model."
+          : null;
   return (
     <div className="row">
       <div className="row-main">
@@ -584,11 +611,16 @@ function SlotRow({
         id={id}
         value={current}
         groups={groups}
-        placeholder={fallback}
+        placeholder="Not set"
         emptyText="No models yet. Download one under On this device, or add a key under Providers."
-        aria-describedby={`${id}-d`}
+        aria-describedby={autoHint === null ? `${id}-d` : `${id}-d ${id}-auto`}
         onValueChange={onChange}
       />
+      {autoHint !== null && (
+        <p id={`${id}-auto`} className="dn-help row-note">
+          {autoHint}
+        </p>
+      )}
       {note}
     </div>
   );

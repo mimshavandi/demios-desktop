@@ -42,6 +42,7 @@ export function LocalModelsCard({
   api,
   initial,
   onReady,
+  onStateChange,
   link = null,
   onLinkClosed,
   compute = null,
@@ -52,6 +53,8 @@ export function LocalModelsCard({
   compute?: LocalCompute | null;
   /** A model finished downloading: refresh pickers and the composer state. */
   onReady: () => void;
+  /** A model's download state changed (queued, downloading, ready, failed…), from any button. */
+  onStateChange?: (row: LocalModelRow) => void;
   /** A demios:// link to confirm (opens the add panel on it). */
   link?: AddModelLink | null;
   onLinkClosed?: () => void;
@@ -83,6 +86,7 @@ export function LocalModelsCard({
         setRows((list) => (list.some((r) => r.id === ev.row.id) ? list.map((r) => (r.id === ev.row.id ? ev.row : r)) : [...list, ev.row]));
         const was = prev.current.get(ev.row.id);
         prev.current.set(ev.row.id, ev.row.state.state);
+        if (ev.row.state.state !== was) onStateChange?.(ev.row);
         if (ev.row.state.state === "ready" && was !== "ready") {
           onReady();
           // Polite, once per finished download (design-system §7).
@@ -103,7 +107,7 @@ export function LocalModelsCard({
     return () => {
       alive = false;
     };
-  }, [api, onReady, watchTry]);
+  }, [api, onReady, onStateChange, watchTry]);
 
   // Hugging Face downloads started from the dialog. They run outside this list (hubDownloads),
   // so they keep going, and show here again, after Settings is closed and opened.
