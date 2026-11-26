@@ -25,8 +25,9 @@ CREATE TABLE sync_vector (
     seq    INTEGER NOT NULL
 ) WITHOUT ROWID;
 
--- Every change received, by (author, seq), with the hash of its envelope: duplicates are
--- recognised, and a different envelope under the same number is caught.
+-- Every change received or made here, by (author, seq), with the hash of its signed bytes:
+-- duplicates (however they were sealed) are recognised, and a different signed change under
+-- the same number is caught.
 CREATE TABLE sync_seen (
     author TEXT    NOT NULL,
     seq    INTEGER NOT NULL,
@@ -45,11 +46,14 @@ CREATE TABLE sync_inbox (
     PRIMARY KEY (author, seq)
 ) WITHOUT ROWID;
 
--- Authors whose changes are held (equivocation), until the user decides.
+-- Authors whose changes are held (equivocation), until the user decides, with the evidence:
+-- the conflicting envelope, which other devices can check against the first one (§9.3).
 CREATE TABLE sync_held_authors (
-    author TEXT    PRIMARY KEY NOT NULL,
-    reason TEXT    NOT NULL,
-    at     INTEGER NOT NULL
+    author   TEXT    PRIMARY KEY NOT NULL,
+    reason   TEXT    NOT NULL,
+    at       INTEGER NOT NULL,
+    seq      INTEGER NOT NULL,
+    evidence BLOB    NOT NULL
 ) WITHOUT ROWID;
 
 -- This device's hybrid logical clock.
@@ -121,10 +125,7 @@ pub fn next_change(
     let seq = deps.get(me) + 1;
     let mut c = clock(&tx)?;
     let hlc = c.send(now_ms);
-    save_clock(&tx, c)?;
-    set_vector(&tx, me, seq)?;
-    tx.commit()?;
-    Ok(Change {
+    let change = Change {
         group,
         epoch,
         author: me,
@@ -132,7 +133,18 @@ pub fn next_change(
         deps,
         hlc,
         ops,
-    })
+    };
+    // Recorded like a received change, so a different change signed with this device's key
+    // under one of its numbers is caught when it comes back (§9.3).
+    let hash = crate::envelope::change_hash(&change.to_bytes()?);
+    tx.execute(
+        "INSERT INTO sync_seen (author, seq, hash) VALUES (?1, ?2, ?3)",
+        params![hex(me), seq as i64, hash.as_slice()],
+    )?;
+    save_clock(&tx, c)?;
+    set_vector(&tx, me, seq)?;
+    tx.commit()?;
+    Ok(change)
 }
 
 /// What [`receive`] did with an envelope.
@@ -145,12 +157,8 @@ pub enum Received {
 }
 
 /// Keeps an opened envelope in the inbox. See the module notes.
-pub fn receive(
-    conn: &Connection,
-    opened: &Opened,
-    envelope: &[u8],
-    now_ms: u64,
-) -> Result<Received> {
+pub fn receive(conn: &Connection, opened: &Opened, now_ms: u64) -> Result<Received> {
+    let envelope = opened.envelope.as_slice();
     let c = &opened.change;
     let tx = conn.unchecked_transaction()?;
     let seen: Option<Vec<u8>> = tx
@@ -164,9 +172,9 @@ pub fn receive(
         Some(h) if h == opened.hash => return Ok(Received::Duplicate),
         Some(_) => {
             tx.execute(
-                "INSERT OR IGNORE INTO sync_held_authors (author, reason, at)
-                 VALUES (?1, 'sent conflicting changes', ?2)",
-                params![hex(c.author), now_ms as i64],
+                "INSERT OR IGNORE INTO sync_held_authors (author, reason, at, seq, evidence)
+                 VALUES (?1, 'sent conflicting changes', ?2, ?3, ?4)",
+                params![hex(c.author), now_ms as i64, c.seq as i64, envelope],
             )?;
             tx.commit()?;
             return Err(SyncError::Equivocation(c.author));
@@ -389,7 +397,7 @@ mod tests {
         }
 
         fn deliver(&mut self, env: &[u8], key: &GroupKey, members: &[PublicIdentity], now: u64) {
-            let lookup = |id: DeviceId| {
+            let lookup = |id: DeviceId, _epoch: u32| {
                 members
                     .iter()
                     .find(|m| m.id() == id)
@@ -397,7 +405,7 @@ mod tests {
                     .ok_or(SyncError::UnknownDevice)
             };
             let opened = open(env, key, lookup).unwrap();
-            receive(&self.conn, &opened, env, now).unwrap();
+            receive(&self.conn, &opened, now).unwrap();
             while let Some((_, _, e)) = next_ready(&self.conn, now).unwrap() {
                 let c = open(&e, key, lookup).unwrap().change;
                 self.apply_ops(&c);
@@ -493,20 +501,11 @@ mod tests {
         let mut a = Replica::new();
         let b = Replica::new();
         let env = a.write(&key, "c1", 1, NOW);
-        let opened = open(&env, &key, |_| Ok(a.keys.public())).unwrap();
-        assert_eq!(
-            receive(&b.conn, &opened, &env, NOW).unwrap(),
-            Received::Stored
-        );
-        assert_eq!(
-            receive(&b.conn, &opened, &env, NOW).unwrap(),
-            Received::Duplicate
-        );
+        let opened = open(&env, &key, |_, _| Ok(a.keys.public())).unwrap();
+        assert_eq!(receive(&b.conn, &opened, NOW).unwrap(), Received::Stored);
+        assert_eq!(receive(&b.conn, &opened, NOW).unwrap(), Received::Duplicate);
         // The author's own change coming back is a duplicate too.
-        assert_eq!(
-            receive(&a.conn, &opened, &env, NOW).unwrap(),
-            Received::Duplicate
-        );
+        assert_eq!(receive(&a.conn, &opened, NOW).unwrap(), Received::Duplicate);
     }
 
     #[test]
@@ -518,15 +517,15 @@ mod tests {
         // `a` signs a different change with the same number (as if its key were misused).
         let fork = Change {
             ops: vec![],
-            ..open(&one, &key, |_| Ok(a.keys.public())).unwrap().change
+            ..open(&one, &key, |_, _| Ok(a.keys.public())).unwrap().change
         };
         let fork_env = seal(&fork, &a.keys, &key).unwrap();
-        let lookup = |_| Ok(a.keys.public());
+        let lookup = |_, _| Ok(a.keys.public());
         let o1 = open(&one, &key, lookup).unwrap();
         let o2 = open(&fork_env, &key, lookup).unwrap();
-        receive(&b.conn, &o1, &one, NOW).unwrap();
+        receive(&b.conn, &o1, NOW).unwrap();
         assert!(matches!(
-            receive(&b.conn, &o2, &fork_env, NOW),
+            receive(&b.conn, &o2, NOW),
             Err(SyncError::Equivocation(d)) if d == a.keys.id()
         ));
         // Its changes are held now, including the first one, until the user decides.
@@ -535,6 +534,49 @@ mod tests {
             waiting(&b.conn, NOW).unwrap(),
             vec![(a.keys.id(), 1, WaitReason::AuthorHeld)]
         );
+    }
+
+    #[test]
+    fn a_change_re_sealed_by_another_member_is_a_duplicate_not_a_conflict() {
+        let key = GroupKey::generate(0).unwrap();
+        let mut v = Replica::new();
+        let b = Replica::new();
+        let original = v.write(&key, "c1", 1, NOW);
+        let opened = open(&original, &key, |_, _| Ok(v.keys.public())).unwrap();
+        receive(&b.conn, &opened, NOW).unwrap();
+        // A member with the group key re-seals V's signed change with a fresh salt.
+        let resealed = seal(&opened.change, &v.keys, &key).unwrap();
+        assert_ne!(resealed, original);
+        let again = open(&resealed, &key, |_, _| Ok(v.keys.public())).unwrap();
+        assert_eq!(receive(&b.conn, &again, NOW).unwrap(), Received::Duplicate);
+        assert!(
+            waiting(&b.conn, NOW)
+                .unwrap()
+                .iter()
+                .all(|w| w.2 != WaitReason::AuthorHeld)
+        );
+    }
+
+    #[test]
+    fn a_fork_of_this_devices_own_change_is_caught() {
+        let key = GroupKey::generate(0).unwrap();
+        let mut a = Replica::new();
+        let mine = a.write(&key, "c1", 1, NOW);
+        let opened = open(&mine, &key, |_, _| Ok(a.keys.public())).unwrap();
+        assert_eq!(receive(&a.conn, &opened, NOW).unwrap(), Received::Duplicate);
+        // Someone with this device's key signs a different change under the same number.
+        let fork = Change {
+            ops: vec![],
+            ..opened.change
+        };
+        let forged = open(&seal(&fork, &a.keys, &key).unwrap(), &key, |_, _| {
+            Ok(a.keys.public())
+        })
+        .unwrap();
+        assert!(matches!(
+            receive(&a.conn, &forged, NOW),
+            Err(SyncError::Equivocation(_))
+        ));
     }
 
     #[test]

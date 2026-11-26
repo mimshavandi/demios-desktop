@@ -143,8 +143,20 @@ pub fn seal(change: &Change, author: &DeviceKeys, key: &GroupKey) -> Result<Vec<
 #[derive(Clone, Debug, PartialEq)]
 pub struct Opened {
     pub change: Change,
-    /// SHA-256 of the envelope, to tell two different envelopes with one (author, seq).
+    /// SHA-256 of the signed change bytes: the identity of the change. It ignores the seal
+    /// (salt, ciphertext), so the same change sealed twice, by its author or re-sealed by
+    /// another member, is one change, and only a different signed change under one
+    /// (author, seq) is equivocation.
     pub hash: [u8; 32],
+    /// The envelope as received, kept in the inbox.
+    pub envelope: Vec<u8>,
+}
+
+/// SHA-256 of a change's signed bytes ([`Opened::hash`]).
+pub fn change_hash(bytes: &[u8]) -> [u8; 32] {
+    let mut h = [0u8; 32];
+    h.copy_from_slice(digest(&SHA256, bytes).as_ref());
+    h
 }
 
 /// SHA-256 of an envelope.
@@ -155,11 +167,12 @@ pub fn envelope_hash(envelope: &[u8]) -> [u8; 32] {
 }
 
 /// Opens an envelope with `key`, and checks the signature against the author's public keys,
-/// which `author_keys` looks up (a current member, §8). Any failure refuses the envelope.
+/// which `author_keys` looks up by author and epoch (a member as membership stood at that
+/// epoch, §8). Any failure refuses the envelope.
 pub fn open(
     envelope: &[u8],
     key: &GroupKey,
-    author_keys: impl FnOnce(DeviceId) -> Result<PublicIdentity>,
+    author_keys: impl FnOnce(DeviceId, u32) -> Result<PublicIdentity>,
 ) -> Result<Opened> {
     if envelope.len() > MAX_ENVELOPE_BYTES {
         return Err(SyncError::Protocol("envelope too large"));
@@ -191,10 +204,11 @@ pub fn open(
             "the change names another group or epoch",
         ));
     }
-    author_keys(change.author)?.verify(bytes, signature)?;
+    author_keys(change.author, change.epoch)?.verify(bytes, signature)?;
     Ok(Opened {
         change,
-        hash: envelope_hash(envelope),
+        hash: change_hash(bytes),
+        envelope: envelope.to_vec(),
     })
 }
 
@@ -238,7 +252,7 @@ mod tests {
                 epoch: 0
             }
         );
-        let opened = open(&env, &key, |_| Ok(me.public())).unwrap();
+        let opened = open(&env, &key, |_, _| Ok(me.public())).unwrap();
         assert_eq!(opened.change, c);
         // Two seals of one change differ (fresh salt).
         assert_ne!(seal(&c, &me, &key).unwrap(), env);
@@ -252,12 +266,15 @@ mod tests {
         for i in [0, 5, 18, 30, HEADER_LEN + 3, env.len() - 1] {
             let mut bad = env.clone();
             bad[i] ^= 1;
-            assert!(open(&bad, &key, |_| Ok(me.public())).is_err(), "byte {i}");
+            assert!(
+                open(&bad, &key, |_, _| Ok(me.public())).is_err(),
+                "byte {i}"
+            );
         }
         let other = GroupKey::generate(0).unwrap();
-        assert!(open(&env, &other, |_| Ok(me.public())).is_err());
+        assert!(open(&env, &other, |_, _| Ok(me.public())).is_err());
         let next_epoch = GroupKey::from_bytes(1, &[0; 32]);
-        assert!(open(&env, &next_epoch, |_| Ok(me.public())).is_err());
+        assert!(open(&env, &next_epoch, |_, _| Ok(me.public())).is_err());
     }
 
     #[test]
@@ -268,11 +285,11 @@ mod tests {
         // Sealed by `me` but checked against `other`'s key (as if `me` claimed to be `other`).
         let env = seal(&change(&me, 0), &me, &key).unwrap();
         assert!(matches!(
-            open(&env, &key, |_| Ok(other.public())),
+            open(&env, &key, |_, _| Ok(other.public())),
             Err(SyncError::BadSignature)
         ));
         // And a non-member is refused by the lookup.
-        assert!(open(&env, &key, |_| Err(SyncError::UnknownDevice)).is_err());
+        assert!(open(&env, &key, |_, _| Err(SyncError::UnknownDevice)).is_err());
     }
 
     #[test]
@@ -282,6 +299,17 @@ mod tests {
         let key = GroupKey::generate(1).unwrap();
         assert!(seal(&change(&me, 1), &other, &key).is_err());
         assert!(seal(&change(&me, 0), &me, &key).is_err());
+    }
+
+    #[test]
+    fn the_same_change_sealed_twice_is_one_change() {
+        let me = DeviceKeys::generate().unwrap();
+        let key = GroupKey::generate(0).unwrap();
+        let c = change(&me, 0);
+        let a = open(&seal(&c, &me, &key).unwrap(), &key, |_, _| Ok(me.public())).unwrap();
+        let b = open(&seal(&c, &me, &key).unwrap(), &key, |_, _| Ok(me.public())).unwrap();
+        assert_ne!(a.envelope, b.envelope);
+        assert_eq!(a.hash, b.hash);
     }
 
     #[test]
