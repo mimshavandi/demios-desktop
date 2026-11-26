@@ -16,50 +16,9 @@ allow = ["Apache-2.0", "Apache-2.0 WITH LLVM-exception", "MIT", "MIT-0", "BSD-2-
 crate = "webpki-root-certs"
 allow = ["CDLA-Permissive-2.0"]
 
-# Our own crates (workspace members) are under PolyForm Shield 1.0.0 (ADR-0017).
-# Scoped to them only, so no dependency under that licence can come in.
-[[licenses.exceptions]]
-crate = "dn-agent"
-allow = ["LicenseRef-PolyForm-Shield-1.0.0"]
-[[licenses.exceptions]]
-crate = "dn-artifacts"
-allow = ["LicenseRef-PolyForm-Shield-1.0.0"]
-[[licenses.exceptions]]
-crate = "dn-core"
-allow = ["LicenseRef-PolyForm-Shield-1.0.0"]
-[[licenses.exceptions]]
-crate = "dn-inference"
-allow = ["LicenseRef-PolyForm-Shield-1.0.0"]
-[[licenses.exceptions]]
-crate = "dn-knowledge"
-allow = ["LicenseRef-PolyForm-Shield-1.0.0"]
-[[licenses.exceptions]]
-crate = "dn-models"
-allow = ["LicenseRef-PolyForm-Shield-1.0.0"]
-[[licenses.exceptions]]
-crate = "dn-plugin-api"
-allow = ["LicenseRef-PolyForm-Shield-1.0.0"]
-[[licenses.exceptions]]
-crate = "dn-providers"
-allow = ["LicenseRef-PolyForm-Shield-1.0.0"]
-[[licenses.exceptions]]
-crate = "dn-secrets"
-allow = ["LicenseRef-PolyForm-Shield-1.0.0"]
-[[licenses.exceptions]]
-crate = "dn-store"
-allow = ["LicenseRef-PolyForm-Shield-1.0.0"]
-[[licenses.exceptions]]
-crate = "dn-sync"
-allow = ["LicenseRef-PolyForm-Shield-1.0.0"]
-[[licenses.exceptions]]
-crate = "dn-tools"
-allow = ["LicenseRef-PolyForm-Shield-1.0.0"]
-[[licenses.exceptions]]
-crate = "dn"
-allow = ["LicenseRef-PolyForm-Shield-1.0.0"]
-[[licenses.exceptions]]
-crate = "demios-desktop"
-allow = ["LicenseRef-PolyForm-Shield-1.0.0"]
+# Our own crates (publish = false) are under the project's licence (ADR-0017), not checked here.
+[licenses.private]
+ignore = true
 
 [bans]
 multiple-versions = "warn"

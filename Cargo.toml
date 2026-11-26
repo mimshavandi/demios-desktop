@@ -6,6 +6,8 @@ members = ["crates/*", "apps/cli", "apps/desktop"]
 version = "0.1.0"
 edition = "2024"
 license = "LicenseRef-PolyForm-Shield-1.0.0"
+# Never published to crates.io; licence tools treat these as our own code (ADR-0017).
+publish = false
 repository = "https://github.com/mimshavandi/demios-desktop"
 rust-version = "1.89"
 
