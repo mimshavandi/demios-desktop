@@ -6,12 +6,19 @@
 //! - [`pairing`]: the pairing link (QR code payload), the one-time secret, the proof that a
 //!   joining device knows it, and the check numbers both sides show.
 //! - [`devices`]: the device list of a group, stored in `sync_devices`.
+//! - [`hlc`], [`change`], [`envelope`], [`inbox`]: sync step 1 (design note §14): the clock,
+//!   change numbers and vectors, signed and sealed envelopes, and the inbox that applies
+//!   changes in causal order.
 //! - [`transport`]: the paired channel (TLS 1.3, each side pinning the other's key), its
 //!   version handshake, and pairing over it.
 
 pub mod b64;
+pub mod change;
 pub mod devices;
+pub mod envelope;
+pub mod hlc;
 pub mod identity;
+pub mod inbox;
 pub mod link;
 pub mod pairing;
 pub mod transport;
@@ -22,7 +29,11 @@ pub use pairing::{CheckNumbers, PairingLink, PairingOffer};
 
 /// Schema migrations for this crate (tables prefixed `sync_`). `dn-store` runs them.
 pub fn migrations() -> &'static [&'static str] {
-    devices::MIGRATIONS
+    &[
+        devices::MIGRATION_DEVICES,
+        inbox::MIGRATION,
+        devices::MIGRATION_NODE_LINK,
+    ]
 }
 
 /// What can go wrong in this crate. No variant carries key material.
@@ -64,6 +75,8 @@ pub enum SyncError {
     VersionMismatch(VersionMismatch),
     #[error("the Node didn't accept this device")]
     Declined,
+    #[error("device {0} sent two different changes under one number")]
+    Equivocation(DeviceId),
     #[error("database: {0}")]
     Db(#[from] rusqlite::Error),
 }
