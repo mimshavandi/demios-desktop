@@ -471,8 +471,8 @@ pub struct ModelCatalog {
     /// and what to do (#200).
     pub keychain: KeychainStatus,
     pub settings: Settings,
-    /// The model chat uses now (the user's choice, or the one picked automatically when no
-    /// chat model is chosen); `None` if nothing is usable.
+    /// The model chat uses now: the Chat slot's model when it resolves (#219: never an
+    /// automatic pick); `None` otherwise.
     pub chat_model: Option<String>,
     /// Whether `chat_model` makes tool calls (without them the model can't make artifacts).
     pub chat_model_tools: bool,

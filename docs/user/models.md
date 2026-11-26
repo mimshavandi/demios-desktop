@@ -123,9 +123,15 @@ Select **Refresh** after loading or removing models on the server. **Remove** de
 
 **Model for each task**, at the top of **Settings → Models**, sets which model does what. **Chat** is the model that answers in conversations.
 
-If you don't choose a Chat model, the app picks one that is ready and says which, under the menu: "Not set: uses … automatically." Models on your computer are listed under **On this device**, the others under their provider.
+Models on your computer are listed under **On this device**, the others under their provider.
 
-**Project search** is the model that finds passages in your project files by meaning (see [Projects](projects.md)). Without one, project files are searched by keywords only. If you leave it unset and the recommended search model is downloaded, it's used automatically, and the row says so: "Not set: uses … automatically." When it isn't downloaded, the row shows:
+**Your first model is saved as the choice.** When a task has no model and you download or add the first model that suits it (a chat model for **Chat**, a search model for **Project search**), Demios saves that model as the task's choice. Downloading or adding more models later doesn't change it; you change it in the menu, or with **Set as default** (below).
+
+If a task has no model and you have several that suit it (for example after updating from an earlier version), Demios doesn't pick one for you. The task says so, for example "Choose a model for Chat." under the message box, with **Choose a model**, which opens this page. If you clear a task's menu, it stays empty until you choose again.
+
+**Set as default:** each model you can use, under **On this device**, **Model servers** and **Providers** (once its key is saved), has **Set as default** for the task it suits. Selecting it makes that model the task's choice and says so ("Now used for Chat"); the row then shows **Default for Chat**. A search model shows it only if it runs on this device, since project search uses models on this device.
+
+**Project search** is the model that finds passages in your project files by meaning (see [Projects](projects.md)). Without one, project files are searched by keywords only. When the recommended search model isn't downloaded, the row shows:
 
 - The recommended model, its download size and its licence, with **Download**.
 - While it downloads and your project files are prepared, the progress. Keyword search works meanwhile.

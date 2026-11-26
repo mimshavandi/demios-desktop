@@ -9,6 +9,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Api } from "../ipc/commands";
 import { errorMessage, type AddModelLink, type FitStatus, type LocalCompute, type LocalModelRow } from "../ipc/types";
 import { Badge, Button, ICON, IconButton, InlineMessage } from "./primitives";
+import { SetDefault } from "./SetDefault";
 import { useToast } from "./toast";
 import { AddFromHub } from "./AddFromHub";
 import { Dialog } from "./Dialog";
@@ -379,9 +380,12 @@ function LocalModelRowView({ api, row }: { api: Api; row: LocalModelRow }) {
           </Button>
         )}
         {s.state === "ready" && (
-          <Badge tone="local" icon={<Cpu {...SMALL} aria-hidden="true" />}>
-            On this device
-          </Badge>
+          <>
+            <Badge tone="local" icon={<Cpu {...SMALL} aria-hidden="true" />}>
+              On this device
+            </Badge>
+            <SetDefault modelRef={row.model_ref} name={row.name} />
+          </>
         )}
         {row.fit.status === "memory_blocked" && s.state === "not_downloaded" && (
           <span className="dn-help local-blocked">

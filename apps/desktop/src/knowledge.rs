@@ -16,8 +16,10 @@
 //! - **Delete all** removes the index with the rest (`state.rs`).
 
 use crate::error::{IpcError, IpcResult};
+use crate::settings::Settings;
 use crate::state::AppState;
 use dn_core::Id;
+use dn_core::model::Capability;
 use dn_knowledge::{EmbedKind, Embedder, Index, QueryVector, SearchMode, SourceFile, Sources};
 use dn_store::Connection;
 use std::sync::{Arc, OnceLock, mpsc};
@@ -276,22 +278,49 @@ impl dn_knowledge::Embedder for LocalEmbedder {
     }
 }
 
-/// Which embedding model to use: the Project search slot if set to a local model, else the
-/// catalog's default once it is downloaded. `None`: keyword search only.
+/// Which embedding model to use: the Project search slot's local model, once it is
+/// downloaded, and only that (#219: an empty slot is never filled by a default here).
+/// `None`: keyword search only.
 fn embed_model_id(state: &AppState) -> Result<Option<String>, String> {
     let Some(local) = state.models.local.as_ref() else {
         return Ok(None);
     };
     let settings = state.settings().map_err(|e| e.message)?;
-    let id = match settings.slot("embed") {
-        Some(m) => match crate::local::catalogue_id(&m) {
-            Some(id) => id.to_owned(),
-            // Only local embedding models are supported here.
-            None => return Ok(None),
-        },
-        None => DEFAULT_EMBED_MODEL.to_owned(),
+    let Some(chosen) = settings.slot("embed") else {
+        return Ok(None);
     };
-    Ok(local.is_ready(&id).then_some(id))
+    // Only local embedding models are supported here.
+    let Some(id) = crate::local::catalogue_id(&chosen) else {
+        return Ok(None);
+    };
+    Ok(local.is_ready(id).then(|| id.to_owned()))
+}
+
+/// The first suitable model fills an empty Project search slot, once (#219): the model the
+/// user accepted in the offer once it is downloaded, else the only downloaded local embedding
+/// model that fits. The earlier default (nomic v1.5, #201) never counts: it is no longer used
+/// for search unless the user picks it. Returns whether `settings` changed (the caller saves
+/// them).
+pub fn fill_embed_slot(state: &AppState, settings: &mut Settings) -> Result<bool, IpcError> {
+    let Some(local) = state.models.local.as_ref() else {
+        return Ok(settings.fill_slot("embed", None));
+    };
+    let suitable: Vec<String> = local
+        .ready()
+        .into_iter()
+        .filter(|e| {
+            e.capabilities.contains(&Capability::Embedding)
+                && !local.wont_fit(&e.id)
+                && e.id != PREVIOUS_EMBED_MODEL
+        })
+        .map(|e| e.id)
+        .collect();
+    let accepted = dn_knowledge::get_pref(&*state.db()?, OFFER_KEY)
+        .map_err(|e| IpcError::new("internal", e.to_string()))?
+        .and_then(|v| v.strip_prefix("accepted:").map(str::to_owned))
+        .filter(|id| suitable.contains(id));
+    let pick = accepted.or_else(|| crate::settings::only_one(suitable));
+    Ok(settings.fill_slot("embed", pick.map(|id| format!("local:{id}"))))
 }
 
 /// The embedding model, loaded on first use. `Ok(None)`: none is downloaded (keyword only).
@@ -460,6 +489,11 @@ pub struct KnowledgeStatus {
 /// The offer and progress. If the model is installed and chunks still wait for it (e.g. it
 /// was just downloaded), embedding them is queued here.
 pub fn status(state: &AppState) -> Result<KnowledgeStatus, String> {
+    // A model downloaded since (from the offer or the model list) may fill the slot now.
+    let mut settings = state.settings().map_err(|e| e.message)?;
+    if fill_embed_slot(state, &mut settings).map_err(|e| e.message)? {
+        state.save_settings(&settings).map_err(|e| e.message)?;
+    }
     let id = offered_model_id(state)?;
     let rows = state
         .models
@@ -708,6 +742,44 @@ mod tests {
         )));
     }
 
+    /// The Project search slot gets the first suitable model once (#219), never the retired
+    /// v1.5, never one of several, and the offer's accepted model when it is downloaded.
+    #[test]
+    fn the_first_search_model_fills_the_slot_once() {
+        let embed = |st: &AppState| st.settings().unwrap().slots.get("embed").cloned();
+        let q8 = "nomic-embed-text-v2-moe-q8_0";
+        // Only v1.5 (an existing user): not filled, search stays keyword only.
+        let dir = std::env::temp_dir().join(format!("dn-knowledge-fill-{}", Id::new()));
+        let mut st = AppState::in_memory().unwrap();
+        with_downloaded(&mut st, &dir, &[PREVIOUS_EMBED_MODEL]);
+        status(&st).unwrap();
+        assert_eq!(embed(&st), None);
+        // Two suitable models and nothing chosen: the slot stays empty.
+        with_downloaded(
+            &mut st,
+            &dir,
+            &[PREVIOUS_EMBED_MODEL, DEFAULT_EMBED_MODEL, q8],
+        );
+        status(&st).unwrap();
+        assert_eq!(embed(&st), None);
+        assert_eq!(embed_model_id(&st).unwrap(), None);
+        // ...unless the user accepted one of them in the offer.
+        dn_knowledge::set_pref(&st.db().unwrap(), OFFER_KEY, &format!("accepted:{q8}")).unwrap();
+        status(&st).unwrap();
+        assert_eq!(embed(&st), Some(format!("local:{q8}")));
+        let _ = std::fs::remove_dir_all(&dir);
+        // One model, then another: the first stays.
+        let dir = std::env::temp_dir().join(format!("dn-knowledge-fill-{}", Id::new()));
+        let mut st = AppState::in_memory().unwrap();
+        with_downloaded(&mut st, &dir, &[q8]);
+        status(&st).unwrap();
+        assert_eq!(embed(&st), Some(format!("local:{q8}")));
+        with_downloaded(&mut st, &dir, &[q8, DEFAULT_EMBED_MODEL]);
+        status(&st).unwrap();
+        assert_eq!(embed(&st), Some(format!("local:{q8}")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// The search model downloaded from the model list (not through the offer), whatever was
     /// answered before, and with the Project search slot empty or set to it: it is ready, it is
     /// the one search uses, and nothing offers it again.
@@ -791,11 +863,13 @@ mod tests {
         // it (no project-files folder exists, so no file can be read).
         with_downloaded(&mut st, &dir, &[PREVIOUS_EMBED_MODEL, DEFAULT_EMBED_MODEL]);
         assert!(st.project_files_root().is_none());
+        // The status read fills the empty slot with v2, the one suitable model (#219).
+        let s = status(&st).unwrap();
+        assert_eq!(st.settings().unwrap().slots.get("embed"), Some(&v2));
         assert_eq!(
             embed_model_id(&st).unwrap().as_deref(),
             Some(DEFAULT_EMBED_MODEL)
         );
-        let s = status(&st).unwrap();
         assert_eq!(s.offer, Offer::Accepted);
         assert_eq!(s.embedding, Some(EmbedProgress { done: 0, total: 1 }));
         embed_pending_with(&st, &Fake("local:nomic-embed-text-v2-moe-q5_k_m"), None).unwrap();

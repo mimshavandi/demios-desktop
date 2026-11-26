@@ -109,28 +109,20 @@ fn title_from(text: &str) -> String {
 /// The model for the next turn and its backend. Blocking (settings, keychain, and loading
 /// a local model's weights).
 ///
-/// When no chat model is chosen, the resolver's automatic pick is saved as the choice, so a
-/// later download or key never silently changes which model answers.
+/// Only the chosen Chat model answers (#219). An empty slot gets the first suitable model
+/// once ([`crate::commands::fill_empty_slots`]); otherwise the turn asks for a choice.
 fn model_for_turn(state: &AppState) -> IpcResult<(ModelRef, Arc<dyn ChatModel>)> {
     // No chat without the assistant's instructions (#141): refuse before anything is written.
     state.agent.ready()?;
-    let mut settings = state.settings()?;
+    let keys = crate::models::provider_keys(&state.keys);
+    let settings = crate::commands::fill_empty_slots(state, state.settings()?, &keys)?;
     let chosen = settings.slot("chat");
-    let model = match state.agent.resolve_model(
-        &settings,
-        &state.models,
-        &crate::models::provider_keys(&state.keys),
-    ) {
+    let model = match state.agent.resolve_model(&settings, &state.models, &keys) {
         Ok(m) => m,
         // The resolver only knows "disabled"; say why when it's a local model too big here.
         Err(e) => return Err(chosen.and_then(|m| wont_fit_error(state, &m)).unwrap_or(e)),
     };
     let backend = state.models.get(&model, &state.keys).map_err(model_error)?;
-    // Save an automatic pick only once it actually loaded.
-    if chosen.is_none() {
-        settings.slots.insert("chat".into(), model.to_string());
-        state.save_settings(&settings)?;
-    }
     Ok((model, backend))
 }
 
@@ -962,12 +954,12 @@ mod tests {
 
     #[cfg(not(fake_model))]
     #[tokio::test(flavor = "multi_thread")]
-    async fn no_model_is_model_source_required() {
+    async fn no_model_asks_for_a_choice() {
         let st = Arc::new(AppState::in_memory().unwrap());
         let conv = st.create_conversation().unwrap();
         let (_e, s) = sink();
         let err = send(&st, conv.id, "hi".into(), s).unwrap_err();
-        assert_eq!(err.code, "model_source_required");
+        assert_eq!(err.code, "model_choice_required");
         assert_eq!(count(&st, conv.id), 0);
     }
 
@@ -1530,7 +1522,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn an_automatic_pick_is_saved_so_later_downloads_dont_change_it() {
+    async fn the_only_chat_model_fills_the_empty_slot() {
         let mut models = crate::models::ModelRegistry::default();
         models.register(
             "local:dev-fake".parse().unwrap(),
@@ -1556,8 +1548,58 @@ mod tests {
                 .map(|m| m.to_string())
                 .as_deref(),
             Some("local:dev-fake"),
-            "the first automatic pick became the saved choice"
+            "the first suitable model became the saved choice"
         );
+    }
+
+    /// An existing user with several chat models and no choice: never an automatic pick; the
+    /// turn asks for a choice and the slot stays empty (#219).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn several_chat_models_and_no_choice_ask_for_one() {
+        let dir = std::env::temp_dir().join(format!("dn-chat-several-{}", Id::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("tiny.gguf"), b"12345").unwrap();
+        std::fs::write(dir.join("tiny.gguf.sha256"), "aa").unwrap();
+        let catalog = dn_models::Catalog {
+            version: 1,
+            models: vec![dn_models::CatalogEntry {
+                id: "tiny".into(),
+                name: "Tiny".into(),
+                repo: "o/r".into(),
+                revision: "x".into(),
+                file: "tiny.gguf".into(),
+                size: 5,
+                sha256: "aa".into(),
+                quant: "Q4_K_M".into(),
+                params_b: 0.1,
+                capabilities: vec![dn_core::model::Capability::Chat],
+                license: "mit".into(),
+                notes: String::new(),
+                tool_support: None,
+            }],
+        };
+        let mut models = crate::models::ModelRegistry::default();
+        models.register(
+            "local:dev-fake".parse().unwrap(),
+            Arc::new(FakeChatModel {
+                delay: Duration::from_millis(0),
+            }),
+        );
+        models.local = Some(Arc::new(crate::local::LocalModels::new(
+            dir.clone(),
+            catalog,
+            dn_models::Machine::cpu_only(16 << 30),
+        )));
+        let mut s = AppState::in_memory().unwrap();
+        s.models = models;
+        let st = Arc::new(s);
+        let conv = st.create_conversation().unwrap();
+        let (_e, s1) = sink();
+        let err = send(&st, conv.id, "hi".into(), s1).unwrap_err();
+        assert_eq!(err.code, "model_choice_required", "{}", err.message);
+        assert!(st.settings().unwrap().slot("chat").is_none());
+        assert_eq!(count(&st, conv.id), 0);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1610,9 +1652,10 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn an_automatic_pick_that_fails_to_load_is_not_saved() {
-        // The only ready source is a downloaded local model whose file isn't a valid GGUF,
-        // so the resolver picks it automatically and llama.cpp then fails to load it.
+    async fn the_first_model_fills_the_slot_and_a_failed_load_says_so() {
+        // The only ready model is a downloaded local model whose file isn't a valid GGUF: it
+        // fills the empty slot (#219), and llama.cpp then fails to load it. No other model is
+        // tried.
         let dir = std::env::temp_dir().join(format!("dn-chat-badload-{}", Id::new()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("tiny.gguf"), b"12345").unwrap();
@@ -1656,9 +1699,10 @@ mod tests {
             .unwrap()
             .unwrap_err();
         assert_eq!(err.code, "model_unavailable", "{}", err.message);
-        assert!(
-            st.settings().unwrap().slot("chat").is_none(),
-            "a failed load isn't saved as the choice"
+        assert_eq!(
+            st.settings().unwrap().slots.get("chat").map(String::as_str),
+            Some("local:tiny"),
+            "the slot keeps the user's only model"
         );
         let _ = std::fs::remove_dir_all(dir);
     }

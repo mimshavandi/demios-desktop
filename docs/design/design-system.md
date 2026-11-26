@@ -79,7 +79,7 @@ Headless primitives + our tokens; **no styled component library** (no MUI/Chakra
 | **Artifact card** (in message) | title, type icon, version, "Open" — clicking focuses the artifact pane. |
 | **Artifact pane chrome** | loading (render skeleton), ready, runtime error (error bar with first error + "Ask to fix"), blocked network (inline notice + per-artifact toggle). Version switcher: `v3 ▾` list with author (model/you) and time; restoring creates a new version (shown as "v4 — restored from v2"). |
 | **Model badge** | `On this device · Qwen3 8B` (local tint) or `Anthropic · Claude Sonnet` (neutral). Fit status on model rows: Ready / Caution / Memory pressure / Won't fit, each with a one-line reason. |
-| **Download row** | queued, downloading (progress bar with size + ETA, Pause), paused, verifying, ready, failed (reason + Retry). |
+| **Download row** | queued, downloading (progress bar with size + ETA, Pause), paused, verifying, ready, failed (reason + Retry; also a file that doesn't match its checksum). Ready: **Set as default** (sm secondary, one per task the model suits; toast "Now used for Chat"), or an accent Badge **Default for Chat** once it is. Model server and provider model rows use the same control. |
 
 ## 5. Behaves (states every container must cover)
 

@@ -258,13 +258,24 @@ export function createMockApi(): Api {
     updated_at: now(),
   });
 
-  const catalog = (): ModelCatalog => ({
+  const listed = (): ModelCatalog => ({
     slots: [
       { slot_id: "chat", label: "Chat", description: "Answers in conversations.", capability: "chat" },
       { slot_id: "embed", label: "Project search", description: "Finds passages in your project files by meaning. Without a model, it searches by keywords only.", capability: "embedding" },
     ],
     models: [
       { model_ref: "local:dev-fake", label: "Dev fake model (canned replies)", source: "dev", capabilities: ["chat"], available: true, note: null },
+      // Downloaded models are choosable, as in the app.
+      ...localRows
+        .filter((r) => r.state.state === "ready")
+        .map((r) => ({
+          model_ref: r.model_ref,
+          label: `${r.name} · ${r.quant}`,
+          source: "local" as const,
+          capabilities: r.capabilities,
+          available: r.fit.status !== "memory_blocked",
+          note: null,
+        })),
       ...remotes.flatMap((r) =>
         r.models.map((m) => ({
           model_ref: m.model_ref,
@@ -296,7 +307,7 @@ export function createMockApi(): Api {
     key_store: "session only (browser mock)",
     keychain: { state: "ok" },
     settings,
-    chat_model: settings.slots["chat"] ?? "local:dev-fake",
+    chat_model: settings.slots["chat"] ?? null,
     chat_model_tools: true,
     compute: {
       mode: "shared_gpu",
@@ -305,6 +316,27 @@ export function createMockApi(): Api {
       description: "Local models run on the built-in graphics (Apple M3), which share this computer's memory.",
     },
   });
+  // The first suitable model fills an empty slot once, as the app does (#219).
+  const catalog = (): ModelCatalog => {
+    const c = listed();
+    for (const slot of c.slots) {
+      const filled = settings.slots_filled ?? [];
+      if (settings.slots[slot.slot_id] !== undefined) {
+        if (!filled.includes(slot.slot_id)) settings = { ...settings, slots_filled: [...filled, slot.slot_id] };
+        continue;
+      }
+      if (filled.includes(slot.slot_id)) continue;
+      const suitable = c.models.filter((m) => m.available && m.capabilities.includes(slot.capability));
+      if (suitable.length === 1 && suitable[0] !== undefined) {
+        settings = {
+          ...settings,
+          slots: { ...settings.slots, [slot.slot_id]: suitable[0].model_ref },
+          slots_filled: [...filled, slot.slot_id],
+        };
+      }
+    }
+    return listed();
+  };
 
   const stream = (cid: string, a: StoredMessage, q: string, onEvent: (e: ChatEvent) => void) => {
     const turn = (msgs.get(cid) ?? []).filter((m) => m.role === "user").length;

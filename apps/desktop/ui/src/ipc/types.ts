@@ -240,6 +240,8 @@ export interface UnknownOutcome {
 export interface Settings {
   /** slot id → ModelRef string (`local:…`, `byok:…:…`, `remote:…:…`). */
   slots: Record<string, string>;
+  /** Slots that have had a model (#219): never filled automatically again. */
+  slots_filled?: string[];
   telemetry_enabled: boolean;
   /** First-run AI notice dismissed (T-STORE-09). Missing in older saves = not seen. */
   ai_notice_seen?: boolean;
@@ -466,7 +468,7 @@ export interface ModelCatalog {
   key_store: string;
   keychain: KeychainStatus;
   settings: Settings;
-  /** The model chat uses now (chosen or picked automatically); null if none is usable. */
+  /** The Chat slot's model when it resolves (#219: no automatic pick); null otherwise. */
   chat_model: string | null;
   /** Whether the chat model makes tool calls; without them it can't make artifacts. */
   chat_model_tools: boolean;

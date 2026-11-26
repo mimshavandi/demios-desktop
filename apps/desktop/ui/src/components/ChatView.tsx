@@ -13,7 +13,7 @@ import {
   type UnknownOutcome,
 } from "../ipc/types";
 import { AI_DISCLOSURE, AI_FIRST_RUN_NOTICE } from "../ai";
-import { describeModel } from "../models";
+import { chatModelsAvailable, describeModel } from "../models";
 import { mod } from "../platform";
 import { canRegenerate, type ChatState, type LiveToolCall } from "../state/chat";
 import { ArtifactCard } from "./ArtifactPane";
@@ -96,6 +96,8 @@ const EXAMPLES = [
 
 export function ChatView(p: Props) {
   const connectRef = useRef<HTMLButtonElement>(null);
+  // Chat models are there but none is chosen (#219): ask for a choice, never pick one.
+  const choose = !p.ready && chatModelsAvailable(p.catalog) && (p.catalog?.settings.slots["chat"] ?? "") === "";
   // The draft lives in App when it passes one, so switching to Settings (e.g. a demios://
   // link) and back keeps it.
   const [localDraft, setLocalDraft] = useState("");
@@ -180,7 +182,20 @@ export function ChatView(p: Props) {
                 : p.catalog.keychain.message}
             </InlineMessage>
           ) : (
-            !p.ready && (
+            !p.ready &&
+            // Models are there but none is chosen for Chat (#219): never an automatic pick.
+            (choose ? (
+              <InlineMessage
+                tone="warning"
+                action={
+                  <Button size="sm" onClick={p.onConnect}>
+                    Choose a model
+                  </Button>
+                }
+              >
+                Choose a model for Chat.
+              </InlineMessage>
+            ) : (
               <InlineMessage
                 tone="warning"
                 action={
@@ -191,7 +206,7 @@ export function ChatView(p: Props) {
               >
                 No model connected. Download a model or add a provider key to start chatting.
               </InlineMessage>
-            )
+            ))
           )}
           {p.loading && (
             <div className="msg-skeleton" aria-busy="true" aria-label="Loading messages">
@@ -281,7 +296,7 @@ export function ChatView(p: Props) {
           ref={p.composerRef}
           value={draft}
           rows={Math.min(8, Math.max(1, draft.split("\n").length))}
-          placeholder={p.ready ? "Message Demios" : "Connect a model to start chatting"}
+          placeholder={p.ready ? "Message Demios" : choose ? "Choose a model for Chat to start chatting" : "Connect a model to start chatting"}
           disabled={!p.ready}
           aria-describedby="composer-hint composer-disclosure"
           onChange={(e) => setDraft(e.target.value)}
@@ -320,7 +335,7 @@ export function ChatView(p: Props) {
             </IconButton>
           ) : (
             <Button ref={connectRef} variant="primary" size="sm" onClick={p.onConnect}>
-              Connect a model
+              {choose ? "Choose a model" : "Connect a model"}
             </Button>
           )}
         </div>

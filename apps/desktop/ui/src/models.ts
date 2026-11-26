@@ -22,13 +22,17 @@ export function describeModel(ref: string | null, catalog: ModelCatalog | null):
   return { local: false, text: `${a} · ${rest.join(":")}` };
 }
 
-/** The model chat will use: what the backend resolved, else the chat slot, else the dev
- * fake when this build has it. */
-export function chatModel(catalog: ModelCatalog | null, devFake: boolean): string | null {
+/** The model chat will use: the Chat slot's model, and only that (#219: an empty slot is
+ * never filled by an automatic pick; the first suitable model fills it once). */
+export function chatModel(catalog: ModelCatalog | null, _devFake: boolean): string | null {
   if (catalog !== null && catalog.chat_model !== null) return catalog.chat_model;
   const chosen = catalog?.settings.slots["chat"];
-  if (chosen !== undefined && chosen !== "") return chosen;
-  return devFake ? "local:dev-fake" : null;
+  return chosen !== undefined && chosen !== "" ? chosen : null;
+}
+
+/** Chat models that could answer, for "Choose a model for Chat" (several and none chosen). */
+export function chatModelsAvailable(catalog: ModelCatalog | null): boolean {
+  return catalog?.models.some((m) => m.available && m.capabilities.includes("chat")) ?? false;
 }
 
 /** Whether a message can be sent right now (composer "Connect a model" state otherwise). */

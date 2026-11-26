@@ -399,8 +399,33 @@ pub(crate) fn catalog(s: &AppState) -> IpcResult<ModelCatalog> {
     catalog_with(s, &settings, &check)
 }
 
+/// The first suitable model fills an empty slot, once (#219): Chat gets the only usable chat
+/// model, Project search the only local embedding model (or the one the user accepted in the
+/// offer). With several, the slot stays empty and its task asks for a choice. Saves and
+/// returns the settings when they changed.
+pub(crate) fn fill_empty_slots(
+    s: &AppState,
+    mut settings: Settings,
+    check: &KeyCheck,
+) -> IpcResult<Settings> {
+    let models = models::catalog(&s.models, s.keys.description, check, &settings).models;
+    let chat = crate::settings::only_one(
+        models
+            .iter()
+            .filter(|m| m.available && m.capabilities.contains(&dn_core::model::Capability::Chat))
+            .map(|m| m.model_ref.clone())
+            .collect(),
+    );
+    let mut changed = settings.fill_slot("chat", chat);
+    changed |= crate::knowledge::fill_embed_slot(s, &mut settings)?;
+    if changed {
+        s.save_settings(&settings)?;
+    }
+    Ok(settings)
+}
+
 fn catalog_with(s: &AppState, settings: &Settings, check: &KeyCheck) -> IpcResult<ModelCatalog> {
-    let settings = settings.clone();
+    let settings = fill_empty_slots(s, settings.clone(), check)?;
     let mut c = models::catalog(&s.models, s.keys.description, check, &settings);
     let resolved = s.agent.resolve_model(&settings, &s.models, check).ok();
     c.chat_model_tools = resolved

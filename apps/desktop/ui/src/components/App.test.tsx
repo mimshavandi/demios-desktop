@@ -139,7 +139,8 @@ function fakeApi() {
   ];
   const msgs = new Map<string, StoredMessage[]>();
   const artifacts: ArtifactDetail[] = [];
-  let settings: Settings = { slots: {}, telemetry_enabled: false };
+  // As the backend leaves it: the only chat model filled the empty Chat slot (#219).
+  let settings: Settings = { slots: { chat: "local:dev-fake" }, slots_filled: ["chat"], telemetry_enabled: false };
   let n = 0;
   const reports: [string, string | null][] = [];
   const links: string[] = [];
@@ -846,10 +847,9 @@ describe("App", () => {
     expect(screen.queryByRole("heading", { name: "Project search" })).toBeNull();
     const before = lists;
     fireEvent.click(screen.getByTestId("project-search-download"));
-    // Once it's downloaded, the slot names it and the model list is read again for the pickers.
-    expect(await screen.findByText("Not set: uses Nomic Embed Text v2 MoE automatically.")).toBeTruthy();
+    // Once it's downloaded, the model list (and the slot the backend filled) is read again.
     await waitFor(() => expect(lists).toBeGreaterThan(before));
-    expect(screen.queryByTestId("project-search-offer")).toBeNull();
+    await waitFor(() => expect(screen.queryByTestId("project-search-offer")).toBeNull());
   });
 
   it("a search model downloaded from the model list shows in the Project search row, with no Download offer", async () => {
@@ -874,7 +874,7 @@ describe("App", () => {
     expect((await screen.findByTestId("project-search-progress")).textContent).toContain("Downloading the search model: 100 MB of 371 MB.");
     state = { state: "ready" };
     act(() => f.local({ type: "changed", row: { ...row, state } }));
-    expect(await screen.findByText("Not set: uses Nomic Embed Text v2 MoE automatically.")).toBeTruthy();
+    await waitFor(() => expect(screen.queryByTestId("project-search-progress")).toBeNull());
     expect(screen.queryByTestId("project-search-offer")).toBeNull();
     expect(screen.queryByTestId("project-search-download")).toBeNull();
   });
@@ -904,18 +904,50 @@ describe("App", () => {
     expect(screen.queryByTestId("project-search-download")).toBeNull();
   });
 
-  it("an empty slot's automatic model is help text under the select, not in it", async () => {
+  it("several chat models and no choice: the chat asks for one, never an automatic pick", async () => {
     const { api } = fakeApi();
+    await api.updateSettings({ slots: {}, telemetry_enabled: false, ai_notice_seen: true });
     const list = api.listModels;
-    api.listModels = async () => ({ ...(await list()), chat_model: "local:dev-fake" });
+    api.listModels = async () => {
+      const c = await list();
+      const other = { model_ref: "local:m1", label: "Tiny Model · Q4_K_M", source: "local" as const, capabilities: ["chat" as const], available: true, note: null };
+      return { ...c, models: [...c.models, other] };
+    };
     render(<App api={api} />);
-    await openSettings("Models");
+    expect(await screen.findByText("Choose a model for Chat.")).toBeTruthy();
+    // The notice and the composer both say so, each with a button to the picker.
+    expect(screen.getByLabelText("Message").getAttribute("placeholder")).toBe("Choose a model for Chat to start chatting");
+    const buttons = screen.getAllByRole("button", { name: "Choose a model" });
+    expect(buttons).toHaveLength(2);
+    fireEvent.click(buttons[0]!);
     const chat = await screen.findByRole("combobox", { name: "Chat" });
     expect(chat.textContent).toContain("Not set");
-    expect(chat.textContent).not.toContain("automatically");
-    const hint = document.getElementById("slot-chat-auto");
-    expect(hint?.textContent).toBe("Not set: uses Dev fake automatically.");
-    expect(chat.getAttribute("aria-describedby")).toBe("slot-chat-d slot-chat-auto");
+    expect(document.body.textContent).not.toContain("automatically");
+  });
+
+  it("'Set as default' sets the task's model, confirms it, and the row says it's the default", async () => {
+    const f = fakeApi();
+    const { api } = f;
+    await api.updateSettings({ slots: {}, telemetry_enabled: false, ai_notice_seen: true });
+    f.localRows[0]!.state = { state: "ready" };
+    const list = api.listModels;
+    api.listModels = async () => {
+      const c = await list();
+      const tiny = { model_ref: "local:m1", label: "Tiny Model · Q4_K_M", source: "local" as const, capabilities: ["chat" as const], available: true, note: null };
+      const claude = { model_ref: "byok:openai:gpt-5", label: "OpenAI · gpt-5", source: "byok" as const, capabilities: ["chat" as const], available: true, note: null };
+      return { ...c, models: [...c.models, tiny, claude], providers: [{ id: "openai", name: "OpenAI", key: "saved" as const }] };
+    };
+    render(<App api={api} />);
+    await openSettings("Models");
+    fireEvent.click(await screen.findByRole("button", { name: "Set Tiny Model as default for Chat" }));
+    expect(await screen.findByText("Now used for Chat")).toBeTruthy();
+    expect((await api.getSettings()).slots["chat"]).toBe("local:m1");
+    expect(await screen.findByText("Default for Chat")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Set Tiny Model as default for Chat" })).toBeNull();
+    // A provider's models, once its key is saved, have it too.
+    fireEvent.click(screen.getByRole("tab", { name: "Providers" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Set gpt-5 as default for Chat" }));
+    await waitFor(async () => expect((await api.getSettings()).slots["chat"]).toBe("byok:openai:gpt-5"));
   });
 
   it("shows models and settings with telemetry off", async () => {

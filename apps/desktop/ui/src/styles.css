@@ -482,6 +482,8 @@ pre.code .code-copy { position: absolute; top: var(--dn-space-1); right: var(--d
 .row-note { flex-basis: 100%; display: grid; gap: var(--dn-space-2); }
 .row-note-offer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--dn-space-2) var(--dn-space-4); }
 .row-note-offer > .dn-help { flex: 1 1 calc(var(--dn-space-16) * 4); }
+/* A provider's models under its key, each with "Set as default" (#219). */
+.provider-models { list-style: none; margin: 0; padding: 0 0 0 var(--dn-space-4); }
 .card-subhead { font-size: var(--dn-text-sm); line-height: var(--dn-leading-sm); font-weight: var(--dn-weight-semibold); margin-top: var(--dn-space-2); }
 .data-flow { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--dn-space-3); }
 .data-flow li { display: grid; gap: calc(var(--dn-space-1) / 2); }

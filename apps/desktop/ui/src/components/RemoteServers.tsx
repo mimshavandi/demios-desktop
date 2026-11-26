@@ -10,6 +10,7 @@ import {
   type RemoteServerView,
 } from "../ipc/types";
 import { Badge, Button, EmptyState, ICON, InlineMessage, Switch, TextField } from "./primitives";
+import { SetDefault } from "./SetDefault";
 import { useToast } from "./toast";
 
 /** How long Undo stays on the toast after a server is removed (the backend keeps it 15 s). */
@@ -242,6 +243,9 @@ function ModelRow({ model: m, onTools }: { model: RemoteModelView; onTools: (on:
             onCheckedChange={onTools}
           />
         </div>
+        <span className="row-actions">
+          <SetDefault modelRef={m.model_ref} name={m.id} />
+        </span>
       </div>
     );
   }
@@ -259,6 +263,9 @@ function ModelRow({ model: m, onTools }: { model: RemoteModelView; onTools: (on:
       ) : (
         <Badge tone="neutral">No tool calls</Badge>
       )}
+      <span className="row-actions">
+        <SetDefault modelRef={m.model_ref} name={m.id} />
+      </span>
     </div>
   );
 }
