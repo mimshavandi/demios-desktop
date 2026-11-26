@@ -19,6 +19,7 @@ pub mod envelope;
 pub mod hlc;
 pub mod identity;
 pub mod inbox;
+pub mod membership;
 pub mod pairing;
 pub mod transport;
 
@@ -28,7 +29,11 @@ pub use pairing::{CheckNumbers, PairingLink, PairingOffer};
 
 /// Schema migrations for this crate (tables prefixed `sync_`). `dn-store` runs them.
 pub fn migrations() -> &'static [&'static str] {
-    &[devices::MIGRATION_DEVICES, inbox::MIGRATION]
+    &[
+        devices::MIGRATION_DEVICES,
+        inbox::MIGRATION,
+        membership::MIGRATION,
+    ]
 }
 
 /// What can go wrong in this crate. No variant carries key material.
@@ -70,6 +75,10 @@ pub enum SyncError {
     VersionMismatch(VersionMismatch),
     #[error("the Node didn't accept this device")]
     Declined,
+    #[error(
+        "the membership chain has two different entries at one place; stop and check the Node's key"
+    )]
+    ForkedChain,
     #[error("device {0} sent two different changes under one number")]
     Equivocation(DeviceId),
     #[error("database: {0}")]

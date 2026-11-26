@@ -49,6 +49,11 @@ impl GroupKey {
         Ok(Self { epoch, key })
     }
 
+    /// The key's bytes, to wrap it for a device or keep it in the secret store.
+    pub(crate) fn bytes(&self) -> &[u8; 32] {
+        &self.key
+    }
+
     pub fn from_bytes(epoch: u32, bytes: &[u8; 32]) -> Self {
         Self {
             epoch,

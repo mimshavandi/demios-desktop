@@ -488,7 +488,7 @@ fn parse_kind(kind: &str) -> Option<DeviceKind> {
     })
 }
 
-fn kind_name(kind: DeviceKind) -> &'static str {
+pub fn kind_name(kind: DeviceKind) -> &'static str {
     match kind {
         DeviceKind::Desktop => "desktop",
         DeviceKind::Node => "node",

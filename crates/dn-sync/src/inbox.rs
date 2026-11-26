@@ -213,6 +213,19 @@ pub fn receive(conn: &Connection, opened: &Opened, now_ms: u64) -> Result<Receiv
     Ok(Received::Stored)
 }
 
+/// [`receive`] for changes from the group: refuses an author that isn't a member, and a
+/// removed author's changes after the last one accepted (§8.2), whatever route brought
+/// them (direct, Relay, or passed on by another device).
+pub fn receive_from_group(
+    conn: &Connection,
+    chain: &crate::membership::Chain,
+    opened: &Opened,
+    now_ms: u64,
+) -> Result<Received> {
+    chain.accepts(&opened.change)?;
+    receive(conn, opened, now_ms)
+}
+
 struct InboxRow {
     author: DeviceId,
     seq: u64,
@@ -599,6 +612,64 @@ mod tests {
         b.deliver(&env, &key, &members, ahead);
         assert!(waiting(&b.conn, ahead).unwrap().is_empty());
         assert_eq!(b.state, a.state);
+    }
+
+    #[test]
+    fn a_removed_devices_later_changes_are_refused_at_the_inbox() {
+        use crate::devices::DeviceKind;
+        use crate::membership::NodeChain;
+        let node = DeviceKeys::generate().unwrap();
+        let mut nc = NodeChain::create(&node, "Home server").unwrap();
+        let laptop = Replica::new();
+        let mut phone = Replica::new();
+        nc.add(
+            &node,
+            &laptop.keys.public(),
+            "Laptop",
+            DeviceKind::Desktop,
+            None,
+        )
+        .unwrap();
+        nc.add(
+            &node,
+            &phone.keys.public(),
+            "Phone",
+            DeviceKind::Phone,
+            None,
+        )
+        .unwrap();
+        let group = nc.chain().group();
+        let k0 = nc.chain().key_for(&phone.keys, 0).unwrap();
+        let write = |p: &mut Replica| {
+            let c = next_change(&p.conn, p.keys.id(), group, 0, vec![], NOW).unwrap();
+            seal(&c, &p.keys, &k0).unwrap()
+        };
+        let first = write(&mut phone);
+        let second = write(&mut phone);
+        // Removed after its first change.
+        nc.remove(&node, phone.keys.id(), laptop.keys.id(), 1)
+            .unwrap();
+        let chain = nc.chain();
+        let lookup = |a, _| chain.author_key(a);
+        let o1 = open(&first, &k0, lookup).unwrap();
+        let o2 = open(&second, &k0, lookup).unwrap();
+        assert_eq!(
+            receive_from_group(&laptop.conn, chain, &o1, NOW).unwrap(),
+            Received::Stored
+        );
+        assert!(matches!(
+            receive_from_group(&laptop.conn, chain, &o2, NOW),
+            Err(SyncError::Removed)
+        ));
+        // A stranger's change is refused too.
+        let stranger = Replica::new();
+        let c = next_change(&stranger.conn, stranger.keys.id(), group, 0, vec![], NOW).unwrap();
+        let env = seal(&c, &stranger.keys, &k0).unwrap();
+        let o = open(&env, &k0, |_, _| Ok(stranger.keys.public())).unwrap();
+        assert!(matches!(
+            receive_from_group(&laptop.conn, chain, &o, NOW),
+            Err(SyncError::UnknownDevice)
+        ));
     }
 
     #[test]
