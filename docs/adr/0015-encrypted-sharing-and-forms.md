@@ -164,7 +164,7 @@ If a form fills up with junk, the owner can see it, close the link or raise the 
 - **The privacy policy needs a section on sharing and forms.** It's a separate, later PR for the owner to approve, together with terms for hosted links and a data processing agreement for business users. A Node-hosted link involves no Demios processing at all. This section is not legal advice.
 
 ### 10. Where the code lives
-- **The viewer, the frame shell and the share endpoint live in this repository** (`demios-desktop`, Apache-2.0), next to `ui/artifact-sandbox`, which they reuse. Same code, same escape tests, same review.
+- **The viewer, the frame shell and the share endpoint live in this repository** (`demios-desktop`, PolyForm Shield 1.0.0 since ADR-0017), next to `ui/artifact-sandbox`, which they reuse. Same code, same escape tests, same review.
 - **Open source is recommended for trust.** A respondent who doesn't use Demios has to trust the viewer's code. The only way to make that trust checkable is to publish it and let anyone rebuild it.
 - Deployment configuration and credentials for the hosted service live in a private operations repository. No secrets come into this one.
 

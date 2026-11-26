@@ -6,6 +6,10 @@ Only changes people using the app or the `dn` command-line tool can notice are l
 
 ## [Unreleased]
 
+### Changed
+
+- Demios Desktop and `dn` are now licensed under the PolyForm Shield License 1.0.0 instead of Apache-2.0. You can still read, build, change and use the code for anything except a product that competes with Demios. Versions up to and including 0.1.0-preview.8cd482c stay under Apache-2.0 ([#217](https://github.com/mimshavandi/demios-desktop/pull/217)).
+
 ## [0.1.0-preview.8cd482c] - 2026-11-26
 
 Second preview build, not signed: installers for macOS, Windows and Linux on the [GitHub release](https://github.com/mimshavandi/demios-desktop/releases/tag/v0.1.0-preview.8cd482c) and [demios.io/download](https://demios.io/download/). It doesn't update itself; install it over the first preview. Everything below is new since the [first preview](#010-preview454e01b---2026-11-25).

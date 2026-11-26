@@ -4,7 +4,7 @@ Last updated: set on publication
 
 ## Who we are
 
-Demios Desktop ("the app") is an open-source desktop app licensed under Apache-2.0. It is published by **DigiNote, Inc.**, which is responsible for this policy and is the controller for the processing described in [Data protection (GDPR)](#data-protection-gdpr). DigiNote, Inc. is also the provider of the app under the EU AI Act. App id: `io.demios.app`.
+Demios Desktop ("the app") is a source-available desktop app licensed under the PolyForm Shield License 1.0.0 (earlier versions under Apache-2.0). It is published by **DigiNote, Inc.**, which is responsible for this policy and is the controller for the processing described in [Data protection (GDPR)](#data-protection-gdpr). DigiNote, Inc. is also the provider of the app under the EU AI Act. App id: `io.demios.app`.
 
 DigiNote, Inc.
 Niederkasseler Kirchweg 85

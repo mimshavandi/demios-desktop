@@ -20,3 +20,4 @@ Format: Context → Decision → Options (table) → Trade-offs → Consequences
 | [0014](0014-demios-node.md) | Demios Node: the engine run headless on the user's own machine or server, with paired clients | Proposed |
 | [0015](0015-encrypted-sharing-and-forms.md) | Sharing artifacts through encrypted links, and forms that collect encrypted responses | Proposed |
 | [0016](0016-demios-relay.md) | Demios Relay: encrypted store-and-forward mailboxes, addressed by public key | Proposed |
+| [0017](0017-licence-polyform-shield.md) | Licence: PolyForm Shield 1.0.0 for the app, `dn`, the Node and the shared crates | Accepted |
