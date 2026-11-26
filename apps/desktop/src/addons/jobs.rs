@@ -17,8 +17,8 @@ use dn_jobs::held::{self, AnswerVerifier, HeldApproval, HoldRequest};
 use dn_jobs::scheduler::{Clock, Event, JobHost, ScheduledJob, Scheduler};
 use dn_jobs::store::{self, Outcome, RunRecord};
 use dn_plugin_api::{
-    BoxFuture, Caller, JobContext, MissedRunRule, Permission, PluginError, PluginId, Registrations,
-    Schedule,
+    BoxFuture, Caller, FixedOffset, JobContext, LocalTime, MissedRunRule, Permission, PluginError,
+    PluginId, Registrations, Schedule,
 };
 use rusqlite::Connection;
 use serde::Serialize;
@@ -61,10 +61,16 @@ impl Clock for AppClock {
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0)
     }
+}
 
-    fn utc_offset_secs(&self, _at: i64) -> i64 {
-        // The offset now, as the window reported it (see the module docs).
-        self.offset.load(Ordering::SeqCst)
+/// The offset now, as the window reported it (see the module docs), for every instant.
+impl LocalTime for AppClock {
+    fn to_local(&self, utc: i64) -> i64 {
+        FixedOffset(self.offset.load(Ordering::SeqCst)).to_local(utc)
+    }
+
+    fn to_utc(&self, local: i64) -> i64 {
+        FixedOffset(self.offset.load(Ordering::SeqCst)).to_utc(local)
     }
 }
 

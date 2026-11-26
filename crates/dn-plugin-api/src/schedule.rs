@@ -1,7 +1,8 @@
 //! Background-job schedules and the missed-run rules (ADR-0013 §2).
 //!
-//! Times are Unix seconds (UTC). A time of day is local: the caller passes the local
-//! offset from UTC it is using now. The decision for missed runs is a fixed rule
+//! Times are Unix seconds (UTC). A time of day is local: the caller passes its time zone
+//! as a [`LocalTime`], so a day with a daylight-saving change (23 or 25 hours) still has
+//! one run at its time. The decision for missed runs is a fixed rule
 //! ([`missed_runs`]): the same schedule, last run and clock always give the same answer.
 
 use crate::error::PluginError;
@@ -10,6 +11,39 @@ use serde::{Deserialize, Serialize};
 const DAY: i64 = 24 * 60 * 60;
 /// The shortest interval a job can run at, in seconds.
 pub const MIN_INTERVAL_SECS: u64 = 60;
+
+/// A time zone, as the schedule needs it: from an instant to the local wall-clock time and
+/// back. Local times are written as seconds, as if the local date and time were UTC.
+///
+/// On days when the clocks change, a [`Schedule::DailyAt`] job still runs once:
+/// - **Skipped time** (clocks go forward, e.g. 02:30 on a day that jumps from 02:00 to
+///   03:00): it runs after the gap, at 03:30.
+/// - **Repeated time** (clocks go back, e.g. 02:30 on a day that goes from 03:00 back to
+///   02:00): it runs at the first 02:30 only.
+///
+/// Implementations must follow this in [`LocalTime::to_utc`] (the "compatible" rule of
+/// calendars and RFC 5545), and both methods must be deterministic.
+pub trait LocalTime {
+    /// The local wall-clock time at the instant `utc`.
+    fn to_local(&self, utc: i64) -> i64;
+    /// The instant a local wall-clock time names. A time that doesn't exist (skipped when
+    /// clocks go forward) is moved forward by the gap, so 02:30 becomes 03:30; a time that
+    /// happens twice (when clocks go back) is the first of the two.
+    fn to_utc(&self, local: i64) -> i64;
+}
+
+/// A fixed offset from UTC, in seconds (no daylight saving).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FixedOffset(pub i64);
+
+impl LocalTime for FixedOffset {
+    fn to_local(&self, utc: i64) -> i64 {
+        utc + self.0
+    }
+    fn to_utc(&self, local: i64) -> i64 {
+        local - self.0
+    }
+}
 
 /// When a job runs.
 #[non_exhaustive]
@@ -45,8 +79,10 @@ impl Schedule {
     }
 
     /// The scheduled times after `since` and at or before `now`: how many there are, and
-    /// the latest. `utc_offset_secs` is the local offset for [`Schedule::DailyAt`].
-    pub fn due_between(&self, since: i64, now: i64, utc_offset_secs: i64) -> Option<Due> {
+    /// the latest. `zone` is the local time for [`Schedule::DailyAt`]; daily times are
+    /// counted in local days, so a 23- or 25-hour day has one run, and skipped or repeated
+    /// times follow [`LocalTime`].
+    pub fn due_between(&self, since: i64, now: i64, zone: &dyn LocalTime) -> Option<Due> {
         if now <= since {
             return None;
         }
@@ -61,23 +97,22 @@ impl Schedule {
             }
             Self::DailyAt { hour, minute } => {
                 let tod = i64::from(hour) * 3600 + i64::from(minute) * 60;
-                let local_now = now + utc_offset_secs;
-                let mut latest = local_now.div_euclid(DAY) * DAY + tod;
-                if latest > local_now {
-                    latest -= DAY;
+                // The run on local day `d` (days since 1970-01-01, local).
+                let at = |d: i64| zone.to_utc(d * DAY + tod);
+                let mut last = zone.to_local(now).div_euclid(DAY);
+                if at(last) > now {
+                    last -= 1;
                 }
-                let latest = latest - utc_offset_secs;
+                let latest = at(last);
                 if latest <= since {
                     return None;
                 }
-                let local_since = since + utc_offset_secs;
-                let mut first = local_since.div_euclid(DAY) * DAY + tod;
-                if first <= local_since {
-                    first += DAY;
+                let mut first = zone.to_local(since).div_euclid(DAY);
+                if at(first) <= since {
+                    first += 1;
                 }
-                let first = first - utc_offset_secs;
                 Some(Due {
-                    count: u64::try_from((latest - first) / DAY + 1).unwrap_or(u64::MAX),
+                    count: u64::try_from(last - first + 1).unwrap_or(u64::MAX),
                     latest,
                 })
             }
@@ -166,9 +201,9 @@ pub fn missed_runs(
     rule: &MissedRunRule,
     since: i64,
     now: i64,
-    utc_offset_secs: i64,
+    zone: &dyn LocalTime,
 ) -> MissedRuns {
-    let Some(due) = schedule.due_between(since, now, utc_offset_secs) else {
+    let Some(due) = schedule.due_between(since, now, zone) else {
         return MissedRuns::None;
     };
     let (scheduled_for, missed) = (due.latest, due.count);
@@ -243,7 +278,13 @@ mod tests {
     #[test]
     fn a_brief_missed_this_morning_runs_late_once() {
         // Last ran Monday 07:00; the app opens Tuesday 10:00.
-        let d = missed_runs(&SEVEN, &SIX_HOURS, MON + 7 * H, MON + 34 * H, 0);
+        let d = missed_runs(
+            &SEVEN,
+            &SIX_HOURS,
+            MON + 7 * H,
+            MON + 34 * H,
+            &FixedOffset(0),
+        );
         assert_eq!(
             d,
             MissedRuns::RunLate {
@@ -256,7 +297,13 @@ mod tests {
     #[test]
     fn a_stale_run_is_skipped_not_run() {
         // Missed Tuesday 07:00; the app opens Tuesday 15:00, more than 6 hours later.
-        let d = missed_runs(&SEVEN, &SIX_HOURS, MON + 7 * H, MON + 39 * H, 0);
+        let d = missed_runs(
+            &SEVEN,
+            &SIX_HOURS,
+            MON + 7 * H,
+            MON + 39 * H,
+            &FixedOffset(0),
+        );
         assert_eq!(
             d,
             MissedRuns::Skip {
@@ -270,7 +317,13 @@ mod tests {
     #[test]
     fn many_missed_days_give_one_run_for_the_latest() {
         // Last ran Monday 07:00; the app opens Thursday 07:05: Tue, Wed, Thu were missed.
-        let d = missed_runs(&SEVEN, &SIX_HOURS, MON + 7 * H, MON + 79 * H + 300, 0);
+        let d = missed_runs(
+            &SEVEN,
+            &SIX_HOURS,
+            MON + 7 * H,
+            MON + 79 * H + 300,
+            &FixedOffset(0),
+        );
         assert_eq!(
             d,
             MissedRuns::RunLate {
@@ -283,12 +336,24 @@ mod tests {
     #[test]
     fn nothing_is_missed_before_the_next_time() {
         assert_eq!(
-            missed_runs(&SEVEN, &SIX_HOURS, MON + 7 * H, MON + 30 * H, 0),
+            missed_runs(
+                &SEVEN,
+                &SIX_HOURS,
+                MON + 7 * H,
+                MON + 30 * H,
+                &FixedOffset(0)
+            ),
             MissedRuns::None
         );
         // A late run at 10:02 counts for that morning's 07:00.
         assert_eq!(
-            missed_runs(&SEVEN, &SIX_HOURS, MON + 10 * H + 120, MON + 20 * H, 0),
+            missed_runs(
+                &SEVEN,
+                &SIX_HOURS,
+                MON + 10 * H + 120,
+                MON + 20 * H,
+                &FixedOffset(0)
+            ),
             MissedRuns::None
         );
     }
@@ -296,7 +361,13 @@ mod tests {
     #[test]
     fn the_time_of_day_is_local() {
         // UTC+2: 07:00 local is 05:00 UTC. Last ran Monday 05:00 UTC, now Tuesday 06:00 UTC.
-        let d = missed_runs(&SEVEN, &SIX_HOURS, MON + 5 * H, MON + 30 * H, 2 * H);
+        let d = missed_runs(
+            &SEVEN,
+            &SIX_HOURS,
+            MON + 5 * H,
+            MON + 30 * H,
+            &FixedOffset(2 * H),
+        );
         assert_eq!(
             d,
             MissedRuns::RunLate {
@@ -310,14 +381,26 @@ mod tests {
     fn ask_and_skip_report_what_was_missed() {
         let every_hour = Schedule::Every { secs: 3600 };
         assert_eq!(
-            missed_runs(&every_hour, &MissedRunRule::Ask, MON, MON + 5 * H + 10, 0),
+            missed_runs(
+                &every_hour,
+                &MissedRunRule::Ask,
+                MON,
+                MON + 5 * H + 10,
+                &FixedOffset(0)
+            ),
             MissedRuns::Ask {
                 scheduled_for: MON + 5 * H,
                 missed: 5
             }
         );
         assert_eq!(
-            missed_runs(&every_hour, &MissedRunRule::Skip, MON, MON + 2 * H, 0),
+            missed_runs(
+                &every_hour,
+                &MissedRunRule::Skip,
+                MON,
+                MON + 2 * H,
+                &FixedOffset(0)
+            ),
             MissedRuns::Skip {
                 scheduled_for: MON + 2 * H,
                 missed: 2,
@@ -328,8 +411,8 @@ mod tests {
 
     #[test]
     fn the_decision_is_the_same_every_time() {
-        let a = missed_runs(&SEVEN, &SIX_HOURS, MON, MON + 100 * H, 3600);
-        let b = missed_runs(&SEVEN, &SIX_HOURS, MON, MON + 100 * H, 3600);
+        let a = missed_runs(&SEVEN, &SIX_HOURS, MON, MON + 100 * H, &FixedOffset(3600));
+        let b = missed_runs(&SEVEN, &SIX_HOURS, MON, MON + 100 * H, &FixedOffset(3600));
         assert_eq!(a, b);
     }
 }

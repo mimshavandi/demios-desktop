@@ -12,6 +12,8 @@ repository = "https://github.com/mimshavandi/demios-desktop"
 rust-version = "1.89"
 
 [workspace.dependencies]
+# The Node's time zone with daylight saving (#257). Already in the tree; lead approved.
+jiff = "1.0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
