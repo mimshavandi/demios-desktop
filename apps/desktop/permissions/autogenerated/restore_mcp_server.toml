@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-restore-mcp-server"
+description = "Enables the restore_mcp_server command without any pre-configured scope."
+commands.allow = ["restore_mcp_server"]
+
+[[permission]]
+identifier = "deny-restore-mcp-server"
+description = "Denies the restore_mcp_server command without any pre-configured scope."
+commands.deny = ["restore_mcp_server"]

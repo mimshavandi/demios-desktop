@@ -29,7 +29,7 @@ Each server's row has a **More actions** menu (the … button):
 
 - **Edit** changes a server's settings. If its address or program changes, type its secrets again.
 - **Reconnect** tries again after a server failed.
-- **Remove** stops the server and, after a confirmation, deletes its settings, the secrets and sign-in saved for it in your keychain, and the "Always allow in this chat" approvals for its tools. Chats that used its tools keep their history. This can't be undone.
+- **Remove** stops the server and deletes its settings, the secrets and sign-in saved for it in your keychain, its tool choices, and the "Always allow in this chat" approvals for its tools. For 10 seconds, **Undo** on the message that appears puts it all back and connects the server again. Chats that used its tools keep their history.
 
 ## What asks first
 
