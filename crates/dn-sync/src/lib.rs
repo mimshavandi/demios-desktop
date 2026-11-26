@@ -11,6 +11,9 @@
 //!   changes in causal order.
 //! - [`transport`]: the paired channel (TLS 1.3, each side pinning the other's key), its
 //!   version handshake, and pairing over it.
+//! - [`membership`], [`group`]: the Node-signed membership chain and the group key (step 2).
+//! - [`records`]: synced records, conflicts and tombstones (step 3).
+//! - [`session`]: a sync round between a device and its Node on the direct route (step 4).
 
 pub mod b64;
 pub mod change;

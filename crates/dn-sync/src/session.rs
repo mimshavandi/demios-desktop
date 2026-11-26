@@ -93,13 +93,16 @@ pub fn held(conn: &Connection) -> Result<Vector> {
     Ok(v)
 }
 
+/// One envelope held here: (author, seq, sealed bytes).
+pub type Held = (DeviceId, u64, Vec<u8>);
+
 /// Envelopes held here that `theirs` lacks, per author in order, about `max_bytes` of
 /// them (at least one). `true` when more remain.
 pub fn envelopes_after(
     conn: &Connection,
     theirs: &Vector,
     max_bytes: usize,
-) -> Result<(Vec<(DeviceId, u64, Vec<u8>)>, bool)> {
+) -> Result<(Vec<Held>, bool)> {
     let authors: Vec<String> = conn
         .prepare("SELECT DISTINCT author FROM sync_envelopes ORDER BY author")?
         .query_map([], |r| r.get(0))?
