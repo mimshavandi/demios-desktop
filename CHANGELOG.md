@@ -8,7 +8,7 @@ Only changes people using the app or the `dn` command-line tool can notice are l
 
 ### Added
 
-- **Settings → Models → On this device:** **Remove** on a downloaded model frees its space. It takes effect at once, with Undo for 10 seconds; a task that used the model then asks you to choose one. Models in your Hugging Face cache or a folder you chose are never deleted. **Cancel download** stops a running or paused download and deletes the part already downloaded ([#PR](https://github.com/mimshavandi/demios-desktop/pull/PR)).
+- **Settings → Models → On this device:** **Remove** on a downloaded model frees its space. It takes effect at once, with Undo for 10 seconds; a task that used the model then asks you to choose one. Models in your Hugging Face cache or a folder you chose are never deleted. **Cancel download** stops a running or paused download and deletes the part already downloaded ([#231](https://github.com/mimshavandi/demios-desktop/pull/231)).
 
 ### Changed
 
