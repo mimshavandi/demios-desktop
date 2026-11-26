@@ -1,6 +1,6 @@
 # ADR-0013: Plugin API (`dn-plugin-api`): what add-ons may register, and how they stay inside the app's rules
 
-**Status:** Proposed · **Date:** 2026-11-25 · **Deciders:** project owner, lead · **Extends:** [ADR-0001](0001-repo-and-crate-layout.md), [ADR-0005](0005-agent-skill-manifests.md), [ADR-0006](0006-tools-mcp-capabilities.md), [ADR-0007](0007-local-storage-and-secrets.md), [ADR-0009](0009-security-baseline.md)
+**Status:** Proposed · **Date:** 2026-11-25 (amended 2026-11-25 for [ADR-0014](0014-demios-node.md)) · **Deciders:** project owner, lead · **Extends:** [ADR-0001](0001-repo-and-crate-layout.md), [ADR-0005](0005-agent-skill-manifests.md), [ADR-0006](0006-tools-mcp-capabilities.md), [ADR-0007](0007-local-storage-and-secrets.md), [ADR-0009](0009-security-baseline.md)
 
 ## Context
 ADR-0001 reserves `dn-plugin-api` as the "stable trait surface that add-ons plug into". Add-ons, including proprietary ones in a separate repository, build on it. ADR-0001 also sets two constraints:
@@ -36,6 +36,7 @@ Every rule below says whether it is **enforced by the host** or is a **review ru
 - **No dynamic loading.** There is no `dlopen`: Rust has no stable ABI, and loading a library needs `unsafe`, which ADR-0009 forbids.
 - **The open-source build links no add-ons and contains no add-on code.** It does contain the generic hooks: the `Plugin` capability source, the in-process handler path in the executor and an empty registry. These stay unused there, and Settings › Add-ons doesn't appear.
 - **The add-on never gets the app's internals.** That rules out a database connection, the `dn_tools::Executor`, the keychain or the webview. It gets a **`Host` handle** of narrow, permission-checked services (§4).
+- **`Host` runs in the desktop app or in a Demios Node** (ADR-0014), the same engine run headless as a service. An add-on build exists for both. The add-on sees the same `Host` API in either, and doesn't know or need to know which one it runs in. Where a service differs (a Node has no window, so `notify()` reaches the user through paired devices), the host says so in that service's documentation, not through a different API.
 - **The API is shaped as declarations plus messages.** Every argument and result that crosses the boundary is a plain, serialisable value. So a later move to WASM (option B) changes how the boundary is called, not what it says.
 
 **Be honest about trust:** in-process means the add-on runs with the app's privileges. Rust can't stop it from using `std::net`, `std::process` or `std::fs` itself. Its isolation is the `Host` API, code review and signed builds of a first-party, reviewed add-on, **not a sandbox**.
@@ -73,7 +74,9 @@ pub trait Plugin: Send + Sync + 'static {
   - Approval comes from the tier and the user's choice, never from the plugin. There is no "auto-approve" field.
 - **Skills** are chat skills in the `SKILL.md` format (#117/#133), registered as values, with the same parser and the same rule that `allowed-tools` only narrows. A plugin skill can't take a built-in skill's name. Its source shows as the add-on's name.
 - **Background jobs (heartbeat)** are declared with an id, a name, a schedule (an interval, or a local time of day) and a handler.
-  - **They run only while the app runs.** They are scheduled by the host. There is no OS daemon, no launch agent, and no running after quit.
+  - **They run whenever a runtime is up:** the desktop app while it's open, or a Demios Node (ADR-0014), which runs as a service while its machine is on. They are scheduled by the host.
+    - **One scheduler at a time.** When a Node is paired, the Node owns the schedule and the desktop app doesn't run jobs, so a job never runs twice. With no Node, the desktop app runs them while it's open.
+    - The desktop app itself still installs no OS daemon or launch agent. Running after the app quits is what a Node is for, and the user installs one as a separate, explicit step.
   - **They are off by default.** The user turns each one on in the add-on's settings and sees its last run, next run and last error. One switch pauses all background jobs.
   - The host honours the user's quiet hours and skips a missed run rather than catching up a burst.
   - **Jobs can't do what needs a person.**
@@ -82,7 +85,7 @@ pub trait Plugin: Send + Sync + 'static {
     - "Delete all" clears the queue.
     - **Every `http()` call from a job that isn't a GET is held** the same way (enforced). The host can't tell where an argument's text came from, so it doesn't try to.
   - A job gets a cancel token and a time budget. When either ends, the job is stopped.
-  - A job reports to the user only through the host's notification service (§4), which follows the OS's notification permission.
+  - A job reports to the user only through the host's notification service (§4), which follows the OS's notification permission. On a Node, held approvals and notifications reach the user on their paired devices (ADR-0014 §4, §6).
 - **Settings panels** are **declarative**: a JSON-Schema form with titles, help text and the design system's controls, rendered by the host UI.
   - An add-on ships **no HTML or JS** into the app's webview. That keeps the webview capability model (#85, ADR-0012) intact.
   - Every string an add-on supplies is shown as plain text, never as markup. That covers titles, help text, notification text, approval text and memory items.
@@ -223,9 +226,9 @@ This ADR only keeps that path open (§1). It doesn't build it. Until then, third
   - `CapabilitySource::Plugin { plugin_id }`;
   - a requester field on approval prompts.
 - **dn-tools** learns to run in-process handlers alongside MCP clients, through the same executor path, and accepts host-built call contexts with their own approval scope.
-- **The app** gains:
+- **The app and the Node** (ADR-0014) gain:
   - a plugin registry with an ownership table;
-  - a job scheduler with a persisted held-approvals queue;
+  - a job scheduler with a persisted held-approvals queue, run by one runtime at a time;
   - a declarative settings-panel renderer;
   - Settings › Add-ons (permissions, jobs, memory, licence status);
   - per-add-on database files;

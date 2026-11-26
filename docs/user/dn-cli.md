@@ -32,6 +32,12 @@ Or run it without installing: `cargo run -p dn -- <command>`.
 
 `<model>` is a catalogue id or a path to a GGUF file.
 
+`--endpoint` follows the same address rules as the app's model servers:
+- `http://` works only for this computer and your local network: `localhost`, `127.0.0.1`, `192.168.x.x`, `10.x.x.x`, `172.16–31.x.x`, Tailscale `100.64–127.x.x`, or names such as `nas` and `studio.local`.
+- Any other server needs `https://`.
+- If the address has no path, `/v1` is added.
+- A redirect to another address stops the request.
+
 ## Add-model links
 
 A `demios://models/add?…` link names a Hugging Face model, and can name one version of it. The app opens them too (see [Adding a model](models.md#links-that-add-a-model)). `dn models open` never downloads without your `y`, and if the link doesn't pick one version, it lists the `dn models pull` commands for each one instead.

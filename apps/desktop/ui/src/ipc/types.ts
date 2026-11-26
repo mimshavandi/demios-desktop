@@ -249,6 +249,8 @@ export interface Settings {
   launch_check_offered?: boolean;
   /** Passed through untouched (no screen edits MCP servers yet). */
   mcp_servers?: unknown[];
+  /** Managed by the server commands; passed through untouched. */
+  remote_servers?: unknown[];
 }
 
 export interface SlotInfo {
@@ -415,10 +417,39 @@ export interface HubPullProgress {
 
 export type HubPullEvent = { type: "progress" } & HubPullProgress;
 
+/** Whether a model makes tool calls: the server (or provider) says so, says not, or doesn't say. */
+export type ToolSupport = "supported" | "unsupported" | "unknown";
+
+/** A model of an OpenAI-compatible server (T-PRV-05). */
+export interface RemoteModelView {
+  id: string;
+  model_ref: string;
+  embedding: boolean;
+  tool_support: ToolSupport;
+  /** The server said it itself (otherwise the user's answer, or nothing, counts). */
+  tool_support_reported: boolean;
+}
+
+/** Whether a model server answers now (from `check_remote_server`). */
+export type RemoteServerStatus =
+  | { state: "connected"; models: number }
+  | { state: "needs_key"; message: string }
+  | { state: "unreachable"; message: string };
+
+/** An OpenAI-compatible server (Ollama, LM Studio, llama.cpp, vLLM, a hosted gateway). */
+export interface RemoteServerView {
+  id: string;
+  name: string;
+  base_url: string;
+  has_key: boolean;
+  models: RemoteModelView[];
+}
+
 export interface ModelCatalog {
   slots: SlotInfo[];
   models: ModelOption[];
   providers: ProviderInfo[];
+  remote_servers: RemoteServerView[];
   local_models: LocalModelRow[];
   key_store: string;
   settings: Settings;

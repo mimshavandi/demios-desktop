@@ -20,7 +20,7 @@ use std::sync::Arc;
 use tauri::State;
 use tauri::ipc::Channel;
 
-type AppStateRef<'a> = State<'a, Arc<AppState>>;
+pub(crate) type AppStateRef<'a> = State<'a, Arc<AppState>>;
 
 pub(crate) async fn blocking<T: Send + 'static>(
     state: &AppStateRef<'_>,
@@ -390,7 +390,7 @@ pub async fn update_settings(
     .await
 }
 
-fn catalog(s: &AppState) -> IpcResult<ModelCatalog> {
+pub(crate) fn catalog(s: &AppState) -> IpcResult<ModelCatalog> {
     let settings = s.settings()?;
     let mut c = models::catalog(&s.models, &s.keys, &settings);
     let resolved = s.agent.resolve_model(&settings, &s.models, &s.keys).ok();

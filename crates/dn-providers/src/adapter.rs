@@ -115,6 +115,7 @@ async fn probe_family(cfg: &ProviderConfig) -> ServerFamily {
     let Ok(client) = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(2))
         .timeout(Duration::from_secs(3))
+        .redirect(crate::endpoint::same_origin_redirects())
         .build()
     else {
         return ServerFamily::Unknown;
@@ -223,7 +224,22 @@ impl ProviderConfig {
         Ok(self)
     }
 
+    /// The API base URL without a trailing `/`. For `OpenAiCompatible` it must pass
+    /// [`crate::check_server_url`] (https, or http only for local hosts).
     pub(crate) fn base_url(&self) -> Result<String, CoreError> {
+        if self.kind == ProviderKind::OpenAiCompatible
+            && let Some(raw) = self.base_url.as_deref()
+        {
+            return crate::endpoint::check_server_url(raw)
+                .map(|u| u.as_str().trim_end_matches('/').to_string())
+                .map_err(|e| {
+                    unavailable(
+                        e.0.clone(),
+                        format!("{}: server URL refused: {e}", self.provider_id),
+                        vec![],
+                    )
+                });
+        }
         self.base_url
             .as_deref()
             .or(self.kind.default_base_url())
@@ -259,6 +275,13 @@ pub struct ModelInfo {
     /// Provider-reported methods, e.g. Gemini `generateContent` / `embedContent`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub methods: Vec<String>,
+    /// Whether the server says the model makes tool calls; `None` when it doesn't say.
+    /// Only OpenAI-compatible servers fill it (Ollama, LM Studio, llama.cpp server).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<bool>,
+    /// Whether the server says the model is an embedding model (`None`: it doesn't say).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedding: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -309,8 +332,13 @@ pub(crate) fn guess_caps(
     info: Option<&ModelInfo>,
 ) -> ModelCaps {
     let m = model_id.to_ascii_lowercase();
-    let embedding =
-        m.contains("embed") || info.is_some_and(|i| i.methods.iter().any(|x| x == "embedContent"));
+    let embedding = match info.and_then(|i| i.embedding) {
+        Some(e) => e,
+        None => {
+            m.contains("embed")
+                || info.is_some_and(|i| i.methods.iter().any(|x| x == "embedContent"))
+        }
+    };
     let chat = !embedding
         && ![
             "tts",
@@ -335,9 +363,15 @@ pub(crate) fn guess_caps(
                 .iter()
                 .any(|k| m.contains(k)),
         };
+    // Hosted providers support tool calls on every chat model. An OpenAI-compatible server
+    // supports them only when it says so: a model it says nothing about isn't assumed to.
+    let tools = match kind {
+        ProviderKind::OpenAiCompatible => chat && info.and_then(|i| i.tool_calls) == Some(true),
+        _ => chat,
+    };
     ModelCaps {
         chat,
-        tools: chat,
+        tools,
         vision,
         reasoning: chat && is_reasoning_model(model_id),
         embedding,
@@ -352,6 +386,7 @@ pub fn build(cfg: ProviderConfig) -> Result<Arc<dyn ProviderAdapter>, CoreError>
     }
     let client = reqwest::Client::builder()
         .connect_timeout(cfg.connect_timeout)
+        .redirect(crate::endpoint::same_origin_redirects())
         .build()
         .map_err(|e| unavailable("Couldn't start the HTTP client.", e.to_string(), vec![]))?;
     let base = cfg.base_url()?;
