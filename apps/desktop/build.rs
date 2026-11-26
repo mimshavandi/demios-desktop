@@ -186,6 +186,18 @@ fn main() {
     println!("cargo::rerun-if-env-changed=DEMIOS_BUILD_COMMIT");
     println!("cargo::rerun-if-env-changed=DEMIOS_BUILD_CHANNEL");
     // The dev fake model (T-SHELL-03) exists only with the feature *and* in debug builds.
+    // Connect (ADR-0018): the owner's catalogue key, compiled in. Empty (no key yet) or 64 hex
+    // digits; anything else would make every catalogue fail, so refuse to build.
+    println!("cargo::rerun-if-changed=connect/catalogue.pub");
+    let pub_key = std::fs::read_to_string("connect/catalogue.pub").expect("connect/catalogue.pub");
+    let pub_key = pub_key.trim();
+    if !(pub_key.is_empty()
+        || (pub_key.len() == 64 && pub_key.bytes().all(|b| b.is_ascii_hexdigit())))
+    {
+        panic!(
+            "connect/catalogue.pub must be empty or 64 hex digits (scripts/connect/new-key.mjs)"
+        );
+    }
     println!("cargo::rustc-check-cfg=cfg(connect_test_key)");
     if std::env::var_os("CARGO_FEATURE_CONNECT_TEST_KEY").is_some()
         && std::env::var_os("CARGO_CFG_DEBUG_ASSERTIONS").is_some()
