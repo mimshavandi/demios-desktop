@@ -262,6 +262,11 @@ pub fn start_run(
     let id = Id::new();
     let (p, j) = key_params(key);
     let tx = conn.unchecked_transaction()?;
+    // Checked in the same transaction as the insert: a job turned off or removed since
+    // the scheduler planned this run doesn't start.
+    if !job_state(&tx, key)?.enabled {
+        return Err(JobsError::JobOff);
+    }
     settle(&tx, key, scheduled_for)?;
     tx.execute(
         "INSERT INTO jobs_runs (id, plugin_id, job_id, scheduled_for, started_at, late,
@@ -296,6 +301,15 @@ pub fn finish_run(
         params![run.to_string(), outcome.as_str(), error, now],
     )?;
     if changed == 0 {
+        let exists: bool = tx.query_row(
+            "SELECT EXISTS (SELECT 1 FROM jobs_runs WHERE id = ?1)",
+            [run.to_string()],
+            |r| r.get(0),
+        )?;
+        if !exists {
+            // "Delete all" or removing the add-on deleted it while it ran.
+            return Ok(());
+        }
         return Err(JobsError::Damaged(format!("run {run} isn't running")));
     }
     if outcome == Outcome::Succeeded {
@@ -603,9 +617,38 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_job_that_is_off_or_gone_does_not_start() {
+        let conn = db();
+        let k = key("daily");
+        assert!(matches!(
+            start_run(&conn, &k, 5, false, 1, 6),
+            Err(JobsError::JobOff)
+        ));
+        set_enabled(&conn, &k, true, 1).unwrap();
+        set_enabled(&conn, &k, false, 2).unwrap();
+        assert!(matches!(
+            start_run(&conn, &k, 5, false, 1, 6),
+            Err(JobsError::JobOff)
+        ));
+        assert!(history(&conn, &k, 5).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_run_deleted_while_it_ran_finishes_quietly() {
+        let conn = db();
+        let k = key("daily");
+        set_enabled(&conn, &k, true, 1).unwrap();
+        let run = start_run(&conn, &k, 5, false, 1, 6).unwrap();
+        delete_all(&conn).unwrap();
+        finish_run(&conn, run, Outcome::Cancelled, None, 7).unwrap();
+        assert!(history(&conn, &k, 5).unwrap().is_empty());
+    }
+
+    #[test]
     fn a_crash_leaves_runs_interrupted_not_running() {
         let conn = db();
         let k = key("daily");
+        set_enabled(&conn, &k, true, 1).unwrap();
         start_run(&conn, &k, 500, false, 1, 501).unwrap();
         assert_eq!(recover(&conn, 600).unwrap(), 1);
         assert_eq!(

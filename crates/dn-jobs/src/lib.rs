@@ -69,6 +69,10 @@ pub enum JobsError {
     BadAnswer(String),
     #[error("this approval isn't approved, or it already ran")]
     NotApproved,
+    #[error("that job is off or its add-on was removed")]
+    JobOff,
+    #[error("background jobs are paused")]
+    Paused,
     #[error("no \"Run it now?\" question is waiting for that job")]
     NoQuestion,
 }

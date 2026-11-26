@@ -81,6 +81,8 @@ struct Planned {
     scheduled_for: i64,
     late: bool,
     covers_runs: u64,
+    /// The user's "Run now" answer; asking already settled its time.
+    answered: bool,
 }
 
 /// The scheduler. The host keeps it in an `Arc`, calls [`Scheduler::run`] on a task, and
@@ -91,7 +93,7 @@ pub struct Scheduler {
     db: Arc<Mutex<Connection>>,
     clock: Arc<dyn Clock>,
     wake: Notify,
-    current: Mutex<Option<CancelToken>>,
+    current: Mutex<Option<(JobKey, CancelToken)>>,
 }
 
 impl Scheduler {
@@ -158,6 +160,7 @@ impl Scheduler {
                             scheduled_for,
                             late,
                             covers_runs,
+                            answered: false,
                         },
                     )),
                     Decision::Ask {
@@ -193,23 +196,46 @@ impl Scheduler {
         Ok(runs)
     }
 
-    async fn run_planned(&self, index: usize, planned: Planned) -> Result<Outcome> {
+    /// Starts one planned run, or returns `None` when it may not start any more: pause-all
+    /// or quiet hours began, the job was turned off or removed, or its time was settled
+    /// meanwhile. The cancel token is registered before that check, so pause-all can
+    /// always reach a run that does start.
+    async fn run_planned(&self, index: usize, planned: Planned) -> Result<Option<Outcome>> {
         let job = &self.jobs[index];
+        let cancel = CancelToken::new();
+        *self.current.lock().unwrap_or_else(|p| p.into_inner()) =
+            Some((job.key.clone(), cancel.clone()));
         let now = self.clock.now();
-        let (run, last_success) = self.with_db(|conn| {
-            let last = store::job_state(conn, &job.key)?.last_success;
-            let run = store::start_run(
+        let started = self.with_db(|conn| {
+            if self.quiet_or_paused(conn, now)? || cancel.is_cancelled() {
+                return Ok(None);
+            }
+            let state = store::job_state(conn, &job.key)?;
+            let settled =
+                !planned.answered && state.since().is_some_and(|s| s >= planned.scheduled_for);
+            if !state.enabled || settled {
+                return Ok(None);
+            }
+            match store::start_run(
                 conn,
                 &job.key,
                 planned.scheduled_for,
                 planned.late,
                 planned.covers_runs,
                 now,
-            )?;
-            Ok((run, last))
-        })?;
-        let cancel = CancelToken::new();
-        *self.current.lock().unwrap_or_else(|p| p.into_inner()) = Some(cancel.clone());
+            ) {
+                Ok(run) => Ok(Some((run, state.last_success))),
+                Err(JobsError::JobOff) => Ok(None),
+                Err(e) => Err(e),
+            }
+        });
+        let (run, last_success) = match started {
+            Ok(Some(started)) => started,
+            other => {
+                *self.current.lock().unwrap_or_else(|p| p.into_inner()) = None;
+                return other.map(|_| None);
+            }
+        };
         self.host.changed(Event::Started {
             job: job.key.clone(),
             run,
@@ -251,7 +277,7 @@ impl Scheduler {
             run,
             outcome,
         });
-        Ok(outcome)
+        Ok(Some(outcome))
     }
 
     /// One pass: plan, then start the due runs one at a time. Returns how many ran.
@@ -263,8 +289,9 @@ impl Scheduler {
             if self.with_db(|conn| self.quiet_or_paused(conn, now))? {
                 break;
             }
-            self.run_planned(index, planned).await?;
-            ran += 1;
+            if self.run_planned(index, planned).await?.is_some() {
+                ran += 1;
+            }
         }
         Ok(ran)
     }
@@ -297,8 +324,9 @@ impl Scheduler {
             scheduled_for: q.scheduled_for,
             late: true,
             covers_runs: q.missed,
+            answered: true,
         };
-        self.run_planned(index, planned).await.map(Some)
+        self.run_planned(index, planned).await
     }
 
     /// Pause-all: stops the running job at once and starts nothing until it's turned off.
@@ -314,7 +342,7 @@ impl Scheduler {
 
     /// Cancels the running job, if any (pause-all, "Delete all", shutdown).
     pub fn cancel_current(&self) {
-        if let Some(c) = self
+        if let Some((_, c)) = self
             .current
             .lock()
             .unwrap_or_else(|p| p.into_inner())
@@ -322,6 +350,25 @@ impl Scheduler {
         {
             c.cancel();
         }
+    }
+
+    /// Turns a job on or off. Turning off the job that is running stops it at once.
+    pub fn set_enabled(&self, key: &JobKey, enabled: bool) -> Result<()> {
+        let now = self.clock.now();
+        self.with_db(|conn| store::set_enabled(conn, key, enabled, now))?;
+        if enabled {
+            self.wake.notify_one();
+        } else if let Some((running, c)) = self
+            .current
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+        {
+            if running == key {
+                c.cancel();
+            }
+        }
+        Ok(())
     }
 
     /// "Delete all local data": stops the running job, then empties every job table and
@@ -347,7 +394,11 @@ impl Scheduler {
     /// shows it; the loop doesn't swallow it.
     pub async fn run(&self, stop: &Notify) -> Result<()> {
         let now = self.clock.now();
-        self.with_db(|conn| store::recover(conn, now))?;
+        self.with_db(|conn| {
+            store::recover(conn, now)?;
+            crate::held::recover(conn)?;
+            Ok(())
+        })?;
         loop {
             self.run_due().await?;
             tokio::select! {
@@ -575,6 +626,101 @@ mod tests {
         assert!(store::history(&conn, &key("daily"), 5).unwrap().is_empty());
         assert!(crate::held::waiting(&conn, MON).unwrap().is_empty());
         assert!(!store::job_state(&conn, &key("daily")).unwrap().enabled);
+    }
+
+    #[tokio::test]
+    async fn a_job_turned_off_while_another_runs_does_not_start() {
+        // Two jobs due in one pass; the second is turned off while the first runs.
+        let conn = db();
+        let a = key("first");
+        let b = key("second");
+        store::set_enabled(&conn, &a, true, MON).unwrap();
+        store::set_enabled(&conn, &b, true, MON).unwrap();
+        let db = Arc::new(Mutex::new(conn));
+        struct TurnsOffB(Arc<Mutex<Connection>>, AtomicUsize);
+        impl JobHost for TurnsOffB {
+            fn run_job<'a>(
+                &'a self,
+                _job: &'a JobKey,
+                _ctx: &'a JobContext,
+            ) -> BoxFuture<'a, std::result::Result<(), PluginError>> {
+                self.1.fetch_add(1, Ordering::SeqCst);
+                store::set_enabled(&self.0.lock().unwrap(), &key("second"), false, MON).unwrap();
+                Box::pin(async { Ok(()) })
+            }
+            fn changed(&self, _: Event) {}
+        }
+        let host = Arc::new(TurnsOffB(db.clone(), AtomicUsize::new(0)));
+        let decl = |id: &str| {
+            JobDecl::new(
+                id,
+                id,
+                Schedule::DailyAt { hour: 7, minute: 0 },
+                6 * 3600,
+                60,
+            )
+        };
+        let s = Scheduler::new(
+            host.clone(),
+            vec![
+                ScheduledJob {
+                    key: a,
+                    decl: decl("first"),
+                },
+                ScheduledJob {
+                    key: b.clone(),
+                    decl: decl("second"),
+                },
+            ],
+            db,
+            Arc::new(FakeClock(AtomicI64::new(MON + 7 * H))),
+        );
+        assert_eq!(s.run_due().await.unwrap(), 1);
+        assert_eq!(host.1.load(Ordering::SeqCst), 1);
+        assert!(
+            store::history(&s.db.lock().unwrap(), &b, 5)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn turning_off_the_running_job_stops_it() {
+        let (host, s, _) = setup(FRESH, MON, MON + 7 * H);
+        host.mode.store(2, Ordering::SeqCst);
+        let s = Arc::new(s);
+        let runner = {
+            let s = s.clone();
+            tokio::spawn(async move { s.run_due().await })
+        };
+        while host.runs.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+        s.set_enabled(&key("daily"), false).unwrap();
+        runner.await.unwrap().unwrap();
+        let h = store::history(&s.db.lock().unwrap(), &key("daily"), 5).unwrap();
+        assert_eq!(h[0].outcome, Outcome::Cancelled);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn delete_all_during_a_run_stops_it_without_an_error() {
+        let (host, s, _) = setup(FRESH, MON, MON + 7 * H);
+        host.mode.store(2, Ordering::SeqCst);
+        let s = Arc::new(s);
+        let runner = {
+            let s = s.clone();
+            tokio::spawn(async move { s.run_due().await })
+        };
+        while host.runs.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+        s.delete_all().unwrap();
+        runner.await.unwrap().unwrap();
+        assert!(
+            store::history(&s.db.lock().unwrap(), &key("daily"), 5)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]

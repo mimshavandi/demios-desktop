@@ -131,10 +131,11 @@ pub struct Answer {
     pub signature: Option<Vec<u8>>,
 }
 
-/// The exact bytes a device signs to answer a held call.
-pub fn answer_message(approval: Id, approve: bool, arguments_sha256: &str) -> Vec<u8> {
+/// The exact bytes a device signs to answer a held call: the call, the tool, the
+/// decision and the SHA-256 of the arguments it showed.
+pub fn answer_message(approval: Id, tool: &str, approve: bool, arguments_sha256: &str) -> Vec<u8> {
     format!(
-        "dn-held-answer v1\n{approval}\n{}\n{arguments_sha256}",
+        "dn-held-answer v1\n{approval}\n{tool}\n{}\n{arguments_sha256}",
         if approve { "approve" } else { "deny" }
     )
     .into_bytes()
@@ -304,7 +305,12 @@ pub fn answer(
     if answer.arguments_sha256 != current.arguments_sha256 {
         return Err(JobsError::ArgumentsChanged);
     }
-    let message = answer_message(answer.approval, answer.approve, &answer.arguments_sha256);
+    let message = answer_message(
+        answer.approval,
+        &current.tool,
+        answer.approve,
+        &answer.arguments_sha256,
+    );
     verifier
         .verify(&answer.answered_by, &message, answer.signature.as_deref())
         .map_err(JobsError::BadAnswer)?;
@@ -345,7 +351,19 @@ pub fn dismiss(conn: &Connection, id: Id) -> Result<()> {
 }
 
 /// Hands an approved call to the runner, once. A second call gets [`JobsError::NotApproved`].
+/// Nothing is handed out while jobs are paused or the job is off or removed; the call
+/// stays approved until then.
 pub fn take_approved(conn: &Connection, id: Id) -> Result<HeldApproval> {
+    let call = get(conn, id)?;
+    if call.state != HeldState::Approved {
+        return Err(JobsError::NotApproved);
+    }
+    if crate::store::paused(conn)? {
+        return Err(JobsError::Paused);
+    }
+    if !crate::store::job_state(conn, &call.job)?.enabled {
+        return Err(JobsError::JobOff);
+    }
     let changed = conn.execute(
         "UPDATE held_approvals SET state = 'running' WHERE id = ?1 AND state = 'approved'",
         [id.to_string()],
@@ -370,6 +388,16 @@ pub fn finish(conn: &Connection, id: Id, result: std::result::Result<(), String>
         return Err(JobsError::NotApproved);
     }
     Ok(())
+}
+
+/// At start: calls left `running` by a crash are marked `failed` ("interrupted"). They
+/// are never run again.
+pub fn recover(conn: &Connection) -> Result<usize> {
+    Ok(conn.execute(
+        "UPDATE held_approvals SET state = 'failed', error = 'interrupted'
+         WHERE state = 'running'",
+        [],
+    )?)
 }
 
 /// Deletes one add-on's held calls.
@@ -412,9 +440,11 @@ mod tests {
         }
     }
 
+    const TOOL: &str = "plugin.brief.send_mail";
+
     fn sign(by: &str, approval: Id, approve: bool, sha: &str) -> Vec<u8> {
         let mut sig = format!("ok:{by}:").into_bytes();
-        sig.extend_from_slice(&answer_message(approval, approve, sha));
+        sig.extend_from_slice(&answer_message(approval, TOOL, approve, sha));
         sig
     }
 
@@ -459,6 +489,7 @@ mod tests {
     #[test]
     fn a_signed_answer_applies_once_and_the_call_runs_once() {
         let conn = db();
+        crate::store::set_enabled(&conn, &key("daily"), true, 1).unwrap();
         let h = hold(&conn, &request(), None, 100).unwrap();
         let a = answer_for(&h, "phone", true);
         assert_eq!(answer(&conn, &PHONE, &a, 110).unwrap(), HeldState::Approved);
@@ -480,6 +511,29 @@ mod tests {
         ));
         finish(&conn, h.id, Ok(())).unwrap();
         assert_eq!(get(&conn, h.id).unwrap().state, HeldState::Ran);
+    }
+
+    #[test]
+    fn an_approved_call_waits_while_paused_or_the_job_is_off_and_a_crash_never_reruns_it() {
+        let conn = db();
+        let k = key("daily");
+        let h = hold(&conn, &request(), None, 100).unwrap();
+        answer(&conn, &PHONE, &answer_for(&h, "phone", true), 101).unwrap();
+        assert!(matches!(take_approved(&conn, h.id), Err(JobsError::JobOff)));
+        crate::store::set_enabled(&conn, &k, true, 1).unwrap();
+        crate::store::set_paused(&conn, true).unwrap();
+        assert!(matches!(take_approved(&conn, h.id), Err(JobsError::Paused)));
+        crate::store::set_paused(&conn, false).unwrap();
+        assert_eq!(get(&conn, h.id).unwrap().state, HeldState::Approved);
+        take_approved(&conn, h.id).unwrap();
+        assert_eq!(recover(&conn).unwrap(), 1);
+        let after = get(&conn, h.id).unwrap();
+        assert_eq!(after.state, HeldState::Failed);
+        assert_eq!(after.error.as_deref(), Some("interrupted"));
+        assert!(matches!(
+            take_approved(&conn, h.id),
+            Err(JobsError::NotApproved)
+        ));
     }
 
     #[test]
@@ -583,13 +637,17 @@ mod tests {
     }
 
     #[test]
-    fn the_signed_message_names_the_call_the_decision_and_the_arguments() {
+    fn the_signed_message_names_the_call_the_tool_the_decision_and_the_arguments() {
         let id = Id::new();
-        let m = String::from_utf8(answer_message(id, true, "ab")).unwrap();
-        assert_eq!(m, format!("dn-held-answer v1\n{id}\napprove\nab"));
+        let m = String::from_utf8(answer_message(id, "t", true, "ab")).unwrap();
+        assert_eq!(m, format!("dn-held-answer v1\n{id}\nt\napprove\nab"));
         assert_ne!(
-            answer_message(id, true, "ab"),
-            answer_message(id, false, "ab")
+            answer_message(id, "t", true, "ab"),
+            answer_message(id, "t", false, "ab")
+        );
+        assert_ne!(
+            answer_message(id, "t", true, "ab"),
+            answer_message(id, "u", true, "ab")
         );
     }
 }
