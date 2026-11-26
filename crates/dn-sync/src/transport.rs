@@ -39,8 +39,8 @@ use rustls::{
     SignatureScheme,
 };
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio_rustls::{TlsAcceptor, TlsConnector, TlsStream};
 
@@ -566,15 +566,20 @@ pub async fn join<S: AsyncRead + AsyncWrite + Unpin>(
     })
 }
 
+fn lock_db(db: &Mutex<Connection>) -> std::sync::MutexGuard<'_, Connection> {
+    db.lock().unwrap_or_else(|p| p.into_inner())
+}
+
 /// On the Node: reads a pairing request and checks it against the offer. A wrong or late
-/// proof, or a device that was removed, gets a refusal and an error.
+/// proof, or a device that was removed, gets a refusal and an error. The database is
+/// locked only for the device-list lookup, never across a network wait.
 pub async fn read_join<S: AsyncRead + AsyncWrite + Unpin>(
-    conn: &Connection,
+    db: &Mutex<Connection>,
     channel: &mut Channel<S>,
     offer: &mut PairingOffer,
-    now: u64,
+    now: impl Fn() -> u64,
 ) -> Result<JoinRequest> {
-    let result = check_join(conn, channel, offer, now).await;
+    let result = check_join(db, channel, offer, now).await;
     if result.is_err() {
         // Best effort: the error itself is what's reported.
         let _ = channel.send(&Message::JoinAnswer { accepted: false }).await;
@@ -583,10 +588,10 @@ pub async fn read_join<S: AsyncRead + AsyncWrite + Unpin>(
 }
 
 async fn check_join<S: AsyncRead + AsyncWrite + Unpin>(
-    conn: &Connection,
+    db: &Mutex<Connection>,
     channel: &mut Channel<S>,
     offer: &mut PairingOffer,
-    now: u64,
+    now: impl Fn() -> u64,
 ) -> Result<JoinRequest> {
     let Message::Join {
         x25519,
@@ -597,7 +602,8 @@ async fn check_join<S: AsyncRead + AsyncWrite + Unpin>(
     else {
         return Err(SyncError::Protocol("expected a pairing request"));
     };
-    if let Some(existing) = DeviceList::by_signing_key(conn, &channel.peer)? {
+    let existing = DeviceList::by_signing_key(&lock_db(db), &channel.peer)?;
+    if let Some(existing) = existing {
         return Err(if existing.is_member() {
             SyncError::AlreadyPaired
         } else {
@@ -611,7 +617,10 @@ async fn check_join<S: AsyncRead + AsyncWrite + Unpin>(
         ed25519: channel.peer,
         x25519,
     };
-    let numbers = offer.accept(&identity, &proof, &channel.binding, now)?;
+    // The name is shown to the person before the device is added: same rules as the list.
+    let name = crate::devices::clean_name(&name)?;
+    // The time the request arrived, not when the Node started waiting for it.
+    let numbers = offer.accept(&identity, &proof, &channel.binding, now())?;
     Ok(JoinRequest {
         identity,
         name,
@@ -623,7 +632,7 @@ async fn check_join<S: AsyncRead + AsyncWrite + Unpin>(
 /// On the Node, after the person answered: adds the device if they confirmed the numbers,
 /// and tells the joining device either way.
 pub async fn finish_join<S: AsyncRead + AsyncWrite + Unpin>(
-    conn: &Connection,
+    db: &Mutex<Connection>,
     channel: &mut Channel<S>,
     request: &JoinRequest,
     confirmed_by: Option<crate::DeviceId>,
@@ -637,7 +646,7 @@ pub async fn finish_join<S: AsyncRead + AsyncWrite + Unpin>(
         return Ok(None);
     }
     let added = DeviceList::add(
-        conn,
+        &lock_db(db),
         &request.identity,
         &request.name,
         request.kind,
@@ -670,7 +679,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_device_pairs_over_the_channel_and_then_connects_as_a_member() {
-        let conn = db();
+        let db = Mutex::new(db());
+        let conn_guard = || db.lock().unwrap();
         let node = DeviceKeys::generate().unwrap();
         let node_key = node.public().ed25519;
         let laptop = DeviceKeys::generate().unwrap();
@@ -681,13 +691,13 @@ mod tests {
         let node_side = async {
             let mut ch = accept(b, &node).await.unwrap();
             assert!(matches!(
-                authorize_member(&conn, &ch),
+                authorize_member(&conn_guard(), &ch),
                 Err(SyncError::UnknownDevice)
             ));
-            let req = read_join(&conn, &mut ch, &mut offer, NOW + 5)
+            let req = read_join(&db, &mut ch, &mut offer, || NOW + 5)
                 .await
                 .unwrap();
-            let device = finish_join(&conn, &mut ch, &req, None, true, 1)
+            let device = finish_join(&db, &mut ch, &req, None, true, 1)
                 .await
                 .unwrap()
                 .unwrap();
@@ -711,7 +721,10 @@ mod tests {
         let (server, client) = tokio::join!(accept(b, &node), connect(a, &laptop, &node_key));
         let server = server.unwrap();
         let client = client.unwrap();
-        assert_eq!(authorize_member(&conn, &server).unwrap().id, laptop.id());
+        assert_eq!(
+            authorize_member(&conn_guard(), &server).unwrap().id,
+            laptop.id()
+        );
         assert_eq!(server.binding(), client.binding());
         assert_eq!(client.peer_signing_key(), &node_key);
     }
@@ -741,7 +754,8 @@ mod tests {
     /// another connection: the proof is bound to the TLS channel it was made on.
     #[tokio::test]
     async fn a_proof_relayed_from_another_connection_is_refused() {
-        let conn = db();
+        let db = Mutex::new(db());
+        let conn_guard = || db.lock().unwrap();
         let node = DeviceKeys::generate().unwrap();
         let node_key = node.public().ed25519;
         let laptop = DeviceKeys::generate().unwrap();
@@ -751,7 +765,7 @@ mod tests {
         let (a, b) = pipe();
         let node_side = async {
             let mut ch = accept(b, &node).await.unwrap();
-            read_join(&conn, &mut ch, &mut offer, NOW).await
+            read_join(&db, &mut ch, &mut offer, || NOW).await
         };
         let relay_side = async {
             // Same keys as the laptop (as if it had them), but a proof from another channel.
@@ -770,17 +784,18 @@ mod tests {
         let (node_result, answer) = tokio::join!(node_side, relay_side);
         assert!(matches!(node_result, Err(SyncError::WrongProof)));
         assert_eq!(answer, Message::JoinAnswer { accepted: false });
-        assert!(DeviceList::members(&conn).unwrap().is_empty());
+        assert!(DeviceList::members(&conn_guard()).unwrap().is_empty());
     }
 
     #[tokio::test]
     async fn the_node_refuses_a_removed_device_on_connect_and_on_re_pairing() {
-        let conn = db();
+        let db = Mutex::new(db());
+        let conn_guard = || db.lock().unwrap();
         let node = DeviceKeys::generate().unwrap();
         let node_key = node.public().ed25519;
         let phone = DeviceKeys::generate().unwrap();
         DeviceList::add(
-            &conn,
+            &conn_guard(),
             &phone.public(),
             "Work phone",
             DeviceKind::Phone,
@@ -788,14 +803,14 @@ mod tests {
             1,
         )
         .unwrap();
-        DeviceList::remove(&conn, phone.id(), 2).unwrap();
+        DeviceList::remove(&conn_guard(), phone.id(), 2).unwrap();
 
         let (a, b) = pipe();
         let (server, client) = tokio::join!(accept(b, &node), connect(a, &phone, &node_key));
         let server = server.unwrap();
         client.unwrap();
         assert!(matches!(
-            authorize_member(&conn, &server),
+            authorize_member(&conn_guard(), &server),
             Err(SyncError::Removed)
         ));
 
@@ -805,7 +820,7 @@ mod tests {
         let (a, b) = pipe();
         let node_side = async {
             let mut ch = accept(b, &node).await.unwrap();
-            read_join(&conn, &mut ch, &mut offer, NOW).await
+            read_join(&db, &mut ch, &mut offer, || NOW).await
         };
         let joiner_side = async {
             join(a, &phone, &link, "Work phone", DeviceKind::Phone)
@@ -821,7 +836,8 @@ mod tests {
 
     #[tokio::test]
     async fn the_person_declining_on_the_node_adds_nothing() {
-        let conn = db();
+        let db = Mutex::new(db());
+        let conn_guard = || db.lock().unwrap();
         let node = DeviceKeys::generate().unwrap();
         let laptop = DeviceKeys::generate().unwrap();
         let mut offer = PairingOffer::new("nas:7443", node.public(), NOW).unwrap();
@@ -829,8 +845,8 @@ mod tests {
         let (a, b) = pipe();
         let node_side = async {
             let mut ch = accept(b, &node).await.unwrap();
-            let req = read_join(&conn, &mut ch, &mut offer, NOW).await.unwrap();
-            finish_join(&conn, &mut ch, &req, None, false, 1)
+            let req = read_join(&db, &mut ch, &mut offer, || NOW).await.unwrap();
+            finish_join(&db, &mut ch, &req, None, false, 1)
                 .await
                 .unwrap()
         };
@@ -844,7 +860,7 @@ mod tests {
         let (added, answer) = tokio::join!(node_side, joiner_side);
         assert!(added.is_none());
         assert!(matches!(answer, Err(SyncError::Declined)));
-        assert!(DeviceList::members(&conn).unwrap().is_empty());
+        assert!(DeviceList::members(&conn_guard()).unwrap().is_empty());
     }
 
     #[tokio::test]
