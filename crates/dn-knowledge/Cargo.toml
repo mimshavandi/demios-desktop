@@ -3,6 +3,7 @@ name = "dn-knowledge"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Local knowledge index over project files: BM25 (SQLite FTS5) plus embeddings, with cited, quoted retrieval (ADR-0007)."

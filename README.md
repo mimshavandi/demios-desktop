@@ -1,13 +1,13 @@
 # Demios Desktop
 
-An open-source desktop app for chatting with AI models you choose: one running on your own computer, or a provider you reach with your own API key. No account needed.
+A source-available desktop app for chatting with AI models you choose: one running on your own computer, or a provider you reach with your own API key. No account needed.
 
 ## Why Demios Desktop
 
 - **Local first.** Chats and settings stay in a database on your computer. Models from the catalogue run on your machine, and nothing leaves it.
 - **Your keys stay yours.** Provider API keys are stored in your operating system's keychain, not in a file.
 - **Nothing is sent to us.** There is no Demios account, server, analytics or crash reporting.
-- **Open source.** Apache-2.0 licence. Read the code, build it yourself, change it.
+- **Source available.** PolyForm Shield 1.0.0 licence: read the code, build it yourself, change it and use it, for anything except a product that competes with Demios. Versions up to v0.1.0-preview.8cd482c stay under Apache-2.0.
 
 ## What it does today
 
@@ -140,4 +140,4 @@ Please report vulnerabilities privately, as described in [SECURITY.md](SECURITY.
 
 ## Licence
 
-[Apache-2.0](LICENSE).
+[PolyForm Shield 1.0.0](LICENSE). Versions up to and including v0.1.0-preview.8cd482c were published under Apache-2.0 and stay under it.

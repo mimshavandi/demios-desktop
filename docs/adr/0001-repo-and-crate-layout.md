@@ -8,7 +8,7 @@ The open-source app and any proprietary add-ons share one base. The app and ever
 ## Decision
 Two repos, one Cargo workspace each:
 
-1. **`demios-desktop`** (public, Apache-2.0) — the open-source app and every shared crate:
+1. **`demios-desktop`** (public, PolyForm Shield 1.0.0 since ADR-0017; Apache-2.0 before) — the source-available app and every shared crate:
    ```
    crates/
      dn-core        domain types: ids, model refs, slots, conversation, artifact, events

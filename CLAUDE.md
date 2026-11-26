@@ -2,7 +2,7 @@
 
 Guidance for Claude Code sessions in demios-desktop.
 
-- This is the open-source (Apache-2.0) Demios Desktop app and its shared crates. Public docs index: `docs/README.md`; architecture decisions: `docs/adr/`. Maintainers track tasks and planning privately; your brief names your task IDs.
+- This is the source-available (PolyForm Shield 1.0.0, ADR-0017) Demios Desktop app and its shared crates. Public docs index: `docs/README.md`; architecture decisions: `docs/adr/`. Maintainers track tasks and planning privately; your brief names your task IDs.
 - Work only on the task IDs in your brief; one worker per set of crates. Report to the lead session, not the owner.
 - `dn-core` types are contracts: change them only with an ADR reference, and tell the lead.
 - No `unsafe` (workspace lint forbids it); only `dn-inference` may opt out for the llama.cpp FFI, with a comment per block.

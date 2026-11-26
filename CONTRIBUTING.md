@@ -6,4 +6,4 @@
 4. New dependency → row in `docs/dependencies.md` and approval in the PR.
 5. Architecture change → new or superseding ADR in `docs/adr/`.
 
-Licensed under Apache-2.0; contributions are accepted under the same licence.
+This repository is licensed under the PolyForm Shield License 1.0.0 ([LICENSE](LICENSE), ADR-0017). By contributing, you license your contribution to DigiNote, Inc. under the Apache License 2.0, and you confirm you have the right to do so (Developer Certificate of Origin: sign off your commits with `git commit -s`). DigiNote, Inc. may then publish it as part of the project under the project's licence.
