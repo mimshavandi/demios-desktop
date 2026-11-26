@@ -406,6 +406,27 @@ pub async fn run<S: AsyncRead + AsyncWrite + Unpin>(
     Ok(report)
 }
 
+/// Ends sync on a device that leaves its Node (unpair, forget, Delete all): deletes the
+/// group keys this device holds for `node`, and everything sync kept, so nothing of the
+/// old group is sent or applied again. The records themselves stay.
+pub fn reset(conn: &Connection, store: &dyn SecretStore, node: &PublicIdentity) -> Result<()> {
+    if let Some(chain) = crate::membership::load(conn, node)? {
+        for epoch in 0..=chain.epoch() {
+            crate::membership::delete_key(store, &chain.group(), epoch)?;
+        }
+    }
+    conn.execute_batch(
+        "SAVEPOINT sync_reset;
+         DELETE FROM sync_vector; DELETE FROM sync_seen; DELETE FROM sync_inbox;
+         DELETE FROM sync_held_authors; DELETE FROM sync_clock; DELETE FROM sync_fields;
+         DELETE FROM sync_conflicts; DELETE FROM sync_purged; DELETE FROM sync_scan;
+         DELETE FROM sync_outbox; DELETE FROM sync_notices; DELETE FROM sync_envelopes;
+         DELETE FROM sync_membership;
+         RELEASE sync_reset;",
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -722,5 +743,38 @@ mod tests {
             sync.answer(laptop.keys.id(), Message::Push { envelopes: foreign }, NOW)
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn leaving_the_node_deletes_the_group_keys_and_what_sync_kept() {
+        let node = Node::new();
+        let laptop = Dev::new();
+        node.add(&laptop);
+        {
+            let conn = laptop.db.lock().unwrap();
+            chat::create_conversation(&conn, "Kept").unwrap();
+        }
+        laptop.sync(&node).await.unwrap();
+        let conn = laptop.db.lock().unwrap();
+        let group = node.group.lock().unwrap().chain().group();
+        assert!(
+            crate::membership::load_key(&laptop.store, &group, 0)
+                .unwrap()
+                .is_some()
+        );
+        reset(&conn, &laptop.store, &node.keys.public()).unwrap();
+        assert!(
+            crate::membership::load_key(&laptop.store, &group, 0)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            crate::membership::load(&conn, &node.keys.public())
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(held(&conn).unwrap(), Vector::default());
+        drop(conn);
+        assert_eq!(laptop.titles(), ["Kept"], "the records stay");
     }
 }

@@ -121,6 +121,7 @@ interface Commands {
   node_remove_device: { args: { id: string }; ret: NodeOverview };
   node_unpair: { args: Record<string, never>; ret: NodeOverview };
   node_forget: { args: Record<string, never>; ret: NodeOverview };
+  node_sync_now: { args: Record<string, never>; ret: NodeOverview };
   set_provider_key: { args: { providerId: string; apiKey: string }; ret: ModelCatalog };
   delete_provider_key: { args: { providerId: string }; ret: ModelCatalog };
   add_remote_server: { args: { name: string; baseUrl: string; apiKey: string | null }; ret: ModelCatalog };
@@ -312,6 +313,8 @@ export const api = {
   nodeUnpair: () => call("node_unpair", {}),
   /** Forgets the Node on this computer only (the Node keeps listing it). */
   nodeForget: () => call("node_forget", {}),
+  /** A sync round at once; after sync stopped, it starts again. */
+  nodeSyncNow: () => call("node_sync_now", {}),
   setProviderKey: (providerId: string, apiKey: string) =>
     call("set_provider_key", { providerId, apiKey }),
   deleteProviderKey: (providerId: string) => call("delete_provider_key", { providerId }),

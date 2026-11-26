@@ -1,7 +1,13 @@
 import { CircleCheck, CircleOff, Laptop, MoreHorizontal, Server, Smartphone, Trash2, Unlink } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Api } from "../ipc/commands";
-import { errorMessage, type JoinStarted, type NodeDevice, type NodeOverview } from "../ipc/types";
+import {
+  errorMessage,
+  type JoinStarted,
+  type NodeDevice,
+  type NodeOverview,
+  type SyncStatus,
+} from "../ipc/types";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Dialog } from "./Dialog";
 import { DropdownMenu } from "./DropdownMenu";
@@ -24,6 +30,28 @@ export function lastSyncedText(ms: number | null, now = Date.now()): string {
   if (min < 1) return "Last synced just now";
   if (min < 60) return `Last synced ${min} min ago`;
   return `Last synced ${whenText(ms, now)}`;
+}
+
+/** This device's row: where sync stands ("Syncing now", "Up to date · last synced …"). */
+export function thisDeviceSyncText(sync: SyncStatus, now = Date.now()): string {
+  switch (sync.state) {
+    case "syncing":
+      return "Syncing now";
+    case "up_to_date":
+      return `Up to date · ${lastSyncedText(sync.last_synced_at, now).replace("Last synced", "synced")}`;
+    case "retrying":
+      return "Trying again soon";
+    case "stopped":
+      return "Sync stopped";
+    case "off":
+      return lastSyncedText(sync.last_synced_at, now);
+  }
+}
+
+/** "Sync stopped: your Node removed this computer. …" */
+function stoppedText(error: string | null): string {
+  if (error === null) return "Sync stopped.";
+  return `Sync stopped: ${error.charAt(0).toLowerCase()}${error.slice(1)}`;
 }
 
 const KIND_ICON = { desktop: Laptop, node: Server, phone: Smartphone } as const;
@@ -91,6 +119,18 @@ export function NodeSettings({ api }: { api: Api }) {
           : `${removing.name} removed. It can't connect or sync again.`,
       });
       setRemoving(null);
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const syncNow = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      setLoad({ kind: "ready", view: await api.nodeSyncNow() });
     } catch (e) {
       setError(errorMessage(e));
     } finally {
@@ -175,6 +215,21 @@ export function NodeSettings({ api }: { api: Api }) {
             Changes made here are kept and sync when it's back.
           </InlineMessage>
         )}
+        {view.sync.state === "retrying" && view.sync.error !== null && (
+          <InlineMessage tone="warning">{view.sync.error} Trying again soon.</InlineMessage>
+        )}
+        {view.sync.state === "stopped" && (
+          <InlineMessage
+            tone="error"
+            action={
+              <Button size="sm" disabled={busy} onClick={() => void syncNow()}>
+                Sync now
+              </Button>
+            }
+          >
+            {stoppedText(view.sync.error)}
+          </InlineMessage>
+        )}
         <dl className="node-facts">
           {status !== null && (
             <>
@@ -232,7 +287,9 @@ export function NodeSettings({ api }: { api: Api }) {
                       <span className="row-title">{d.name}</span>{" "}
                       {d.this_device && <Badge>This device</Badge>}
                       {d.kind === "node" && <Badge>Node</Badge>}
-                      <div className="dn-help">{lastSyncedText(d.last_synced_at)}</div>
+                      <div className="dn-help">
+                        {d.this_device ? thisDeviceSyncText(view.sync) : lastSyncedText(d.last_synced_at)}
+                      </div>
                     </div>
                   </div>
                   {d.kind !== "node" && (

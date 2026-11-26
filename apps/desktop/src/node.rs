@@ -40,6 +40,8 @@ pub struct PendingJoin {
 #[derive(Default)]
 pub struct NodeState {
     pending: tokio::sync::Mutex<Option<PendingJoin>>,
+    /// Sync with the paired Node (crate::node_sync).
+    pub sync: crate::node_sync::SyncControl,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -64,6 +66,8 @@ pub struct NodeOverview {
     /// keychain). Offline alone isn't a problem: `online` is false and the screen says since
     /// when.
     pub problem: Option<String>,
+    /// Where sync stands.
+    pub sync: crate::node_sync::SyncStatus,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -149,7 +153,7 @@ async fn open(address: &str) -> Result<TcpStream, SyncError> {
     }
 }
 
-async fn connect_member(
+pub(crate) async fn connect_member(
     keys: &DeviceKeys,
     link: &NodeLink,
 ) -> Result<Channel<TcpStream>, SyncError> {
@@ -199,6 +203,7 @@ pub async fn overview(state: &std::sync::Arc<AppState>) -> IpcResult<NodeOvervie
                 status: None,
                 devices: Vec::new(),
                 problem: None,
+                sync: state.node.sync.status(),
             });
         }
         Err(e) => return Err(e),
@@ -209,6 +214,7 @@ pub async fn overview(state: &std::sync::Arc<AppState>) -> IpcResult<NodeOvervie
         status: None,
         devices: Vec::new(),
         problem: None,
+        sync: state.node.sync.status(),
     };
     let mut ch = match connect_member(&keys, &link).await {
         Ok(ch) => ch,
@@ -332,6 +338,14 @@ pub async fn join_wait(
     })
     .await
     .map_err(|e| IpcError::new("node", e.to_string()))??;
+    // Paired: sync starts (the first round seeds what's already here).
+    crate::node_sync::start(state);
+    overview(state).await
+}
+
+/// "Sync now" in Settings › Node.
+pub async fn sync_now(state: &std::sync::Arc<AppState>) -> IpcResult<NodeOverview> {
+    crate::node_sync::sync_now(state);
     overview(state).await
 }
 
@@ -389,6 +403,7 @@ pub async fn forget(state: &std::sync::Arc<AppState>) -> IpcResult<NodeOverview>
     join_cancel(&state.node).await;
     let st = state.clone();
     tauri::async_runtime::spawn_blocking(move || -> IpcResult<()> {
+        crate::node_sync::leave(&st).map_err(|e| IpcError::new("node_sync", e))?;
         link::forget(&*st.db()?).map_err(|e| IpcError::new("node", e.to_string()))
     })
     .await
@@ -418,6 +433,7 @@ pub async fn unpair(state: &std::sync::Arc<AppState>) -> IpcResult<NodeOverview>
     }
     let st = state.clone();
     tauri::async_runtime::spawn_blocking(move || -> IpcResult<()> {
+        crate::node_sync::leave(&st).map_err(|e| IpcError::new("node_sync", e))?;
         link::forget(&*st.db()?).map_err(|e| IpcError::new("node", e.to_string()))
     })
     .await

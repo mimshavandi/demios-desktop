@@ -439,6 +439,11 @@ impl AppState {
         self.project_files.as_deref()
     }
 
+    /// The database itself, for work that takes and lets go of it in batches (sync).
+    pub(crate) fn db_mutex(&self) -> &Mutex<Connection> {
+        &self.db
+    }
+
     pub fn db(&self) -> IpcResult<MutexGuard<'_, Connection>> {
         self.db
             .lock()
@@ -736,6 +741,11 @@ impl AppState {
                 eprintln!("could not delete MCP secret `{id}`: {e}");
                 keys_ok = false;
             }
+        }
+        // Sync with the Node ends first: its group keys are found through the chain.
+        if let Err(e) = crate::node_sync::leave(self) {
+            eprintln!("could not end sync with the Node: {e}");
+            failed.push("sync data");
         }
         // This computer's device keys (Settings › Node): a new identity after Delete all.
         if let Err(e) = self.keys.store.delete(&dn_sync::identity::secret_id()) {

@@ -43,7 +43,7 @@ const REPLY = (q: string, turn: number) =>
   "- *Stop* and *Retry* work on this reply too.";
 
 function noNode(): NodeOverview {
-  return { paired: null, online: false, status: null, devices: [], problem: null };
+  return { paired: null, online: false, status: null, devices: [], problem: null, sync: { state: "off", last_synced_at: null, failures: 0, error: null, applied: 0 } };
 }
 
 function mockPairedNode(): NodeOverview {
@@ -65,6 +65,7 @@ function mockPairedNode(): NodeOverview {
       { id: "c3", name: "Work phone", kind: "phone", last_synced_at: now - 3_600_000, this_device: false },
     ],
     problem: null,
+    sync: { state: "up_to_date", last_synced_at: now, failures: 0, error: null, applied: 0 },
   };
 }
 
@@ -797,6 +798,7 @@ export function createMockApi(): Api {
       nodeView = noNode();
       return nodeView;
     },
+    nodeSyncNow: async () => nodeView,
     setProviderKey: async (p) => {
       keys.add(p);
       return catalog();

@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, describe, expect, it } from "vitest";
 import type { Api } from "../ipc/commands";
 import type { JoinStarted, NodeOverview } from "../ipc/types";
-import { lastSyncedText, NodeSettings, whenText } from "./NodeSettings";
+import { lastSyncedText, NodeSettings, thisDeviceSyncText, whenText } from "./NodeSettings";
 import { TooltipProvider } from "./primitives";
 import { ToastProvider } from "./toast";
 
@@ -15,7 +15,14 @@ globalThis.ResizeObserver ??= class {
 } as unknown as typeof ResizeObserver;
 
 const NOW = Date.now();
-const none: NodeOverview = { paired: null, online: false, status: null, devices: [], problem: null };
+const none: NodeOverview = {
+  paired: null,
+  online: false,
+  status: null,
+  devices: [],
+  problem: null,
+  sync: { state: "off", last_synced_at: null, failures: 0, error: null, applied: 0 },
+};
 const paired: NodeOverview = {
   paired: { name: "Home server", address: "192.168.1.20:7443", paired_at: NOW, last_reached_at: NOW },
   online: true,
@@ -33,6 +40,7 @@ const paired: NodeOverview = {
     { id: "p1", name: "Work phone", kind: "phone", last_synced_at: NOW - 5 * 60_000, this_device: false },
   ],
   problem: null,
+  sync: { state: "up_to_date", last_synced_at: NOW, failures: 0, error: null, applied: 0 },
 };
 
 function fake(start: NodeOverview, over: Partial<Api> = {}) {
@@ -69,6 +77,11 @@ function fake(start: NodeOverview, over: Partial<Api> = {}) {
     nodeForget: async () => {
       calls.push(["forget"]);
       view = none;
+      return view;
+    },
+    nodeSyncNow: async () => {
+      calls.push(["sync"]);
+      view = { ...view, sync: { ...view.sync, state: "syncing", error: null, failures: 0 } };
       return view;
     },
     ...over,
@@ -255,5 +268,48 @@ describe("time text", () => {
     expect(lastSyncedText(now - 2 * 60_000, now)).toBe("Last synced 2 min ago");
     expect(whenText(new Date(2026, 10, 26, 3, 12).getTime(), now)).toMatch(/03:12|3:12/);
     expect(whenText(new Date(2026, 10, 25, 3, 12).getTime(), now)).toMatch(/25/);
+  });
+});
+
+describe("sync", () => {
+  it("says where sync stands on this device's row", () => {
+    const base = paired.sync;
+    expect(thisDeviceSyncText({ ...base, state: "syncing" }, NOW)).toBe("Syncing now");
+    expect(thisDeviceSyncText({ ...base, last_synced_at: NOW - 2 * 60_000 }, NOW)).toBe(
+      "Up to date · synced 2 min ago",
+    );
+    expect(thisDeviceSyncText({ ...base, state: "retrying" }, NOW)).toBe("Trying again soon");
+  });
+
+  it("shows a failure that will be tried again, without a button", async () => {
+    const { api } = fake({
+      ...paired,
+      sync: { ...paired.sync, state: "retrying", failures: 1, error: "Couldn't reach your Node." },
+    });
+    show(api);
+    expect(await screen.findByText("Couldn't reach your Node. Trying again soon.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Sync now" })).toBeNull();
+  });
+
+  it("says why sync stopped and starts it again on Sync now", async () => {
+    const { api, calls } = fake({
+      ...paired,
+      sync: {
+        ...paired.sync,
+        state: "stopped",
+        failures: 5,
+        error: "Your Node removed this computer. Forget the Node here, then pair again.",
+      },
+    });
+    show(api);
+    expect(
+      await screen.findByText(
+        "Sync stopped: your Node removed this computer. Forget the Node here, then pair again.",
+      ),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
+    await waitFor(() => expect(calls).toContainEqual(["sync"]));
+    expect(await screen.findByText("Syncing now")).toBeTruthy();
+    expect(screen.queryByText(/Sync stopped/)).toBeNull();
   });
 });

@@ -614,6 +614,19 @@ export interface PairedNode {
   last_reached_at: number | null;
 }
 
+/** Where sync with the paired Node stands (background, a round every minute). */
+export interface SyncStatus {
+  state: "off" | "syncing" | "up_to_date" | "retrying" | "stopped";
+  /** Unix milliseconds of the last round that worked. */
+  last_synced_at: number | null;
+  /** Failed rounds in a row. */
+  failures: number;
+  /** Why the last round failed, in the user's words. */
+  error: string | null;
+  /** Changes from other devices applied in the last round that worked. */
+  applied: number;
+}
+
 /** `paired: null` when no Node is paired. Offline alone is `online: false` with no problem. */
 export interface NodeOverview {
   paired: PairedNode | null;
@@ -621,6 +634,7 @@ export interface NodeOverview {
   status: NodeStatus | null;
   devices: NodeDevice[];
   problem: string | null;
+  sync: SyncStatus;
 }
 
 export interface JoinStarted {

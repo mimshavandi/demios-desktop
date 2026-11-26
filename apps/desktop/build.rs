@@ -65,6 +65,7 @@ const COMMANDS: &[&str] = &[
     "node_remove_device",
     "node_unpair",
     "node_forget",
+    "node_sync_now",
     "set_provider_key",
     "add_remote_server",
     "refresh_remote_server",

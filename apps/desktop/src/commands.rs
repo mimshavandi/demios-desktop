@@ -1415,6 +1415,12 @@ pub async fn node_unpair(state: AppStateRef<'_>) -> IpcResult<crate::node::NodeO
     crate::node::unpair(state.inner()).await
 }
 
+/// "Sync now": a sync round at once (and sync starts again after it stopped).
+#[tauri::command]
+pub async fn node_sync_now(state: AppStateRef<'_>) -> IpcResult<crate::node::NodeOverview> {
+    crate::node::sync_now(state.inner()).await
+}
+
 /// Forgets the Node on this computer only (a Node that is gone or removed this computer).
 #[tauri::command]
 pub async fn node_forget(state: AppStateRef<'_>) -> IpcResult<crate::node::NodeOverview> {

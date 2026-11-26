@@ -22,6 +22,7 @@ pub mod local;
 pub mod mcp;
 pub mod models;
 pub mod node;
+pub mod node_sync;
 pub mod projects;
 pub mod remote;
 pub mod secrets;
@@ -213,6 +214,7 @@ pub fn run() {
             })?;
             install_add_links(app.handle(), &state);
             knowledge::start(&state);
+            node_sync::start(&state);
             // The page's first commands need these, so they come before the window.
             app.manage(state.clone());
             app.manage(artifact_child::ChildState::default());
@@ -285,6 +287,7 @@ pub fn run() {
             commands::node_remove_device,
             commands::node_unpair,
             commands::node_forget,
+            commands::node_sync_now,
             commands::set_provider_key,
             remote::add_remote_server,
             remote::refresh_remote_server,
