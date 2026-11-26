@@ -36,6 +36,8 @@ pub struct Reply {
     pub hold_head: Option<std::time::Duration>,
     /// Pause between body pieces.
     pub pace: Option<std::time::Duration>,
+    /// A `location` header (redirect replies).
+    pub location: Option<String>,
 }
 
 impl Reply {
@@ -48,6 +50,7 @@ impl Reply {
             hold: None,
             hold_head: None,
             pace: None,
+            location: None,
         }
     }
 
@@ -61,6 +64,7 @@ impl Reply {
             hold: None,
             hold_head: None,
             pace: None,
+            location: None,
         }
     }
 
@@ -73,6 +77,17 @@ impl Reply {
             hold: None,
             hold_head: None,
             pace: None,
+            location: None,
+        }
+    }
+}
+
+impl Reply {
+    /// A `307` to `to`.
+    pub fn redirect(to: &str) -> Self {
+        Self {
+            location: Some(to.to_string()),
+            ..Self::inline(307, "text/plain", "")
         }
     }
 }
@@ -156,8 +171,13 @@ pub async fn serve(replies: Vec<Reply>) -> Server {
             if let Some(d) = reply.hold_head {
                 tokio::time::sleep(d).await;
             }
+            let location = reply
+                .location
+                .as_deref()
+                .map(|l| format!("location: {l}\r\n"))
+                .unwrap_or_default();
             let head = format!(
-                "HTTP/1.1 {} X\r\ncontent-type: {}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                "HTTP/1.1 {} X\r\ncontent-type: {}\r\ncontent-length: {}\r\n{location}connection: close\r\n\r\n",
                 reply.status,
                 reply.content_type,
                 reply.body.len()

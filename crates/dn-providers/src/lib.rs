@@ -12,11 +12,13 @@
 
 mod adapter;
 mod anthropic;
+mod endpoint;
 mod gemini;
 mod http;
 mod openai;
 pub mod policy;
 pub mod resolver;
+mod servers;
 pub mod sse;
 mod util;
 
@@ -25,6 +27,7 @@ pub use adapter::{
     detect_server_family,
 };
 pub use dn_core::CoreError;
+pub use endpoint::{UrlRejected, check_server_url, is_local_host, same_origin_redirects};
 pub use policy::ReasoningPolicy;
 pub use resolver::{ModelResolver, Resolved, ResolvedFrom, SourceEntry};
 pub use util::{BoxFuture, next_event};

@@ -78,7 +78,7 @@ tauri-plugin-updater = { version = "2", optional = true, default-features = fals
 tokio = { workspace = true, features = ["sync", "macros", "time", "rt"] }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "io-util"] }
 
 [lints]
 workspace = true
