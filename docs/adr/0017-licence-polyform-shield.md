@@ -14,7 +14,8 @@ This repository was published under Apache-2.0. Apache-2.0 lets anyone fork the 
 - **Contributions:** contributors license their contributions to DigiNote, Inc. under Apache-2.0 and sign off their commits (Developer Certificate of Origin); DigiNote, Inc. publishes them under the project's licence (CONTRIBUTING.md). Until now every commit has come from the owner, so no consent from others was needed for this change.
 - **Third-party dependencies keep their licences.** All are permissive (deny.toml), which is compatible with distributing under PolyForm Shield. deny.toml and about.toml accept `LicenseRef-PolyForm-Shield-1.0.0` only for our own crates, never for a dependency.
 - **Wording:** the app and its docs say "source-available", not "open source".
-- **Other licences, unchanged by this ADR:** the Twin and the organisation layer stay proprietary; the Relay server's and team server's licences are decided outside this repository.
+- **The Relay, client and server, is part of this repository** and under this licence (ADR-0016 §7).
+- **Other licences, unchanged by this ADR:** the Twin and the organisation layer stay proprietary.
 
 ## Options considered
 | Option | Licence | Effect |
@@ -32,7 +33,7 @@ This repository was published under Apache-2.0. Apache-2.0 lets anyone fork the 
 ## Consequences
 - `LICENSE`, `Cargo.toml`, the npm packages, `tauri.conf.json`, the Flatpak metainfo, README, CONTRIBUTING, the privacy policy and the store listing name the new licence.
 - The CHANGELOG lists the change for users.
-- ADR-0015 and ADR-0016 name this licence for the parts that live in this repository.
+- ADR-0015 and ADR-0016 name this licence for the parts that live in this repository; the Relay server is `dn relay run` here, not a separate repository.
 
 ## Action items
 1. demios.io: replace "open source" with "source-available" and name the licence.

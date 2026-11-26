@@ -1,6 +1,6 @@
 # ADR-0016: Demios Relay: encrypted store-and-forward mailboxes, addressed by public key
 
-**Status:** Proposed · **Date:** 2026-11-25 · **Deciders:** project owner, lead · **Extends:** [ADR-0009](0009-security-baseline.md), [ADR-0014](0014-demios-node.md), [ADR-0015](0015-encrypted-sharing-and-forms.md) · **Issue:** #207
+**Status:** Accepted (owner, 2026-11-26) · **Date:** 2026-11-25 (amended 2026-11-26: licence, ADR-0017) · **Deciders:** project owner, lead · **Extends:** [ADR-0009](0009-security-baseline.md), [ADR-0014](0014-demios-node.md), [ADR-0015](0015-encrypted-sharing-and-forms.md) · **Issue:** #207
 
 ## Context
 Several features need to hand something to a device that isn't online right now:
@@ -131,9 +131,11 @@ The setup screen says: "The Relay receives these events in the clear and encrypt
 
 - **"Delete all local data"** (and ADR-0014's wipe across devices) **closes every mailbox the user owns** on the Relay first, with signed requests, because the keys to close them are deleted with the rest. A mailbox that can't be closed (no network) is listed in the report with the date its messages expire.
 
-### 7. Open source and self-hosting
-- **The Relay is open source,** in this repository (`demios-desktop`, Apache-2.0), as a small Rust service, `dn relay run`. Its storage holds only ciphertext and per-mailbox limits.
-- **Anyone can run one.** A user's Node can run its own Relay (`dn node` with the Relay switched on) on a public address. The app then uses that Relay for everything except official phone push (§4.2).
+### 7. Source code, licence and self-hosting
+- **The Relay is in this repository,** client and server, under the same licence as the rest of it: PolyForm Shield 1.0.0 (ADR-0017). The server is a small Rust service, `dn relay run`. Its storage holds only ciphertext and per-mailbox limits. The protocol is fully specified here, so anyone can check what the app sends and what the server keeps.
+- **What the licence allows:** anyone can read, build, audit, change and run the Relay, for themselves or their organisation, including on a public address for their own devices and their own form respondents. What it doesn't allow is using it for a product or service that competes with Demios, such as offering a hosted Relay to others. That never lapses.
+- **Not gated in code.** The server has no licence check, feature flags or limits tied to who runs it.
+- **Anyone can run one.** A user's Node can run its own Relay (`dn node` with the Relay switched on, or `dn relay run` on its own) on a public address. The app then uses that Relay for everything except official phone push (§4.2).
 - **The app uses one Relay at a time,** shown in Settings › Node and Settings › Shared links: the Demios-hosted Relay, the user's own, or none.
   - **With none,** the features that need it say so, for example "Forms need a Relay to collect responses while your computer is off". Nothing quietly changes to another route.
 - **The Relay is never required for the basics.** Chats, models, tools, a Node on the local network, and direct sync all work without it.
@@ -206,12 +208,12 @@ Quotas on the hosted Relay keep the worst case bounded per mailbox. Whether some
 - **Dependencies:** HPKE, Ed25519 and an HTTP server, the same ones ADR-0015 needs, each to be approved by the lead and recorded in `docs/dependencies.md`.
 
 ## Action items (to be filed as issues)
-1. Relay service: mailboxes, signed owner requests, delivery grants, limits, TTL and deletion.
+1. Relay server (`dn relay run`): mailboxes, signed owner requests, delivery grants, limits, TTL and deletion.
 2. Relay client: sealing, signing, chunking and fetching, shared by the app and the Node.
 3. Push wake-ups through the hosted Relay, and UnifiedPush or ntfy for self-hosted Relays.
 4. Sync through mailboxes when devices aren't online together (`dn-sync`).
 5. Webhook receiver with per-source Off, Notify only and Full payload, and unguessable, rotatable URLs.
-6. Self-hosted Relay on the Node, and the app's choice of Relay.
+6. Self-hosted Relay on the Node or on its own (`dn relay run`, with its install docs), and the app's choice of Relay.
 7. "Delete all" closes the user's mailboxes, and reports any it couldn't close.
 8. Threat model for the Relay (extends ADR-0009): metadata, webhook plaintext, abuse, and a breach of the operator.
 9. Privacy-policy section and hosted-service terms, for owner approval.

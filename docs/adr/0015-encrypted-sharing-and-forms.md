@@ -1,6 +1,6 @@
 # ADR-0015: Sharing artifacts through encrypted links, and forms that collect encrypted responses
 
-**Status:** Proposed · **Date:** 2026-11-25 · **Deciders:** project owner, lead · **Extends:** [ADR-0004](0004-artifacts-runtime.md), [ADR-0009](0009-security-baseline.md), [ADR-0014](0014-demios-node.md), [ADR-0016](0016-demios-relay.md) · **Issue:** #204 · **Threat model it builds on:** [artifact sandbox](../security/artifact-sandbox.md)
+**Status:** Accepted (owner, 2026-11-26) · **Date:** 2026-11-25 · **Deciders:** project owner, lead · **Extends:** [ADR-0004](0004-artifacts-runtime.md), [ADR-0009](0009-security-baseline.md), [ADR-0014](0014-demios-node.md), [ADR-0016](0016-demios-relay.md) · **Issue:** #204 · **Threat model it builds on:** [artifact sandbox](../security/artifact-sandbox.md)
 
 ## Context
 Artifacts (ADR-0004) live only in the app today. The owner decided that a user can **share an artifact through a link**. That includes **forms that collect responses while the owner's computer is off**.
