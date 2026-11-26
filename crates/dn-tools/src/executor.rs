@@ -493,10 +493,15 @@ impl Executor {
         }) else {
             return;
         };
+        // Read the add-on tools first: locks are always taken in the order `plugins`, then
+        // `capabilities` (as `add_plugin` does), never the other way round.
+        let Some(plugins) = self.rd(&self.plugins).map(|p| p.clone()) else {
+            return;
+        };
         if let Some(mut caps) = self.wr(&self.capabilities) {
             for cap in caps.values_mut() {
                 if is_plugin_server(&cap.server_id) {
-                    if let Some(c) = self.rebuilt_plugin_capability(cap, &ov) {
+                    if let Some(c) = Self::rebuilt_plugin_capability(cap, &plugins, &ov) {
                         *cap = c;
                     }
                 } else if let Some(trusted) = trust.get(&cap.server_id) {
@@ -556,12 +561,11 @@ impl Executor {
     }
 
     fn rebuilt_plugin_capability(
-        &self,
         cap: &McpCapability,
+        plugins: &HashMap<String, Vec<PluginTool>>,
         ov: &HashMap<String, CapabilityOverride>,
     ) -> Option<McpCapability> {
         let plugin_id = cap.server_id.strip_prefix("plugin:")?;
-        let plugins = self.rd(&self.plugins)?;
         let t = plugins
             .get(plugin_id)?
             .iter()
@@ -638,6 +642,19 @@ impl Executor {
             .retain(|_, c| c.server_id != server);
         self.gate
             .clear_capability_prefix(&format!("plugin.{plugin_id}."));
+        // A new generation, as for a removed server: a call whose approval card was open
+        // when the add-on was removed can't pass its freshness check afterwards.
+        let next = self.generations.fetch_add(1, Ordering::SeqCst) + 1;
+        self.changes
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(
+                server,
+                ToolListState {
+                    generation: next,
+                    stale: false,
+                },
+            );
         self.reindex_names();
     }
 

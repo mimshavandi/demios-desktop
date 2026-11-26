@@ -446,3 +446,61 @@ async fn removing_an_add_on_removes_its_tools_and_grants() {
         ApprovalPolicy::AskOncePerConversation
     ));
 }
+
+#[tokio::test]
+async fn a_call_approved_after_its_add_on_was_removed_doesnt_run() {
+    let (ex, mut rx) = executor();
+    let h = Arc::new(Recorder::default());
+    ex.add_plugin(
+        "notes",
+        vec![tool(
+            "save",
+            RiskTier::LowWrite,
+            RiskTier::LowWrite,
+            h.clone(),
+        )],
+    )
+    .unwrap();
+    let ex2 = ex.clone();
+    let run = tokio::spawn(async move {
+        ex2.execute(
+            &ctx_in("conv", Id::new()),
+            &call("c1", "plugin.notes.save", serde_json::json!({})),
+        )
+        .await
+    });
+    let req = rx.recv().await.unwrap();
+    // The add-on is turned off while the card is open; then the person approves.
+    ex.remove_plugin("notes");
+    req.respond(ApprovalDecision::Approve);
+    assert!(run.await.unwrap().is_err());
+    assert!(h.calls().is_empty());
+}
+
+#[tokio::test]
+async fn overrides_and_registration_can_run_at_the_same_time() {
+    let (ex, _rx) = executor();
+    let h = Arc::new(Recorder::default());
+    let tasks: Vec<_> = (0..20)
+        .map(|i| {
+            let ex = ex.clone();
+            let h = h.clone();
+            tokio::task::spawn_blocking(move || {
+                if i % 2 == 0 {
+                    ex.set_overrides(HashMap::new());
+                } else {
+                    let id = format!("p{i}");
+                    ex.add_plugin(&id, vec![tool("t", RiskTier::Read, RiskTier::Read, h)])
+                        .unwrap();
+                }
+            })
+        })
+        .collect();
+    for t in tasks {
+        tokio::time::timeout(Duration::from_secs(10), t)
+            .await
+            .expect("no deadlock")
+            .unwrap();
+    }
+    assert_eq!(ex.capabilities().len(), 10);
+}
