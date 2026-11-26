@@ -219,13 +219,6 @@ pub fn run_with_addons(addons: Vec<std::sync::Arc<dyn dn_plugin_api::Plugin>>) {
             })?;
             install_add_links(app.handle(), &state);
             knowledge::start(&state);
-            {
-                use tauri::Emitter;
-                let handle = app.handle().clone();
-                state.addons.jobs.on_change(std::sync::Arc::new(move || {
-                    let _ = handle.emit("addons-changed", ());
-                }));
-            }
             addons::Addons::install(&state, addons);
             // The page's first commands need these, so they come before the window.
             app.manage(state.clone());
@@ -237,6 +230,7 @@ pub fn run_with_addons(addons: Vec<std::sync::Arc<dyn dn_plugin_api::Plugin>>) {
         })
         .invoke_handler(tauri::generate_handler![
             addons::commands::addons_list,
+            addons::commands::addons_watch,
             addons::commands::addon_detail,
             addons::commands::addons_pending_consent,
             addons::commands::addon_consent,

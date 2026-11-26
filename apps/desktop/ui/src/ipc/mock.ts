@@ -3,6 +3,7 @@
 // when `import.meta.env.DEV` and no Tauri runtime is present.
 
 import type { Api } from "./commands";
+import { mockAddons } from "./mockAddons";
 import type {
   DownloadState,
   KnowledgeStatus,
@@ -1060,6 +1061,7 @@ export function createMockApi(): Api {
       emitRow(r);
       return null;
     },
+    ...mockAddons(),
     checkModelTools: async (id) => {
       await new Promise((r) => setTimeout(r, 800));
       const r = localRows.find((x) => x.id === id);

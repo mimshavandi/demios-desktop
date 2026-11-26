@@ -44,9 +44,29 @@ import type {
   AddModelLink,
   UpdateCheck,
   UpdateProgress,
+  AddonSummary,
+  AddonDetail,
+  AddonConsentRequest,
+  AddonConsentAnswer,
+  AddonPermission,
+  MissedRunRule,
 } from "./types";
 
 interface Commands {
+  addons_list: { args: Record<string, never>; ret: AddonSummary[] };
+  addons_watch: { args: { onChange: Channel<null> }; ret: null };
+  addon_detail: { args: { id: string }; ret: AddonDetail };
+  addons_pending_consent: { args: Record<string, never>; ret: AddonConsentRequest[] };
+  addon_consent: { args: { id: string; asked: AddonPermission[]; answer: AddonConsentAnswer }; ret: null };
+  addon_set_permission: { args: { id: string; permission: AddonPermission; on: boolean }; ret: null };
+  addon_set_enabled: { args: { id: string; on: boolean }; ret: null };
+  addons_set_utc_offset: { args: { minutes: number }; ret: null };
+  addons_paused: { args: Record<string, never>; ret: boolean };
+  addons_set_paused: { args: { paused: boolean }; ret: null };
+  addon_set_job_enabled: { args: { id: string; job: string; on: boolean }; ret: null };
+  addon_set_missed_rule: { args: { id: string; job: string; rule: MissedRunRule | null }; ret: null };
+  addon_answer_question: { args: { id: string; job: string; runNow: boolean }; ret: null };
+  addon_answer_held: { args: { heldId: Id; approve: boolean; argumentsSha256: string }; ret: null };
   app_info: { args: Record<string, never>; ret: AppInfo };
   check_for_update: { args: Record<string, never>; ret: UpdateCheck };
   install_update: { args: { version: string; onProgress: Channel<UpdateProgress> }; ret: null };
@@ -334,6 +354,34 @@ export const api = {
    * local request; the result comes back (source "checked") and the row updates.
    */
   checkModelTools: (modelId: string) => call("check_model_tools", { modelId }),
+  /** The add-ons built into this copy (empty in the regular build: no Add-ons page). */
+  addonsList: () => call("addons_list", {}),
+  /** Calls `onChange` when a job ran or a call was held or answered. */
+  addonsWatch: (onChange: () => void) => call("addons_watch", { onChange: channel<null>(() => onChange()) }),
+  addonDetail: (id: string) => call("addon_detail", { id }),
+  /** Add-ons whose consent dialog should open (first start, or a new version asks for more). */
+  addonsPendingConsent: () => call("addons_pending_consent", {}),
+  /** The consent dialog's answer, for the permissions it showed (`asked`). */
+  addonConsent: (id: string, asked: AddonPermission[], answer: AddonConsentAnswer) =>
+    call("addon_consent", { id, asked, answer }),
+  /** Turns one permission off at once, or back on (only one already asked about). */
+  addonSetPermission: (id: string, permission: AddonPermission, on: boolean) =>
+    call("addon_set_permission", { id, permission, on }),
+  addonSetEnabled: (id: string, on: boolean) => call("addon_set_enabled", { id, on }),
+  /** The window's offset from UTC, in minutes; background jobs start once it is known. */
+  addonsSetUtcOffset: (minutes: number) => call("addons_set_utc_offset", { minutes }),
+  addonsPaused: () => call("addons_paused", {}),
+  addonsSetPaused: (paused: boolean) => call("addons_set_paused", { paused }),
+  addonSetJobEnabled: (id: string, job: string, on: boolean) => call("addon_set_job_enabled", { id, job, on }),
+  /** The person's missed-run rule; null goes back to the add-on's proposal. */
+  addonSetMissedRule: (id: string, job: string, rule: MissedRunRule | null) =>
+    call("addon_set_missed_rule", { id, job, rule }),
+  /** "Run it now?": Run now (true) or Skip. */
+  addonAnswerQuestion: (id: string, job: string, runNow: boolean) =>
+    call("addon_answer_question", { id, job, runNow }),
+  /** "Allow once" (approve) or "Dismiss" a held call, for the arguments shown. */
+  addonAnswerHeld: (heldId: Id, approve: boolean, argumentsSha256: string) =>
+    call("addon_answer_held", { heldId, approve, argumentsSha256 }),
 };
 
 export type Api = typeof api;

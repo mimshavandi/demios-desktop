@@ -96,10 +96,8 @@ pub fn owned(conn: &Connection, kind: Owned, plugin: &PluginId) -> rusqlite::Res
     let mut st = conn.prepare(
         "SELECT key FROM app_addon_owned WHERE kind = ?1 AND plugin_id = ?2 ORDER BY key",
     )?;
-    let v = st
-        .query_map(params![kind.as_str(), plugin.as_str()], |r| r.get(0))?
-        .collect();
-    v
+    st.query_map(params![kind.as_str(), plugin.as_str()], |r| r.get(0))?
+        .collect()
 }
 
 /// Every add-on that owns anything, whether or not it is in this build any more.
@@ -108,8 +106,7 @@ pub fn known_plugins(conn: &Connection) -> rusqlite::Result<Vec<String>> {
         "SELECT plugin_id FROM app_addon_owned UNION SELECT plugin_id FROM app_addon_state
          ORDER BY 1",
     )?;
-    let v = st.query_map([], |r| r.get(0))?.collect();
-    v
+    st.query_map([], |r| r.get(0))?.collect()
 }
 
 /// The stored state of an add-on.

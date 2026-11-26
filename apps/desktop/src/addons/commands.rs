@@ -162,3 +162,16 @@ pub async fn addon_answer_held(
         .await
         .map_err(bad)
 }
+
+/// Calls `on_change` whenever a job ran, a call was held or something was answered, so
+/// Settings › Add-ons can reload. A new subscription replaces the old one.
+#[tauri::command]
+pub async fn addons_watch(
+    state: AppStateRef<'_>,
+    on_change: tauri::ipc::Channel<()>,
+) -> IpcResult<()> {
+    state.addons.jobs.on_change(std::sync::Arc::new(move || {
+        let _ = on_change.send(());
+    }));
+    Ok(())
+}

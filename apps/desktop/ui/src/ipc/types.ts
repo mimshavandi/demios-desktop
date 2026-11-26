@@ -724,3 +724,115 @@ export interface ArtifactDetail {
   title: string;
   versions: ArtifactVersionView[];
 }
+
+// ---- add-ons (ADR-0013; apps/desktop/src/addons)
+
+/** A permission an add-on can ask for. */
+export type AddonPermission =
+  | "chats.read"
+  | "memory"
+  | "knowledge.search"
+  | "tools.call"
+  | "notify"
+  | "network"
+  | "jobs";
+
+/** A row of Settings › Add-ons. */
+export interface AddonSummary {
+  id: string;
+  name: string;
+  version: string;
+  state: "running" | "off" | "not_running";
+  /** Why it isn't running, in words. */
+  reason: string | null;
+  /** Never answered, or a new version asks for more. */
+  needs_consent: boolean;
+  /** Held calls and "Run it now?" questions. */
+  waiting: number;
+  has_jobs: boolean;
+}
+
+export interface AddonPermissionView {
+  permission: AddonPermission;
+  asked: boolean;
+  allowed: boolean;
+  /** For `tools.call`: the tools the add-on listed. */
+  tools: string[];
+  /** For `network`: the hosts the add-on listed. */
+  hosts: string[];
+}
+
+export type JobSchedule = { kind: "every"; secs: number } | { kind: "daily_at"; hour: number; minute: number };
+
+export type MissedRunRule = { rule: "catch_up_once"; fresh_for_secs: number } | { rule: "ask" } | { rule: "skip" };
+
+export type JobOutcome = "running" | "succeeded" | "failed" | "cancelled" | "timed_out" | "interrupted" | "skipped";
+
+/** One run in a job's history (dn-jobs `RunRecord`). Times are Unix seconds. */
+export interface JobRun {
+  id: Id;
+  job: { plugin: string; job: string };
+  scheduled_for: number;
+  started_at: number;
+  finished_at: number | null;
+  late: boolean;
+  covers_runs: number;
+  outcome: JobOutcome;
+  not_fresh: boolean;
+  error: string | null;
+}
+
+export interface AddonJob {
+  id: string;
+  name: string;
+  schedule: JobSchedule;
+  enabled: boolean;
+  missed_rule: MissedRunRule;
+  missed_rule_is_default: boolean;
+  proposed_rule: MissedRunRule;
+  last_success: number | null;
+  /** Newest first. */
+  history: JobRun[];
+  /** "Run it now?", when one is waiting. */
+  question: { scheduled_for: number; missed: number } | null;
+  running: boolean;
+}
+
+/** A job's call held for the person. */
+export interface HeldCall {
+  id: Id;
+  job_id: string;
+  tool: string;
+  summary: string;
+  /** The exact arguments, as stored (JSON text). */
+  arguments: string;
+  arguments_sha256: string;
+  created_at: number;
+}
+
+export interface AddonDetail {
+  summary: AddonSummary;
+  permissions: AddonPermissionView[];
+  chats_all: boolean;
+  chats_projects: Id[];
+  knowledge_projects: Id[];
+  jobs: AddonJob[];
+  held: HeldCall[];
+}
+
+/** One consent dialog: only the permissions not asked about yet. */
+export interface AddonConsentRequest {
+  id: string;
+  name: string;
+  version: string;
+  /** First start (true) or a new version asking for more. */
+  first: boolean;
+  permissions: AddonPermissionView[];
+}
+
+export interface AddonConsentAnswer {
+  allowed: AddonPermission[];
+  chats_all: boolean;
+  chats_projects: Id[];
+  knowledge_projects: Id[];
+}

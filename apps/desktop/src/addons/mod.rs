@@ -345,7 +345,7 @@ impl Addons {
                 waiting.get(e.manifest.id.as_str()).copied().unwrap_or(0),
             ));
         }
-        v.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        v.sort_by_key(|a| a.name.to_lowercase());
         Ok(v)
     }
 
