@@ -249,6 +249,8 @@ export interface Settings {
   launch_check_offered?: boolean;
   /** Passed through untouched (no screen edits MCP servers yet). */
   mcp_servers?: unknown[];
+  /** Managed by the server commands; passed through untouched. */
+  remote_servers?: unknown[];
 }
 
 export interface SlotInfo {
@@ -415,10 +417,39 @@ export interface HubPullProgress {
 
 export type HubPullEvent = { type: "progress" } & HubPullProgress;
 
+/** Whether a model makes tool calls: the server (or provider) says so, says not, or doesn't say. */
+export type ToolSupport = "supported" | "unsupported" | "unknown";
+
+/** A model of an OpenAI-compatible server (T-PRV-05). */
+export interface RemoteModelView {
+  id: string;
+  model_ref: string;
+  embedding: boolean;
+  tool_support: ToolSupport;
+  /** The server said it itself (otherwise the user's answer, or nothing, counts). */
+  tool_support_reported: boolean;
+}
+
+/** Whether a model server answers now (from `check_remote_server`). */
+export type RemoteServerStatus =
+  | { state: "connected"; models: number }
+  | { state: "needs_key"; message: string }
+  | { state: "unreachable"; message: string };
+
+/** An OpenAI-compatible server (Ollama, LM Studio, llama.cpp, vLLM, a hosted gateway). */
+export interface RemoteServerView {
+  id: string;
+  name: string;
+  base_url: string;
+  has_key: boolean;
+  models: RemoteModelView[];
+}
+
 export interface ModelCatalog {
   slots: SlotInfo[];
   models: ModelOption[];
   providers: ProviderInfo[];
+  remote_servers: RemoteServerView[];
   local_models: LocalModelRow[];
   key_store: string;
   settings: Settings;
@@ -613,14 +644,30 @@ export interface Citation {
   end_line: number;
 }
 
-/** The embedding-model offer (knowledge.rs, #171). */
+/** A search model in the offer (knowledge.rs `OfferedModel`). */
+export interface OfferedModel {
+  id: string;
+  name: string;
+  size: number;
+  /** Licence id from the model card, shown with the offer. */
+  license: string;
+  state: DownloadState;
+}
+
+/** The embedding-model offer (knowledge.rs, #171, #201). */
 export interface KnowledgeStatus {
-  /** `ask`: not answered yet (the project view may ask once); `declined`: "Not now". */
-  offer: "ask" | "declined" | "accepted";
+  /**
+   * `ask`: not answered yet (the project view may ask once); `declined`: "Not now";
+   * `upgrade`: accepted for the earlier search model, and the new default isn't downloaded yet
+   * (asked once more; search is keyword only until then).
+   */
+  offer: "ask" | "declined" | "accepted" | "upgrade";
   /** The offered model; null when this build has no local models. */
-  model: { id: string; name: string; size: number; state: DownloadState } | null;
+  model: OfferedModel | null;
   /** While the installed model hasn't embedded every passage yet. */
   embedding: { done: number; total: number } | null;
+  /** The earlier search model, still downloaded but no longer used (it can be removed). */
+  unused: OfferedModel | null;
 }
 
 /** What an answer in a project chat was given (`message_sources`). */

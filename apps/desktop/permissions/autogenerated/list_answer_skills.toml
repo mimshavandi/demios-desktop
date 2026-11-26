@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-list-answer-skills"
+description = "Enables the list_answer_skills command without any pre-configured scope."
+commands.allow = ["list_answer_skills"]
+
+[[permission]]
+identifier = "deny-list-answer-skills"
+description = "Denies the list_answer_skills command without any pre-configured scope."
+commands.deny = ["list_answer_skills"]

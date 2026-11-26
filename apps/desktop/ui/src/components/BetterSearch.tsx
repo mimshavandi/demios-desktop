@@ -3,19 +3,42 @@
 // asked again), and always in Settings › Models. On "Download", the normal verified download
 // runs, then the project's existing passages are embedded in the background, from the stored
 // chunks (no file is read again). Keyword search keeps answering meanwhile.
+//
+// #201 made nomic-embed-text v2 the search model. Someone who accepted the earlier model (v1.5)
+// is asked once more ("upgrade"), since the new one is a new download; its vectors can't be
+// mixed with the old ones, so search is keyword only until then, and the passages are then
+// re-embedded from the stored text.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Api } from "../ipc/commands";
-import type { KnowledgeStatus } from "../ipc/types";
+import type { KnowledgeStatus, OfferedModel } from "../ipc/types";
 import { formatBytes } from "./LocalModels";
 import { Button, InlineMessage } from "./primitives";
 
 /** How often the status is read again while something is in progress. */
 const POLL_MS = 1500;
 
-/** The offer's question, with the model's download size. */
-export function offerText(size: number): string {
-  return `Turn on better search? Downloads the ${formatBytes(size)} search model once.`;
+/** The offer's question, with the model's download size and licence. */
+export function offerText(m: Pick<OfferedModel, "size" | "license">): string {
+  return `Turn on better search? Downloads the ${formatBytes(m.size)} search model once. ${licenceText(m.license)}`;
+}
+
+/** The question for someone who turned on the earlier search model (offer "upgrade"). */
+export function upgradeText(m: Pick<OfferedModel, "size" | "license">): string {
+  return (
+    `A better search model is available: it also finds passages in other languages. Download it once ` +
+    `(${formatBytes(m.size)}), and your projects' passages are re-indexed with it from the text already stored; ` +
+    `no files are read again. Until then, search uses keywords only. ${licenceText(m.license)}`
+  );
+}
+
+export function licenceText(license: string): string {
+  return `Licence: ${license === "" ? "not stated" : license}.`;
+}
+
+/** The earlier search model, still downloaded but no longer used. */
+export function unusedText(m: Pick<OfferedModel, "name" | "size">): string {
+  return `${m.name} (${formatBytes(m.size)}) is no longer used for search. You can remove it from the model list.`;
 }
 
 /** What is going on, for a progress line: downloading, improving search, or nothing. */
@@ -81,7 +104,8 @@ export function BetterSearchOffer({ api, hasFiles }: { api: Api; hasFiles: boole
     );
   }
   const notInstalled = status.model.state.state === "not_downloaded" || status.model.state.state === "failed";
-  if (answered || status.offer !== "ask" || !notInstalled) return null;
+  const asking = status.offer === "ask" || status.offer === "upgrade";
+  if (answered || !asking || !notInstalled) return null;
   return (
     <div data-testid="better-search-offer">
       <InlineMessage
@@ -97,7 +121,7 @@ export function BetterSearchOffer({ api, hasFiles }: { api: Api; hasFiles: boole
           </span>
         }
       >
-        {offerText(status.model.size)}
+        {status.offer === "upgrade" ? upgradeText(status.model) : offerText(status.model)}
       </InlineMessage>
       {error !== null && <InlineMessage tone="error">{error}</InlineMessage>}
     </div>
@@ -133,14 +157,20 @@ export function BetterSearchSetting({ api }: { api: Api }) {
         </p>
       ) : (
         <div className="row-actions">
-          <p className="dn-help">
-            Project files are searched by keywords. Download the {formatBytes(status.model.size)} search model to also
-            find passages by meaning.
+          <p className="dn-help" data-testid="better-search-setting-text">
+            {status.offer === "upgrade"
+              ? upgradeText(status.model)
+              : `Project files are searched by keywords. Download the ${formatBytes(status.model.size)} search model to also find passages by meaning. ${licenceText(status.model.license)}`}
           </p>
           <Button size="sm" onClick={() => void download()} data-testid="better-search-setting-download">
             {st === "failed" ? "Try again" : "Download"}
           </Button>
         </div>
+      )}
+      {status.unused !== null && (
+        <p className="dn-help" data-testid="better-search-unused">
+          {unusedText(status.unused)}
+        </p>
       )}
       {error !== null && <InlineMessage tone="error">{error}</InlineMessage>}
     </section>

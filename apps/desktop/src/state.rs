@@ -170,6 +170,15 @@ struct RemovedKey {
     at: Instant,
 }
 
+/// A removed OpenAI-compatible server, kept for [`KEY_UNDO_WINDOW`] so Undo can put it back
+/// with its key and the tasks that used it (T-PRV-05).
+pub struct RemovedServer {
+    pub server: settings::RemoteServer,
+    pub key: Option<Secret>,
+    pub slots: Vec<(String, String)>,
+    at: Instant,
+}
+
 pub struct AppState {
     db: Mutex<Connection>,
     pub models: ModelRegistry,
@@ -187,6 +196,7 @@ pub struct AppState {
     running: Mutex<HashMap<Id, Running>>,
     live: Mutex<HashMap<Id, Live>>,
     removed_keys: Mutex<HashMap<String, RemovedKey>>,
+    removed_servers: Mutex<HashMap<String, RemovedServer>>,
     next_token: AtomicU64,
     /// Bumped by "Delete all local data": a background MCP connect started before it must
     /// not add its server afterwards.
@@ -240,6 +250,10 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 
 impl AppState {
     pub fn new(conn: Connection, models: ModelRegistry, keys: Keys) -> Self {
+        // The registry serves the OpenAI-compatible servers saved in settings.
+        if let Ok(s) = settings::load(&conn) {
+            models.set_remote_servers(&s.remote_servers);
+        }
         Self {
             db: Mutex::new(conn),
             models,
@@ -254,6 +268,7 @@ impl AppState {
             running: Mutex::new(HashMap::new()),
             live: Mutex::new(HashMap::new()),
             removed_keys: Mutex::new(HashMap::new()),
+            removed_servers: Mutex::new(HashMap::new()),
             next_token: AtomicU64::new(1),
             mcp_epoch: AtomicU64::new(0),
             local_servers: crate::mcp::local_servers_allowed(),
@@ -414,7 +429,9 @@ impl AppState {
 
     pub fn save_settings(&self, s: &Settings) -> IpcResult<()> {
         s.validate().map_err(IpcError::invalid)?;
-        Ok(settings::save(&*self.db()?, s)?)
+        settings::save(&*self.db()?, s)?;
+        self.models.set_remote_servers(&s.remote_servers);
+        Ok(())
     }
 
     pub fn create_conversation(&self) -> IpcResult<store::Conversation> {
@@ -596,6 +613,15 @@ impl AppState {
         if self.keys.has(HF_TOKEN_PROVIDER_ID).unwrap_or(false) {
             out.push("Hugging Face token".into());
         }
+        for r in self
+            .settings()
+            .map(|s| s.remote_servers)
+            .unwrap_or_default()
+        {
+            if self.keys.has(&r.key_id()).unwrap_or(false) {
+                out.push(format!("{} server key", r.name));
+            }
+        }
         let servers = self.settings().map(|s| s.mcp_servers).unwrap_or_default();
         let mut ids = mcp_secret_ids(&servers);
         if let Ok(db) = self.db()
@@ -630,12 +656,18 @@ impl AppState {
         let mut failed = Vec::new();
         // MCP secrets: those the saved servers name, plus every id ever written (servers
         // removed earlier). If settings can't be read, report it: their secrets may remain.
-        let mut mcp_ids = match self.settings() {
-            Ok(s) => mcp_secret_ids(&s.mcp_servers),
+        let (mut mcp_ids, remote_key_ids) = match self.settings() {
+            Ok(s) => (
+                mcp_secret_ids(&s.mcp_servers),
+                s.remote_servers
+                    .iter()
+                    .map(|r| r.key_id())
+                    .collect::<Vec<_>>(),
+            ),
             Err(e) => {
                 eprintln!("could not read settings: {}", e.message);
-                failed.push("tool-server sign-ins (settings unreadable)");
-                Vec::new()
+                failed.push("tool-server sign-ins and server keys (settings unreadable)");
+                (Vec::new(), Vec::new())
             }
         };
         match self
@@ -656,6 +688,8 @@ impl AppState {
         let mut keys_ok = true;
         let mut provider_ids: Vec<&str> = crate::models::PROVIDERS.iter().map(|p| p.id).collect();
         provider_ids.push(HF_TOKEN_PROVIDER_ID);
+        // Keys of OpenAI-compatible servers (removing a server deletes its key at once).
+        provider_ids.extend(remote_key_ids.iter().map(String::as_str));
         for id in provider_ids {
             if let Err(e) = self.keys.delete(id) {
                 eprintln!("could not delete the `{id}` key: {e}");
@@ -670,6 +704,7 @@ impl AppState {
             }
         }
         lock(&self.removed_keys).clear();
+        lock(&self.removed_servers).clear();
         if !keys_ok {
             failed.push("keys in the system keychain");
         }
@@ -691,6 +726,9 @@ impl AppState {
                 if let Err(e) = &artifacts {
                     eprintln!("could not delete artifacts: {e}");
                     failed.push("artifacts");
+                }
+                if r.is_ok() {
+                    self.models.set_remote_servers(&[]);
                 }
                 if let Err(e) = dn_knowledge::delete_all(&db) {
                     eprintln!("could not delete the knowledge index: {e}");
@@ -1172,6 +1210,32 @@ impl AppState {
         );
     }
 
+    pub fn remember_removed_server(
+        &self,
+        server: settings::RemoteServer,
+        key: Option<Secret>,
+        slots: Vec<(String, String)>,
+    ) {
+        let mut m = lock(&self.removed_servers);
+        m.retain(|_, r| r.at.elapsed() < KEY_UNDO_WINDOW);
+        m.insert(
+            server.id.clone(),
+            RemovedServer {
+                server,
+                key,
+                slots,
+                at: Instant::now(),
+            },
+        );
+    }
+
+    /// The removed server, if still within the undo window.
+    pub fn take_removed_server(&self, server_id: &str) -> Option<RemovedServer> {
+        let mut m = lock(&self.removed_servers);
+        m.retain(|_, r| r.at.elapsed() < KEY_UNDO_WINDOW);
+        m.remove(server_id)
+    }
+
     /// The removed key and the slots it was cleared from, if still within the window.
     pub fn take_removed_key(&self, provider_id: &str) -> Option<(Secret, Vec<(String, String)>)> {
         let mut m = lock(&self.removed_keys);
@@ -1459,6 +1523,42 @@ mod tests {
             assert!(project::file_path(&root, &kept_file).exists());
         });
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn removed_servers_wait_for_undo_and_delete_all_drops_them_and_their_keys() {
+        let keys = Keys::memory();
+        let conn = dn_store::open_in_memory(&migration_sets()).unwrap();
+        let st = AppState::new(conn, ModelRegistry::default(), keys.clone());
+        let server = settings::RemoteServer {
+            id: "box".into(),
+            name: "Box".into(),
+            base_url: "http://localhost:11434/v1".into(),
+            family: Default::default(),
+            models: vec![],
+        };
+        st.remember_removed_server(
+            server.clone(),
+            Some(Secret::new("k")),
+            vec![("chat".into(), "remote:box:m".into())],
+        );
+        let r = st.take_removed_server("box").expect("within the window");
+        assert_eq!(r.server, server);
+        assert_eq!(r.key.unwrap().expose(), "k");
+        assert!(st.take_removed_server("box").is_none(), "taken once");
+        // A saved server's key is deleted by Delete all local data, and so is a pending undo.
+        keys.set(&server.key_id(), &Secret::new("saved")).unwrap();
+        st.save_settings(&Settings {
+            remote_servers: vec![server.clone()],
+            ..Default::default()
+        })
+        .unwrap();
+        st.remember_removed_server(server.clone(), None, vec![]);
+        assert_eq!(st.keychain_entries(), ["Box server key"]);
+        assert!(st.wipe_local_data().is_empty());
+        assert!(!keys.has(&server.key_id()).unwrap());
+        assert!(st.take_removed_server("box").is_none());
+        assert!(st.settings().unwrap().remote_servers.is_empty());
     }
 
     #[test]

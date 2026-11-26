@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-skills-overview"
+description = "Enables the skills_overview command without any pre-configured scope."
+commands.allow = ["skills_overview"]
+
+[[permission]]
+identifier = "deny-skills-overview"
+description = "Denies the skills_overview command without any pre-configured scope."
+commands.deny = ["skills_overview"]

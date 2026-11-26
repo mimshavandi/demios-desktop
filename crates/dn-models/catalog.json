@@ -167,6 +167,20 @@
       "tool_support": "supported"
     },
     {
+      "id": "nomic-embed-text-v2-moe-q5_k_m",
+      "name": "Nomic Embed Text v2 MoE",
+      "repo": "nomic-ai/nomic-embed-text-v2-moe-GGUF",
+      "revision": "ffbcf4c99e5d617dda10ec8c0e9f75754b0cbb80",
+      "file": "nomic-embed-text-v2-moe.Q5_K_M.gguf",
+      "size": 370828256,
+      "sha256": "a6546bdf4e46288c93d79e6292bbdd8efa7ca87c242a8e60afa9cbacdc641471",
+      "quant": "Q5_K_M",
+      "params_b": 0.5,
+      "capabilities": ["embedding"],
+      "license": "apache-2.0",
+      "notes": "The default search model for project files: multilingual, finds passages across languages. Same results as Q8_0 in the benchmark (docs/benchmarks/embeddings.md)."
+    },
+    {
       "id": "nomic-embed-text-v2-moe-q8_0",
       "name": "Nomic Embed Text v2 MoE",
       "repo": "nomic-ai/nomic-embed-text-v2-moe-GGUF",
@@ -192,7 +206,7 @@
       "params_b": 0.137,
       "capabilities": ["embedding"],
       "license": "apache-2.0",
-      "notes": "English embeddings (768 dimensions) for the knowledge index; small and fast."
+      "notes": "Older English embedding model, no longer the default (v2 replaces it). Small and fast; weak across languages."
     }
   ]
 }

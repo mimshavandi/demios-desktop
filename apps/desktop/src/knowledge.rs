@@ -6,8 +6,9 @@
 //!   immutable, so a file id identifies its bytes. Files over dn-knowledge's size cap are not
 //!   read at all.
 //! - **Embeddings.** With an embedding model downloaded (the Embeddings slot, or the catalog's
-//!   nomic-embed-text v1.5), chunks are embedded in batches, outside the database lock, with
-//!   nomic's task prefixes. Without one, search is **keyword only**, and the sources under
+//!   nomic-embed-text v2 MoE, #201), chunks are embedded in batches, outside the database lock,
+//!   with nomic's task prefixes. Vectors of different models are never compared: a new model
+//!   re-embeds the stored chunks (no file is read again). Without one, search is **keyword only**, and the sources under
 //!   each answer say so and how to get better results (no silent degradation).
 //! - **Retrieval.** For a chat in a project, the question's best excerpts go into the system
 //!   prompt as quoted, cited, untrusted data ([`dn_knowledge::context_block`]), and what the
@@ -23,8 +24,12 @@ use std::sync::{Arc, OnceLock, mpsc};
 
 type AppStateRef<'a> = tauri::State<'a, Arc<AppState>>;
 
-/// The catalog's embedding model (#131), used when the Embeddings slot is empty.
-pub const DEFAULT_EMBED_MODEL: &str = "nomic-embed-text-v1.5-q4_k_m";
+/// The catalog's embedding model, used when the Embeddings slot is empty: nomic-embed-text v2
+/// MoE at Q5_K_M (#201; chosen by the evaluation in #128 and #194).
+pub const DEFAULT_EMBED_MODEL: &str = "nomic-embed-text-v2-moe-q5_k_m";
+/// The default before #201. Never used unless the user picks it for the Embeddings slot; if
+/// it is still downloaded, Settings says it is no longer used, so it can be removed.
+pub const PREVIOUS_EMBED_MODEL: &str = "nomic-embed-text-v1.5-q4_k_m";
 /// Excerpts given to the model per question.
 const TOP_K: usize = 6;
 /// Chunks embedded per call to the model.
@@ -382,19 +387,22 @@ pub enum Offer {
     /// "Not now": never asked again (Settings › Models still offers it).
     Declined,
     Accepted,
+    /// Accepted for an earlier model (nomic v1.5 before #201), and the current one isn't
+    /// downloaded: asked once more, because the new model is a new download. Until then
+    /// search is keyword only, and the answers say so.
+    Upgrade,
 }
 
-fn offer(db: &Connection) -> Result<Offer, String> {
-    Ok(
-        match dn_knowledge::get_pref(db, OFFER_KEY)
-            .map_err(err)?
-            .as_deref()
-        {
-            Some("declined") => Offer::Declined,
-            Some("accepted") => Offer::Accepted,
-            _ => Offer::Ask,
-        },
-    )
+/// The stored answer for `model_id`. Stored values: `declined`, `accepted:<model id>`, and
+/// plain `accepted` (from before #201, when the only offered model was nomic v1.5).
+fn offer(db: &Connection, model_id: &str, ready: bool) -> Result<Offer, String> {
+    let stored = dn_knowledge::get_pref(db, OFFER_KEY).map_err(err)?;
+    Ok(match stored.as_deref() {
+        None => Offer::Ask,
+        Some("declined") => Offer::Declined,
+        Some(v) if v.strip_prefix("accepted:") == Some(model_id) || ready => Offer::Accepted,
+        Some(_) => Offer::Upgrade,
+    })
 }
 
 /// The embedding model the offer is about: the Embeddings slot's local model, or the
@@ -411,9 +419,23 @@ fn offered_model_id(state: &AppState) -> Result<String, String> {
 pub struct OfferedModel {
     pub id: String,
     pub name: String,
-    /// Download size in bytes (shown as "84 MB").
+    /// Download size in bytes (shown as "371 MB").
     pub size: u64,
+    /// Licence id from the model card (shown with the offer; accepted by downloading).
+    pub license: String,
     pub state: crate::local::DownloadState,
+}
+
+impl OfferedModel {
+    fn of(r: crate::local::LocalModelRow) -> Self {
+        Self {
+            id: r.id,
+            name: r.name,
+            size: r.size,
+            license: r.license,
+            state: r.state,
+        }
+    }
 }
 
 #[derive(serde::Serialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -430,29 +452,39 @@ pub struct KnowledgeStatus {
     pub model: Option<OfferedModel>,
     /// While the model is installed and the index isn't fully embedded by it yet.
     pub embedding: Option<EmbedProgress>,
+    /// The earlier default (nomic v1.5), while it is still downloaded but no longer used for
+    /// search: Settings says so, and it can be removed there.
+    pub unused: Option<OfferedModel>,
 }
 
 /// The offer and progress. If the model is installed and chunks still wait for it (e.g. it
 /// was just downloaded), embedding them is queued here.
 pub fn status(state: &AppState) -> Result<KnowledgeStatus, String> {
-    let offer = offer(&*state.db().map_err(|e| e.message)?)?;
     let id = offered_model_id(state)?;
-    let model = state.models.local.as_ref().and_then(|local| {
-        local
-            .rows()
-            .into_iter()
-            .find(|r| r.id == id)
-            .map(|r| OfferedModel {
-                id: r.id,
-                name: r.name,
-                size: r.size,
-                state: r.state,
-            })
-    });
+    let rows = state
+        .models
+        .local
+        .as_ref()
+        .map(|local| local.rows())
+        .unwrap_or_default();
+    let model = rows
+        .iter()
+        .find(|r| r.id == id)
+        .cloned()
+        .map(OfferedModel::of);
     let ready = matches!(
         model.as_ref().map(|m| &m.state),
         Some(crate::local::DownloadState::Ready)
     );
+    let unused = rows
+        .into_iter()
+        .find(|r| {
+            r.id == PREVIOUS_EMBED_MODEL
+                && r.id != id
+                && r.state == crate::local::DownloadState::Ready
+        })
+        .map(OfferedModel::of);
+    let offer = offer(&*state.db().map_err(|e| e.message)?, &id, ready)?;
     let embedding = if ready {
         let (done, total) = dn_knowledge::embedding_counts(
             &*state.db().map_err(|e| e.message)?,
@@ -472,16 +504,23 @@ pub fn status(state: &AppState) -> Result<KnowledgeStatus, String> {
         offer,
         model,
         embedding,
+        unused,
     })
 }
 
 /// "Download" (`accept`) or "Not now". Download starts the normal verified download of the
-/// model; once it is ready, [`status`] queues embedding the existing chunks.
+/// model; once it is ready, [`status`] queues embedding the existing chunks (re-embedding
+/// those an earlier model embedded, from the stored text).
 pub fn answer_offer(state: &AppState, accept: bool) -> Result<(), String> {
+    let id = offered_model_id(state)?;
     dn_knowledge::set_pref(
         &*state.db().map_err(|e| e.message)?,
         OFFER_KEY,
-        if accept { "accepted" } else { "declined" },
+        &if accept {
+            format!("accepted:{id}")
+        } else {
+            "declined".to_owned()
+        },
     )
     .map_err(err)?;
     if !accept {
@@ -492,7 +531,6 @@ pub fn answer_offer(state: &AppState, accept: bool) -> Result<(), String> {
         .local
         .as_ref()
         .ok_or("local models aren't available in this build")?;
-    let id = offered_model_id(state)?;
     if !local.is_ready(&id) {
         local.download(&id)?;
     }
@@ -592,15 +630,162 @@ mod tests {
 
     #[test]
     fn nomic_gets_its_task_prefixes_and_other_models_none() {
-        assert_eq!(
-            prefix("local:nomic-embed-text-v1.5-q4_k_m", EmbedKind::Document),
-            "search_document: "
-        );
-        assert_eq!(
-            prefix("local:nomic-embed-text-v1.5-q4_k_m", EmbedKind::Query),
-            "search_query: "
-        );
+        for id in [DEFAULT_EMBED_MODEL, PREVIOUS_EMBED_MODEL] {
+            let id = format!("local:{id}");
+            assert_eq!(prefix(&id, EmbedKind::Document), "search_document: ");
+            assert_eq!(prefix(&id, EmbedKind::Query), "search_query: ");
+        }
         assert_eq!(prefix("local:bge-small", EmbedKind::Query), "");
+    }
+
+    #[test]
+    fn the_default_is_nomic_v2_q5_k_m_pinned_in_the_catalogue() {
+        let c = dn_models::Catalog::builtin();
+        let m = c.get(DEFAULT_EMBED_MODEL).expect("in the catalogue");
+        assert_eq!(m.capabilities, [dn_core::model::Capability::Embedding]);
+        assert_eq!(m.quant, "Q5_K_M");
+        assert_eq!(m.size, 370_828_256);
+        assert_eq!(
+            m.sha256,
+            "a6546bdf4e46288c93d79e6292bbdd8efa7ca87c242a8e60afa9cbacdc641471"
+        );
+        assert_eq!(m.license, "apache-2.0");
+        assert_eq!(
+            m.url(),
+            "https://huggingface.co/nomic-ai/nomic-embed-text-v2-moe-GGUF/resolve/ffbcf4c99e5d617dda10ec8c0e9f75754b0cbb80/nomic-embed-text-v2-moe.Q5_K_M.gguf"
+        );
+        // The old default stays listed only so a downloaded copy can be seen and removed.
+        assert!(c.get(PREVIOUS_EMBED_MODEL).is_some());
+    }
+
+    #[test]
+    fn the_stored_answer_maps_to_the_offer() {
+        let st = AppState::in_memory().unwrap();
+        let db = st.db().unwrap();
+        let v2 = DEFAULT_EMBED_MODEL;
+        assert_eq!(offer(&db, v2, false).unwrap(), Offer::Ask);
+        for (stored, ready, want) in [
+            ("declined", false, Offer::Declined),
+            ("declined", true, Offer::Declined),
+            // Before #201 "accepted" meant nomic v1.5: the new model is a new download.
+            ("accepted", false, Offer::Upgrade),
+            ("accepted", true, Offer::Accepted),
+            (
+                "accepted:nomic-embed-text-v1.5-q4_k_m",
+                false,
+                Offer::Upgrade,
+            ),
+            (
+                "accepted:nomic-embed-text-v2-moe-q5_k_m",
+                false,
+                Offer::Accepted,
+            ),
+        ] {
+            dn_knowledge::set_pref(&db, OFFER_KEY, stored).unwrap();
+            assert_eq!(
+                offer(&db, v2, ready).unwrap(),
+                want,
+                "{stored} ready={ready}"
+            );
+        }
+    }
+
+    /// A models folder where the given catalogue models are downloaded and verified (sparse
+    /// files of the catalogue size, with the checksum marker).
+    fn with_downloaded(st: &mut AppState, dir: &std::path::Path, ids: &[&str]) {
+        let catalog = dn_models::Catalog::builtin();
+        std::fs::create_dir_all(dir).unwrap();
+        for id in ids {
+            let e = catalog.get(id).unwrap();
+            let f = std::fs::File::create(dir.join(&e.file)).unwrap();
+            f.set_len(e.size).unwrap();
+            std::fs::write(dir.join(format!("{}.sha256", e.file)), &e.sha256).unwrap();
+        }
+        st.models.local = Some(Arc::new(crate::local::LocalModels::new(
+            dir.to_path_buf(),
+            catalog,
+            dn_models::Machine::cpu_only(16 << 30),
+        )));
+    }
+
+    #[test]
+    fn a_v15_index_is_never_searched_with_v15_and_re_embeds_with_v2_after_the_download() {
+        let dir = std::env::temp_dir().join(format!("dn-knowledge-v2-{}", Id::new()));
+        let mut st = AppState::in_memory().unwrap();
+        // An existing user: accepted the offer before #201, nomic v1.5 downloaded, and the
+        // project's passages embedded with it.
+        with_downloaded(&mut st, &dir, &[PREVIOUS_EMBED_MODEL]);
+        let v15 = format!("local:{PREVIOUS_EMBED_MODEL}");
+        let v2 = format!("local:{DEFAULT_EMBED_MODEL}");
+        {
+            let db = st.db().unwrap();
+            dn_knowledge::set_pref(&db, OFFER_KEY, "accepted").unwrap();
+            Index::new(&db)
+                .sync_source(
+                    "p",
+                    &[SourceFile {
+                        file_id: "f".into(),
+                        display_path: "plan.md".into(),
+                        content: b"Der Start ist im Mai.".to_vec(),
+                    }],
+                    None,
+                )
+                .unwrap();
+        }
+        embed_pending_with(&st, &Fake("local:nomic-embed-text-v1.5-q4_k_m"), None).unwrap();
+        let counts =
+            |st: &AppState, m: &str| dn_knowledge::embedding_counts(&st.db().unwrap(), m).unwrap();
+        assert_eq!(counts(&st, &v15), (1, 1));
+
+        // v1.5 is no fallback: until v2 is downloaded, search is keyword only (and says so).
+        assert_eq!(embed_model_id(&st).unwrap(), None);
+        let s = status(&st).unwrap();
+        assert_eq!(
+            s.offer,
+            Offer::Upgrade,
+            "asked once more, for the new download"
+        );
+        let m = s.model.unwrap();
+        assert_eq!(m.id, DEFAULT_EMBED_MODEL);
+        assert_eq!((m.size, m.license.as_str()), (370_828_256, "apache-2.0"));
+        assert_eq!(m.state, crate::local::DownloadState::NotDownloaded);
+        assert_eq!(s.unused.unwrap().id, PREVIOUS_EMBED_MODEL);
+        assert!(s.embedding.is_none());
+
+        // After the user's download: v2 is used, and the stored chunks are re-embedded with
+        // it (no project-files folder exists, so no file can be read).
+        with_downloaded(&mut st, &dir, &[PREVIOUS_EMBED_MODEL, DEFAULT_EMBED_MODEL]);
+        assert!(st.project_files_root().is_none());
+        assert_eq!(
+            embed_model_id(&st).unwrap().as_deref(),
+            Some(DEFAULT_EMBED_MODEL)
+        );
+        let s = status(&st).unwrap();
+        assert_eq!(s.offer, Offer::Accepted);
+        assert_eq!(s.embedding, Some(EmbedProgress { done: 0, total: 1 }));
+        embed_pending_with(&st, &Fake("local:nomic-embed-text-v2-moe-q5_k_m"), None).unwrap();
+        assert_eq!(counts(&st, &v2), (1, 1));
+        assert_eq!(
+            counts(&st, &v15),
+            (0, 1),
+            "no v1.5 vector is left to mix in"
+        );
+        let s = status(&st).unwrap();
+        assert!(s.embedding.is_none());
+        assert_eq!(
+            s.unused.map(|m| m.id).as_deref(),
+            Some(PREVIOUS_EMBED_MODEL),
+            "the old file is pointed out, so it can be removed"
+        );
+        // "Download" records the model it was for.
+        answer_offer(&st, true).unwrap();
+        assert_eq!(
+            dn_knowledge::get_pref(&st.db().unwrap(), OFFER_KEY)
+                .unwrap()
+                .as_deref(),
+            Some("accepted:nomic-embed-text-v2-moe-q5_k_m")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

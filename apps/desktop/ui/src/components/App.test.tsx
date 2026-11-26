@@ -162,6 +162,7 @@ function fakeApi() {
       { model_ref: "local:dev-fake", label: "Dev fake", source: "dev", capabilities: ["chat"], available: true, note: null },
     ],
     providers: [{ id: "openai", name: "OpenAI", has_key: false }],
+    remote_servers: [],
     local_models: localRows,
     key_store: "memory",
     settings,
@@ -179,7 +180,7 @@ function fakeApi() {
     artifactChildFocus: async () => null,
     artifactChildClose: async () => null,
     messageSources: async () => null,
-    knowledgeStatus: async () => ({ offer: "ask", model: null, embedding: null }),
+    knowledgeStatus: async () => ({ offer: "ask", model: null, embedding: null, unused: null }),
     knowledgeOffer: async () => null,
     appInfo: async () => ({ version: "0.1.0", dev_fake_model: true, data_dir: "/tmp", models_dir: "/tmp/models", updates: launch.mode }),
     checkForUpdate: async () => ({ status: "up_to_date", current: "0.1.0" }) as const,
@@ -369,6 +370,12 @@ function fakeApi() {
     },
     listModels: async () => catalog(),
     setProviderKey: async () => catalog(),
+    addRemoteServer: async () => catalog(),
+    refreshRemoteServer: async () => catalog(),
+    removeRemoteServer: async () => catalog(),
+    restoreRemoteServer: async () => catalog(),
+    checkRemoteServer: async () => ({ state: "connected", models: 0 }) as const,
+    setRemoteModelTools: async () => catalog(),
     deleteProviderKey: async () => catalog(),
     restoreProviderKey: async () => catalog(),
     watchLocalModels: async (onEvent) => {
@@ -1705,6 +1712,18 @@ describe("Settings sections (#174)", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "Models" })).toBeTruthy();
   });
 
+  it("stays in Settings when it is opened while the chat list is still loading", async () => {
+    const { api } = fakeApi();
+    let release: () => void = () => {};
+    const list = api.listConversations;
+    api.listConversations = () => new Promise((resolve) => (release = () => void list().then(resolve)));
+    render(<App api={api} />);
+    await openSettings("Models");
+    await act(async () => release());
+    expect(screen.getByRole("heading", { level: 1, name: "Models" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Model servers" })).toBeTruthy();
+  });
+
   it("moves between the Models tabs with the arrow keys, Home and End", async () => {
     const { api } = fakeApi();
     render(<App api={api} />);
@@ -1712,9 +1731,14 @@ describe("Settings sections (#174)", () => {
     const device = screen.getByRole("tab", { name: "On this device" });
     device.focus();
     fireEvent.keyDown(device, { key: "ArrowRight" });
+    const servers = screen.getByRole("tab", { name: "Model servers" });
+    expect(servers.getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(servers);
+    expect(screen.getByRole("tabpanel").getAttribute("aria-labelledby")).toBe("models-tab-servers");
+    expect(within(screen.getByRole("tabpanel")).getByRole("button", { name: "Add model server" })).toBeTruthy();
+    fireEvent.keyDown(servers, { key: "ArrowRight" });
     const providers = screen.getByRole("tab", { name: "Providers" });
     expect(providers.getAttribute("aria-selected")).toBe("true");
-    expect(document.activeElement).toBe(providers);
     expect(screen.getByRole("tabpanel").getAttribute("aria-labelledby")).toBe("models-tab-providers");
     fireEvent.keyDown(providers, { key: "Home" });
     expect(screen.getByRole("tab", { name: "On this device" }).getAttribute("aria-selected")).toBe("true");
