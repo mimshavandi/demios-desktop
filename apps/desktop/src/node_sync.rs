@@ -180,7 +180,7 @@ async fn run_loop(state: Arc<AppState>) {
                         applied: report.applied,
                     }
                 });
-                after_purge(&report);
+                after_purge(&state, &report).await;
                 Some(Duration::from_secs(INTERVAL_SECS))
             }
             Err(e) => {
@@ -252,12 +252,37 @@ async fn round(state: &Arc<AppState>) -> Result<Report, SyncError> {
 
 /// Records another device deleted for good are gone here too; what the app keeps about
 /// them outside the store goes with them.
-fn after_purge(report: &Report) {
-    for (collection, id) in &report.purged {
-        if collection == "chat" {
-            // TODO(#291): AppState::forget_purged_chat (W-shell) drops what the app keeps
-            // about the chat outside the store.
-            eprintln!("sync: chat {id} was deleted for good on another device");
+async fn after_purge(state: &Arc<AppState>, report: &Report) {
+    let chats: Vec<String> = report
+        .purged
+        .iter()
+        .filter(|(collection, _)| collection == "chat")
+        .map(|(_, id)| id.clone())
+        .collect();
+    if chats.is_empty() {
+        return;
+    }
+    let st = state.clone();
+    let done = tauri::async_runtime::spawn_blocking(move || {
+        for id in chats {
+            // Ids from other devices were checked when the purge was applied; one that
+            // isn't canonical here is a bug, said out loud rather than skipped.
+            match dn_store::sync_rows::canonical_id(&id) {
+                Ok(chat) => {
+                    let left = st.forget_purged_chat(chat);
+                    if !left.is_empty() {
+                        eprintln!(
+                            "sync: chat {id} was deleted on another device; couldn't remove its {}",
+                            left.join(", ")
+                        );
+                    }
+                }
+                Err(e) => eprintln!("sync: a purged chat has a bad id {id:?}: {e}"),
+            }
         }
+    })
+    .await;
+    if let Err(e) = done {
+        eprintln!("sync: cleaning up after purged chats failed: {e}");
     }
 }
