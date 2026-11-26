@@ -3,6 +3,7 @@ name = "dn-tools"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "MCP client, capability wrapper, approval gate and side-effect ledger (ADR-0006)"

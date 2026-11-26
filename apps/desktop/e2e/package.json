@@ -2,7 +2,7 @@
   "name": "demios-desktop-e2e",
   "private": true,
   "version": "0.1.0",
-  "license": "Apache-2.0",
+  "license": "SEE LICENSE IN LICENSE",
   "type": "module",
   "description": "Real-app end-to-end tests: tauri-driver + WebdriverIO (T-SHELL-05).",
   "scripts": {

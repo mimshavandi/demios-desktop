@@ -16,6 +16,8 @@ accepted = [
 ignore-build-dependencies = true
 ignore-dev-dependencies = true
 ignore-transitive-dependencies = false
+# Our own crates (publish = false) are the app itself, not third-party packages (ADR-0017).
+private = { ignore = true }
 
 # Same scoped exception as deny.toml (Mozilla root CA bundle as data).
 [webpki-root-certs]
