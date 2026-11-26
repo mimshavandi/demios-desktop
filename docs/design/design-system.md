@@ -106,6 +106,8 @@ WCAG 2.2 AA. Every control has name/role/state; streaming answers announced poli
 
 ## 8. Enforcement
 
+- **Design reference:** maintainers keep a browsable copy of this standard (tokens, components with previews of every state, screenshots) as a shared design artifact. A new screen or component is designed and reviewed there before it's built; this file and `ui/design-tokens` stay the source of truth, and a PR that changes either updates the reference in the same change.
+
 - `ui/design-tokens`: `node scripts/build.mjs --check` in CI (stale files or contrast failure fails the build).
 - UI lint (T-DES-02, after W-shell's UI lands): stylelint rule banning raw hex/rgb, px font sizes and non-token spacing in `apps/desktop/ui` and `ui/artifact-sandbox`; `/ui-ux-behaves:audit` ratchet for known anti-patterns (disabled submit, spinner over area, "Are you sure?").
 - Review: each screen PR includes light + dark screenshots and a note of which behaves it covers; the lead runs `/ui-ux-behaves:review` on the MVP screens.

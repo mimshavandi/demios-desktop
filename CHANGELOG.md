@@ -9,6 +9,7 @@ Only changes people using the app or the `dn` command-line tool can notice are l
 ### Changed
 
 - Demios Desktop and `dn` are now licensed under the PolyForm Shield License 1.0.0 instead of Apache-2.0. You can still read, build, change and use the code for anything except a product that competes with Demios. Versions up to and including 0.1.0-preview.8cd482c stay under Apache-2.0 ([#217](https://github.com/mimshavandi/demios-desktop/pull/217)).
+- Text fields, menus and other control outlines are darker in both light and dark appearance, so they're easier to see: they now meet the 3:1 contrast that accessibility guidelines ask of control borders ([#220](https://github.com/mimshavandi/demios-desktop/pull/220)).
 
 ## [0.1.0-preview.8cd482c] - 2026-11-26
 
