@@ -871,9 +871,14 @@ impl AppState {
         if req.is_closed() {
             return;
         }
+        // Store and announce under the same lock, so an answer (which removes the request
+        // under this lock) can't emit `Resolved` before `Requested` reaches the UI. The
+        // UI sink only sends on a channel; it never takes this lock.
         let prompt = req.prompt.clone();
-        lock(&self.approvals).insert(prompt.request_id, req);
+        let mut approvals = lock(&self.approvals);
+        approvals.insert(prompt.request_id, req);
         self.emit_approval(ToolEvent::Requested { prompt });
+        drop(approvals);
     }
 
     /// Requests whose call is gone (timed out, stopped, run ended) leave the UI as expired.
