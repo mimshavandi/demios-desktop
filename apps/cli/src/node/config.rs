@@ -96,8 +96,9 @@ pub struct NodeConfig {
     pub name: String,
     pub listen: SocketAddr,
     pub secrets: SecretsConfig,
-    /// Local time offset from UTC in minutes, for jobs at a time of day.
-    pub utc_offset_minutes: i32,
+    /// The IANA time zone for jobs at a time of day, e.g. `Europe/Berlin`. Daylight saving
+    /// follows it.
+    pub time_zone: String,
 }
 
 impl NodeConfig {
@@ -105,14 +106,14 @@ impl NodeConfig {
         name: String,
         listen: SocketAddr,
         secrets: SecretsConfig,
-        utc_offset_minutes: i32,
+        time_zone: String,
     ) -> Result<Self, String> {
         let config = Self {
             v: CONFIG_VERSION,
             name,
             listen,
             secrets,
-            utc_offset_minutes,
+            time_zone,
         };
         config.check()?;
         Ok(config)
@@ -129,9 +130,7 @@ impl NodeConfig {
         if len == 0 || len > 64 || self.name.chars().any(char::is_control) {
             return Err("the Node's name must be 1 to 64 characters".into());
         }
-        if !(-14 * 60..=14 * 60).contains(&self.utc_offset_minutes) {
-            return Err("--utc-offset must be between -14:00 and +14:00".into());
-        }
+        crate::node::zone::Zone::named(&self.time_zone)?;
         Ok(())
     }
 
@@ -147,6 +146,23 @@ impl NodeConfig {
                 path.display()
             )
         })?;
+        // A node.json from before time zones: say exactly what to change.
+        if let Ok(serde_json::Value::Object(o)) = serde_json::from_str(&text)
+            && o.contains_key("utc_offset_minutes")
+            && !o.contains_key("time_zone")
+        {
+            let zone = crate::node::zone::system_name(
+                &|k| std::env::var_os(k),
+                Path::new("/etc/localtime"),
+            )
+            .unwrap_or_else(|_| "Europe/Berlin".into());
+            return Err(format!(
+                "{} sets `utc_offset_minutes`, which this dn replaced with a time zone (daylight \
+                 saving included). Replace that line with\n  \"time_zone\": \"{zone}\"\nusing \
+                 the Node's own IANA time zone name, then start it again",
+                path.display()
+            ));
+        }
         let config: Self = serde_json::from_str(&text)
             .map_err(|e| format!("{} isn't valid: {e}", path.display()))?;
         config.check()?;
@@ -210,26 +226,6 @@ fn create_private_dir(dir: &Path) -> Result<(), String> {
     #[cfg(not(unix))]
     let made = std::fs::create_dir_all(dir);
     made.map_err(|e| format!("couldn't create {}: {e}", dir.display()))
-}
-
-/// Parses `+01:00`, `-05:30` or `0` into minutes.
-pub fn parse_utc_offset(text: &str) -> Result<i32, String> {
-    let bad = || format!("`{text}` isn't a UTC offset like +01:00 or -05:30");
-    if text == "0" || text.eq_ignore_ascii_case("z") {
-        return Ok(0);
-    }
-    let (sign, rest) = match text.as_bytes().first() {
-        Some(b'+') => (1, &text[1..]),
-        Some(b'-') => (-1, &text[1..]),
-        _ => return Err(bad()),
-    };
-    let (h, m) = rest.split_once(':').ok_or_else(bad)?;
-    let h: i32 = h.parse().map_err(|_| bad())?;
-    let m: i32 = m.parse().map_err(|_| bad())?;
-    if h > 14 || !(0..60).contains(&m) || m % 15 != 0 {
-        return Err(bad());
-    }
-    Ok(sign * (h * 60 + m))
 }
 
 /// Environment variables that commonly carry API keys or tokens.
@@ -313,7 +309,7 @@ mod tests {
             SecretsConfig::ContainerSecret {
                 name: "demios".into(),
             },
-            60,
+            "Europe/Berlin".into(),
         )
         .unwrap();
         c.create(&dir).unwrap();
@@ -321,6 +317,23 @@ mod tests {
         assert!(c.create(&dir).unwrap_err().contains("already set up"));
         std::fs::write(NodeConfig::path(&dir), r#"{"v":1,"extra":true}"#).unwrap();
         assert!(NodeConfig::load(&dir).is_err());
+        // An unknown time zone is refused at run too.
+        let text = serde_json::to_string(&c)
+            .unwrap()
+            .replace("Europe/Berlin", "Mars/Olympus");
+        std::fs::write(NodeConfig::path(&dir), text).unwrap();
+        assert!(NodeConfig::load(&dir).unwrap_err().contains("Mars/Olympus"));
+        // A node.json from before time zones names the file and the line to add.
+        let old = serde_json::to_string(&c).unwrap().replace(
+            r#""time_zone":"Europe/Berlin""#,
+            r#""utc_offset_minutes":60"#,
+        );
+        std::fs::write(NodeConfig::path(&dir), old).unwrap();
+        let e = NodeConfig::load(&dir).unwrap_err();
+        assert!(
+            e.contains("node.json") && e.contains("\"time_zone\": \""),
+            "{e}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
         assert!(NodeConfig::load(&dir).unwrap_err().contains("dn node init"));
     }
@@ -336,17 +349,6 @@ mod tests {
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
         assert!(check_private_dir(&dir).is_ok());
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn utc_offsets_parse() {
-        assert_eq!(parse_utc_offset("+01:00").unwrap(), 60);
-        assert_eq!(parse_utc_offset("-05:30").unwrap(), -330);
-        assert_eq!(parse_utc_offset("+05:45").unwrap(), 345);
-        assert_eq!(parse_utc_offset("0").unwrap(), 0);
-        for bad in ["1", "+1", "+15:00", "+01:07", "UTC"] {
-            assert!(parse_utc_offset(bad).is_err(), "{bad}");
-        }
     }
 
     #[test]

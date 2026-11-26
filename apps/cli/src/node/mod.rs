@@ -16,9 +16,10 @@
 //! already in the list are accepted.
 
 pub mod config;
+pub mod zone;
 
 use clap::Subcommand;
-use config::{NodeConfig, SecretsConfig, parse_utc_offset, secret_env_vars};
+use config::{NodeConfig, SecretsConfig, secret_env_vars};
 use dn_jobs::JobKey;
 use dn_jobs::scheduler::{Clock, Event, JobHost, Scheduler};
 use dn_plugin_api::{BoxFuture, JobContext, PluginError};
@@ -62,9 +63,10 @@ pub enum NodeCmd {
         /// key-file:<path>, passphrase or insecure-plaintext (test setups only).
         #[arg(long)]
         secrets: String,
-        /// Local time offset for jobs at a time of day, e.g. +01:00.
-        #[arg(long, default_value = "0", allow_hyphen_values = true)]
-        utc_offset: String,
+        /// The time zone for jobs at a time of day, an IANA name such as Europe/Berlin.
+        /// Defaults to this system's time zone.
+        #[arg(long)]
+        time_zone: Option<String>,
     },
     /// Run the Node in the foreground, as its service manager starts it.
     Run {
@@ -80,14 +82,13 @@ pub async fn command(cmd: NodeCmd) -> Result<(), String> {
             name,
             listen,
             secrets,
-            utc_offset,
+            time_zone,
         } => {
-            let config = NodeConfig::new(
-                name,
-                listen,
-                SecretsConfig::parse(&secrets)?,
-                parse_utc_offset(&utc_offset)?,
-            )?;
+            let time_zone = match time_zone {
+                Some(z) => z,
+                None => zone::system_name(&|k| std::env::var_os(k), Path::new("/etc/localtime"))?,
+            };
+            let config = NodeConfig::new(name, listen, SecretsConfig::parse(&secrets)?, time_zone)?;
             config.create(&data_dir)?;
             eprintln!(
                 "Node set up in {}. Start it with `dn node run --data-dir {}`.",
@@ -140,15 +141,21 @@ fn now_secs() -> i64 {
     dn_store::now_ms() / 1000
 }
 
-/// A fixed local offset (#257 adds the time zone with daylight saving).
-struct FixedOffsetClock(i64);
+/// The clock in the Node's time zone, daylight saving included.
+struct ZoneClock(zone::Zone);
 
-impl Clock for FixedOffsetClock {
+impl Clock for ZoneClock {
     fn now(&self) -> i64 {
         now_secs()
     }
-    fn utc_offset_secs(&self, _at: i64) -> i64 {
-        self.0
+}
+
+impl dn_plugin_api::LocalTime for ZoneClock {
+    fn to_local(&self, utc: i64) -> i64 {
+        self.0.to_local(utc)
+    }
+    fn to_utc(&self, local: i64) -> i64 {
+        self.0.to_utc(local)
     }
 }
 
@@ -255,7 +262,7 @@ impl Node {
             Arc::new(NoAddOns),
             Vec::new(),
             db.clone(),
-            Arc::new(FixedOffsetClock(i64::from(config.utc_offset_minutes) * 60)),
+            Arc::new(ZoneClock(zone::Zone::named(&config.time_zone)?)),
         ));
         eprintln!(
             "dn node: {} ({}) on {}, secrets: {}",
@@ -465,7 +472,7 @@ mod tests {
             "Home server".into(),
             "127.0.0.1:0".parse().unwrap(),
             secrets,
-            60,
+            "Europe/Berlin".into(),
         )
         .unwrap()
         .create(dir)
