@@ -165,19 +165,22 @@ impl PairingLink {
     }
 }
 
-fn proof_input(node: &PublicIdentity, joiner: &PublicIdentity) -> Vec<u8> {
-    let mut input = Vec::with_capacity(PROOF_LABEL.len() + 128);
+fn proof_input(node: &PublicIdentity, joiner: &PublicIdentity, channel: &[u8; 32]) -> Vec<u8> {
+    let mut input = Vec::with_capacity(PROOF_LABEL.len() + 160);
     input.extend_from_slice(PROOF_LABEL);
     input.extend_from_slice(&node.to_bytes());
     input.extend_from_slice(&joiner.to_bytes());
+    input.extend_from_slice(channel);
     input
 }
 
 /// The joining device's proof that it knows the link's secret: HMAC-SHA256 keyed with the
-/// secret over the Node's and the joiner's public keys, so it can't be reused for other keys.
-pub fn join_proof(link: &PairingLink, joiner: &PublicIdentity) -> [u8; 32] {
+/// secret over the Node's and the joiner's public keys and the TLS channel binding
+/// (`channel`, from the connection's keying-material exporter). So it can't be reused for
+/// other keys or on another connection.
+pub fn join_proof(link: &PairingLink, joiner: &PublicIdentity, channel: &[u8; 32]) -> [u8; 32] {
     let key = hmac::Key::new(hmac::HMAC_SHA256, link.secret.as_ref());
-    let tag = hmac::sign(&key, &proof_input(&link.node, joiner));
+    let tag = hmac::sign(&key, &proof_input(&link.node, joiner, channel));
     let mut out = [0u8; 32];
     out.copy_from_slice(tag.as_ref());
     out
@@ -240,6 +243,7 @@ impl PairingOffer {
         &mut self,
         joiner: &PublicIdentity,
         proof: &[u8],
+        channel: &[u8; 32],
         now: u64,
     ) -> Result<CheckNumbers> {
         if self.closed || now >= self.link.expires_at {
@@ -247,7 +251,7 @@ impl PairingOffer {
             return Err(SyncError::OfferClosed);
         }
         let key = hmac::Key::new(hmac::HMAC_SHA256, self.link.secret.as_ref());
-        if hmac::verify(&key, &proof_input(&self.link.node, joiner), proof).is_err() {
+        if hmac::verify(&key, &proof_input(&self.link.node, joiner, channel), proof).is_err() {
             self.wrong_proofs += 1;
             if self.wrong_proofs >= MAX_WRONG_PROOFS {
                 self.closed = true;
@@ -300,6 +304,7 @@ mod tests {
     use crate::identity::DeviceKeys;
 
     const NOW: u64 = 1_800_000_000;
+    const CH: [u8; 32] = [7; 32];
 
     fn setup() -> (DeviceKeys, DeviceKeys, PairingOffer) {
         let node = DeviceKeys::generate().unwrap();
@@ -315,8 +320,10 @@ mod tests {
         let link = PairingLink::parse(&url, NOW + 30).unwrap();
         assert_eq!(&link, offer.link());
         link.check_node(&node.public()).unwrap();
-        let proof = join_proof(&link, &joiner.public());
-        let on_node = offer.accept(&joiner.public(), &proof, NOW + 31).unwrap();
+        let proof = join_proof(&link, &joiner.public(), &CH);
+        let on_node = offer
+            .accept(&joiner.public(), &proof, &CH, NOW + 31)
+            .unwrap();
         let on_joiner = CheckNumbers::new(&link.node, &joiner.public());
         assert_eq!(on_node, on_joiner);
         assert_eq!(on_node.to_string().len(), 14);
@@ -325,16 +332,16 @@ mod tests {
     #[test]
     fn the_code_works_once() {
         let (_, joiner, mut offer) = setup();
-        let proof = join_proof(offer.link(), &joiner.public());
-        offer.accept(&joiner.public(), &proof, NOW).unwrap();
+        let proof = join_proof(offer.link(), &joiner.public(), &CH);
+        offer.accept(&joiner.public(), &proof, &CH, NOW).unwrap();
         assert!(matches!(
-            offer.accept(&joiner.public(), &proof, NOW),
+            offer.accept(&joiner.public(), &proof, &CH, NOW),
             Err(SyncError::OfferClosed)
         ));
         let other = DeviceKeys::generate().unwrap();
-        let proof = join_proof(offer.link(), &other.public());
+        let proof = join_proof(offer.link(), &other.public(), &CH);
         assert!(matches!(
-            offer.accept(&other.public(), &proof, NOW),
+            offer.accept(&other.public(), &proof, &CH, NOW),
             Err(SyncError::OfferClosed)
         ));
         assert_eq!(offer.seconds_left(NOW), 0);
@@ -350,9 +357,9 @@ mod tests {
             PairingLink::parse(&url, expiry),
             Err(SyncError::OfferClosed)
         ));
-        let proof = join_proof(offer.link(), &joiner.public());
+        let proof = join_proof(offer.link(), &joiner.public(), &CH);
         assert!(matches!(
-            offer.accept(&joiner.public(), &proof, expiry),
+            offer.accept(&joiner.public(), &proof, &CH, expiry),
             Err(SyncError::OfferClosed)
         ));
     }
@@ -362,25 +369,25 @@ mod tests {
         let (node, joiner, mut offer) = setup();
         // Someone who saw only the Node's keys and address, not the secret.
         let mut forged = PairingOffer::new("192.168.1.20:7443", node.public(), NOW).unwrap();
-        let guess = join_proof(forged.link(), &joiner.public());
+        let guess = join_proof(forged.link(), &joiner.public(), &CH);
         for _ in 0..MAX_WRONG_PROOFS - 1 {
             assert!(matches!(
-                offer.accept(&joiner.public(), &guess, NOW),
+                offer.accept(&joiner.public(), &guess, &CH, NOW),
                 Err(SyncError::WrongProof)
             ));
         }
         assert!(matches!(
-            offer.accept(&joiner.public(), &guess, NOW),
+            offer.accept(&joiner.public(), &guess, &CH, NOW),
             Err(SyncError::WrongProof)
         ));
         // Closed now, even for the right proof.
-        let right = join_proof(offer.link(), &joiner.public());
+        let right = join_proof(offer.link(), &joiner.public(), &CH);
         assert!(matches!(
-            offer.accept(&joiner.public(), &right, NOW),
+            offer.accept(&joiner.public(), &right, &CH, NOW),
             Err(SyncError::OfferClosed)
         ));
         // The forged offer is unrelated and still open.
-        assert!(forged.accept(&joiner.public(), &guess, NOW).is_ok());
+        assert!(forged.accept(&joiner.public(), &guess, &CH, NOW).is_ok());
     }
 
     #[test]
@@ -388,12 +395,28 @@ mod tests {
         // A device in the middle replays a real joiner's proof with its own keys.
         let (_, joiner, mut offer) = setup();
         let attacker = DeviceKeys::generate().unwrap();
-        let proof = join_proof(offer.link(), &joiner.public());
+        let proof = join_proof(offer.link(), &joiner.public(), &CH);
         assert!(matches!(
-            offer.accept(&attacker.public(), &proof, NOW),
+            offer.accept(&attacker.public(), &proof, &CH, NOW),
             Err(SyncError::WrongProof)
         ));
-        assert!(offer.accept(&joiner.public(), &proof, NOW).is_ok());
+        assert!(offer.accept(&joiner.public(), &proof, &CH, NOW).is_ok());
+    }
+
+    #[test]
+    fn a_proof_from_another_connection_is_refused() {
+        // A proof seen on one connection can't be replayed on another one.
+        let (_, joiner, mut offer) = setup();
+        let proof = join_proof(offer.link(), &joiner.public(), &[1; 32]);
+        assert!(matches!(
+            offer.accept(&joiner.public(), &proof, &[2; 32], NOW),
+            Err(SyncError::WrongProof)
+        ));
+        assert!(
+            offer
+                .accept(&joiner.public(), &proof, &[1; 32], NOW)
+                .is_ok()
+        );
     }
 
     #[test]

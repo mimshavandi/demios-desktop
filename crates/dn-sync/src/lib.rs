@@ -6,11 +6,14 @@
 //! - [`pairing`]: the pairing link (QR code payload), the one-time secret, the proof that a
 //!   joining device knows it, and the check numbers both sides show.
 //! - [`devices`]: the device list of a group, stored in `sync_devices`.
+//! - [`transport`]: the paired channel (TLS 1.3, each side pinning the other's key), its
+//!   version handshake, and pairing over it.
 
 pub mod b64;
 pub mod devices;
 pub mod identity;
 pub mod pairing;
+pub mod transport;
 
 pub use devices::{Device, DeviceKind, DeviceList};
 pub use identity::{DeviceId, DeviceKeys, PublicIdentity};
@@ -50,8 +53,40 @@ pub enum SyncError {
     UnknownDevice,
     #[error("that device was removed and can't be paired again with the same keys")]
     Removed,
+    #[error("the connection failed: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("the secure connection failed: {0}")]
+    Tls(String),
+    #[error("the other device broke the protocol: {0}")]
+    Protocol(&'static str),
+    #[error("{0}")]
+    VersionMismatch(VersionMismatch),
+    #[error("the Node didn't accept this device")]
+    Declined,
     #[error("database: {0}")]
     Db(#[from] rusqlite::Error),
+}
+
+/// Protocol majors that differ. The message names the side to update (ADR-0014 §8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VersionMismatch {
+    pub ours: u16,
+    pub theirs: u16,
+}
+
+impl std::fmt::Display for VersionMismatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let side = if self.theirs > self.ours {
+            "Update this app to sync"
+        } else {
+            "Update the other device to sync"
+        };
+        write!(
+            f,
+            "the other device speaks sync version {} and this one {}. {side}",
+            self.theirs, self.ours
+        )
+    }
 }
 
 pub type Result<T> = std::result::Result<T, SyncError>;
