@@ -1,6 +1,6 @@
 # ADR-0013: Plugin API (`dn-plugin-api`): what add-ons may register, and how they stay inside the app's rules
 
-**Status:** Accepted (owner, 2026-11-26) · **Date:** 2026-11-25 (amended 2026-11-25 for [ADR-0014](0014-demios-node.md); amended 2026-11-26: missed-run rules) · **Deciders:** project owner, lead · **Extends:** [ADR-0001](0001-repo-and-crate-layout.md), [ADR-0005](0005-agent-skill-manifests.md), [ADR-0006](0006-tools-mcp-capabilities.md), [ADR-0007](0007-local-storage-and-secrets.md), [ADR-0009](0009-security-baseline.md)
+**Status:** Accepted (owner, 2026-11-26), amendment proposed (§9, owner approval needed) · **Date:** 2026-11-25 (amended 2026-11-25 for [ADR-0014](0014-demios-node.md); amended 2026-11-26: missed-run rules; amendment proposed 2026-11-26: §9) · **Deciders:** project owner, lead · **Extends:** [ADR-0001](0001-repo-and-crate-layout.md), [ADR-0005](0005-agent-skill-manifests.md), [ADR-0006](0006-tools-mcp-capabilities.md), [ADR-0007](0007-local-storage-and-secrets.md), [ADR-0009](0009-security-baseline.md)
 
 ## Context
 ADR-0001 reserves `dn-plugin-api` as the "stable trait surface that add-ons plug into". Add-ons, including proprietary ones in a separate repository, build on it. ADR-0001 also sets two constraints:
@@ -206,6 +206,130 @@ To use the text otherwise, an add-on calls `Untrusted::into_inner()`, a named ac
 Third-party, untrusted add-ons would need a real sandbox: WASM components or a separate process. That is option B or C below, with the same host-service API over a message boundary.
 
 This ADR only keeps that path open (§1). It doesn't build it. Until then, third parties extend Demios through **MCP servers** and **skills**.
+
+### 9. Amendment proposed (2026-11-26, owner approval needed): per-tool limits, withdrawing held calls, add-on views, and tools that always need a fresh approval
+> **Status of this section: proposed.** §1–§8 stay as accepted. Where this section changes them, it says so, and it applies only once the owner approves it.
+
+Why: an add-on that reads mail and drafts replies showed four gaps, each of which would otherwise be handled by a review rule or not at all.
+1. Holding any write tool raises **every** tool of the add-on to `external_write`, so even "show today's summary" asks every time (§2, risk floor).
+2. An add-on can't take back a call it put in the held queue, so an edited draft would leave the old version waiting for approval.
+3. An add-on can show only a settings form (§2), so a summary, a list of items or a draft to review can't be shown on the desktop or a phone.
+4. "Never send without the user's approval" depends on the user's per-tool choices. One "run without asking" choice, made by mistake, removes it.
+
+#### 9.1 (a) Per-tool limits: every handler and job gets a `Host` limited to its own tier
+**Changes §2 ("The risk floor") and §4.** Today the host limits only `read`-tier handlers. Instead, it limits every tier, and the add-on-wide floor goes away.
+
+| Declared tier | Own data (memory, settings, files, database) | `http()` | `tools()` |
+|---|---|---|---|
+| `read` | read only | **none** | tools up to `read` |
+| `low_write` | read and write | **none** | tools up to `low_write` |
+| `external_write` and above | read and write | listed hosts (`network`); from a job, anything but GET is held, as in §2 | tools up to the handler's tier |
+
+- **Enforced by the host,** through `Access` and `Caller::max_tool_tier` in `dn-plugin-api`, which already carry the tier.
+  - `Access` gains a variant for `low_write`, so that `ReadWrite` means `external_write` and above.
+  - `http()` is refused below `external_write`. That includes GET, since a GET can carry data out in its address.
+  - In practice this changes nothing for the `read` tier. Today an add-on holding `network` has a floor of `external_write`, so no `read`-tier handler could call `http()`.
+- **The floor goes away.** A tool's tier is what it declares, because its `Host` can't do more than that tier allows.
+  - `dn_plugin_api::risk_floor` stays the one place the rule lives, and the `Registrar` stays its only caller. It changes from "the floor of the add-on" to "the lowest tier a tool may declare", which is `read` for every tool under this rule.
+  - The function is kept rather than removed, so a later permission that can't be limited per handler has one place to put a floor back.
+- **Jobs declare a tier too.**
+  - `JobDecl` gains `tier`, and the job's `Host` is limited by it like a tool's.
+  - An API minor version can only add, so a job declared without a tier keeps today's behaviour: `ReadWrite` with tools up to `sensitive`. The add-on build CI warns about it.
+- **What this buys:** an add-on can split its work into handlers with separate powers, and the host enforces the split.
+  - A handler that reads outside content runs at `read`, with no write tool and no `http()`.
+  - A handler that writes drafts into its own database runs at `low_write`, with no tool that acts outside the app.
+  - A handler that turns a stored draft into a request to send runs at `external_write`, and that request still needs approval (§9.4).
+  - Outside text can then change, at most, the content of something that waits for the user.
+- **What stays a review rule:** as in §1, an in-process add-on could reach past `Host` with raw `std` I/O. The CI checks (§1) and the conformance kit's new tier-limit scenarios are the backstops.
+
+#### 9.2 (b) An add-on can withdraw or replace its own held call
+**Adds to §2 ("Jobs can't do what needs a person") and §4.** `Host` gains `held()`, covering only calls this add-on put in the queue (enforced: the queue records the requester, and the host checks it).
+- `list()`: its calls that are still waiting, with their ids, tools and arguments.
+- `withdraw(id)`: the call becomes **withdrawn**, never runs, and its history says "withdrawn by *add-on*".
+- `replace(id, new arguments)`: in one transaction, it withdraws the old call and holds a new one for the same tool, linked to the old as "replaces". Every device shows only the new one, and the review shows what changed (a diff of the arguments).
+- **Only while held.** Withdrawing or replacing a call that has already been approved, is running or has finished fails with a clear error. The step from held to answered happens once (dn-jobs' guarded update), so an answer and a withdrawal can't both win.
+- **An answer to a withdrawn call is refused**, and the device that gave it says "This was replaced by a newer version".
+- Delete all and pause-all work as before. Withdrawn calls go into the run history only; they never go back into the queue.
+
+#### 9.3 (c) Declarative add-on views, drawn by the host on desktop and phone
+**Changes §2 ("Settings panels are declarative").** Settings panels stay as they are. An add-on can also register **views**.
+- **A view** is an id, a title, where it appears (its own entry in the sidebar, or a section of Settings › Add-ons), and a **`read`-tier render handler**.
+  - The handler returns a **view document**: a tree of blocks from a fixed set, as plain, serialisable data (§1).
+  - **Blocks:** heading, text, notice (information or warning), key and value list, item list (each item has a title, a subtitle, a reason, badges and actions), draft (labelled fields, a body, and a diff against an earlier version), and empty state.
+- **Every string is plain text.** There's no markup, HTML or script. Addresses are shown as text and open only through the app's link confirmation (the system dialog that shows the full address). The host draws every block with the design system's components.
+- **Actions** name one of the add-on's own tools (`plugin.<id>.<name>`) and its arguments, or another of its views.
+  - An action runs through the executor like any tool call, at the tool's tier, with the user's approval choices. A view can't run anything the user couldn't run from a chat.
+  - Its approval scope is per view (`plugin:<id>:view:<view>`) and never shared with chats.
+- **On a phone or another paired device,** the device asks the runtime (the desktop app or the Node) to render the view. The view document comes back over the paired channel, or sealed through the Relay. The device draws it with the same rules.
+- **Limits** (enforced): at most 200 blocks and 4 levels of nesting, 2,000 characters per text block, 20,000 per draft body, and 10 actions per item.
+- **Versions:** block kinds are `#[non_exhaustive]`. A host that meets a block kind it doesn't know shows "Update Demios to see this part" in its place, and never drops it silently.
+- New views are designed in the design reference first (ADR-0010, design standard §8).
+
+#### 9.4 (d) Tools that always need a fresh approval (`approval_required`)
+**Adds to §2, ADR-0006 and ADR-0014 §6.** Some tools act for the user in a way that can't be taken back: sending a message, answering an invitation, paying.
+
+**Which tools are in the class:**
+- A tool is `approval_required` when:
+  - its entry in the Connect catalogue marks it (ADR-0018 §1);
+  - its add-on declares it so; or
+  - the user marks it.
+- A mark from the catalogue or an add-on **can't be removed** by a setting. A mark the user added can be removed by the user, after a confirmation.
+
+**What the class changes** (enforced by the host):
+- **No standing permission.** "Always allow in this chat", "run without asking" and the per-add-on `auto` choice aren't offered and aren't accepted. A stored choice that would allow one is ignored, and Settings shows that it is ignored.
+- **A job's call is always held** (§2), whatever the settings.
+- **The call runs only with a one-time approval token:**
+  - it's bound to the held call's id, the tool, and the SHA-256 of the exact stored arguments, which is dn-jobs' signed answer message (`dn-held-answer v1`);
+  - it's consumed by the held-to-approved step, which happens once.
+- **The executor checks the token** immediately before it runs the call, and refuses to run an `approval_required` tool without one. It doesn't matter where the call came from: a chat, a view action or a job.
+- **The token is minted only by a person's answer:**
+  - in the app, by the approval card's **Allow once** (an app command that only the app's own page can call, #85); or
+  - on another device, by an answer signed with that device's key and checked by the Node's `AnswerVerifier` against the device group (ADR-0014 §6).
+- **No add-on, job, model output or tool can create a token.** An add-on's `Host` has no way to, and the token types aren't in `dn-plugin-api`.
+
+**Two optional strengthenings for devices that can do them:**
+- **Presence-bound keys.** A device whose signing key requires user presence for each signature (Face ID or Touch ID, Windows Hello) registers that at pairing. The user confirms it on the Node's pairing screen. For `approval_required` calls, the Node can then accept answers only from such devices. It's a setting, and it's off when no paired device has such a key.
+- **Freshness.** An answer must be signed after the call was held and before its expiry. A copied old answer can't approve a new call, even with the same arguments, because the held call id differs.
+
+**Be honest about the limits:**
+- On a single computer without a Node, the token protects against every code path except the app process itself. An in-process add-on is still trusted code (§1), and the token is a check in the executor, not a sandbox.
+- What the class does guarantee is that **no setting, schedule or add-on request** can make such a tool run without a person answering that one call.
+
+#### 9.5 Consequences of the amendment
+- **`dn-plugin-api`** (API minor version):
+  - `Access` for every tier; `JobDecl::tier`;
+  - `Host::held()` with list, withdraw and replace;
+  - view registration and the view-document types;
+  - the `approval_required` declaration on tools;
+  - `risk_floor` returns `read` (§9.1).
+  - The conformance kit gains scenarios for each.
+- **`dn-core`:** `CapabilitySpec` gains `approval_required`. That's a contract change, and this ADR is its reference.
+- **`dn-tools`:**
+  - the executor ignores standing choices for the class, and checks and consumes the token;
+  - the approval card hides "Always allow" for it, as it already does for destructive and sensitive tools.
+- **`dn-jobs`** (#252):
+  - `withdrawn` and `replaced` states, linked to the call that replaced them;
+  - answers to them are refused;
+  - the token check before `take_approved` hands out a call in the class;
+  - the requester is recorded, for `held()`'s ownership check.
+- **The app and paired devices:** a view renderer for the block set, approval cards for held calls that show diffs, and "replaced by a newer version".
+- **Connect catalogue** (ADR-0018): entries gain the `approval_required` mark for send, answer and pay tools.
+
+#### 9.6 Options considered for the amendment
+| Gap | Chosen | Rejected | Why |
+|---|---|---|---|
+| Risk floor | Tier-limited `Host` for every tier | Keep the add-on-wide floor; ask add-ons to split into several add-ons with separate permissions | Splitting doubles consent screens and still leaves the split unenforced inside each add-on |
+| Edited held calls | `withdraw` and `replace`, held state only | The user edits the arguments in the approval card | The add-on keeps its own copy of the draft; editing in two places drifts. Editing in the card may come later as a host feature |
+| Add-on screens | Declarative blocks drawn by the host | Add-on HTML in a sandboxed frame like artifacts; native UI per platform | HTML would need a second capability model and couldn't be drawn on a phone without a webview; blocks keep text plain and look native everywhere |
+| Never-without-approval tools | A tool class with one-time tokens checked by the executor | Rely on the user never choosing "run without asking"; a per-add-on switch | A setting can be changed by mistake; a class the catalogue or add-on sets can't |
+
+#### 9.7 Action items (to be filed as issues once approved)
+1. `dn-plugin-api`: per-tier `Access`, `JobDecl::tier`, the new `risk_floor`, and the conformance scenarios.
+2. `dn-plugin-api` and `dn-jobs` (#252): `Host::held()`, the withdrawn and replaced states, and requester ownership.
+3. `dn-plugin-api`: views and the view document. App: the renderer, designed in the design reference first.
+4. `dn-core`, `dn-tools` and `dn-jobs`: the `approval_required` class, token checks, and Allow-once-only cards.
+5. Pairing (ADR-0014 §2): the presence-bound key flag, and the Node setting that accepts only such devices for the class.
+6. Connect catalogue: the class marks on send, answer and pay tools.
 
 ## Options considered
 
