@@ -113,7 +113,7 @@ pub enum CollectionKind {
 }
 
 /// One kind of synced record, read and written through its owning crate.
-pub trait Collection {
+pub trait Collection: Sync {
     /// The name in changes (`chat`, `message`, `project`).
     fn name(&self) -> &'static str;
     /// The table it reads in dn-store's change log.
@@ -129,6 +129,11 @@ pub trait Collection {
     /// For a child record: its parent (collection, id), to drop children of a purged parent.
     fn parent(&self, _fields: &Map<String, Value>) -> Option<(&'static str, String)> {
         None
+    }
+    /// Records this one refers to and that must reach the other side first (a message's
+    /// chat, a chat's project).
+    fn refers_to(&self, fields: &Map<String, Value>) -> Vec<(&'static str, String)> {
+        self.parent(fields).into_iter().collect()
     }
     /// The children a purge of this record removes too, as (collection, id).
     fn children(&self, _conn: &Connection, _id: &str) -> Result<Vec<(&'static str, String)>> {
@@ -217,6 +222,14 @@ impl Collection for Chats {
     }
     fn purge(&self, conn: &Connection, id: &str, at_ms: i64) -> Result<()> {
         sync_rows::purge_chat(conn, id, at_ms).map_err(store)
+    }
+    fn refers_to(&self, fields: &Map<String, Value>) -> Vec<(&'static str, String)> {
+        fields
+            .get("project_id")
+            .and_then(Value::as_str)
+            .map(|p| ("project", p.to_owned()))
+            .into_iter()
+            .collect()
     }
     fn children(&self, conn: &Connection, id: &str) -> Result<Vec<(&'static str, String)>> {
         Ok(sync_rows::chat_message_ids(conn, id)
@@ -438,8 +451,119 @@ fn scan_rev(conn: &Connection) -> Result<i64> {
         .unwrap_or(0))
 }
 
-/// Turns local edits into one change, sealed into the outbox (see the module notes).
-/// Returns `None` when nothing changed here.
+/// Most ops in one change, and their rough size: a big history goes out in many changes,
+/// each a short transaction (§10.2: a change stays well under 1 MiB).
+pub const SCAN_MAX_OPS: usize = 200;
+pub const SCAN_MAX_BYTES: usize = 256 * 1024;
+
+/// What one [`scan`] did.
+#[derive(Debug, Default)]
+pub struct Scanned {
+    /// The change made from local edits, if any.
+    pub change: Option<Change>,
+    /// More local edits wait for the next scan.
+    pub more: bool,
+}
+
+/// Collects one change's worth of local edits.
+struct Batch {
+    ops: Vec<Op>,
+    bytes: usize,
+    /// (collection, id, field, value) to record once the change has its number.
+    fields: Vec<(&'static str, String, String, Value)>,
+    purges: Vec<(&'static str, String)>,
+    emitted: std::collections::HashSet<(&'static str, String)>,
+}
+
+impl Batch {
+    fn full(&self) -> bool {
+        self.ops.len() >= SCAN_MAX_OPS || self.bytes >= SCAN_MAX_BYTES
+    }
+
+    fn push(&mut self, op: Op) {
+        self.bytes += serde_json::to_vec(&op).map(|v| v.len()).unwrap_or(0);
+        self.ops.push(op);
+    }
+}
+
+fn known(conn: &Connection, col: &str, id: &str) -> Result<bool> {
+    Ok(conn
+        .query_row(
+            "SELECT 1 FROM sync_fields WHERE collection = ?1 AND id = ?2 LIMIT 1",
+            params![col, id],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
+}
+
+/// Adds a record as it is now: its changed fields, or the whole record if appended. Its
+/// parents go first when they haven't been sent yet, so a change never names a chat or a
+/// project the other side doesn't have.
+fn emit(
+    tx: &Connection,
+    cols: &[&dyn Collection],
+    col: &dyn Collection,
+    id: &str,
+    now: Map<String, Value>,
+    b: &mut Batch,
+) -> Result<()> {
+    let name = col.name();
+    if !b.emitted.insert((name, id.to_owned())) {
+        return Ok(());
+    }
+    for (pc, pid) in col.refers_to(&now) {
+        let Ok(pcol) = collection(cols, pc) else {
+            continue;
+        };
+        if is_purged(tx, pc, &pid)?
+            || known(tx, pc, &pid)?
+            || b.emitted.contains(&(pc, pid.clone()))
+        {
+            continue;
+        }
+        if let Some(pnow) = pcol.read(tx, &pid)? {
+            emit(tx, cols, pcol, &pid, pnow, b)?;
+        }
+    }
+    match col.kind() {
+        CollectionKind::Append => {
+            if field_write(tx, name, id, "")?.is_some() {
+                return Ok(()); // Already sent, or received from another device.
+            }
+            b.push(Op::Append {
+                collection: name.to_owned(),
+                id: id.to_owned(),
+                value: Value::Object(now),
+            });
+            b.fields
+                .push((name, id.to_owned(), String::new(), Value::Null));
+        }
+        CollectionKind::Fields(spec) => {
+            let mut changed = BTreeMap::new();
+            for (field, _) in spec {
+                let v = now.get(*field).cloned().unwrap_or(Value::Null);
+                let same =
+                    field_write(tx, name, id, field)?.is_some_and(|w| w.hash == value_hash(&v));
+                if !same {
+                    changed.insert((*field).to_owned(), v.clone());
+                    b.fields.push((name, id.to_owned(), (*field).to_owned(), v));
+                }
+            }
+            if !changed.is_empty() {
+                b.push(Op::Put {
+                    collection: name.to_owned(),
+                    id: id.to_owned(),
+                    fields: changed,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Turns local edits into at most one change ([`SCAN_MAX_OPS`], [`SCAN_MAX_BYTES`]), sealed
+/// into the outbox (see the module notes). `more` says another scan has more to do.
 pub fn scan(
     conn: &Connection,
     cols: &[&dyn Collection],
@@ -447,26 +571,29 @@ pub fn scan(
     group: GroupId,
     key: &GroupKey,
     now_ms: u64,
-) -> Result<Option<Change>> {
+) -> Result<Scanned> {
     let tx = conn.unchecked_transaction()?;
     let since = scan_rev(&tx)?;
-    let mut entries = sync_rows::log_since(&tx, since).map_err(store)?;
-    let Some(last_rev) = entries.iter().map(|e| e.rev).max() else {
-        return Ok(None);
+    let entries = sync_rows::log_since(&tx, since).map_err(store)?;
+    if entries.is_empty() {
+        return Ok(Scanned::default());
+    }
+    let mut b = Batch {
+        ops: Vec::new(),
+        bytes: 0,
+        fields: Vec::new(),
+        purges: Vec::new(),
+        emitted: Default::default(),
     };
-    // Parents before children inside one change (a chat's latest entry can come after its
-    // newest message, since a message bumps the chat): in the order of `cols`, then of the log.
-    let rank = |k: Kind| {
-        cols.iter()
-            .position(|c| c.log_kind() == k)
-            .unwrap_or(usize::MAX)
-    };
-    entries.sort_by_key(|e| (rank(e.kind), e.rev));
-    let mut ops = Vec::new();
-    // What to record once the change has its number: (collection, id, field, value).
-    let mut fields: Vec<(&'static str, String, String, Value)> = Vec::new();
-    let mut purges: Vec<(&'static str, String)> = Vec::new();
+    let mut done_rev = since;
+    let mut more = false;
+    // In log order; parents are pulled forward by `emit`.
     for e in &entries {
+        if b.full() {
+            more = true;
+            break;
+        }
+        done_rev = e.rev;
         let Some(col) = cols.iter().copied().find(|c| c.log_kind() == e.kind) else {
             continue;
         };
@@ -475,58 +602,30 @@ pub fn scan(
             continue; // Our own apply of a purge, or a record already deleted for good.
         }
         if e.deleted {
-            ops.push(Op::Purge {
+            b.push(Op::Purge {
                 collection: name.to_owned(),
                 id: e.id.clone(),
             });
-            purges.push((name, e.id.clone()));
+            b.purges.push((name, e.id.clone()));
             continue;
         }
-        let Some(now) = col.read(&tx, &e.id)? else {
-            continue;
-        };
-        match col.kind() {
-            CollectionKind::Append => {
-                if field_write(&tx, name, &e.id, "")?.is_some() {
-                    continue; // Already sent, or received from another device.
-                }
-                ops.push(Op::Append {
-                    collection: name.to_owned(),
-                    id: e.id.clone(),
-                    value: Value::Object(now),
-                });
-                fields.push((name, e.id.clone(), String::new(), Value::Null));
-            }
-            CollectionKind::Fields(spec) => {
-                let mut changed = BTreeMap::new();
-                for (field, _) in spec {
-                    let v = now.get(*field).cloned().unwrap_or(Value::Null);
-                    let same = field_write(&tx, name, &e.id, field)?
-                        .is_some_and(|w| w.hash == value_hash(&v));
-                    if !same {
-                        changed.insert((*field).to_owned(), v.clone());
-                        fields.push((name, e.id.clone(), (*field).to_owned(), v));
-                    }
-                }
-                if !changed.is_empty() {
-                    ops.push(Op::Put {
-                        collection: name.to_owned(),
-                        id: e.id.clone(),
-                        fields: changed,
-                    });
-                }
-            }
+        if let Some(now) = col.read(&tx, &e.id)? {
+            emit(&tx, cols, col, &e.id, now, &mut b)?;
         }
     }
     let mut out = None;
-    if !ops.is_empty() {
-        let change = inbox::next_change_in(&tx, me.id(), group, key.epoch, ops, now_ms)?;
+    if !b.ops.is_empty() {
+        let change = inbox::next_change_in(&tx, me.id(), group, key.epoch, b.ops, now_ms)?;
         let envelope = seal(&change, me, key)?;
         tx.execute(
             "INSERT INTO sync_outbox (seq, envelope) VALUES (?1, ?2)",
             params![change.seq as i64, envelope],
         )?;
-        for (col, id, field, value) in &fields {
+        tx.execute(
+            "INSERT INTO sync_envelopes (author, seq, envelope) VALUES (?1, ?2, ?3)",
+            params![change.author.to_hex(), change.seq as i64, envelope],
+        )?;
+        for (col, id, field, value) in &b.fields {
             record_field(
                 &tx,
                 col,
@@ -542,18 +641,18 @@ pub fn scan(
                 settle_conflicts(&tx, col, id, field, &change)?;
             }
         }
-        for (col, id) in &purges {
+        for (col, id) in &b.purges {
             record_purge(&tx, col, id, change.author, change.seq, change.hlc)?;
         }
         out = Some(change);
     }
     tx.execute(
         "INSERT INTO sync_scan (id, rev) VALUES (1, ?1) ON CONFLICT (id) DO UPDATE SET rev = excluded.rev",
-        [last_rev],
+        [done_rev],
     )?;
-    sync_rows::prune_log(&tx, last_rev).map_err(store)?;
+    sync_rows::prune_log(&tx, done_rev).map_err(store)?;
     tx.commit()?;
-    Ok(out)
+    Ok(Scanned { change: out, more })
 }
 
 fn notice(conn: &Connection, col: &str, id: &str, text: &str, now_ms: u64) -> Result<()> {
@@ -572,8 +671,9 @@ pub fn apply(
     change: &Change,
     me: DeviceId,
     now_ms: u64,
-) -> Result<()> {
+) -> Result<Vec<(String, String)>> {
     let tx = conn.unchecked_transaction()?;
+    let mut purged = Vec::new();
     for op in &change.ops {
         // Ids from other devices must be in the one form this app writes (see
         // `dn_store::sync_rows::canonical_id`), so tombstones and keys always match.
@@ -612,6 +712,7 @@ pub fn apply(
                 }
                 col.purge(&tx, id, change.hlc.millis() as i64)?;
                 record_purge(&tx, col.name(), id, change.author, change.seq, change.hlc)?;
+                purged.push((col.name().to_owned(), id.clone()));
             }
             Op::Append {
                 collection: c,
@@ -739,12 +840,64 @@ pub fn apply(
     }
     inbox::applied_in(&tx, change, now_ms)?;
     tx.commit()?;
-    Ok(())
+    Ok(purged)
 }
 
-/// One round: scan local edits first, then apply every change that is ready. The caller
-/// holds the connection for the whole round (see the module notes). `open` opens an
-/// envelope from the inbox (with the right epoch's key and the membership chain).
+/// What one [`pump_batch`] did.
+#[derive(Debug, Default)]
+pub struct PumpBatch {
+    /// Changes made from local edits.
+    pub local: Vec<Change>,
+    pub applied: usize,
+    /// Records other devices deleted for good, as (collection, id): the app forgets what it
+    /// keeps about them elsewhere.
+    pub purged: Vec<(String, String)>,
+    /// Call again: more local edits or ready changes wait.
+    pub more: bool,
+}
+
+/// One short step of scan-then-apply (see the module notes): while local edits wait, it
+/// records one batch of them and returns; only when none wait does it apply up to
+/// `max_apply` ready changes. The caller holds the connection for the call and may release
+/// it between calls, so a big first sync never holds it long, and a local edit is always
+/// recorded before anything newer is applied.
+#[allow(clippy::too_many_arguments)]
+pub fn pump_batch(
+    conn: &Connection,
+    cols: &[&dyn Collection],
+    me: &DeviceKeys,
+    group: GroupId,
+    key: &GroupKey,
+    open: impl Fn(&[u8]) -> Result<Opened>,
+    max_apply: usize,
+    now_ms: u64,
+) -> Result<PumpBatch> {
+    let mut out = PumpBatch::default();
+    let s = scan(conn, cols, me, group, key, now_ms)?;
+    out.local.extend(s.change);
+    if s.more {
+        out.more = true;
+        return Ok(out);
+    }
+    while out.applied < max_apply {
+        let Some((author, seq, envelope)) = inbox::next_ready(conn, now_ms)? else {
+            return Ok(out);
+        };
+        let opened = open(&envelope)?;
+        if opened.change.author != author || opened.change.seq != seq {
+            return Err(SyncError::Protocol(
+                "an inbox envelope isn't the change it was stored as",
+            ));
+        }
+        out.purged
+            .extend(apply(conn, cols, &opened.change, me.id(), now_ms)?);
+        out.applied += 1;
+    }
+    out.more = inbox::next_ready(conn, now_ms)?.is_some();
+    Ok(out)
+}
+
+/// [`pump_batch`] until nothing waits (tests, and the Node, where nothing else writes).
 pub fn pump(
     conn: &Connection,
     cols: &[&dyn Collection],
@@ -753,20 +906,17 @@ pub fn pump(
     key: &GroupKey,
     open: impl Fn(&[u8]) -> Result<Opened>,
     now_ms: u64,
-) -> Result<(Option<Change>, usize)> {
-    let local = scan(conn, cols, me, group, key, now_ms)?;
-    let mut applied = 0;
-    while let Some((author, seq, envelope)) = inbox::next_ready(conn, now_ms)? {
-        let opened = open(&envelope)?;
-        if opened.change.author != author || opened.change.seq != seq {
-            return Err(SyncError::Protocol(
-                "an inbox envelope isn't the change it was stored as",
-            ));
+) -> Result<PumpBatch> {
+    let mut total = PumpBatch::default();
+    loop {
+        let b = pump_batch(conn, cols, me, group, key, &open, 100, now_ms)?;
+        total.local.extend(b.local);
+        total.applied += b.applied;
+        total.purged.extend(b.purged);
+        if !b.more {
+            return Ok(total);
         }
-        apply(conn, cols, &opened.change, me.id(), now_ms)?;
-        applied += 1;
     }
-    Ok((local, applied))
 }
 
 /// A text field written on two devices at once (§6.2).

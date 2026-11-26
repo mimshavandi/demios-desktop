@@ -16,6 +16,7 @@ pub mod b64;
 pub mod change;
 pub mod devices;
 pub mod envelope;
+pub mod group;
 pub mod hlc;
 pub mod identity;
 pub mod inbox;
@@ -23,6 +24,7 @@ pub mod link;
 pub mod membership;
 pub mod pairing;
 pub mod records;
+pub mod session;
 pub mod transport;
 
 pub use devices::{Device, DeviceKind, DeviceList};
@@ -37,6 +39,7 @@ pub fn migrations() -> &'static [&'static str] {
         devices::MIGRATION_NODE_LINK,
         membership::MIGRATION,
         records::MIGRATION,
+        session::MIGRATION,
     ]
 }
 
@@ -85,6 +88,8 @@ pub enum SyncError {
     ForkedChain,
     #[error("device {0} sent two different changes under one number")]
     Equivocation(DeviceId),
+    #[error("the Node refused the sync: {0}")]
+    Refused(String),
     #[error("the local store refused a synced record: {0}")]
     Store(String),
     #[error("database: {0}")]

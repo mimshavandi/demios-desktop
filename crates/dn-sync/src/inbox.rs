@@ -172,6 +172,27 @@ pub enum Received {
 
 /// Keeps an opened envelope in the inbox. See the module notes.
 pub fn receive(conn: &Connection, opened: &Opened, now_ms: u64) -> Result<Received> {
+    keep_and_queue(conn, opened, now_ms, true)
+}
+
+/// Like [`receive_from_group`], for the Node: checks and keeps the envelope to pass on,
+/// without queueing it to apply (the Node holds no records).
+pub fn keep_from_group(
+    conn: &Connection,
+    chain: &crate::membership::Chain,
+    opened: &Opened,
+    now_ms: u64,
+) -> Result<Received> {
+    chain.accepts(&opened.change)?;
+    keep_and_queue(conn, opened, now_ms, false)
+}
+
+fn keep_and_queue(
+    conn: &Connection,
+    opened: &Opened,
+    now_ms: u64,
+    queue: bool,
+) -> Result<Received> {
     let envelope = opened.envelope.as_slice();
     let c = &opened.change;
     let tx = conn.unchecked_transaction()?;
@@ -211,6 +232,14 @@ pub fn receive(conn: &Connection, opened: &Opened, now_ms: u64) -> Result<Receiv
         "INSERT INTO sync_seen (author, seq, hash) VALUES (?1, ?2, ?3)",
         params![hex(c.author), c.seq as i64, opened.hash.as_slice()],
     )?;
+    tx.execute(
+        "INSERT OR IGNORE INTO sync_envelopes (author, seq, envelope) VALUES (?1, ?2, ?3)",
+        params![hex(c.author), c.seq as i64, envelope],
+    )?;
+    if !queue {
+        tx.commit()?;
+        return Ok(Received::Stored);
+    }
     tx.execute(
         "INSERT INTO sync_inbox (author, seq, deps, hlc, envelope, received_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -648,6 +677,7 @@ mod tests {
             "Laptop",
             DeviceKind::Desktop,
             None,
+            &[],
         )
         .unwrap();
         nc.add(
@@ -656,6 +686,7 @@ mod tests {
             "Phone",
             DeviceKind::Phone,
             None,
+            &[],
         )
         .unwrap();
         let group = nc.chain().group();
