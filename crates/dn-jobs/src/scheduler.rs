@@ -358,15 +358,13 @@ impl Scheduler {
         self.with_db(|conn| store::set_enabled(conn, key, enabled, now))?;
         if enabled {
             self.wake.notify_one();
-        } else if let Some((running, c)) = self
-            .current
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .as_ref()
+            return Ok(());
+        }
+        let current = self.current.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some((running, c)) = current.as_ref()
+            && running == key
         {
-            if running == key {
-                c.cancel();
-            }
+            c.cancel();
         }
         Ok(())
     }
