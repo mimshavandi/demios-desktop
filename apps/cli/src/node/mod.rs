@@ -965,7 +965,7 @@ mod tests {
                     "N".into(),
                     listen.parse().unwrap(),
                     SecretsConfig::InsecurePlaintext,
-                    0,
+                    "UTC".into(),
                 )
                 .unwrap()
             };
