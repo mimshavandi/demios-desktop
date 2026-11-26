@@ -512,7 +512,9 @@ pub trait HostBackend: Send + Sync {
     ) -> BoxFuture<'a, Result<(), PluginError>>;
 
     /// Runs a statement on the add-on's own database file and returns the rows changed.
-    /// The connection's authorizer refuses `ATTACH` and other schemas.
+    /// The connection's authorizer refuses `ATTACH` and other schemas. When
+    /// [`Caller::access`] is [`Access::DeleteOnly`], it must also refuse anything but
+    /// `DELETE` (and `DROP`), so deletion can't write.
     fn db_execute<'a>(
         &'a self,
         caller: &'a Caller,
