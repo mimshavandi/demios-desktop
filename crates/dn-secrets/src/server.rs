@@ -221,6 +221,29 @@ fn read_key_file(path: &Path, what: &str) -> Result<Zeroizing<[u8; 32]>, SecretE
     })
 }
 
+/// Refuses a key file inside the data folder, on every platform.
+fn check_not_inside(key: &Path, data_dir: &Path) -> Result<(), SecretError> {
+    let key_real = fs::canonicalize(key).map_err(|e| {
+        unavailable(format!(
+            "couldn't read the key file at {}: {e}",
+            key.display()
+        ))
+    })?;
+    let data = fs::canonicalize(data_dir).map_err(|e| {
+        unavailable(format!(
+            "couldn't read the data folder {}: {e}",
+            data_dir.display()
+        ))
+    })?;
+    if key_real.starts_with(&data) {
+        return Err(unavailable(format!(
+            "the key file at {} is inside the data folder; put it on a separate mount",
+            key.display()
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(unix)]
 fn check_key_file_placement(key: &Path, data_dir: &Path) -> Result<(), SecretError> {
     use std::os::unix::fs::MetadataExt;
@@ -236,6 +259,7 @@ fn check_key_file_placement(key: &Path, data_dir: &Path) -> Result<(), SecretErr
             key.display()
         )));
     }
+    check_not_inside(key, data_dir)?;
     let data = fs::metadata(data_dir).map_err(|e| {
         unavailable(format!(
             "couldn't read the data folder {}: {e}",
@@ -253,26 +277,8 @@ fn check_key_file_placement(key: &Path, data_dir: &Path) -> Result<(), SecretErr
 
 #[cfg(not(unix))]
 fn check_key_file_placement(key: &Path, data_dir: &Path) -> Result<(), SecretError> {
-    // No device numbers here; refuse at least a key file inside the data folder.
-    let key = fs::canonicalize(key).map_err(|e| {
-        unavailable(format!(
-            "couldn't read the key file at {}: {e}",
-            key.display()
-        ))
-    })?;
-    let data = fs::canonicalize(data_dir).map_err(|e| {
-        unavailable(format!(
-            "couldn't read the data folder {}: {e}",
-            data_dir.display()
-        ))
-    })?;
-    if key.starts_with(&data) {
-        return Err(unavailable(format!(
-            "the key file at {} is inside the data folder; put it on a separate disk",
-            key.display()
-        )));
-    }
-    Ok(())
+    // No device numbers here: refuse at least a key file inside the data folder.
+    check_not_inside(key, data_dir)
 }
 
 fn read_key(
@@ -404,8 +410,15 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), SecretError> {
             .and_then(|n| n.to_str())
             .unwrap_or("secrets")
     ));
+    // A leftover temp file (or a link planted there) is removed, and the new one must not
+    // exist yet, so its owner-only mode always applies.
+    match fs::remove_file(&tmp) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(fail(e)),
+    }
     let mut options = fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    options.write(true).create_new(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
@@ -605,7 +618,11 @@ impl EncryptedFileStore {
             }));
         }
         let iterations = u32::from_be_bytes([head[9], head[10], head[11], head[12]]);
-        if kdf == KDF_PBKDF2 && !(MIN_ITERATIONS..=MAX_ITERATIONS).contains(&iterations) {
+        let rounds_ok = match kdf {
+            KDF_PBKDF2 => (MIN_ITERATIONS..=MAX_ITERATIONS).contains(&iterations),
+            _ => iterations == 0,
+        };
+        if !rounds_ok {
             return Err(damaged(&self.path));
         }
         let mut salt = [0u8; SALT_LEN];
@@ -1072,6 +1089,19 @@ mod tests {
             EncryptedFileStore::open_with_key(path, ext(), &KEY),
             Err(SecretError::Denied(_))
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_leftover_temp_file_does_not_keep_its_permissions() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let dir = TempDir::new();
+        let tmp = dir.0.join(".secrets.enc.tmp");
+        fs::write(&tmp, b"old").unwrap();
+        fs::set_permissions(&tmp, fs::Permissions::from_mode(0o644)).unwrap();
+        let path = dir.0.join(ENCRYPTED_FILE);
+        EncryptedFileStore::open_with_key(path.clone(), ext(), &KEY).unwrap();
+        assert_eq!(fs::metadata(&path).unwrap().mode() & 0o777, 0o600);
     }
 
     #[test]
