@@ -11,24 +11,17 @@ rust-version.workspace = true
 aws-lc-rs.workspace = true
 dn-secrets.workspace = true
 rusqlite.workspace = true
-<<<<<<< HEAD
 rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["io-util"] }
 tokio-rustls.workspace = true
-=======
-thiserror.workspace = true
->>>>>>> origin/main
 zeroize.workspace = true
 
 [dev-dependencies]
 dn-store.workspace = true
-<<<<<<< HEAD
 tokio = { workspace = true, features = ["io-util", "macros", "rt"] }
-=======
->>>>>>> origin/main
 
 [lints]
 workspace = true

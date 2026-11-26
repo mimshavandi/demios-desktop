@@ -137,17 +137,7 @@ impl DeviceList {
     ) -> Result<Device> {
         let name = clean_name(name)?;
         let id = keys.id();
-<<<<<<< HEAD
         let same_signing_key = Self::by_signing_key(conn, &keys.ed25519)?;
-=======
-        let same_signing_key = conn
-            .query_row(
-                "SELECT * FROM sync_devices WHERE ed25519 = ?1",
-                [keys.ed25519.as_slice()],
-                from_row,
-            )
-            .optional()?;
->>>>>>> origin/main
         if let Some(existing) = same_signing_key.or(Self::get(conn, id)?) {
             return Err(if existing.is_member() {
                 SyncError::AlreadyPaired
@@ -181,7 +171,6 @@ impl DeviceList {
             .optional()?)
     }
 
-<<<<<<< HEAD
     /// The device with this Ed25519 key, removed or not (the TLS peer key on a connection).
     pub fn by_signing_key(conn: &Connection, ed25519: &[u8; 32]) -> Result<Option<Device>> {
         Ok(conn
@@ -193,8 +182,6 @@ impl DeviceList {
             .optional()?)
     }
 
-=======
->>>>>>> origin/main
     /// Current members, oldest first.
     pub fn members(conn: &Connection) -> Result<Vec<Device>> {
         let mut stmt = conn
