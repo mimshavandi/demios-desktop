@@ -20,6 +20,7 @@ pub mod client;
 pub mod config;
 pub mod error;
 pub mod executor;
+pub mod in_process;
 pub mod ledger;
 pub mod narrow;
 pub mod oauth;
@@ -29,7 +30,10 @@ pub use approval::{ApprovalDecision, ApprovalGate, ApprovalPrompt, ApprovalReque
 pub use capability::{CapabilityOverride, McpCapability};
 pub use client::{ConnectionStatus, McpCallOutput, McpClient, McpTool};
 pub use config::{McpServerConfig, McpTransport, OAuthSettings, ValueRef};
-pub use executor::{CallContext, Executor, RetryPolicy, ToolOutcome};
+pub use executor::{
+    CallContext, CallOrigin, Executor, JobCall, PluginCall, RetryPolicy, ToolOutcome,
+};
+pub use in_process::{InProcessTool, PluginTool};
 pub use ledger::migrations;
 pub use narrow::{CapabilityResolver, Narrowed, ToolAllowlist};
 pub use oauth::{LoopbackRedirect, OAuthManager, PendingAuthorization};

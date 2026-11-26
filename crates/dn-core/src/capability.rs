@@ -40,8 +40,37 @@ pub enum ApprovalPolicy {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CapabilitySource {
     Builtin,
-    Mcp { server_id: String },
-    Skill { skill_id: String },
+    Mcp {
+        server_id: String,
+    },
+    Skill {
+        skill_id: String,
+    },
+    /// A tool of a first-party add-on, run in-process through the same executor path as MCP
+    /// tools (ADR-0013 §2). Its id is `plugin.<plugin_id>.<name>`.
+    Plugin {
+        plugin_id: String,
+    },
+}
+
+/// Who asked for a tool call, shown on the approval prompt so an add-on's request never
+/// looks like the model's own (ADR-0013 §4).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ApprovalRequester {
+    /// The model in a chat run.
+    #[default]
+    Model,
+    /// An add-on, from one of its tool handlers or background jobs.
+    Plugin {
+        plugin_id: String,
+        /// The add-on's name, shown as plain text.
+        name: String,
+        /// The background job's name, when the call comes from a job.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        job: Option<String>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

@@ -7,17 +7,22 @@ use crate::approval::{ApprovalGate, ApprovalPrompt, GateOutcome};
 use crate::capability::{CapabilityOverride, McpCapability, preflight, with_hash_suffix};
 use crate::client::{McpCallOutput, McpClient};
 use crate::error::{ToolError, ToolErrorKind};
+use crate::in_process::{
+    InProcessTool, PluginTool, is_plugin_server, plugin_server_id, valid_plugin_id, valid_tool_name,
+};
 use crate::ledger::{self, Claim};
 use dn_core::CoreError;
 use dn_core::Id;
-use dn_core::capability::{Preflight, RiskTier};
+use dn_core::capability::{
+    ApprovalPolicy, ApprovalRequester, CapabilitySource, CapabilitySpec, Preflight, RiskTier,
+};
 use dn_core::chat::{ToolCall, ToolSpec};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-/// Per-call context from the agent loop.
+/// Per-call context from the agent loop, or built by the host for an add-on's own call.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CallContext {
     /// The chat this run belongs to. `None` = a one-off run with no persistent chat.
@@ -25,6 +30,47 @@ pub struct CallContext {
     /// Fresh id per agent run (UUIDv7). Model tool-call ids repeat across runs (`call_0`, ""),
     /// so ledger keys use `(run_id, call.id)`.
     pub run_id: Id,
+    /// Who is calling: a chat's model, or an add-on (ADR-0013 §4).
+    pub origin: CallOrigin,
+    /// Allowlists of capability-id patterns the call must match, one per narrowing layer
+    /// (a chat skill's `allowed-tools`, inherited by an add-on handler). Empty = no
+    /// narrowing. Layers are only added, never removed.
+    pub allowed_tools: Vec<Vec<String>>,
+}
+
+/// Who a call comes from.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum CallOrigin {
+    /// The model in a chat (or one-off) run.
+    #[default]
+    Chat,
+    /// An add-on calling a tool through the host. Only the host builds this.
+    Plugin(PluginCall),
+}
+
+/// An add-on's call, as the host built it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PluginCall {
+    /// The add-on's id.
+    pub plugin_id: String,
+    /// Its name, for the approval prompt.
+    pub name: String,
+    /// The highest tier it may call: the tier of the handler making the call.
+    pub max_tier: RiskTier,
+    /// Set when the call comes from a background job.
+    pub job: Option<JobCall>,
+}
+
+/// The background job an add-on's call comes from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct JobCall {
+    /// The job's id.
+    pub id: String,
+    /// Its name, for prompts and the held-approvals queue.
+    pub name: String,
+    /// Capability ids the user set to run without asking for this add-on. Only these run
+    /// at once from a job; the `read`-tier default doesn't count (ADR-0013 §2).
+    pub auto_tools: Vec<String>,
 }
 
 impl CallContext {
@@ -32,16 +78,59 @@ impl CallContext {
         Self {
             conversation_id,
             run_id,
+            origin: CallOrigin::Chat,
+            allowed_tools: Vec::new(),
         }
     }
 
-    /// Scope for "allow for this chat" grants and field-based idempotency keys: the
-    /// conversation, or the run when there is none (so grants never leak across chats).
-    pub fn scope(&self) -> String {
-        match &self.conversation_id {
-            Some(c) => format!("conv:{c}"),
-            None => format!("run:{}", self.run_id),
+    /// The context for an add-on's own tool call: no chat, its own run, and the
+    /// allowlists it inherited from the run that called it.
+    pub fn for_plugin(run_id: Id, call: PluginCall, inherited: Vec<Vec<String>>) -> Self {
+        Self {
+            conversation_id: None,
+            run_id,
+            origin: CallOrigin::Plugin(call),
+            allowed_tools: inherited,
         }
+    }
+
+    /// Adds a narrowing layer.
+    pub fn with_allowed_tools(mut self, patterns: Vec<String>) -> Self {
+        self.allowed_tools.push(patterns);
+        self
+    }
+
+    /// Scope for "allow for this chat" grants and field-based idempotency keys: the
+    /// conversation, or the run when there is none (so grants never leak across chats). An
+    /// add-on's call has its own scope, `plugin:<id>:<run>`, which never equals a chat's.
+    pub fn scope(&self) -> String {
+        match (&self.origin, &self.conversation_id) {
+            (CallOrigin::Plugin(p), _) => format!("plugin:{}:{}", p.plugin_id, self.run_id),
+            (CallOrigin::Chat, Some(c)) => format!("conv:{c}"),
+            (CallOrigin::Chat, None) => format!("run:{}", self.run_id),
+        }
+    }
+
+    /// Who the approval prompt names.
+    pub fn requester(&self) -> ApprovalRequester {
+        match &self.origin {
+            CallOrigin::Chat => ApprovalRequester::Model,
+            CallOrigin::Plugin(p) => ApprovalRequester::Plugin {
+                plugin_id: p.plugin_id.clone(),
+                name: p.name.clone(),
+                job: p.job.as_ref().map(|j| j.name.clone()),
+            },
+        }
+    }
+
+    /// Whether every narrowing layer allows `capability_id`.
+    pub fn narrowing_allows(&self, capability_id: &str) -> bool {
+        self.allowed_tools.iter().all(|l| {
+            l.iter().any(|p| match p.strip_suffix('*') {
+                Some(prefix) => capability_id.starts_with(prefix),
+                None => p == capability_id,
+            })
+        })
     }
 }
 
@@ -76,6 +165,9 @@ pub struct Executor {
     /// LLM-safe name → capability id.
     llm_names: RwLock<HashMap<String, String>>,
     overrides: RwLock<HashMap<String, CapabilityOverride>>,
+    /// Add-on tools by add-on id, as registered; capabilities are rebuilt from these with
+    /// the user's overrides.
+    plugins: RwLock<HashMap<String, Vec<PluginTool>>>,
     gate: Arc<ApprovalGate>,
     ledger: Arc<Mutex<rusqlite::Connection>>,
     retry: RetryPolicy,
@@ -152,7 +244,77 @@ impl Drop for ClaimGuard {
     }
 }
 
+/// What runs a capability's calls.
+enum Target {
+    Mcp(Arc<McpClient>),
+    InProcess(Arc<dyn InProcessTool>),
+}
+
 impl Executor {
+    fn target(&self, cap: &McpCapability) -> Result<Target, ToolError> {
+        let id = &cap.spec.id;
+        if is_plugin_server(&cap.server_id) {
+            self.handler(cap)
+                .map(Target::InProcess)
+                .ok_or_else(|| ToolError::new(id, ToolErrorKind::NotFound, "add-on removed"))
+        } else {
+            self.client(&cap.server_id)
+                .map(Target::Mcp)
+                .ok_or_else(|| ToolError::new(id, ToolErrorKind::NotFound, "server removed"))
+        }
+    }
+
+    fn status_of(&self, cap: &McpCapability) -> crate::client::ConnectionStatus {
+        use crate::client::ConnectionStatus;
+        match self.target(cap) {
+            Ok(Target::Mcp(c)) => c.status(),
+            Ok(Target::InProcess(_)) => ConnectionStatus::Connected,
+            Err(_) => ConnectionStatus::Disconnected,
+        }
+    }
+
+    /// The checks a host-built context adds (ADR-0013 §4), before anything else happens:
+    /// every narrowing layer must allow the tool, an add-on can't call above its tier, and
+    /// a job's call runs only for a tool the user set to run without asking for that add-on
+    /// (anything else is held for the user). Returns true for such a job call.
+    fn check_origin(ctx: &CallContext, cap: &McpCapability) -> Result<bool, ToolError> {
+        let id = &cap.spec.id;
+        if !ctx.narrowing_allows(id) {
+            let msg = "This tool isn't available with the skill chosen for this chat.";
+            return Err(
+                ToolError::new(id, ToolErrorKind::Blocked, "not in the allowlist")
+                    .with_model_message(msg),
+            );
+        }
+        let CallOrigin::Plugin(p) = &ctx.origin else {
+            return Ok(false);
+        };
+        if cap.spec.risk > p.max_tier {
+            return Err(ToolError::new(
+                id,
+                ToolErrorKind::Blocked,
+                format!(
+                    "{} may call tools up to {:?} here; this one is {:?}",
+                    p.name, p.max_tier, cap.spec.risk
+                ),
+            )
+            .with_model_message(format!(
+                "{} can't use this tool from here: it changes more than the tool that called it \
+                 may.",
+                p.name
+            )));
+        }
+        match &p.job {
+            Some(j) if j.auto_tools.iter().any(|t| t == id) => Ok(true),
+            Some(j) => Err(ToolError::new(
+                id,
+                ToolErrorKind::Held,
+                format!("job `{}` of {} needs the user's answer", j.id, p.name),
+            )),
+            None => Ok(false),
+        }
+    }
+
     /// `ledger` is a dedicated connection to the app database (WAL mode) with
     /// [`ledger::migrations`] applied. Don't share the chat connection.
     pub fn new(gate: Arc<ApprovalGate>, ledger: Arc<Mutex<rusqlite::Connection>>) -> Self {
@@ -161,6 +323,7 @@ impl Executor {
             capabilities: RwLock::default(),
             llm_names: RwLock::default(),
             overrides: RwLock::default(),
+            plugins: RwLock::default(),
             gate,
             ledger,
             retry: RetryPolicy::default(),
@@ -330,9 +493,18 @@ impl Executor {
         }) else {
             return;
         };
+        // Read the add-on tools first: locks are always taken in the order `plugins`, then
+        // `capabilities` (as `add_plugin` does), never the other way round.
+        let Some(plugins) = self.rd(&self.plugins).map(|p| p.clone()) else {
+            return;
+        };
         if let Some(mut caps) = self.wr(&self.capabilities) {
             for cap in caps.values_mut() {
-                if let Some(trusted) = trust.get(&cap.server_id) {
+                if is_plugin_server(&cap.server_id) {
+                    if let Some(c) = Self::rebuilt_plugin_capability(cap, &plugins, &ov) {
+                        *cap = c;
+                    }
+                } else if let Some(trusted) = trust.get(&cap.server_id) {
                     let tool = crate::client::McpTool {
                         name: cap.tool_name.clone(),
                         title: cap.title.clone(),
@@ -350,6 +522,139 @@ impl Executor {
                 }
             }
         }
+        self.reindex_names();
+    }
+
+    /// The capability for add-on tool `t`, with the user's override `ov`. The tier is the
+    /// declared one or the user's choice, never below the add-on's floor.
+    fn plugin_capability(
+        plugin_id: &str,
+        t: &PluginTool,
+        ov: Option<&CapabilityOverride>,
+    ) -> McpCapability {
+        let risk = ov.and_then(|o| o.risk).unwrap_or(t.risk).max(t.floor);
+        let approval = ov
+            .and_then(|o| o.approval)
+            .unwrap_or_else(|| risk.default_approval());
+        McpCapability {
+            spec: CapabilitySpec {
+                id: format!("plugin.{plugin_id}.{}", t.name),
+                source: CapabilitySource::Plugin {
+                    plugin_id: plugin_id.to_owned(),
+                },
+                description: t.description.clone(),
+                input_schema: t.input_schema.clone(),
+                output_schema: t.output_schema.clone(),
+                risk,
+                idempotency_key_field: ov
+                    .and_then(|o| o.idempotency_key_field.clone())
+                    .or_else(|| t.idempotency_key_field.clone()),
+            },
+            server_id: plugin_server_id(plugin_id),
+            tool_name: t.name.clone(),
+            title: Some(t.title.clone()),
+            hints: Default::default(),
+            approval,
+            disabled: ov.is_some_and(|o| o.disabled),
+            llm_name: String::new(),
+        }
+    }
+
+    fn rebuilt_plugin_capability(
+        cap: &McpCapability,
+        plugins: &HashMap<String, Vec<PluginTool>>,
+        ov: &HashMap<String, CapabilityOverride>,
+    ) -> Option<McpCapability> {
+        let plugin_id = cap.server_id.strip_prefix("plugin:")?;
+        let t = plugins
+            .get(plugin_id)?
+            .iter()
+            .find(|t| t.name == cap.tool_name)?;
+        let mut c = Self::plugin_capability(plugin_id, t, ov.get(&cap.spec.id));
+        c.llm_name = cap.llm_name.clone();
+        Some(c)
+    }
+
+    fn handler(&self, cap: &McpCapability) -> Option<Arc<dyn InProcessTool>> {
+        let plugin_id = cap.server_id.strip_prefix("plugin:")?;
+        self.rd(&self.plugins)?
+            .get(plugin_id)?
+            .iter()
+            .find(|t| t.name == cap.tool_name)
+            .map(|t| Arc::clone(&t.handler))
+    }
+
+    /// Registers an add-on's tools (ADR-0013 §2). They run through the same path as MCP
+    /// tools, with ids `plugin.<plugin_id>.<name>`. Refuses a bad id or name, a repeated
+    /// name, an add-on already registered, and a tool declared below its floor.
+    pub fn add_plugin(
+        &self,
+        plugin_id: &str,
+        tools: Vec<PluginTool>,
+    ) -> Result<Vec<McpCapability>, CoreError> {
+        let what = format!("plugin.{plugin_id}");
+        self.check_available(&what)?;
+        let invalid = |m: String| CoreError::from(ToolError::new(&what, ToolErrorKind::Config, m));
+        if !valid_plugin_id(plugin_id) {
+            return Err(invalid(format!("`{plugin_id}` isn't an add-on id")));
+        }
+        for (i, t) in tools.iter().enumerate() {
+            if !valid_tool_name(&t.name) || tools[..i].iter().any(|o| o.name == t.name) {
+                return Err(invalid(format!("bad or repeated tool name `{}`", t.name)));
+            }
+            if t.risk < t.floor {
+                return Err(invalid(format!(
+                    "`{}` declares {:?}, below the add-on's floor {:?}",
+                    t.name, t.risk, t.floor
+                )));
+            }
+        }
+        let unavailable = || CoreError::from(self.unavailable_error(&what));
+        let ov = self.rd(&self.overrides).ok_or_else(unavailable)?.clone();
+        {
+            let mut plugins = self.wr(&self.plugins).ok_or_else(unavailable)?;
+            if plugins.contains_key(plugin_id) {
+                return Err(invalid(format!("`{plugin_id}` is already registered")));
+            }
+            let mut all = self.wr(&self.capabilities).ok_or_else(unavailable)?;
+            for t in &tools {
+                let cap = Self::plugin_capability(plugin_id, t, None);
+                let cap = Self::plugin_capability(plugin_id, t, ov.get(&cap.spec.id));
+                all.insert(cap.spec.id.clone(), cap);
+            }
+            plugins.insert(plugin_id.to_owned(), tools);
+        }
+        self.reindex_names();
+        let server = plugin_server_id(plugin_id);
+        Ok(self
+            .capabilities()
+            .into_iter()
+            .filter(|c| c.server_id == server)
+            .collect())
+    }
+
+    /// Removes an add-on's tools (turned off, licence ended, "Delete all") and forgets
+    /// "allow for this chat" grants for them.
+    pub fn remove_plugin(&self, plugin_id: &str) {
+        let server = plugin_server_id(plugin_id);
+        self.recovering_write(&self.plugins).remove(plugin_id);
+        self.recovering_write(&self.capabilities)
+            .retain(|_, c| c.server_id != server);
+        self.gate
+            .clear_capability_prefix(&format!("plugin.{plugin_id}."));
+        // A new generation, as for a removed server: a call whose approval card was open
+        // when the add-on was removed can't pass its freshness check afterwards.
+        let next = self.generations.fetch_add(1, Ordering::SeqCst) + 1;
+        self.changes
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(
+                server,
+                ToolListState {
+                    generation: next,
+                    stale: false,
+                },
+            );
         self.reindex_names();
     }
 
@@ -417,6 +722,8 @@ impl Executor {
             .drain()
             .map(|(_, v)| v)
             .collect();
+        // Add-on tools go too: nothing may run while data is deleted.
+        self.recovering_write(&self.plugins).clear();
         self.recovering_write(&self.capabilities).clear();
         self.reindex_names();
         shutdown_concurrently(
@@ -513,7 +820,10 @@ impl Executor {
             let Some(cap) = all.get_mut(&id) else {
                 continue;
             };
-            let mut name = crate::capability::llm_tool_name(&cap.server_id, &cap.tool_name);
+            let mut name = match cap.server_id.strip_prefix("plugin:") {
+                Some(plugin_id) => crate::in_process::plugin_llm_name(plugin_id, &cap.tool_name),
+                None => crate::capability::llm_tool_name(&cap.server_id, &cap.tool_name),
+            };
             let mut n = 0u32;
             while taken.contains(&name) {
                 n += 1;
@@ -592,10 +902,7 @@ impl Executor {
             .ok_or_else(|| Self::not_found(&call.name))?;
         let seen = self.tool_list_generation(&cap.server_id);
         self.check_fresh(&cap.server_id, &cap.spec.id, seen)?;
-        let status = self
-            .client(&cap.server_id)
-            .map(|c| c.status())
-            .unwrap_or(crate::client::ConnectionStatus::Disconnected);
+        let status = self.status_of(&cap);
         let ok = self
             .gate
             .is_satisfied(&ctx.scope(), &cap.spec.id, cap.approval);
@@ -724,12 +1031,15 @@ impl Executor {
         self.check_fresh(&cap.server_id, &cap.spec.id, seen)?;
         let id = cap.spec.id.clone();
         let scope = ctx.scope();
-        let client = self
-            .client(&cap.server_id)
-            .ok_or_else(|| ToolError::new(&id, ToolErrorKind::NotFound, "server removed"))?;
+        let job_auto = Self::check_origin(ctx, &cap)?;
+        let target = self.target(&cap)?;
 
-        let approved_already = self.gate.is_satisfied(&scope, &id, cap.approval);
-        match preflight(&cap, &call.arguments, &client.status(), approved_already) {
+        let approved_already = job_auto || self.gate.is_satisfied(&scope, &id, cap.approval);
+        let status = match &target {
+            Target::Mcp(c) => c.status(),
+            Target::InProcess(_) => crate::client::ConnectionStatus::Connected,
+        };
+        match preflight(&cap, &call.arguments, &status, approved_already) {
             Preflight::Ready | Preflight::ApprovalRequired => {}
             Preflight::Blocked { reason } => {
                 return Err(ToolError::new(&id, ToolErrorKind::Blocked, reason));
@@ -742,7 +1052,9 @@ impl Executor {
             }
             Preflight::NeedsConnection { .. } => {
                 // A failed server may have come back; try once before giving up.
-                client.connect().await.map_err(|e| e.for_capability(&id))?;
+                if let Target::Mcp(client) = &target {
+                    client.connect().await.map_err(|e| e.for_capability(&id))?;
+                }
             }
             Preflight::ScopeMissing { scopes } => {
                 return Err(ToolError::new(
@@ -820,6 +1132,13 @@ impl Executor {
             ));
         }
 
+        // A job's call reaches this point only for a tool the user set to run without asking
+        // for this add-on: that choice is the approval.
+        let policy = if job_auto {
+            ApprovalPolicy::Auto
+        } else {
+            cap.approval
+        };
         let approval = self.gate.check(ApprovalPrompt {
             request_id: Id::new(),
             scope: scope.clone(),
@@ -827,8 +1146,9 @@ impl Executor {
             title: cap.title.clone().unwrap_or_else(|| cap.tool_name.clone()),
             description: cap.spec.description.clone(),
             risk: cap.spec.risk,
-            policy: cap.approval,
+            policy,
             arguments: call.arguments.clone(),
+            requester: ctx.requester(),
         });
         let outcome = tokio::select! {
             o = approval => o,
@@ -911,10 +1231,15 @@ impl Executor {
         let attempts = async {
             loop {
                 tries += 1;
-                match client
-                    .call_tool(&cap.tool_name, call.arguments.clone())
-                    .await
-                {
+                let out = match &target {
+                    Target::Mcp(client) => {
+                        client
+                            .call_tool(&cap.tool_name, call.arguments.clone())
+                            .await
+                    }
+                    Target::InProcess(handler) => handler.call(ctx, call.arguments.clone()).await,
+                };
+                match out {
                     Ok(out) => break Ok(out),
                     Err(e) if e.retryable() && tries < max => {
                         tokio::time::sleep(self.retry.backoff * tries).await;

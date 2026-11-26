@@ -925,6 +925,7 @@ mod tests {
             risk: RiskTier::LowWrite,
             policy: ApprovalPolicy::AskOncePerConversation,
             arguments: serde_json::json!({}),
+            requester: Default::default(),
         };
         let (_, req) = tokio::join!(exec.gate().check(prompt), rx.recv());
         let _ = req;

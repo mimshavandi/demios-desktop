@@ -53,6 +53,9 @@ pub enum ToolErrorKind {
     /// A previous attempt of this write ended without a known outcome (interrupted, cancelled
     /// or timed out mid-call). It won't run again until the user resolves it.
     OutcomeUnknown,
+    /// A background job's call needs a person: the host queues it for the user, and it is
+    /// never approved on its own (ADR-0013 §2).
+    Held,
 }
 
 impl ToolError {
@@ -131,6 +134,9 @@ impl ToolError {
             ToolErrorKind::InFlight => format!("\"{tool}\" is already running this action."),
             ToolErrorKind::Ledger => format!("Couldn't record the result of \"{tool}\"."),
             ToolErrorKind::Cancelled => format!("\"{tool}\" was stopped."),
+            ToolErrorKind::Held => {
+                format!("\"{tool}\" waits for your answer in Demios before it runs.")
+            }
             ToolErrorKind::OutcomeUnknown => format!(
                 "An earlier \"{tool}\" action may or may not have gone through. Check it and \
                  confirm before running it again."

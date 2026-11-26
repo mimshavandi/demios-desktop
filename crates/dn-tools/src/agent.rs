@@ -28,7 +28,9 @@ impl ToolExecutor for Executor {
         ctx: &'a ToolContext,
     ) -> BoxFuture<'a, Result<ToolOutput, CoreError>> {
         Box::pin(async move {
-            let cctx = CallContext::new(ctx.conversation_id.map(|id| id.to_string()), ctx.run_id);
+            let mut cctx =
+                CallContext::new(ctx.conversation_id.map(|id| id.to_string()), ctx.run_id);
+            cctx.allowed_tools = ctx.allowed_tools.clone();
             match self
                 .execute_tool_error(&cctx, call, ctx.cancel.cancelled())
                 .await

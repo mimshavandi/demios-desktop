@@ -32,6 +32,9 @@ pub enum SecretKind {
     ProviderKey,
     /// OAuth / bearer token for an MCP server.
     McpToken,
+    /// This device's own private keys for pairing and sync (ADR-0014 §2), e.g.
+    /// `device/identity`. Never leaves the device.
+    DeviceKey,
 }
 
 impl SecretKind {
@@ -39,6 +42,7 @@ impl SecretKind {
         match self {
             Self::ProviderKey => "provider",
             Self::McpToken => "mcp",
+            Self::DeviceKey => "device",
         }
     }
 }
@@ -61,6 +65,13 @@ impl SecretId {
     pub fn mcp(id: impl Into<String>) -> Self {
         Self {
             kind: SecretKind::McpToken,
+            id: id.into(),
+        }
+    }
+
+    pub fn device(id: impl Into<String>) -> Self {
+        Self {
+            kind: SecretKind::DeviceKey,
             id: id.into(),
         }
     }
