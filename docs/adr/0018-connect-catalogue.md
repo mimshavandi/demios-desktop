@@ -1,6 +1,6 @@
 # ADR-0018: Connect: a curated catalogue of tool servers, with no connector code to maintain
 
-**Status:** Proposed · **Date:** 2026-11-26 · **Deciders:** project owner, lead · **Extends:** [ADR-0006](0006-tools-mcp-capabilities.md), [ADR-0007](0007-local-storage-and-secrets.md), [ADR-0009](0009-security-baseline.md), [ADR-0014](0014-demios-node.md)
+**Status:** Accepted (owner, 2026-11-26) · **Date:** 2026-11-26 · **Deciders:** project owner, lead · **Extends:** [ADR-0006](0006-tools-mcp-capabilities.md), [ADR-0007](0007-local-storage-and-secrets.md), [ADR-0009](0009-security-baseline.md), [ADR-0014](0014-demios-node.md)
 
 ## Context
 People want the app to work with the services they already use: mail, calendar, documents, issue trackers, chat. The app already adds any MCP tool server: a program on the computer or a remote HTTPS server, with sign-in in the browser (ADR-0006), and every tool goes through risk levels and approvals.
