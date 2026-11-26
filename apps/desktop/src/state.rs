@@ -325,6 +325,22 @@ impl AppState {
         skills: Option<&std::path::Path>,
         launch_approver: Option<Arc<dyn crate::mcp::LaunchApprover>>,
     ) -> dn_store::Result<Arc<Self>> {
+        Self::open_with_keys(path, skills, launch_approver, Keys::os_keychain())
+    }
+
+    /// [`Self::open`] with the in-memory secret store, for tests that need the on-disk state
+    /// (executor, jobs database) but must never reach the OS keychain (CI runners have none).
+    #[cfg(test)]
+    pub fn open_for_tests(path: &std::path::Path) -> dn_store::Result<Arc<Self>> {
+        Self::open_with_keys(path, None, None, Keys::memory())
+    }
+
+    fn open_with_keys(
+        path: &std::path::Path,
+        skills: Option<&std::path::Path>,
+        launch_approver: Option<Arc<dyn crate::mcp::LaunchApprover>>,
+        keys: Keys,
+    ) -> dn_store::Result<Arc<Self>> {
         let conn = dn_store::open(path, &migration_sets())?;
         let n = store::recover_interrupted(&conn)?;
         if n > 0 {
@@ -366,7 +382,6 @@ impl AppState {
                 eprintln!("could not clear the tool ledger of a deleted chat: {e}");
             }
         }
-        let keys = Keys::os_keychain();
         let agent = Agent::load(skills);
         let settling: Arc<crate::tool_review::Settling> = Default::default();
         let tools = Arc::new(crate::agent::ManifestTools {

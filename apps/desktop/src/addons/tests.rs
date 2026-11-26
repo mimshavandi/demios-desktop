@@ -147,7 +147,7 @@ fn with_state(f: impl AsyncFnOnce(Arc<AppState>)) {
     let path = dir.join("db.sqlite3");
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
-        let st = AppState::open(&path, None).unwrap();
+        let st = AppState::open_for_tests(&path).unwrap();
         f(st).await;
     });
     let _ = std::fs::remove_dir_all(dir);
