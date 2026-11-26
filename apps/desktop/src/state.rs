@@ -263,6 +263,38 @@ pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// Removes what the app keeps for a chat outside dn-store's tables: its artifacts, its
+/// skill, its knowledge citations, its tool history (unknown writes stay until resolved)
+/// and its "allow for this chat" grants. Keeps going after a failure and returns the parts
+/// it could not remove, in the user's words. Idempotent.
+fn forget_chat_data(
+    conn: &Connection,
+    executor: Option<&dn_tools::Executor>,
+    id: Id,
+) -> Vec<&'static str> {
+    let mut failed = Vec::new();
+    if let Err(e) = dn_artifacts::ArtifactStore::new(conn).delete_conversation(id) {
+        eprintln!("could not delete the artifacts of a deleted chat: {e}");
+        failed.push("its artifacts");
+    }
+    if let Err(e) = crate::skills::forget_chat(conn, id) {
+        eprintln!("could not forget the skill of a deleted chat: {e}");
+        failed.push("its skill");
+    }
+    if let Err(e) = dn_knowledge::remove_conversation_sources(conn, &id.to_string()) {
+        eprintln!("could not delete the sources of a deleted chat: {e}");
+        failed.push("its sources");
+    }
+    if let Some(exec) = executor {
+        if let Err(e) = exec.forget_conversation(&id.to_string()) {
+            eprintln!("could not clear the tool ledger of a deleted chat: {e}");
+            failed.push("its tool history");
+        }
+        exec.gate().clear_conversation(&format!("conv:{id}"));
+    }
+    failed
+}
+
 impl AppState {
     pub fn new(conn: Connection, models: ModelRegistry, keys: Keys) -> Self {
         // The registry serves the OpenAI-compatible servers saved in settings.
@@ -329,16 +361,6 @@ impl AppState {
         }
         // Every purged chat, including ones purged by older builds that kept ledger rows.
         let tombstones = store::list_tombstones(&conn)?;
-        // A purged chat keeps no artifacts either (idempotent: runs on every start).
-        let artifacts = dn_artifacts::ArtifactStore::new(&conn);
-        for (id, _) in &tombstones {
-            if let Err(e) = artifacts.delete_conversation(*id) {
-                eprintln!("could not delete the artifacts of a deleted chat: {e}");
-            }
-            if let Err(e) = crate::skills::forget_chat(&conn, *id) {
-                eprintln!("could not forget the skill of a deleted chat: {e}");
-            }
-        }
 
         let ledger = dn_store::open_connection(path)?;
         match dn_tools::ledger::mark_interrupted(&ledger) {
@@ -351,11 +373,9 @@ impl AppState {
             Arc::new(gate),
             Arc::new(Mutex::new(ledger)),
         ));
-        // A purged chat keeps no tool history either (unknown writes stay until resolved).
+        // A purged chat keeps none of the app's data either (idempotent: runs on every start).
         for (id, _) in &tombstones {
-            if let Err(e) = executor.forget_conversation(&id.to_string()) {
-                eprintln!("could not clear the tool ledger of a deleted chat: {e}");
-            }
+            forget_chat_data(&conn, Some(&executor), *id);
         }
         let keys = Keys::os_keychain();
         let agent = Agent::load(skills);
@@ -789,6 +809,17 @@ impl AppState {
         }
         lock(&self.live).clear();
         failed
+    }
+
+    /// A chat was purged while the app runs (by sync, from another device): stop its reply
+    /// if one is being written, and remove what the app keeps for it outside dn-store, as
+    /// start-up does for every tombstone. Blocking. Returns the parts it could not remove.
+    pub fn forget_purged_chat(&self, conversation_id: Id) -> Vec<&'static str> {
+        self.stop(conversation_id);
+        match self.db() {
+            Ok(db) => forget_chat_data(&db, self.executor.as_deref(), conversation_id),
+            Err(_) => vec!["its artifacts, skill, sources and tool history"],
+        }
     }
 
     pub fn is_generating(&self, conversation_id: Id) -> bool {
@@ -1467,6 +1498,49 @@ mod tests {
                     .unwrap()
                     .is_empty()
             );
+        });
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_chat_purged_while_the_app_runs_loses_the_apps_data_for_it_too() {
+        let dir = std::env::temp_dir().join(format!("dn-app-forget-{}", Id::new()));
+        let path = dir.join("db.sqlite3");
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let st = AppState::open(&path, None).unwrap();
+            let (gone, kept) = {
+                let c = st.db().unwrap();
+                let gone = store::create_conversation(&c, "gone").unwrap();
+                let kept = store::create_conversation(&c, "kept").unwrap();
+                let arts = dn_artifacts::ArtifactStore::new(&c);
+                let ctx = dn_artifacts::OpContext::model(None);
+                for conv in [gone.id, kept.id] {
+                    arts.create(
+                        conv,
+                        &dn_core::artifact::ArtifactType::Html,
+                        "Page",
+                        "<p>x</p>",
+                        &ctx,
+                    )
+                    .unwrap();
+                    crate::skills::set_chat_skill(&c, conv, Some("summarize")).unwrap();
+                }
+                (gone.id, kept.id)
+            };
+            {
+                // Sync purged it: dn-store's rows are gone, a tombstone stays.
+                let c = st.db().unwrap();
+                store::delete_conversation(&c, gone).unwrap();
+                store::purge_deleted(&c, i64::MAX).unwrap();
+            }
+            assert!(st.forget_purged_chat(gone).is_empty());
+            let c = st.db().unwrap();
+            let arts = dn_artifacts::ArtifactStore::new(&c);
+            assert!(arts.list(gone).unwrap().is_empty());
+            assert_eq!(arts.list(kept).unwrap().len(), 1);
+            assert_eq!(crate::skills::chat_skill(&c, gone).unwrap(), None);
+            assert!(crate::skills::chat_skill(&c, kept).unwrap().is_some());
         });
         let _ = std::fs::remove_dir_all(dir);
     }
