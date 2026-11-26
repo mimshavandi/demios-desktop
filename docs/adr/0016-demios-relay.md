@@ -1,6 +1,6 @@
 # ADR-0016: Demios Relay: encrypted store-and-forward mailboxes, addressed by public key
 
-**Status:** Proposed · **Date:** 2026-11-25 · **Deciders:** project owner, lead · **Extends:** [ADR-0009](0009-security-baseline.md), [ADR-0014](0014-demios-node.md), [ADR-0015](0015-encrypted-sharing-and-forms.md) · **Issue:** #207
+**Status:** Accepted (owner, 2026-11-26) · **Date:** 2026-11-25 (amended 2026-11-26: server licence) · **Deciders:** project owner, lead · **Extends:** [ADR-0009](0009-security-baseline.md), [ADR-0014](0014-demios-node.md), [ADR-0015](0015-encrypted-sharing-and-forms.md) · **Issue:** #207
 
 ## Context
 Several features need to hand something to a device that isn't online right now:
@@ -131,9 +131,14 @@ The setup screen says: "The Relay receives these events in the clear and encrypt
 
 - **"Delete all local data"** (and ADR-0014's wipe across devices) **closes every mailbox the user owns** on the Relay first, with signed requests, because the keys to close them are deleted with the rest. A mailbox that can't be closed (no network) is listed in the report with the date its messages expire.
 
-### 7. Open source and self-hosting
-- **The Relay is open source,** in this repository (`demios-desktop`, Apache-2.0), as a small Rust service, `dn relay run`. Its storage holds only ciphertext and per-mailbox limits.
-- **Anyone can run one.** A user's Node can run its own Relay (`dn node` with the Relay switched on) on a public address. The app then uses that Relay for everything except official phone push (§4.2).
+### 7. Source code, licence and self-hosting
+- **Two parts, two licences:**
+  - **The Relay client** (sealing, signing, grants, fetching, mailbox delivery in `dn-sync`) is in this repository under Apache-2.0, like the rest of the app and `dn`. The protocol is fully specified there, so anyone can check what the app sends.
+  - **The Relay server** is a small, separate Rust program, `demios-relay`, in its own public repository under the **Functional Source License, FSL-1.1-Apache-2.0**. Its storage holds only ciphertext and per-mailbox limits.
+- **What the FSL allows:** anyone can read, build, audit, change and run the server, for themselves or their organisation, including on a public address for their own devices and their own form respondents. What it doesn't allow is offering the Relay to others as a competing commercial service. **Each release becomes Apache-2.0 two years after it ships.**
+- **Why the server isn't Apache-2.0:** the Relay's privacy promise has to be checkable, so its source is public; but a hosted Relay is the one part of Demios a third party could resell as a service, so the server alone carries the FSL. Nothing else changes licence. The app, `dn` and the Node stay Apache-2.0.
+- **Not gated in code.** The server has no licence check, feature flags or limits tied to who runs it.
+- **Anyone can run one.** A user's Node machine can run `demios-relay` next to the Node, as a separate process or container, on a public address. The app then uses that Relay for everything except official phone push (§4.2). Keeping it a separate program means no FSL code is linked into the Apache-2.0 `dn` binary.
 - **The app uses one Relay at a time,** shown in Settings › Node and Settings › Shared links: the Demios-hosted Relay, the user's own, or none.
   - **With none,** the features that need it say so, for example "Forms need a Relay to collect responses while your computer is off". Nothing quietly changes to another route.
 - **The Relay is never required for the basics.** Chats, models, tools, a Node on the local network, and direct sync all work without it.
@@ -201,17 +206,19 @@ Quotas on the hosted Relay keep the worst case bounded per mailbox. Whether some
 ## Consequences
 - **ADR-0014** points its optional relay and its push at this ADR. A Node can run its own Relay.
 - **ADR-0015** uses a Relay mailbox per form link for responses, instead of defining its own store.
-- **`dn`** gains `relay run`. **`dn-sync`** gains mailbox delivery and chunking. A shared crate (or module) holds the Relay client: sealing, signing, grants and fetching.
+- **`dn-sync`** gains mailbox delivery and chunking. A shared crate (or module) holds the Relay client: sealing, signing, grants and fetching. All of that is Apache-2.0 in this repository.
+- **A new public repository, `demios-relay`,** holds the server under FSL-1.1-Apache-2.0, with its own `LICENSE`, a short licence explainer in its README, and a conformance test suite that the client in this repository also runs. `dn` doesn't gain a `relay run` command.
 - **The app** shows which Relay is in use, each mailbox's state, and the webhook setting per source, and closes mailboxes in "Delete all".
 - **Dependencies:** HPKE, Ed25519 and an HTTP server, the same ones ADR-0015 needs, each to be approved by the lead and recorded in `docs/dependencies.md`.
 
 ## Action items (to be filed as issues)
-1. Relay service: mailboxes, signed owner requests, delivery grants, limits, TTL and deletion.
+1. Relay server (`demios-relay`, FSL): mailboxes, signed owner requests, delivery grants, limits, TTL and deletion.
 2. Relay client: sealing, signing, chunking and fetching, shared by the app and the Node.
 3. Push wake-ups through the hosted Relay, and UnifiedPush or ntfy for self-hosted Relays.
 4. Sync through mailboxes when devices aren't online together (`dn-sync`).
 5. Webhook receiver with per-source Off, Notify only and Full payload, and unguessable, rotatable URLs.
-6. Self-hosted Relay on the Node, and the app's choice of Relay.
+6. Self-hosted Relay next to the Node (`demios-relay` as a process or container, with its install docs), and the app's choice of Relay.
 7. "Delete all" closes the user's mailboxes, and reports any it couldn't close.
 8. Threat model for the Relay (extends ADR-0009): metadata, webhook plaintext, abuse, and a breach of the operator.
 9. Privacy-policy section and hosted-service terms, for owner approval.
+10. Create the `demios-relay` repository: FSL-1.1-Apache-2.0 `LICENSE` file, licence note in its README and in `docs/dependencies.md` here, and the shared conformance tests.
