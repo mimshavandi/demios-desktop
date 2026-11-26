@@ -209,8 +209,10 @@ fn unwrap(group: &GroupId, epoch: u32, w: &Wrapped, me: &DeviceKeys) -> Result<G
 }
 
 impl Chain {
-    /// Checks a whole chain from its first entry.
-    pub fn from_entries(entries: &[Entry]) -> Result<Self> {
+    /// Checks a whole chain from its first entry. `node` is the Node this device pinned when
+    /// it paired (from the pairing link): a chain started by any other key is refused, so a
+    /// whole chain made up elsewhere can't take over.
+    pub fn from_entries(entries: &[Entry], expected: &PublicIdentity) -> Result<Self> {
         let first = entries.first().ok_or(SyncError::Protocol("empty chain"))?;
         let wire: EntryWire = serde_json::from_slice(&first.bytes)
             .map_err(|_| SyncError::Protocol("unreadable chain entry"))?;
@@ -225,7 +227,11 @@ impl Chain {
         if wire.v != CHAIN_VERSION || wire.n != 0 || !wire.prev.is_empty() {
             return Err(SyncError::Protocol("bad first chain entry"));
         }
-        let node = parse_identity(node)?;
+        let created_by = parse_identity(node)?;
+        if created_by != *expected {
+            return Err(SyncError::NodeKeyMismatch);
+        }
+        let node = created_by;
         node.verify(&first.bytes, &first.signature)?;
         let group =
             GroupId(b64::decode_array::<16>(group).ok_or(SyncError::Protocol("bad group id"))?);
@@ -490,7 +496,7 @@ impl NodeChain {
             bytes,
         };
         Ok(Self {
-            chain: Chain::from_entries(&[entry])?,
+            chain: Chain::from_entries(&[entry], &node.public())?,
             key: GroupKey::generate(0)?,
         })
     }
@@ -578,8 +584,27 @@ CREATE TABLE sync_membership (
 /// Stores the entries of `chain` not stored yet. Entries are append-only.
 pub fn save(conn: &rusqlite::Connection, chain: &Chain) -> Result<()> {
     let tx = conn.unchecked_transaction()?;
-    let have: i64 = tx.query_row("SELECT COUNT(*) FROM sync_membership", [], |r| r.get(0))?;
-    for (n, e) in chain.entries().iter().enumerate().skip(have as usize) {
+    let mut stmt = tx.prepare("SELECT n, bytes, signature FROM sync_membership ORDER BY n")?;
+    let stored = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, Vec<u8>>(1)?,
+                r.get::<_, Vec<u8>>(2)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(stmt);
+    // What's stored must be the start of this chain; anything else is refused, not overwritten.
+    for (i, (n, bytes, sig)) in stored.iter().enumerate() {
+        let same = chain.entries().get(i).is_some_and(|e| {
+            *n == i as i64 && e.bytes == *bytes && e.signature.as_slice() == sig.as_slice()
+        });
+        if !same {
+            return Err(SyncError::ForkedChain);
+        }
+    }
+    for (n, e) in chain.entries().iter().enumerate().skip(stored.len()) {
         tx.execute(
             "INSERT INTO sync_membership (n, bytes, signature) VALUES (?1, ?2, ?3)",
             rusqlite::params![n as i64, e.bytes, e.signature.as_slice()],
@@ -589,8 +614,8 @@ pub fn save(conn: &rusqlite::Connection, chain: &Chain) -> Result<()> {
     Ok(())
 }
 
-/// Loads and checks the stored chain, if any.
-pub fn load(conn: &rusqlite::Connection) -> Result<Option<Chain>> {
+/// Loads and checks the stored chain, if any, against the paired Node's key.
+pub fn load(conn: &rusqlite::Connection, node: &PublicIdentity) -> Result<Option<Chain>> {
     let mut stmt = conn.prepare("SELECT bytes, signature FROM sync_membership ORDER BY n")?;
     let rows = stmt.query_map([], |r| {
         Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, Vec<u8>>(1)?))
@@ -606,7 +631,7 @@ pub fn load(conn: &rusqlite::Connection) -> Result<Option<Chain>> {
     if entries.is_empty() {
         return Ok(None);
     }
-    Chain::from_entries(&entries).map(Some)
+    Chain::from_entries(&entries, node).map(Some)
 }
 
 /// The secret-store id of a group key: `device/group.<group>.<epoch>`. Group keys live in
@@ -714,7 +739,7 @@ mod tests {
     #[test]
     fn every_device_checks_the_chain_and_gets_the_groups_key() {
         let g = group();
-        let copy = Chain::from_entries(g.nc.chain().entries()).unwrap();
+        let copy = Chain::from_entries(g.nc.chain().entries(), &g.node.public()).unwrap();
         assert_eq!(copy.group(), g.nc.chain().group());
         assert_eq!(copy.member(g.phone.id()).unwrap().name, "Work phone");
         let k_laptop = copy.key_for(&g.laptop, 0).unwrap();
@@ -729,11 +754,11 @@ mod tests {
     #[test]
     fn a_removed_device_is_refused_after_its_last_change_and_cant_read_the_new_epoch() {
         let mut g = group();
-        let before = Chain::from_entries(g.nc.chain().entries()).unwrap();
+        let before = Chain::from_entries(g.nc.chain().entries(), &g.node.public()).unwrap();
         let old_key = before.key_for(&g.phone, 0).unwrap();
         g.nc.remove(&g.node, g.phone.id(), g.laptop.id(), 3)
             .unwrap();
-        let chain = Chain::from_entries(g.nc.chain().entries()).unwrap();
+        let chain = Chain::from_entries(g.nc.chain().entries(), &g.node.public()).unwrap();
         assert_eq!(chain.epoch(), 1);
         // Its changes up to #3 still count; #4 on is refused, through any route.
         assert!(chain.accepts(&change(&chain, &g.phone, 3, 0)).is_ok());
@@ -760,11 +785,11 @@ mod tests {
     #[test]
     fn an_old_epoch_envelope_from_a_member_still_in_flight_is_accepted() {
         let mut g = group();
-        let chain0 = Chain::from_entries(g.nc.chain().entries()).unwrap();
+        let chain0 = Chain::from_entries(g.nc.chain().entries(), &g.node.public()).unwrap();
         let k0 = chain0.key_for(&g.laptop, 0).unwrap();
         let in_flight = seal(&change(&chain0, &g.laptop, 1, 0), &g.laptop, &k0).unwrap();
         g.nc.remove(&g.node, g.phone.id(), g.node.id(), 0).unwrap();
-        let chain = Chain::from_entries(g.nc.chain().entries()).unwrap();
+        let chain = Chain::from_entries(g.nc.chain().entries(), &g.node.public()).unwrap();
         // The Node (or any member) still has epoch 0's key and the laptop is still a member.
         let k0_again = chain.key_for(&g.laptop, 0).unwrap();
         let opened = open(&in_flight, &k0_again, |a, _| chain.author_key(a)).unwrap();
@@ -774,7 +799,7 @@ mod tests {
     #[test]
     fn a_forked_chain_is_detected() {
         let g = group();
-        let mut chain = Chain::from_entries(g.nc.chain().entries()).unwrap();
+        let mut chain = Chain::from_entries(g.nc.chain().entries(), &g.node.public()).unwrap();
         // Two Node branches from the same point: one removes the phone, the other renames it.
         let mut a = NodeChain {
             chain: chain.clone(),
@@ -801,9 +826,29 @@ mod tests {
     }
 
     #[test]
+    fn a_chain_started_by_another_node_is_refused() {
+        let g = group();
+        let other = DeviceKeys::generate().unwrap();
+        let theirs = NodeChain::create(&other, "Not your Node").unwrap();
+        assert!(matches!(
+            Chain::from_entries(theirs.chain().entries(), &g.node.public()),
+            Err(SyncError::NodeKeyMismatch)
+        ));
+        // And a stored chain that differs from the one being saved isn't overwritten.
+        let conn =
+            dn_store::open_in_memory(&[dn_store::MigrationSet::new("sync", crate::migrations())])
+                .unwrap();
+        save(&conn, g.nc.chain()).unwrap();
+        assert!(matches!(
+            save(&conn, theirs.chain()),
+            Err(SyncError::ForkedChain)
+        ));
+    }
+
+    #[test]
     fn entries_not_signed_by_the_node_are_refused() {
         let g = group();
-        let mut chain = Chain::from_entries(g.nc.chain().entries()).unwrap();
+        let mut chain = Chain::from_entries(g.nc.chain().entries(), &g.node.public()).unwrap();
         // The laptop tries to write membership itself.
         let forged = NodeChain {
             chain: chain.clone(),
@@ -849,7 +894,7 @@ mod tests {
         let mut g = group();
         assert!(g.nc.remove(&g.node, g.node.id(), g.laptop.id(), 0).is_err());
         // A Node that leaves someone out of a rotation writes an entry every device refuses.
-        let mut copy = Chain::from_entries(g.nc.chain().entries()).unwrap();
+        let mut copy = Chain::from_entries(g.nc.chain().entries(), &g.node.public()).unwrap();
         let partial = NodeChain {
             chain: copy.clone(),
             key: GroupKey::from_bytes(0, g.nc.key().bytes()),
@@ -872,11 +917,11 @@ mod tests {
         let conn =
             dn_store::open_in_memory(&[dn_store::MigrationSet::new("sync", crate::migrations())])
                 .unwrap();
-        assert!(load(&conn).unwrap().is_none());
+        assert!(load(&conn, &g.node.public()).unwrap().is_none());
         save(&conn, g.nc.chain()).unwrap();
         g.nc.remove(&g.node, g.phone.id(), g.node.id(), 0).unwrap();
         save(&conn, g.nc.chain()).unwrap();
-        let loaded = load(&conn).unwrap().unwrap();
+        let loaded = load(&conn, &g.node.public()).unwrap().unwrap();
         assert_eq!(loaded.entries(), g.nc.chain().entries());
         assert_eq!(loaded.epoch(), 1);
         // A changed stored entry fails the check on load.
@@ -885,7 +930,7 @@ mod tests {
             [],
         )
         .unwrap();
-        assert!(load(&conn).is_err());
+        assert!(load(&conn, &g.node.public()).is_err());
 
         let store = dn_secrets::MemoryStore::new();
         let key = loaded.key_for(&g.laptop, 1).unwrap();
