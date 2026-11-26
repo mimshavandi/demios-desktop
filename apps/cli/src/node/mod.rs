@@ -16,6 +16,8 @@
 //! already in the list are accepted.
 
 pub mod config;
+// The control channel is a Unix socket; Windows has none yet (#261).
+#[cfg(unix)]
 pub mod control;
 
 use clap::Subcommand;
@@ -45,6 +47,7 @@ const HANDSHAKE_SECS: u64 = 10;
 const IDLE_SECS: u64 = 15 * 60;
 /// An unpaired device must send its pairing request within this time after the handshake.
 /// No person waits on this step (the check numbers come after it).
+#[cfg(unix)]
 const JOIN_SECS: u64 = 30;
 /// Connections handled at once; more wait for a slot.
 const MAX_CONNECTIONS: usize = 64;
@@ -130,6 +133,7 @@ pub async fn command(cmd: NodeCmd) -> Result<(), String> {
 }
 
 /// The address devices should use, from `--address` or a specific listen address.
+#[cfg(unix)]
 fn pair_address(config: &NodeConfig, address: Option<String>) -> Result<String, String> {
     match address {
         Some(a) => Ok(a),
@@ -226,7 +230,9 @@ impl JobHost for NoAddOns {
 
 /// A started Node, before it serves.
 pub struct Node {
+    #[cfg(unix)]
     data_dir: PathBuf,
+    #[cfg(unix)]
     pairing: control::PairingState,
     #[cfg(unix)]
     control: tokio::net::UnixListener,
@@ -323,7 +329,9 @@ impl Node {
             report.label
         );
         Ok(Self {
+            #[cfg(unix)]
             data_dir: data_dir.to_owned(),
+            #[cfg(unix)]
             pairing: Arc::new(tokio::sync::Mutex::new(None)),
             #[cfg(unix)]
             control,
@@ -385,14 +393,20 @@ impl Node {
                     Err(_) => break,
                 },
             };
-            let (keys, db, base, pairing) = (
-                self.keys.clone(),
-                self.db.clone(),
-                base.clone(),
-                self.pairing.clone(),
-            );
+            let (keys, db, base) = (self.keys.clone(), self.db.clone(), base.clone());
+            #[cfg(unix)]
+            let pairing = self.pairing.clone();
             tokio::spawn(async move {
-                handle(stream, peer, &keys, &db, &base, &pairing).await;
+                handle(
+                    stream,
+                    peer,
+                    &keys,
+                    &db,
+                    &base,
+                    #[cfg(unix)]
+                    &pairing,
+                )
+                .await;
                 drop(permit);
             });
         }
@@ -432,7 +446,7 @@ async fn handle(
     keys: &DeviceKeys,
     db: &Mutex<Connection>,
     base: &StatusBase,
-    pairing: &control::PairingState,
+    #[cfg(unix)] pairing: &control::PairingState,
 ) {
     let mut channel = match tokio::time::timeout(
         Duration::from_secs(HANDSHAKE_SECS),
@@ -467,7 +481,16 @@ async fn handle(
         }
     };
     let Some(device) = device else {
+        #[cfg(unix)]
         pair_device(channel, peer, keys, db, pairing).await;
+        #[cfg(not(unix))]
+        {
+            eprintln!(
+                "dn node: refused {peer}: not a paired device (pairing from the Node isn't \
+                 available on Windows yet, #261)"
+            );
+            let _ = channel.close().await;
+        }
         return;
     };
     loop {
@@ -511,6 +534,7 @@ async fn handle(
 }
 
 /// A device that isn't paired: it may join only while `dn node pair` has a code open.
+#[cfg(unix)]
 async fn pair_device(
     mut channel: transport::Channel<TcpStream>,
     peer: SocketAddr,
