@@ -46,7 +46,7 @@ Screenshots coming with the first release.
 
 ## Install
 
-A **preview build** of Demios Desktop 0.1.0 is available for macOS, Windows and Linux. Download it from [demios.io/download](https://demios.io/download/) or from the [GitHub release](https://github.com/mimshavandi/demios-desktop/releases/tag/v0.1.0-preview.454e01b).
+A **preview build** of Demios Desktop 0.1.0 is available for macOS, Windows and Linux. Download it from [demios.io/download](https://demios.io/download/) or from the [GitHub release](https://github.com/mimshavandi/demios-desktop/releases/tag/v0.1.0-preview.8cd482c).
 
 | System | File |
 |---|---|
