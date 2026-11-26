@@ -1,6 +1,6 @@
 # ADR-0014: Demios Node: the engine run headless on the user's own machine or server, with paired clients
 
-**Status:** Proposed · **Date:** 2026-11-25 · **Deciders:** project owner, lead · **Extends:** [ADR-0001](0001-repo-and-crate-layout.md), [ADR-0006](0006-tools-mcp-capabilities.md), [ADR-0007](0007-local-storage-and-secrets.md), [ADR-0009](0009-security-baseline.md), [ADR-0013](0013-plugin-api.md), [ADR-0016](0016-demios-relay.md) · **Issue:** #203
+**Status:** Proposed · **Date:** 2026-11-25 (amended 2026-11-26: offline notice) · **Deciders:** project owner, lead · **Extends:** [ADR-0001](0001-repo-and-crate-layout.md), [ADR-0006](0006-tools-mcp-capabilities.md), [ADR-0007](0007-local-storage-and-secrets.md), [ADR-0009](0009-security-baseline.md), [ADR-0013](0013-plugin-api.md), [ADR-0016](0016-demios-relay.md) · **Issue:** #203
 
 ## Context
 Everything in Demios runs inside the desktop app today. When the app is closed or the computer sleeps, nothing runs:
@@ -76,6 +76,10 @@ This ADR decides the Node's shape: pairing, sync, models, approvals, secrets, op
 
     The device then connects to the Node directly to read and answer.
   - The pairing screen says which of these is on.
+- **Offline notice for the Node (optional, off by default).** So the user learns that jobs aren't running before a missed result shows it:
+  - while it runs, the Node puts a small sealed "alive" record in the user's own Relay mailbox at a fixed interval (for example every 15 minutes);
+  - a paired phone or desktop that sees no fresh record for a set time says "Your Node has been offline since 03:12" (a local notification on the device; the Relay never sends it and can't read the record);
+  - **the cost is metadata:** the Relay sees when the Node is up. Settings › Node says so where it's turned on. Without a Relay the notice isn't available, and a device that reaches the Node directly sees its status anyway.
 
 ### 5. Models on the Node
 A Node has three kinds of model, and each chat, job or add-on slot names one **explicitly**:
@@ -226,3 +230,4 @@ Each path runs the Node as a **dedicated, unprivileged user**, with its data in 
 9. Install paths: Docker image, systemd unit, launchd, Windows service, and their docs.
 10. Threat model for the Node (extends ADR-0009): the trust boundary of the Node's host, pairing, transport, sync and push.
 11. Optional push: a content-free wake-up through the Relay (ADR-0016 §4.2) or the user's own push server.
+12. Optional offline notice: the Node's sealed "alive" record in the user's own Relay mailbox, and the "offline since" message on paired devices.

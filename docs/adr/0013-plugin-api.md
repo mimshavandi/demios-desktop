@@ -1,6 +1,6 @@
 # ADR-0013: Plugin API (`dn-plugin-api`): what add-ons may register, and how they stay inside the app's rules
 
-**Status:** Proposed · **Date:** 2026-11-25 (amended 2026-11-25 for [ADR-0014](0014-demios-node.md)) · **Deciders:** project owner, lead · **Extends:** [ADR-0001](0001-repo-and-crate-layout.md), [ADR-0005](0005-agent-skill-manifests.md), [ADR-0006](0006-tools-mcp-capabilities.md), [ADR-0007](0007-local-storage-and-secrets.md), [ADR-0009](0009-security-baseline.md)
+**Status:** Proposed · **Date:** 2026-11-25 (amended 2026-11-25 for [ADR-0014](0014-demios-node.md); amended 2026-11-26: missed-run rules) · **Deciders:** project owner, lead · **Extends:** [ADR-0001](0001-repo-and-crate-layout.md), [ADR-0005](0005-agent-skill-manifests.md), [ADR-0006](0006-tools-mcp-capabilities.md), [ADR-0007](0007-local-storage-and-secrets.md), [ADR-0009](0009-security-baseline.md)
 
 ## Context
 ADR-0001 reserves `dn-plugin-api` as the "stable trait surface that add-ons plug into". Add-ons, including proprietary ones in a separate repository, build on it. ADR-0001 also sets two constraints:
@@ -78,7 +78,17 @@ pub trait Plugin: Send + Sync + 'static {
     - **One scheduler at a time.** When a Node is paired, the Node owns the schedule and the desktop app doesn't run jobs, so a job never runs twice. With no Node, the desktop app runs them while it's open.
     - The desktop app itself still installs no OS daemon or launch agent. Running after the app quits is what a Node is for, and the user installs one as a separate, explicit step.
   - **They are off by default.** The user turns each one on in the add-on's settings and sees its last run, next run and last error. One switch pauses all background jobs.
-  - The host honours the user's quiet hours and skips a missed run rather than catching up a burst.
+  - **Quiet hours.** The host honours the user's quiet hours. A run that falls inside them waits until they end.
+  - **Missed runs.** When no runtime was up at a job's scheduled time (the app was closed, the Node's machine was off), the runtime works out what was missed when it starts again, from the job's schedule and its last successful run, both stored locally. Nothing is kept on a server for this, and no server runs jobs. Each job has a **missed-run rule**. The add-on proposes it in the job declaration, and the user can change it per job:
+    - **`catch_up_once`** (default), with a `fresh_for` window that the add-on declares (for example 6 hours). If the latest missed time is still inside the window, the job runs **once** and is marked "late". If it isn't, the missed run is skipped. Example: a 07:00 brief runs late at 10:00, but not the next day at 07:05, when the next scheduled run is due anyway.
+    - **`ask`**: the user gets one message per job ("*Weekly report* missed 2 runs while Demios was off. Run it now?") with **Run now** and **Skip**. Fits jobs that cost money or send something.
+    - **`skip`**: missed runs are dropped. Fits work that's only useful on time, such as a reminder.
+  - **Safeguards for missed runs.**
+    - **Never a burst.** However many runs were missed, each job catches up at most once, and catch-ups start one at a time.
+    - **The decision is a fixed rule, not a model's judgement.** The same schedule, last run and clock always give the same result, so it is predictable and testable, and it costs nothing.
+    - **The job is told it's late.** Its context carries the scheduled time and the time of the last successful run, so its work can cover the whole gap, for example "since Tuesday 07:00".
+    - **Late runs follow the same rules.** They wait for quiet hours to end, their tool calls are held as below, and the pause-all switch also stops catch-ups and pending "Run now?" questions.
+    - **It's never silent.** Each job's status shows "missed at 07:00, ran late at 10:02", "skipped (not fresh)" or "waiting for you", and the run history keeps it.
   - **Jobs can't do what needs a person.**
     - A job's tool calls go through approvals as usual, but `auto` applies **only to tools the user explicitly set to "run without asking" for this add-on**. The `read`-tier default doesn't count.
     - Every other call is **held**. It goes into a persisted queue that waits for the user, shows the add-on, the job and the exact arguments, and is never auto-approved. It doesn't time out into a silent denial; it stays held until the user answers or dismisses it.
@@ -239,7 +249,7 @@ This ADR only keeps that path open (§1). It doesn't build it. Until then, third
 1. `dn-plugin-api`: the traits and types above, `Untrusted<T>`, and the conformance kit (`testing` feature).
 2. `dn-core` `CapabilitySource::Plugin` and the approval requester field. In-process tool handlers in the dn-tools executor, with host-built call contexts (own scope, inherited narrowing, tier limits).
 3. App: plugin registry and ownership table, permissions and consent UI, Settings › Add-ons.
-4. App: background job scheduler, quiet hours, a persisted held-approvals queue, pause-all.
+4. App and Node: background job scheduler, quiet hours, missed-run rules (`catch_up_once` with `fresh_for`, `ask`, `skip`) with their status and history, a persisted held-approvals queue, pause-all.
 5. App: declarative settings-panel renderer (plain text only).
 6. Storage: per-add-on database files with an authorizer, queued purges, the "Delete all" sequence, and a leftover check.
 7. Add-on build CI: a `cargo deny` ban list (transitive) and a gate on `std::net`, `std::process` and `std::fs`.
