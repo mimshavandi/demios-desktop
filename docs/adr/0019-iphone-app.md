@@ -1,15 +1,15 @@
 # ADR-0019: The iPhone app: a companion for approvals and add-on views, paired with a Node
 
-**Status:** Proposed · **Date:** 2026-11-26 · **Deciders:** project owner, lead · **Extends:** [ADR-0009](0009-security-baseline.md), [ADR-0010](0010-design-system.md), [ADR-0013](0013-plugin-api.md) (§9, proposed), [ADR-0014](0014-demios-node.md) (§4a, proposed), [ADR-0016](0016-demios-relay.md) · **Issue:** #264
+**Status:** Accepted (owner, 2026-11-26) · **Date:** 2026-11-26 · **Deciders:** project owner, lead · **Extends:** [ADR-0009](0009-security-baseline.md), [ADR-0010](0010-design-system.md), [ADR-0013](0013-plugin-api.md) (§9), [ADR-0014](0014-demios-node.md) (§4a), [ADR-0016](0016-demios-relay.md) · **Issue:** #264
 
 ## Context
 A Demios Node runs jobs while nobody is at the desk (ADR-0014). Anything risky a job prepares is **held** until a person answers (ADR-0013 §2, ADR-0014 §6). Today, the only place to answer is the desktop app. So a reply prepared at 08:00 waits until the person sits down, and an answer given "on the go" doesn't exist.
 
-The pieces a phone needs are already decided or proposed:
+The pieces a phone needs are already decided:
 - **Pairing and the device group** (ADR-0014 §2). The paired transport is merged (#243): TLS 1.3 in `rustls` with **RFC 7250 raw public keys**, not certificates.
 - **Signed answers to held calls**, applied once, with the exact arguments in the signed message (ADR-0014 §6; dn-jobs, #252).
-- **Tools that always need a fresh approval,** and **declarative add-on views** drawn by the host on any device (ADR-0013 §9, proposed).
-- **Reaching the Node** directly on the same network, or through the Relay elsewhere (ADR-0014 §4a, proposed).
+- **Tools that always need a fresh approval,** and **declarative add-on views** drawn by the host on any device (ADR-0013 §9).
+- **Reaching the Node** directly on the same network, or through the Relay elsewhere (ADR-0014 §4a).
 - **Content-free push wake-ups** through the hosted Relay (ADR-0016 §4.2).
 
 This ADR decides what the phone app is, how it uses the Rust engine, how approvals are protected on the phone, and how it gets onto phones before and after a paid Apple Developer membership.
@@ -47,11 +47,11 @@ Those stay on the desktop and the Node for now. **The app contains no add-on cod
   - the Keychain;
   - push registration;
   - the app lifecycle.
-- **The bridge is UniFFI** (Mozilla, MPL-2.0): generated Swift bindings, async functions, and Swift implementations of Rust traits. Options are in the table below. It's a new dependency, so it needs the lead's approval and a `docs/dependencies.md` row before it's used.
+- **The bridge is UniFFI** (Mozilla, MPL-2.0): generated Swift bindings, async functions, and Swift implementations of Rust traits. Options are in the table below. It's a new dependency, approved by the owner on 2026-11-26 with this ADR and listed in `docs/dependencies.md`.
 - **The unsafe-code rule (ADR-0009).**
   - UniFFI's generated scaffolding contains `unsafe` blocks, and a crate-level `forbid` also applies to macro-generated code. So **`dn-mobile` becomes the second crate allowed to opt out of `forbid(unsafe_code)`**, after `dn-inference`.
   - It may contain generated bindings only, never hand-written `unsafe`, and a CI check enforces that.
-  - This changes ADR-0009's baseline and needs the owner's approval with this ADR.
+  - This changes ADR-0009's baseline. The owner approved it with this ADR on 2026-11-26, and ADR-0009 points here.
 - **Build:** an XCFramework for the device and the Simulator (arm64), built by a script in `apps/ios`. CI builds it on a macOS runner and runs the core's tests on the host.
 
 ### 3. What the phone keeps: a subset, sealed to the phone
@@ -183,11 +183,11 @@ Those stay on the desktop and the Node for now. **The app contains no add-on cod
 - **`dn-sync` and its design note:** the subset member (§3), and approval keys that are P-256 and presence-bound.
 - **dn-jobs (#252):** its `AnswerVerifier` on the Node accepts ECDSA P-256 answers from a device's registered approval key.
 - **ADR-0009:** a second, generated-only exception to the unsafe-code lint.
-- **`docs/dependencies.md`:** `uniffi`, once approved.
+- **`docs/dependencies.md`:** `uniffi` is listed (owner approved 2026-11-26), and added to the workspace when `dn-mobile` first uses it.
 - **Design:** the phone screens are designed in the design reference first (ADR-0010; design standard §8). They are pairing, pending items and the review, Face ID approval, receipts, views, status, and the notification opt-in.
 
 ## Action items (to be filed as issues)
-1. `dn-mobile` crate with UniFFI (dependency approval, the unsafe-code exception with its CI check), and the XCFramework build.
+1. `dn-mobile` crate with UniFFI (the unsafe-code exception with its CI check), and the XCFramework build.
 2. The SwiftUI app: pairing, pending items and review, approve with Face ID, deny, receipts, views, status.
 3. Secure Enclave approval key and presence-bound registration at pairing; P-256 verification in the Node's `AnswerVerifier`.
 4. The subset member in `dn-sync`: sealing to the phone's key, no group key, and the design note.
