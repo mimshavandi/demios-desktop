@@ -5,6 +5,7 @@ import {
   errorMessage,
   type AddModelLink,
   type AppInfo,
+  type KeychainStatus,
   type LocalDataSummary,
   type McpServerStatus,
   type ModelCatalog,
@@ -162,6 +163,9 @@ export function SettingsView({
   useEffect(() => {
     void fetch();
   }, [fetch]);
+  useKeychainAnswer(api, load.kind === "ready" ? load.catalog : null, set, (message) =>
+    setLoad({ kind: "error", message }),
+  );
 
   const save = async (catalog: ModelCatalog, next: Settings, what: string) => {
     try {
@@ -387,6 +391,7 @@ function ModelsPage({
             )}
           </>
         )}
+        {shown !== "device" && <KeychainNotice api={api} status={catalog.keychain} onCatalog={onCatalog} />}
         {shown === "servers" && <RemoteServersCard api={api} catalog={catalog} onCatalog={onCatalog} />}
         {shown === "providers" && (
           <section className="card" aria-labelledby="keys-h">
@@ -402,6 +407,97 @@ function ModelsPage({
         )}
       </div>
     </>
+  );
+}
+
+/**
+ * The catalog came back before the keychain answered (#200): wait for its answer, however long
+ * the user takes with an unlock prompt, and hand it on. The backend runs one check at a time, so
+ * every caller gets the same answer from one prompt.
+ */
+export function useKeychainAnswer(
+  api: Api,
+  catalog: ModelCatalog | null,
+  onAnswer: (c: ModelCatalog) => void,
+  onError: (message: string) => void,
+) {
+  const checking = catalog?.keychain.state === "checking";
+  const handlers = useRef({ onAnswer, onError });
+  handlers.current = { onAnswer, onError };
+  useEffect(() => {
+    if (!checking) return;
+    let live = true;
+    api
+      .checkKeys()
+      .then((c) => {
+        if (live) handlers.current.onAnswer(c);
+      })
+      .catch((e: unknown) => {
+        if (live) handlers.current.onError(errorMessage(e));
+      });
+    return () => {
+      live = false;
+    };
+  }, [api, checking]);
+}
+
+/** After this long without an answer, "checking" becomes "locked or not answering". */
+export const KEYCHAIN_SLOW_MS = 8000;
+
+/**
+ * The system keychain didn't answer or failed (#200): say why and what to do, instead of showing
+ * "no key". While it is still being checked (an unlock prompt may be open), say so; after
+ * {@link KEYCHAIN_SLOW_MS} say it is locked or not answering. The check itself is never cut short.
+ */
+export function KeychainNotice({
+  api,
+  status,
+  onCatalog,
+}: {
+  api: Api;
+  status: KeychainStatus;
+  onCatalog: (c: ModelCatalog) => void;
+}) {
+  const [slow, setSlow] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    setSlow(false);
+    if (status.state !== "checking") return;
+    const t = setTimeout(() => setSlow(true), KEYCHAIN_SLOW_MS);
+    return () => clearTimeout(t);
+  }, [status.state]);
+  if (status.state === "ok") return null;
+  if (status.state === "checking" && !slow) {
+    return <InlineMessage tone="info">Checking your system keychain for saved keys…</InlineMessage>;
+  }
+  const retry = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      onCatalog(await api.checkKeys());
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const message =
+    status.state === "checking"
+      ? "Your system keychain is locked or not answering, so Demios can't tell which API keys are saved. If it asked for a password, answer it, then choose Retry."
+      : status.message;
+  return (
+    <InlineMessage
+      tone="warning"
+      action={
+        <Button size="sm" variant="secondary" loading={busy} onClick={() => void retry()}>
+          Retry
+        </Button>
+      }
+    >
+      {message}
+      {error !== null && ` ${error}`}
+    </InlineMessage>
   );
 }
 
@@ -549,10 +645,16 @@ function ProviderRow({
         type="password"
         autoComplete="off"
         spellCheck={false}
-        placeholder={provider.has_key ? "Paste a new key to replace it" : "Paste API key"}
+        placeholder={provider.key === "saved" ? "Paste a new key to replace it" : "Paste API key"}
         value={key}
         error={error}
-        help={provider.has_key ? "Key saved." : "No key yet."}
+        help={
+          provider.key === "saved"
+            ? "Key saved."
+            : provider.key === "none"
+              ? "No key yet."
+              : "Can't tell whether a key is saved: see the keychain message above."
+        }
         onChange={(e) => {
           setKey(e.target.value);
           if (error !== null) setError(null);
@@ -567,7 +669,7 @@ function ProviderRow({
         >
           Save key
         </Button>
-        {provider.has_key && (
+        {provider.key === "saved" && (
           <Button variant="ghost" loading={busy === "remove"} onClick={() => void removeKey()}>
             Remove key
           </Button>
@@ -802,7 +904,17 @@ function GeneralPage({
           </li>
           <li>
             Keys in your system keychain
-            {summary !== null && (summary.keychain.length > 0 ? `: ${summary.keychain.join(", ")}` : ": none saved")}
+            {summary !== null &&
+              (summary.keychain.entries.length > 0
+                ? `: ${summary.keychain.entries.join(", ")}`
+                : summary.keychain.problem === null
+                  ? ": none saved"
+                  : "")}
+            {summary?.keychain.problem != null && (
+              <InlineMessage tone="warning">
+                Couldn't check all of them. {summary.keychain.problem}
+              </InlineMessage>
+            )}
           </li>
           <li>App storage of this window</li>
         </ul>

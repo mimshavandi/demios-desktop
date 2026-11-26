@@ -56,6 +56,7 @@ const COMMANDS: &[&str] = &[
     "get_settings",
     "update_settings",
     "list_models",
+    "check_keys",
     "set_provider_key",
     "add_remote_server",
     "refresh_remote_server",

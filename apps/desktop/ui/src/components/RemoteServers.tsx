@@ -3,6 +3,7 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { Api } from "../ipc/commands";
 import {
   errorMessage,
+  type KeyState,
   type ModelCatalog,
   type RemoteModelView,
   type RemoteServerStatus,
@@ -159,7 +160,7 @@ export function RemoteServersCard({
                 {s.base_url} · {s.models.length === 1 ? "1 model" : `${s.models.length} models`}
               </span>
             </div>
-            <StatusBadge status={status[s.id]} hasKey={s.has_key} onRetry={() => void check(s.id)} />
+            <StatusBadge status={status[s.id]} keyState={s.key} onRetry={() => void check(s.id)} />
             <div className="row-actions">
               <Button
                 variant="secondary"
@@ -197,11 +198,11 @@ export function RemoteServersCard({
 
 function StatusBadge({
   status,
-  hasKey,
+  keyState,
   onRetry,
 }: {
   status: RemoteServerStatus | "checking" | undefined;
-  hasKey: boolean;
+  keyState: KeyState;
   onRetry: () => void;
 }) {
   if (status === undefined || status === "checking") {
@@ -213,7 +214,9 @@ function StatusBadge({
   if (status.state === "needs_key") {
     return (
       <span className="row-actions" title={status.message}>
-        <Badge tone="warning">{hasKey ? "Key refused" : "Needs key"}</Badge>
+        <Badge tone="warning">
+          {keyState === "saved" ? "Key refused" : keyState === "none" ? "Needs key" : "Key unreadable"}
+        </Badge>
       </span>
     );
   }

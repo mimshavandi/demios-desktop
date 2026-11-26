@@ -18,7 +18,7 @@ const ollama: RemoteServerView = {
   id: "ollama",
   name: "Ollama",
   base_url: "http://localhost:11434/v1",
-  has_key: false,
+  key: "none",
   models: [
     { id: "qwen3:8b", model_ref: "remote:ollama:qwen3:8b", embedding: false, tool_support: "supported", tool_support_reported: true },
     { id: "tiny", model_ref: "remote:ollama:tiny", embedding: false, tool_support: "unsupported", tool_support_reported: true },
@@ -39,6 +39,7 @@ function fake(statuses: RemoteServerStatus[] = [{ state: "connected", models: 4 
     remote_servers: servers,
     local_models: [],
     key_store: "memory",
+    keychain: { state: "ok" },
     settings: { slots: {}, telemetry_enabled: false },
     chat_model: null,
     chat_model_tools: false,

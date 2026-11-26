@@ -8,7 +8,7 @@
 use crate::chat::{self, ChatEvent, TurnStarted};
 use crate::error::{IpcError, IpcResult};
 use crate::models::{self, ModelCatalog};
-use crate::secrets::Secret;
+use crate::secrets::{KeyCheck, Secret};
 use crate::settings::Settings;
 use crate::state::{AppState, ToolEvent, ToolSnapshot};
 use dn_core::Id;
@@ -118,8 +118,9 @@ pub struct LocalDataSummary {
     pub data_dir: Option<String>,
     pub models_dir: Option<String>,
     pub models_bytes: u64,
-    /// Keychain entries in the user's words ("OpenAI key", "Hugging Face token", …).
-    pub keychain: Vec<String>,
+    /// Keychain entries in the user's words ("OpenAI key", "Hugging Face token", …), and
+    /// why the list may be incomplete when the keychain failed.
+    pub keychain: crate::state::KeychainEntries,
 }
 
 #[tauri::command]
@@ -390,10 +391,18 @@ pub async fn update_settings(
     .await
 }
 
+/// The catalog after a change the user made (a key saved, a server added). Blocking: asks the
+/// keychain, and waits if it shows a prompt, since the user is there to answer it.
 pub(crate) fn catalog(s: &AppState) -> IpcResult<ModelCatalog> {
     let settings = s.settings()?;
-    let mut c = models::catalog(&s.models, &s.keys, &settings);
-    let resolved = s.agent.resolve_model(&settings, &s.models, &s.keys).ok();
+    let check = KeyCheck::run(&s.keys, models::key_ids(&settings));
+    catalog_with(s, &settings, &check)
+}
+
+fn catalog_with(s: &AppState, settings: &Settings, check: &KeyCheck) -> IpcResult<ModelCatalog> {
+    let settings = settings.clone();
+    let mut c = models::catalog(&s.models, s.keys.description, check, &settings);
+    let resolved = s.agent.resolve_model(&settings, &s.models, check).ok();
     c.chat_model_tools = resolved
         .as_ref()
         .is_some_and(|m| s.models.supports_tools(m));
@@ -401,9 +410,41 @@ pub(crate) fn catalog(s: &AppState) -> IpcResult<ModelCatalog> {
     Ok(c)
 }
 
+/// How long the Models list waits for the keychain before it shows with key states
+/// "checking". Not a limit on the keychain: the check keeps going and [`check_keys`] gets
+/// its answer (a locked keychain may be waiting for the user to unlock it).
+const LIST_WAIT: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// The catalog, never held up by the keychain for more than [`LIST_WAIT`] (#200). If the
+/// keychain hasn't answered by then, key states are unknown and `keychain` is `checking`:
+/// the UI then calls [`check_keys`].
 #[tauri::command]
 pub async fn list_models(state: AppStateRef<'_>) -> IpcResult<ModelCatalog> {
-    blocking(&state, |s| catalog(s)).await
+    let (settings, pending) = blocking(&state, |s| {
+        let settings = s.settings()?;
+        let pending = s.key_checks.start(&s.keys, models::key_ids(&settings));
+        Ok((settings, pending))
+    })
+    .await?;
+    let check = match tokio::time::timeout(LIST_WAIT, crate::secrets::answer(pending)).await {
+        Ok(c) => c,
+        Err(_) => Arc::new(KeyCheck::checking()),
+    };
+    blocking(&state, move |s| catalog_with(s, &settings, &check)).await
+}
+
+/// The catalog once the keychain has answered, however long that takes (the user may be
+/// answering an unlock prompt). Joins a check that is already running.
+#[tauri::command]
+pub async fn check_keys(state: AppStateRef<'_>) -> IpcResult<ModelCatalog> {
+    let (settings, pending) = blocking(&state, |s| {
+        let settings = s.settings()?;
+        let pending = s.key_checks.start(&s.keys, models::key_ids(&settings));
+        Ok((settings, pending))
+    })
+    .await?;
+    let check = crate::secrets::answer(pending).await;
+    blocking(&state, move |s| catalog_with(s, &settings, &check)).await
 }
 
 fn known_provider(provider_id: &str) -> IpcResult<()> {

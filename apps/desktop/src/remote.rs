@@ -450,7 +450,12 @@ mod tests {
         let (st, keys) = state_with(no_keychain);
         let c = save_new_server(&st, server("ollama"), None).expect("added without a keychain");
         assert_eq!(c.remote_servers.len(), 1);
-        assert!(!c.remote_servers[0].has_key);
+        // The key state is unknown, with the keychain's reason, not "no key" (#200).
+        assert_eq!(c.remote_servers[0].key, crate::secrets::KeyState::Unknown);
+        assert!(matches!(
+            c.keychain,
+            crate::secrets::KeychainStatus::Unavailable { .. }
+        ));
         // Chat builds its config without a key, and the server can be removed again.
         let cfg = crate::models::remote_config(&server("ollama"), &keys).expect("no key needed");
         assert!(cfg.api_key.is_none());

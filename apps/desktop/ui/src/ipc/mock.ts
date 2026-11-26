@@ -287,13 +287,14 @@ export function createMockApi(): Api {
       ),
     ],
     providers: [
-      { id: "anthropic", name: "Anthropic", has_key: keys.has("anthropic") },
-      { id: "openai", name: "OpenAI", has_key: keys.has("openai") },
-      { id: "gemini", name: "Google Gemini", has_key: keys.has("gemini") },
+      { id: "anthropic", name: "Anthropic", key: keys.has("anthropic") ? "saved" : "none" },
+      { id: "openai", name: "OpenAI", key: keys.has("openai") ? "saved" : "none" },
+      { id: "gemini", name: "Google Gemini", key: keys.has("gemini") ? "saved" : "none" },
     ],
     remote_servers: remotes,
     local_models: localRows.map((r) => ({ ...r })),
     key_store: "session only (browser mock)",
+    keychain: { state: "ok" },
     settings,
     chat_model: settings.slots["chat"] ?? "local:dev-fake",
     chat_model_tools: true,
@@ -493,7 +494,10 @@ export function createMockApi(): Api {
       models_bytes: localRows
         .filter((r) => r.state.state === "ready")
         .reduce((n, r) => n + r.size, 0),
-      keychain: [...keys].map((p) => `${p === "anthropic" ? "Anthropic" : p === "openai" ? "OpenAI" : "Google Gemini"} key`),
+      keychain: {
+        entries: [...keys].map((p) => `${p === "anthropic" ? "Anthropic" : p === "openai" ? "OpenAI" : "Google Gemini"} key`),
+        problem: null,
+      },
     }),
     deleteAllLocalData: async () => {
       convs.length = 0;
@@ -681,6 +685,7 @@ export function createMockApi(): Api {
       return s;
     },
     listModels: async () => catalog(),
+    checkKeys: async () => catalog(),
     setProviderKey: async (p) => {
       keys.add(p);
       return catalog();
@@ -699,7 +704,7 @@ export function createMockApi(): Api {
           id,
           name: name.trim() || new URL(url).host,
           base_url: url.replace(/\/$/, "") + (new URL(url).pathname === "/" ? "/v1" : ""),
-          has_key: apiKey !== null && apiKey.trim() !== "",
+          key: apiKey !== null && apiKey.trim() !== "" ? "saved" : "none",
           models: [
             { id: "qwen3:8b", model_ref: ref("qwen3:8b"), embedding: false, tool_support: "supported", tool_support_reported: true },
             { id: "mystery-7b", model_ref: ref("mystery-7b"), embedding: false, tool_support: "unknown", tool_support_reported: false },

@@ -7,7 +7,7 @@
 //! - The dev fake (T-SHELL-03, debug builds) is a fixed entry.
 //! - Local llama.cpp models (`local:<id>`) come from `dn-inference` (#12).
 
-use crate::secrets::Keys;
+use crate::secrets::{KeyCheck, KeyState, KeychainStatus, Keys};
 use crate::settings::{RemoteServer, SLOTS, Settings, SlotInfo};
 use dn_core::chat::ChatModel;
 use dn_core::model::{Capability, ModelRef, Readiness};
@@ -245,8 +245,10 @@ impl ModelRegistry {
         lock(&self.providers).adapters.contains_key(provider_id)
     }
 
-    /// What the resolver may pick from. Blocking: checks the keychain.
-    pub fn sources(&self, keys: &Keys) -> Vec<SourceEntry> {
+    /// What the resolver may pick from, given which provider keys are saved. A provider whose
+    /// key state is unknown (keychain failed) is not picked; callers report the keychain
+    /// problem instead of "add a key".
+    pub fn sources(&self, keys: &KeyCheck) -> Vec<SourceEntry> {
         let mut out: Vec<SourceEntry> = self
             .fixed
             .keys()
@@ -288,7 +290,7 @@ impl ModelRegistry {
             }
         }
         for p in PROVIDERS {
-            let ready = keys.has(p.id).unwrap_or(false);
+            let ready = keys.saved(p.id);
             for m in p.suggested_models {
                 out.push(SourceEntry {
                     model: ModelRef::Byok {
@@ -431,7 +433,7 @@ pub struct ModelOption {
 pub struct ProviderInfo {
     pub id: String,
     pub name: String,
-    pub has_key: bool,
+    pub key: KeyState,
 }
 
 /// An OpenAI-compatible server as the settings screen shows it.
@@ -440,7 +442,7 @@ pub struct RemoteServerView {
     pub id: String,
     pub name: String,
     pub base_url: String,
-    pub has_key: bool,
+    pub key: KeyState,
     pub models: Vec<RemoteModelView>,
 }
 
@@ -465,6 +467,9 @@ pub struct ModelCatalog {
     /// `watch_local_models`).
     pub local_models: Vec<crate::local::LocalModelRow>,
     pub key_store: String,
+    /// Whether the keychain answered; when not, key states are unknown and Settings says why
+    /// and what to do (#200).
+    pub keychain: KeychainStatus,
     pub settings: Settings,
     /// The model chat uses now (the user's choice, or the one picked automatically when no
     /// chat model is chosen); `None` if nothing is usable.
@@ -484,7 +489,26 @@ pub struct LocalCompute {
     pub description: String,
 }
 
-pub fn catalog(registry: &ModelRegistry, keys: &Keys, settings: &Settings) -> ModelCatalog {
+/// Which provider keys are saved, for model resolution. Blocking (keychain).
+pub fn provider_keys(keys: &Keys) -> KeyCheck {
+    KeyCheck::run(keys, PROVIDERS.iter().map(|p| p.id))
+}
+
+/// Every keychain id the catalog shows a key state for: provider keys and server keys.
+pub fn key_ids(settings: &Settings) -> Vec<String> {
+    PROVIDERS
+        .iter()
+        .map(|p| p.id.to_string())
+        .chain(settings.remote_servers.iter().map(|r| r.key_id()))
+        .collect()
+}
+
+pub fn catalog(
+    registry: &ModelRegistry,
+    key_store: &str,
+    keys: &KeyCheck,
+    settings: &Settings,
+) -> ModelCatalog {
     let mut models = vec![];
     if registry.contains_fixed("local:dev-fake") {
         models.push(ModelOption {
@@ -514,11 +538,11 @@ pub fn catalog(registry: &ModelRegistry, keys: &Keys, settings: &Settings) -> Mo
         .map(|p| ProviderInfo {
             id: p.id.into(),
             name: p.name.into(),
-            has_key: keys.has(p.id).unwrap_or(false),
+            key: keys.state(p.id),
         })
         .collect();
     for (p, info) in PROVIDERS.iter().zip(&providers) {
-        if !info.has_key {
+        if info.key != KeyState::Saved {
             continue;
         }
         for m in p.suggested_models {
@@ -560,7 +584,7 @@ pub fn catalog(registry: &ModelRegistry, keys: &Keys, settings: &Settings) -> Mo
             id: r.id.clone(),
             name: r.name.clone(),
             base_url: r.base_url.clone(),
-            has_key: keys.has(&r.key_id()).unwrap_or(false),
+            key: keys.state(&r.key_id()),
             models: views,
         });
     }
@@ -575,7 +599,8 @@ pub fn catalog(registry: &ModelRegistry, keys: &Keys, settings: &Settings) -> Mo
         providers,
         remote_servers,
         local_models,
-        key_store: keys.description.into(),
+        key_store: key_store.into(),
+        keychain: keys.status.clone(),
         settings: settings.clone(),
         chat_model: None,
         chat_model_tools: false,
@@ -595,19 +620,33 @@ mod tests {
     use super::*;
     use crate::secrets::Secret;
 
+    fn check(keys: &Keys, settings: &Settings) -> KeyCheck {
+        KeyCheck::run(keys, key_ids(settings))
+    }
+
     #[test]
     fn byok_models_appear_only_with_a_key() {
         let keys = Keys::memory();
         let reg = ModelRegistry::default();
-        let c = catalog(&reg, &keys, &Settings::default());
+        let c = catalog(
+            &reg,
+            "test",
+            &check(&keys, &Settings::default()),
+            &Settings::default(),
+        );
         assert!(c.models.iter().all(|m| m.source != ModelSource::Byok));
-        assert!(c.providers.iter().all(|p| !p.has_key));
+        assert!(c.providers.iter().all(|p| p.key == KeyState::None));
         // "fast" is valid but hidden until something reads it.
         let ids: Vec<_> = c.slots.iter().map(|s| s.slot_id).collect();
         assert_eq!(ids, ["chat", "embed"]);
 
         keys.set("anthropic", &Secret::new("x")).unwrap();
-        let c = catalog(&reg, &keys, &Settings::default());
+        let c = catalog(
+            &reg,
+            "test",
+            &check(&keys, &Settings::default()),
+            &Settings::default(),
+        );
         let byok: Vec<_> = c
             .models
             .iter()
@@ -615,7 +654,30 @@ mod tests {
             .collect();
         assert!(!byok.is_empty());
         assert!(byok.iter().all(|m| m.available));
-        assert!(c.providers.iter().any(|p| p.id == "anthropic" && p.has_key));
+        assert!(
+            c.providers
+                .iter()
+                .any(|p| p.id == "anthropic" && p.key == KeyState::Saved)
+        );
+    }
+
+    #[test]
+    fn a_failing_keychain_shows_unknown_keys_with_the_reason_not_no_key() {
+        use crate::secrets::{SecretError, tests::failing};
+        let reg = ModelRegistry::default();
+        let settings = Settings::default();
+        for err in [
+            (|| SecretError::Unavailable("no secret service".into())) as fn() -> SecretError,
+            || SecretError::Denied("locked".into()),
+        ] {
+            let keys = failing(err);
+            let c = catalog(&reg, "test", &check(&keys, &settings), &settings);
+            assert!(c.providers.iter().all(|p| p.key == KeyState::Unknown));
+            assert!(c.keychain.is_problem() && c.keychain.message().is_some());
+            // The list itself is still there; only provider models wait for the keychain.
+            assert!(c.models.iter().all(|m| m.source != ModelSource::Byok));
+            assert!(!c.slots.is_empty());
+        }
     }
 
     #[test]
@@ -706,7 +768,7 @@ mod tests {
             ..Default::default()
         };
         reg.set_remote_servers(&settings.remote_servers);
-        let c = catalog(&reg, &keys, &settings);
+        let c = catalog(&reg, "test", &check(&keys, &settings), &settings);
         let refs: Vec<_> = c
             .models
             .iter()
@@ -724,10 +786,13 @@ mod tests {
             c.remote_servers[0].models[0].tool_support,
             ToolSupport::Supported
         );
-        assert!(!c.remote_servers[0].has_key);
-        assert!(reg.sources(&keys).iter().any(
-            |s| s.model.to_string() == "remote:box:qwen3:8b" && s.readiness == Readiness::Ready
-        ));
+        assert_eq!(c.remote_servers[0].key, KeyState::None);
+        assert!(
+            reg.sources(&check(&keys, &settings))
+                .iter()
+                .any(|s| s.model.to_string() == "remote:box:qwen3:8b"
+                    && s.readiness == Readiness::Ready)
+        );
         // The adapter is built (no request yet) and cached under the server's key id.
         reg.get(&"remote:box:qwen3:8b".parse().unwrap(), &keys)
             .unwrap();
