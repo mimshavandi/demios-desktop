@@ -1,6 +1,6 @@
 # ADR-0016: Demios Relay: encrypted store-and-forward mailboxes, addressed by public key
 
-**Status:** Proposed · **Date:** 2026-11-25 · **Deciders:** project owner, lead · **Extends:** [ADR-0009](0009-security-baseline.md), [ADR-0014](0014-demios-node.md), [ADR-0015](0015-encrypted-sharing-and-forms.md) · **Issue:** #207
+**Status:** Accepted (owner, 2026-11-26) · **Date:** 2026-11-25 · **Deciders:** project owner, lead · **Extends:** [ADR-0009](0009-security-baseline.md), [ADR-0014](0014-demios-node.md), [ADR-0015](0015-encrypted-sharing-and-forms.md) · **Issue:** #207
 
 ## Context
 Several features need to hand something to a device that isn't online right now:
