@@ -333,8 +333,10 @@ function Shell({ api }: { api: Api }) {
   }, [artifactDetails]);
 
   const open = useCallback(
-    async (id: Id | null) => {
-      setView({ kind: "chat" });
+    // `keepView`: load the chat without switching to it (startup, where the user may already
+    // have opened Settings or a project while the list was loading).
+    async (id: Id | null, { keepView = false }: { keepView?: boolean } = {}) => {
+      if (!keepView) setView({ kind: "chat" });
       setNewChatProject(null);
       setError(null);
       void refreshUnknowns(id);
@@ -442,7 +444,7 @@ function Shell({ api }: { api: Api }) {
         const list = await api.listConversations();
         setConversations(list);
         setListState({ kind: "ready" });
-        await open(list[0]?.id ?? null);
+        await open(list[0]?.id ?? null, { keepView: true });
         // A link that started the app wins over opening the last chat.
         if (addLinkRef.current !== null) setView({ kind: "settings", route: { section: "models", tab: "device" } });
       } catch (e) {

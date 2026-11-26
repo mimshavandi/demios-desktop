@@ -17,6 +17,7 @@ Only changes people using the app or the `dn` command-line tool can notice are l
 - Move a chat into a project, or out of one, from the **Project** list under the message box. Undo moves it back, and the chat follows its new project's instructions from the next message ([#165](https://github.com/mimshavandi/demios-desktop/pull/165)).
 - Each chat in the sidebar has a **More actions** menu: move it to a project, rename it in place, or delete it with Undo. The menu works with the keyboard ([#168](https://github.com/mimshavandi/demios-desktop/pull/168)).
 - **Check for updates when Demios starts**, off by default: after your first check for updates, Demios asks once whether to turn it on. When it's on, a new version shows a notice; nothing downloads until you install it ([#139](https://github.com/mimshavandi/demios-desktop/pull/139)).
+- Use models from a model server: Ollama, LM Studio, llama.cpp's `llama-server`, vLLM or any OpenAI-compatible server, in **Settings → Models → Model servers**. Each model says whether it can call tools, and chat streams from the server. A key, if the server needs one, is kept in your system keychain; a server without a key also works on a Linux desktop with no keychain ([#151](https://github.com/mimshavandi/demios-desktop/pull/151)).
 
 #### `dn` command-line tool
 
@@ -34,6 +35,7 @@ Only changes people using the app or the `dn` command-line tool can notice are l
 - Settings uses the whole window: the artifact pane is hidden while Settings or a project page is open, and comes back with the chat. If your models can't be loaded, only the Models page says so; General still works ([#185](https://github.com/mimshavandi/demios-desktop/pull/185)).
 - The window always opens inside the screen's free area, so its bottom, including the message box, is never hidden behind the Windows taskbar or the macOS Dock. Demios remembers the window's size, position and maximised state for each monitor, and pulls it back on screen if a monitor is gone or its scaling changed ([#180](https://github.com/mimshavandi/demios-desktop/pull/180)).
 - The window appears only once it is in place, so it no longer jumps back to its starting size if you resize it right after Demios opens. In a window narrower than 1024 pixels, the artifact pane no longer opens over the chat at launch ([#196](https://github.com/mimshavandi/demios-desktop/pull/196)).
+- Opening Settings, or a project, while Demios is still starting no longer sends you back to the chat once your chats have loaded ([#151](https://github.com/mimshavandi/demios-desktop/pull/151)).
 - On Windows and macOS the window can now be made as small as 720 × 480, as on Linux, so it fits a 1366 × 768 screen at 125% scaling. It used to stop at 900 × 560 ([#199](https://github.com/mimshavandi/demios-desktop/pull/199)).
 
 ## [0.1.0-preview.454e01b] - 2026-11-25

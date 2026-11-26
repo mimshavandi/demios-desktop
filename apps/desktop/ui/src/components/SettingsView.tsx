@@ -29,6 +29,7 @@ import {
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Licences } from "./Licences";
 import { McpServersCard } from "./McpServers";
+import { RemoteServersCard } from "./RemoteServers";
 import { SkillsCard } from "./Skills";
 import { Updates } from "./Updates";
 import { LocalModelsCard, formatBytes } from "./LocalModels";
@@ -36,7 +37,7 @@ import { BetterSearchSetting } from "./BetterSearch";
 import { useToast } from "./toast";
 
 export type SettingsSection = "general" | "models" | "tools" | "skills";
-export type ModelsTab = "device" | "providers";
+export type ModelsTab = "device" | "servers" | "providers";
 
 /** Where Settings opens: a section, and for Models which tab. Banners and hints link here. */
 export interface SettingsRoute {
@@ -53,6 +54,7 @@ const SECTIONS: { id: SettingsSection; label: string; icon: typeof Cpu }[] = [
 
 const MODEL_TABS: TabItem<ModelsTab>[] = [
   { id: "device", label: "On this device" },
+  { id: "servers", label: "Model servers" },
   { id: "providers", label: "Providers" },
 ];
 
@@ -384,6 +386,7 @@ function ModelsPage({
             )}
           </>
         )}
+        {shown === "servers" && <RemoteServersCard api={api} catalog={catalog} onCatalog={onCatalog} />}
         {shown === "providers" && (
           <section className="card" aria-labelledby="keys-h">
             <h2 id="keys-h">Provider keys</h2>
@@ -421,6 +424,12 @@ function SlotRow({
         .filter((m) => m.source === "local" || m.source === "dev")
         .map((m) => ({ value: m.model_ref, label: m.label })),
     },
+    ...catalog.remote_servers.map((r) => ({
+      label: r.name,
+      options: usable
+        .filter((m) => m.model_ref.startsWith(`remote:${r.id}:`))
+        .map((m) => ({ value: m.model_ref, label: m.label.replace(`${r.name} · `, "") })),
+    })),
     ...catalog.providers.map((p) => ({
       label: p.name,
       options: usable
