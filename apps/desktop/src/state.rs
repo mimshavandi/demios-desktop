@@ -620,6 +620,8 @@ impl AppState {
         let mut failed = Vec::new();
         // A join waiting for confirmation on a Node must not record it afterwards.
         crate::node::join_cancel(&self.node).await;
+        // A sync round still running must end before its keys and tables are deleted.
+        crate::node_sync::stop_and_wait(self).await;
         if !self.stop_all_and_wait(REPLY_STOP_TIMEOUT).await {
             eprintln!("some replies did not stop in time; deleting anyway");
             failed.push("an answer that was still being written (it may have been saved again)");

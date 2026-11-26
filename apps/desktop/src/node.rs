@@ -408,6 +408,7 @@ pub async fn remove_device(state: &std::sync::Arc<AppState>, id: &str) -> IpcRes
 /// confirmation says so.
 pub async fn forget(state: &std::sync::Arc<AppState>) -> IpcResult<NodeOverview> {
     join_cancel(&state.node).await;
+    crate::node_sync::stop_and_wait(state).await;
     let st = state.clone();
     tauri::async_runtime::spawn_blocking(move || -> IpcResult<()> {
         crate::node_sync::leave(&st).map_err(|e| IpcError::new("node_sync", e))?;
@@ -438,6 +439,7 @@ pub async fn unpair(state: &std::sync::Arc<AppState>) -> IpcResult<NodeOverview>
             ));
         }
     }
+    crate::node_sync::stop_and_wait(state).await;
     let st = state.clone();
     tauri::async_runtime::spawn_blocking(move || -> IpcResult<()> {
         crate::node_sync::leave(&st).map_err(|e| IpcError::new("node_sync", e))?;

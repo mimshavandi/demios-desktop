@@ -18,6 +18,7 @@ use dn_sync::link::{self, NodeLink};
 use dn_sync::records::store_collections;
 use dn_sync::session::{self, Device, Report};
 use serde::Serialize;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -65,6 +66,9 @@ pub struct SyncControl {
     status: Mutex<SyncStatus>,
     wake: tokio::sync::Notify,
     task: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
+    /// Bumped when sync ends, under the database lock: work of an earlier task that is
+    /// still running (on a blocking thread) sees it and writes nothing.
+    generation: AtomicU64,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -105,9 +109,10 @@ pub fn start(state: &Arc<AppState>) {
         return;
     }
     let st = state.clone();
-    *task = Some(tauri::async_runtime::spawn(
-        async move { run_loop(st).await },
-    ));
+    let generation = control.generation.load(Ordering::SeqCst);
+    *task = Some(tauri::async_runtime::spawn(async move {
+        run_loop(st, generation).await
+    }));
 }
 
 /// "Sync now": a round at once; after sync stopped, it starts again.
@@ -120,11 +125,27 @@ pub fn sync_now(state: &Arc<AppState>) {
     }
 }
 
+/// Stops the task and waits until it has ended, so nothing of a round still running
+/// (a key kept, a table written) lands after [`leave`]. Call it before `leave`.
+pub async fn stop_and_wait(state: &AppState) {
+    let control = &state.node.sync;
+    control.generation.fetch_add(1, Ordering::SeqCst);
+    let task = lock(&control.task).take();
+    if let Some(t) = task {
+        t.abort();
+        let _ = t.await;
+    }
+    *lock(&control.status) = SyncStatus::default();
+}
+
 /// Ends sync with the Node: stops the task, stops change logging, and deletes the group
-/// keys and what sync kept. Call it before the link is forgotten.
+/// keys and what sync kept. Call it before the link is forgotten, after
+/// [`stop_and_wait`].
 pub fn leave(state: &AppState) -> Result<(), String> {
     state.node.sync.stop();
     let db = state.db().map_err(|e| e.message)?;
+    // Under the lock: a round's blocking step that starts after this does nothing.
+    state.node.sync.generation.fetch_add(1, Ordering::SeqCst);
     if let Some(l) = link::get(&db).map_err(|e| e.to_string())? {
         session::reset(&db, &*state.keys.store, &l.node.keys).map_err(|e| e.to_string())?;
     }
@@ -162,13 +183,14 @@ fn message(e: &SyncError) -> String {
     }
 }
 
-async fn run_loop(state: Arc<AppState>) {
+async fn run_loop(state: Arc<AppState>, generation: u64) {
     let control = &state.node.sync;
     loop {
         control.set(|s| s.state = SyncState::Syncing);
-        let result = tokio::time::timeout(Duration::from_secs(ROUND_SECS), round(&state))
-            .await
-            .unwrap_or(Err(SyncError::Io(std::io::ErrorKind::TimedOut.into())));
+        let result =
+            tokio::time::timeout(Duration::from_secs(ROUND_SECS), round(&state, generation))
+                .await
+                .unwrap_or(Err(SyncError::Io(std::io::ErrorKind::TimedOut.into())));
         let pause = match result {
             Ok(report) => {
                 control.set(|s| {
@@ -217,21 +239,25 @@ async fn run_loop(state: Arc<AppState>) {
 }
 
 /// What a round needs from the app.
-fn prepare(state: &AppState) -> Result<(DeviceKeys, NodeLink), SyncError> {
+fn prepare(state: &AppState, generation: u64) -> Result<(DeviceKeys, NodeLink), SyncError> {
     let db = state
         .db()
         .map_err(|e| SyncError::Store(e.message.to_string()))?;
+    // Sync ended while this waited for the lock: write nothing, make no keys.
+    if state.node.sync.generation.load(Ordering::SeqCst) != generation {
+        return Err(SyncError::Store("sync was stopped".into()));
+    }
     let l = link::get(&db)?.ok_or(SyncError::Store("no Node is paired".into()))?;
     // Change logging is on while a Node is paired (it seeds what's already here once).
     dn_store::sync_rows::enable(&db).map_err(|e| SyncError::Store(e.to_string()))?;
-    drop(db);
     let keys = DeviceKeys::load_or_create(&*state.keys.store)?;
+    drop(db);
     Ok((keys, l))
 }
 
-async fn round(state: &Arc<AppState>) -> Result<Report, SyncError> {
+async fn round(state: &Arc<AppState>, generation: u64) -> Result<Report, SyncError> {
     let st = state.clone();
-    let (keys, l) = tauri::async_runtime::spawn_blocking(move || prepare(&st))
+    let (keys, l) = tauri::async_runtime::spawn_blocking(move || prepare(&st, generation))
         .await
         .map_err(|e| SyncError::Store(e.to_string()))??;
     let mut ch = crate::node::connect_member(&keys, &l).await?;
@@ -284,5 +310,33 @@ async fn after_purge(state: &Arc<AppState>, report: &Report) {
     .await;
     if let Err(e) = done {
         eprintln!("sync: cleaning up after purged chats failed: {e}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A round's blocking step that started before sync ended writes nothing after it:
+    /// no change logging switched back on, no device keys made.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn work_of_a_stopped_round_writes_nothing() {
+        let state = Arc::new(AppState::in_memory().unwrap());
+        let before = state.node.sync.generation.load(Ordering::SeqCst);
+        stop_and_wait(&state).await;
+        leave(&state).unwrap();
+        let err = prepare(&state, before).unwrap_err();
+        assert!(err.to_string().contains("sync was stopped"), "{err}");
+        assert!(!dn_store::sync_rows::enabled(&state.db().unwrap()).unwrap());
+        assert!(
+            state
+                .keys
+                .store
+                .get(&dn_sync::identity::secret_id())
+                .unwrap()
+                .is_none(),
+            "no device keys were made"
+        );
+        assert_eq!(state.node.sync.status(), SyncStatus::default());
     }
 }
