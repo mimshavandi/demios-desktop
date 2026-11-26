@@ -156,6 +156,7 @@ impl NodeConfig {
     /// Writes `node.json`. Refuses to replace an existing one.
     pub fn create(&self, data_dir: &Path) -> Result<(), String> {
         create_private_dir(data_dir)?;
+        check_private_dir(data_dir)?;
         let path = Self::path(data_dir);
         let text = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
         let mut options = std::fs::OpenOptions::new();
@@ -175,6 +176,26 @@ impl NodeConfig {
         std::io::Write::write_all(&mut file, text.as_bytes())
             .map_err(|e| format!("couldn't write {}: {e}", path.display()))
     }
+}
+
+/// Refuses a data folder that other users can read or enter: it holds the database and,
+/// with some stores, the secrets file (Unix; Windows relies on the service account's ACLs).
+pub fn check_private_dir(dir: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let meta =
+            std::fs::metadata(dir).map_err(|e| format!("couldn't read {}: {e}", dir.display()))?;
+        if meta.mode() & 0o077 != 0 {
+            return Err(format!(
+                "{} can be read by other users; make it owner-only (chmod 700)",
+                dir.display()
+            ));
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = dir;
+    Ok(())
 }
 
 fn create_private_dir(dir: &Path) -> Result<(), String> {
@@ -240,9 +261,9 @@ pub fn secret_env_vars(vars: impl IntoIterator<Item = (OsString, OsString)>) -> 
             let upper = k.to_ascii_uppercase();
             SECRET_VARS.contains(&upper.as_str())
                 || (upper.starts_with("DEMIOS_")
-                    && ["KEY", "TOKEN", "SECRET", "PASSWORD", "PASSPHRASE"]
-                        .iter()
-                        .any(|w| upper.contains(w)))
+                    && upper
+                        .split('_')
+                        .any(|w| ["KEY", "TOKEN", "SECRET", "PASSWORD", "PASSPHRASE"].contains(&w)))
         })
         .collect();
     found.sort();
@@ -304,6 +325,19 @@ mod tests {
         assert!(NodeConfig::load(&dir).unwrap_err().contains("dn node init"));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_data_folder_others_can_read_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("dn-node-open-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(check_private_dir(&dir).unwrap_err().contains("chmod 700"));
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(check_private_dir(&dir).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn utc_offsets_parse() {
         assert_eq!(parse_utc_offset("+01:00").unwrap(), 60);
@@ -322,6 +356,7 @@ mod tests {
             ("PATH", "/usr/bin"),
             ("DEMIOS_PROVIDER_KEY", "x"),
             ("DEMIOS_DATA_DIR", "/var/lib/demios"),
+            ("DEMIOS_KEYBOARD_LAYOUT", "de"),
             ("HF_TOKEN", ""),
         ]
         .map(|(k, v)| (OsString::from(k), OsString::from(v)));

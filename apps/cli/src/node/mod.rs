@@ -202,6 +202,7 @@ impl Node {
                 found.join(", ")
             ));
         }
+        config::check_private_dir(data_dir)?;
         let config = NodeConfig::load(data_dir)?;
         let store = server::open(&config.secrets.choice(), data_dir, env)
             .map_err(|e| format!("couldn't open the secret store: {e}"))?;
@@ -308,8 +309,12 @@ impl Node {
                     continue;
                 }
             };
-            let Ok(permit) = slots.clone().acquire_owned().await else {
-                break;
+            let permit = tokio::select! {
+                () = stop.notified() => break,
+                permit = slots.clone().acquire_owned() => match permit {
+                    Ok(p) => p,
+                    Err(_) => break,
+                },
             };
             let (keys, db, base) = (self.keys.clone(), self.db.clone(), base.clone());
             tokio::spawn(async move {
@@ -372,7 +377,9 @@ async fn handle(
         let conn = lock(db);
         match transport::authorize_member(&conn, &channel) {
             Ok(d) => {
-                let _ = DeviceList::mark_synced(&conn, d.id, dn_store::now_ms());
+                if let Err(e) = DeviceList::mark_synced(&conn, d.id, dn_store::now_ms()) {
+                    eprintln!("dn node: couldn't record when {} last synced: {e}", d.id);
+                }
                 d
             }
             Err(e) => {
@@ -391,6 +398,12 @@ async fn handle(
                     break;
                 }
             };
+        // Checked again for every message: a device removed while connected is cut off
+        // at its next request.
+        if let Err(e) = transport::authorize_member(&lock(db), &channel) {
+            eprintln!("dn node: disconnected {} ({}): {e}", device.name, device.id);
+            break;
+        }
         let reply = match message {
             Message::StatusRequest => match status(base, db) {
                 Ok(s) => Message::Status(s),
@@ -429,6 +442,11 @@ mod tests {
                 dn_store::now_ms()
             ));
             std::fs::create_dir_all(&dir).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+            }
             Self(dir)
         }
     }
