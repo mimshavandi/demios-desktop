@@ -79,6 +79,7 @@ Release builds (`tauri build` without `--debug`, i.e. `TAURI_ENV_DEBUG=false`, o
 | flatpak-builder-tools (pinned commit in `generate-sources.sh`) with its Python requirements aiohttp and tomlkit (in a throwaway venv) | `packaging/flatpak/generate-sources.sh`, CI job `flatpak` | offline cargo and npm source lists for the Flatpak build | MIT (tools), Apache-2.0 (aiohttp), MIT (tomlkit) |
 | org.flatpak.Builder (Flathub; flatpak-builder, flatpak-builder-lint, appstreamcli, desktop-file-validate) | CI job `flatpak`, local builds | builds the Flatpak and runs Flathub's linters | LGPL-2.1+ / MIT |
 | cargo-about 0.9.3, built from its crates.io source inside the Flatpak build and removed from the app | `packaging/flatpak/io.demios.app.yml` | the licences list in an offline build (same tool and version as above) | MIT OR Apache-2.0 |
+| Khronos SPIRV-Headers vulkan-sdk-1.4.321.0 (archive SHA-256 `5bbea925663d4cd2bab23efad53874f2718248a73dcaf9dd21dff8cb48e602fc`), header-only, installed in the Flatpak build and removed from the app | `packaging/flatpak/io.demios.app.yml` | the CMake package llama.cpp's Vulkan backend requires; the GNOME 49 SDK doesn't ship it (#190) | MIT |
 
 ### e2e (`apps/desktop/e2e`, dev only)
 

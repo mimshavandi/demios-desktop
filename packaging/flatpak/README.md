@@ -21,7 +21,7 @@ Files for building Demios Desktop as a Flatpak and, later, publishing it on Flat
   ```
 
   The app only reads that cache and never writes to it, so `:ro` is enough. The manifest doesn't grant this by default, to keep the home folder out of the sandbox.
-- **Local models run on the GPU through Vulkan** (NVIDIA, AMD, Intel). The build turns on the app's `vulkan` feature. The SDK has the Vulkan headers and `glslc`, and the GNOME runtime has the Vulkan loader. The GPU driver comes from Flatpak's GL extension (Mesa, or the NVIDIA extension matching the host driver), through `--device=dri`. Without a usable GPU, the app runs models on the processor and says so, as the other Linux builds do. CI checks that the binary links `libvulkan.so.1`. CUDA isn't possible on Flathub.
+- **Local models run on the GPU through Vulkan** (NVIDIA, AMD, Intel). The build turns on the app's `vulkan` feature. The SDK has the Vulkan headers and `glslc`, and the GNOME runtime has the Vulkan loader. The SDK lacks the SPIRV-Headers CMake package llama.cpp needs, so the manifest builds it from a pinned Khronos release, for the build only (it is not in the app). The GPU driver comes from Flatpak's GL extension (Mesa, or the NVIDIA extension matching the host driver), through `--device=dri`. Without a usable GPU, the app runs models on the processor and says so, as the other Linux builds do. CI checks that the binary links `libvulkan.so.1`. CUDA isn't possible on Flathub.
 - **Links and sign-in pages** open in the user's browser through the OpenURI portal (`xdg-open` inside the sandbox), so this needs no permission.
 - **No self-updater.** Flathub updates the app.
 
