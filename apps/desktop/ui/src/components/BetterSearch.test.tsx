@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Api } from "../ipc/commands";
 import type { KnowledgeStatus } from "../ipc/types";
-import { BetterSearchOffer, BetterSearchSetting, offerText, progressText, unusedText, upgradeText } from "./BetterSearch";
+import { BetterSearchOffer, offerText, progressText, upgradeText } from "./BetterSearch";
 
 afterEach(cleanup);
 
@@ -14,19 +14,11 @@ const model = (state: KnowledgeStatus["model"] extends infer M ? (M extends { st
   state,
 });
 
-const previous = {
-  id: "nomic-embed-text-v1.5-q4_k_m",
-  name: "Nomic Embed Text v1.5",
-  size: 84_106_624,
-  license: "apache-2.0",
-  state: { state: "ready" as const },
-};
-
 function fakeApi(initial: KnowledgeStatus) {
   let current = initial;
   const offer = vi.fn(async (accept: boolean) => {
     current = accept
-      ? { offer: "accepted", model: model({ state: "downloading", done: 10, total: 100, bytes_per_sec: 0 }), embedding: null, unused: current.unused }
+      ? { offer: "accepted", model: model({ state: "downloading", done: 10, total: 100, bytes_per_sec: 0 }), embedding: null }
       : { ...current, offer: "declined" };
     return null;
   });
@@ -34,7 +26,7 @@ function fakeApi(initial: KnowledgeStatus) {
   return { api, offer };
 }
 
-const ask: KnowledgeStatus = { offer: "ask", model: model({ state: "not_downloaded" }), embedding: null, unused: null };
+const ask: KnowledgeStatus = { offer: "ask", model: model({ state: "not_downloaded" }), embedding: null };
 
 describe("the embedding-model offer", () => {
   it("asks once, with the model's size and licence, when a project has files and no model", async () => {
@@ -45,7 +37,7 @@ describe("the embedding-model offer", () => {
   });
 
   it("asks someone who turned on the earlier model once more, saying the passages are re-indexed", async () => {
-    const { api, offer } = fakeApi({ ...ask, offer: "upgrade", unused: previous });
+    const { api, offer } = fakeApi({ ...ask, offer: "upgrade" });
     render(<BetterSearchOffer api={api} hasFiles />);
     const prompt = await screen.findByTestId("better-search-offer");
     expect(prompt.textContent).toContain(upgradeText(ask.model!));
@@ -80,7 +72,7 @@ describe("the embedding-model offer", () => {
   });
 
   it("doesn't ask when the model is already installed", async () => {
-    const { api } = fakeApi({ offer: "ask", model: model({ state: "ready" }), embedding: null, unused: null });
+    const { api } = fakeApi({ offer: "ask", model: model({ state: "ready" }), embedding: null });
     const { container } = render(<BetterSearchOffer api={api} hasFiles />);
     await new Promise((r) => setTimeout(r, 20));
     expect(container.textContent).toBe("");
@@ -92,27 +84,6 @@ describe("the embedding-model offer", () => {
     fireEvent.click(await screen.findByTestId("better-search-download"));
     await waitFor(() => expect(screen.getByTestId("better-search-progress").textContent).toContain("Downloading the search model"));
     expect(offer).toHaveBeenCalledWith(true);
-  });
-
-  it("Settings › Models offers it even after 'Not now'", async () => {
-    const { api, offer } = fakeApi({ ...ask, offer: "declined" });
-    render(<BetterSearchSetting api={api} />);
-    expect((await screen.findByTestId("better-search-setting-text")).textContent).toContain("Licence: apache-2.0.");
-    fireEvent.click(screen.getByTestId("better-search-setting-download"));
-    await waitFor(() => expect(offer).toHaveBeenCalledWith(true));
-  });
-
-  it("Settings explains the upgrade, and points out the old model once it is no longer used", async () => {
-    const up = fakeApi({ ...ask, offer: "upgrade", unused: previous });
-    render(<BetterSearchSetting api={up.api} />);
-    expect((await screen.findByTestId("better-search-setting-text")).textContent).toBe(upgradeText(ask.model!));
-    cleanup();
-    const done = fakeApi({ offer: "accepted", model: model({ state: "ready" }), embedding: null, unused: previous });
-    render(<BetterSearchSetting api={done.api} />);
-    expect((await screen.findByTestId("better-search-unused")).textContent).toBe(unusedText(previous));
-    expect(unusedText(previous)).toBe(
-      "Nomic Embed Text v1.5 (84 MB) is no longer used for search. You can remove it from the model list.",
-    );
   });
 });
 

@@ -1,5 +1,5 @@
 import { Boxes, Cpu, ExternalLink, KeyRound, SlidersHorizontal, Sparkles, Trash2, Wrench } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { Api } from "../ipc/commands";
 import {
   errorMessage,
@@ -34,7 +34,7 @@ import { RemoteServersCard } from "./RemoteServers";
 import { SkillsCard } from "./Skills";
 import { Updates } from "./Updates";
 import { LocalModelsCard, formatBytes } from "./LocalModels";
-import { BetterSearchSetting } from "./BetterSearch";
+import { DefaultsContext, SetDefault, type Defaults } from "./SetDefault";
 import { useToast } from "./toast";
 
 export type SettingsSection = "general" | "models" | "tools" | "skills";
@@ -167,11 +167,11 @@ export function SettingsView({
     setLoad({ kind: "error", message }),
   );
 
-  const save = async (catalog: ModelCatalog, next: Settings, what: string) => {
+  const save = async (catalog: ModelCatalog, next: Settings, what: string, done?: string) => {
     try {
       const settings = await api.updateSettings(next);
       set({ ...catalog, settings });
-      toast({ tone: "success", title: `${what} saved` });
+      toast({ tone: "success", title: done ?? `${what} saved` });
     } catch (e) {
       toast({ tone: "error", title: `Couldn't save ${what.toLowerCase()}. ${errorMessage(e)}` });
     }
@@ -284,7 +284,7 @@ export function SettingsView({
                   tab={tab}
                   onTab={(t) => onRoute({ section: "models", tab: t })}
                   onCatalog={set}
-                  onSave={(next, what) => void save(load.catalog, next, what)}
+                  onSave={(next, what, done) => void save(load.catalog, next, what, done)}
                   addLink={addLink}
                   {...(onAddLinkClosed !== undefined ? { onAddLinkClosed } : {})}
                 />
@@ -320,7 +320,7 @@ function ModelsPage({
   tab: ModelsTab;
   onTab: (t: ModelsTab) => void;
   onCatalog: (c: ModelCatalog) => void;
-  onSave: (s: Settings, what: string) => void;
+  onSave: (s: Settings, what: string, done?: string) => void;
 }) {
   const s = catalog.settings;
   // A download finished: pickers and the composer should see the new model.
@@ -336,8 +336,13 @@ function ModelsPage({
   }, [api, onCatalog, toast]);
   // A demios:// add-model link opens On this device, where the add panel is.
   const shown: ModelsTab = addLink !== null ? "device" : tab;
+  const defaults: Defaults = {
+    catalog,
+    setDefault: (slot, modelRef) =>
+      onSave({ ...s, slots: { ...s.slots, [slot.slot_id]: modelRef } }, `${slot.label} model`, `Now used for ${slot.label}`),
+  };
   return (
-    <>
+    <DefaultsContext.Provider value={defaults}>
       <section className="card" aria-labelledby="slots-h">
         <h2 id="slots-h">Model for each task</h2>
         <p className="dn-help">A task without a model shows a message instead of quietly using another one.</p>
@@ -346,7 +351,9 @@ function ModelsPage({
             key={slot.slot_id}
             slot={slot}
             catalog={catalog}
-            devFake={info?.dev_fake_model ?? false}
+            {...(slot.slot_id === "embed" && (s.slots["embed"] ?? "") === ""
+              ? { note: <p className="dn-help row-note">No model chosen: project files are searched by keywords.</p> }
+              : {})}
             onChange={(model) => {
               const slots = { ...s.slots };
               if (model === "") delete slots[slot.slot_id];
@@ -372,7 +379,6 @@ function ModelsPage({
             {info?.models_dir != null && (
               <p className="dn-help settings-note">Downloaded models are stored in {info.models_dir}</p>
             )}
-            <BetterSearchSetting api={api} />
             {info?.dev_fake_model === true && (
               <section className="card" aria-labelledby="dev-h">
                 <h2 id="dev-h">Development</h2>
@@ -401,12 +407,15 @@ function ModelsPage({
               in chats that use a provider's models are sent to that provider under your account with them.
             </p>
             {catalog.providers.map((p) => (
-              <ProviderRow key={p.id} api={api} provider={p} onCatalog={onCatalog} />
+              <Fragment key={p.id}>
+                <ProviderRow api={api} provider={p} onCatalog={onCatalog} />
+                {p.key === "saved" && <ProviderModels catalog={catalog} provider={p} />}
+              </Fragment>
             ))}
           </section>
         )}
       </div>
-    </>
+    </DefaultsContext.Provider>
   );
 }
 
@@ -504,12 +513,13 @@ export function KeychainNotice({
 function SlotRow({
   slot,
   catalog,
-  devFake,
+  note,
   onChange,
 }: {
   slot: SlotInfo;
   catalog: ModelCatalog;
-  devFake: boolean;
+  /** Shown under the selector (the Project search model's offer and download). */
+  note?: ReactNode;
   onChange: (model: string) => void;
 }) {
   const current = catalog.settings.slots[slot.slot_id] ?? "";
@@ -540,14 +550,6 @@ function SlotRow({
     })),
   ];
   const id = `slot-${slot.slot_id}`;
-  const auto = slot.slot_id === "chat" ? catalog.chat_model : null;
-  const autoLabel = auto === null ? null : (catalog.models.find((m) => m.model_ref === auto)?.label ?? auto);
-  const fallback =
-    autoLabel !== null && current === ""
-      ? `Not set (uses ${autoLabel} automatically)`
-      : slot.slot_id === "chat" && devFake
-        ? "Not set (uses the dev fake model)"
-        : "Not set";
   return (
     <div className="row">
       <div className="row-main">
@@ -562,12 +564,37 @@ function SlotRow({
         id={id}
         value={current}
         groups={groups}
-        placeholder={fallback}
+        placeholder="Not set"
         emptyText="No models yet. Download one under On this device, or add a key under Providers."
         aria-describedby={`${id}-d`}
         onValueChange={onChange}
       />
+      {note}
     </div>
+  );
+}
+
+/** A provider's models, once its key is saved, each with "Set as default" (#219). */
+function ProviderModels({ catalog, provider }: { catalog: ModelCatalog; provider: ProviderInfo }) {
+  const models = catalog.models.filter((m) => m.model_ref.startsWith(`byok:${provider.id}:`));
+  if (models.length === 0) return null;
+  return (
+    <ul className="provider-models" aria-label={`${provider.name} models`}>
+      {models.map((m) => {
+        const name = m.label.replace(`${provider.name} · `, "");
+        return (
+          <li key={m.model_ref} className="row" data-testid="provider-model">
+            <div className="row-main">
+              <span className="row-title">{name}</span>
+              {!m.available && <span className="dn-help">{m.note ?? "Not in this build yet"}</span>}
+            </div>
+            <span className="row-actions">
+              <SetDefault modelRef={m.model_ref} name={name} />
+            </span>
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 

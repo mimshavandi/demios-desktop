@@ -149,6 +149,7 @@ kbd { font-family: var(--dn-font-sans); font-size: var(--dn-text-xs); color: var
 
 .dn-select { display: inline-flex; align-items: center; justify-content: space-between; gap: var(--dn-space-2); width: calc(var(--dn-space-16) * 4 + var(--dn-space-8)); flex: none; cursor: pointer; text-align: left; }
 .dn-select:hover { border-color: var(--dn-color-text-subtle); }
+.dn-select-value { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dn-select[data-placeholder] { color: var(--dn-color-text-subtle); }
 .dn-select-content {
   z-index: var(--dn-z-popover); min-width: var(--radix-select-trigger-width);
@@ -478,6 +479,12 @@ pre.code .code-copy { position: absolute; top: var(--dn-space-1); right: var(--d
 .row-title { font-weight: var(--dn-weight-medium); }
 .row-actions { display: flex; gap: var(--dn-space-2); padding-top: calc(var(--dn-space-6) - var(--dn-space-1)); }
 .row:not(.row-form) > .row-actions { padding-top: 0; }
+/* A note under a row's control, full width (the Project search model's offer and download). */
+.row-note { flex-basis: 100%; display: grid; gap: var(--dn-space-2); }
+.row-note-offer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--dn-space-2) var(--dn-space-4); }
+.row-note-offer > .dn-help { flex: 1 1 calc(var(--dn-space-16) * 4); }
+/* A provider's models under its key, each with "Set as default" (#219). */
+.provider-models { list-style: none; margin: 0; padding: 0 0 0 var(--dn-space-4); }
 .card-subhead { font-size: var(--dn-text-sm); line-height: var(--dn-leading-sm); font-weight: var(--dn-weight-semibold); margin-top: var(--dn-space-2); }
 .data-flow { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--dn-space-3); }
 .data-flow li { display: grid; gap: calc(var(--dn-space-1) / 2); }

@@ -1,7 +1,7 @@
 // The embedding-model offer (#171). The model isn't bundled: it is offered once, the first time
 // a project has files and no embedding model is installed ("Not now" is remembered and never
-// asked again), and always in Settings › Models. On "Download", the normal verified download
-// runs, then the project's existing passages are embedded in the background, from the stored
+// asked again). In Settings › Models the search model is picked like any other model
+// (Project search slot, Set as default). On "Download", the normal verified download runs, then the project's existing passages are embedded in the background, from the stored
 // chunks (no file is read again). Keyword search keeps answering meanwhile.
 //
 // #201 made nomic-embed-text v2 the search model. Someone who accepted the earlier model (v1.5)
@@ -34,11 +34,6 @@ export function upgradeText(m: Pick<OfferedModel, "size" | "license">): string {
 
 export function licenceText(license: string): string {
   return `Licence: ${license === "" ? "not stated" : license}.`;
-}
-
-/** The earlier search model, still downloaded but no longer used. */
-export function unusedText(m: Pick<OfferedModel, "name" | "size">): string {
-  return `${m.name} (${formatBytes(m.size)}) is no longer used for search. You can remove it from the model list.`;
 }
 
 /** What is going on, for a progress line: downloading, improving search, or nothing. */
@@ -125,54 +120,5 @@ export function BetterSearchOffer({ api, hasFiles }: { api: Api; hasFiles: boole
       </InlineMessage>
       {error !== null && <InlineMessage tone="error">{error}</InlineMessage>}
     </div>
-  );
-}
-
-/** The same choice in Settings › Models, always available (also after "Not now"). */
-export function BetterSearchSetting({ api }: { api: Api }) {
-  const { status, failed, refresh } = useKnowledgeStatus(api.knowledgeStatus);
-  const [error, setError] = useState<string | null>(null);
-  if (failed) return <InlineMessage tone="error">Project search status couldn't be loaded.</InlineMessage>;
-  if (status?.model == null) return null;
-  const st = status.model.state.state;
-  const progress = progressText(status);
-  const download = async () => {
-    setError(null);
-    try {
-      await api.knowledgeOffer(true);
-      await refresh();
-    } catch (e) {
-      console.error("knowledge offer", e);
-      setError("The search model couldn't be downloaded. Try again.");
-    }
-  };
-  return (
-    <section className="card" aria-labelledby="better-search-h" data-testid="better-search-setting">
-      <h2 id="better-search-h">Project search</h2>
-      {st === "ready" && progress === null ? (
-        <p className="dn-help">Searching project files uses {status.model.name}: keywords and meaning.</p>
-      ) : progress !== null ? (
-        <p className="dn-help" role="status">
-          {progress} Keyword search works meanwhile.
-        </p>
-      ) : (
-        <div className="row-actions">
-          <p className="dn-help" data-testid="better-search-setting-text">
-            {status.offer === "upgrade"
-              ? upgradeText(status.model)
-              : `Project files are searched by keywords. Download the ${formatBytes(status.model.size)} search model to also find passages by meaning. ${licenceText(status.model.license)}`}
-          </p>
-          <Button size="sm" onClick={() => void download()} data-testid="better-search-setting-download">
-            {st === "failed" ? "Try again" : "Download"}
-          </Button>
-        </div>
-      )}
-      {status.unused !== null && (
-        <p className="dn-help" data-testid="better-search-unused">
-          {unusedText(status.unused)}
-        </p>
-      )}
-      {error !== null && <InlineMessage tone="error">{error}</InlineMessage>}
-    </section>
   );
 }

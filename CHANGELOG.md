@@ -10,6 +10,12 @@ Only changes people using the app or the `dn` command-line tool can notice are l
 
 - Demios Desktop and `dn` are now licensed under the PolyForm Shield License 1.0.0 instead of Apache-2.0. You can still read, build, change and use the code for anything except a product that competes with Demios. Versions up to and including 0.1.0-preview.8cd482c stay under Apache-2.0 ([#217](https://github.com/mimshavandi/demios-desktop/pull/217)).
 - Text fields, menus and other control outlines are darker in both light and dark appearance, so they're easier to see: they now meet the 3:1 contrast that accessibility guidelines ask of control borders ([#220](https://github.com/mimshavandi/demios-desktop/pull/220)).
+- **Settings → Models:** the **Embeddings** row is now **Project search**, a picker like **Chat**. While no model is chosen, it says "No model chosen: project files are searched by keywords." The separate **Project search** card is gone: the search model is downloaded from its row under **On this device** like any other, and models we recommend (today Nomic Embed Text v2 MoE) have a **Recommended** chip there and in **Add a model** results ([#219](https://github.com/mimshavandi/demios-desktop/pull/219)).
+- **Model for each task:** your first model for a task is saved as its choice, and later downloads or keys never change it. Demios no longer uses a model you didn't choose: with several models and none chosen, the task says "Choose a model for Chat." with a button to the menu. Each model row under **On this device**, **Model servers** and **Providers** has **Set as default**, which says "Now used for Chat" and then shows **Default for Chat** ([#219](https://github.com/mimshavandi/demios-desktop/pull/219)).
+
+### Fixed
+
+- A model file in the models folder that doesn't match its published checksum is now shown as such on its row, with **Retry**, instead of as not downloaded. The **Chat** menu no longer wraps a long "Not set (uses … automatically)" onto two lines and past its box: that text is gone ([#219](https://github.com/mimshavandi/demios-desktop/pull/219)).
 
 ## [0.1.0-preview.8cd482c] - 2026-11-26
 

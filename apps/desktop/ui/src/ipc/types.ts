@@ -240,6 +240,8 @@ export interface UnknownOutcome {
 export interface Settings {
   /** slot id → ModelRef string (`local:…`, `byok:…:…`, `remote:…:…`). */
   slots: Record<string, string>;
+  /** Slots that have had a model (#219): never filled automatically again. */
+  slots_filled?: string[];
   telemetry_enabled: boolean;
   /** First-run AI notice dismissed (T-STORE-09). Missing in older saves = not seen. */
   ai_notice_seen?: boolean;
@@ -314,6 +316,8 @@ export type ModelOrigin = "catalog" | "hub" | "hf_cache";
 
 export interface LocalModelRow {
   id: string;
+  /** One of the models we recommend, from the catalogue (#219): a "Recommended" chip. */
+  recommended?: boolean;
   origin: ModelOrigin;
   /** Hub and cache models: where the file is. */
   location: string | null;
@@ -367,6 +371,8 @@ export interface HubRepoSummary {
   tags: string[];
   /** From pipeline_tag and tags only (source "hint"); null when the Hub doesn't say. */
   traits_hint: ModelTraits | null;
+  /** A recommended catalogue model comes from this repo (#219). */
+  recommended?: boolean;
 }
 
 export interface HubSearchPage {
@@ -395,6 +401,8 @@ export interface HubVariant {
   downloaded: string | null;
   /** Downloading now (started earlier): the latest progress. */
   progress: HubPullProgress | null;
+  /** The file of a recommended catalogue model (#219). */
+  recommended?: boolean;
 }
 
 export interface HubRepoView {
@@ -466,7 +474,7 @@ export interface ModelCatalog {
   key_store: string;
   keychain: KeychainStatus;
   settings: Settings;
-  /** The model chat uses now (chosen or picked automatically); null if none is usable. */
+  /** The Chat slot's model when it resolves (#219: no automatic pick); null otherwise. */
   chat_model: string | null;
   /** Whether the chat model makes tool calls; without them it can't make artifacts. */
   chat_model_tools: boolean;
@@ -680,8 +688,6 @@ export interface KnowledgeStatus {
   model: OfferedModel | null;
   /** While the installed model hasn't embedded every passage yet. */
   embedding: { done: number; total: number } | null;
-  /** The earlier search model, still downloaded but no longer used (it can be removed). */
-  unused: OfferedModel | null;
 }
 
 /** What an answer in a project chat was given (`message_sources`). */

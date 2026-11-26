@@ -250,6 +250,10 @@ pub struct RepoSummary {
     /// header is read; `None` when the Hub doesn't say.
     #[serde(default)]
     pub traits_hint: Option<crate::kind::TraitsView>,
+    /// A recommended catalogue model comes from this repo (#219): set by the app from the
+    /// built-in catalogue, never from the Hub.
+    #[serde(default)]
+    pub recommended: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1157,6 +1161,7 @@ fn parse_summary(v: &Value) -> Option<RepoSummary> {
         license: license_of(v, &tags).id,
         traits_hint: crate::kind::hint(v["pipeline_tag"].as_str(), &tags).map(Into::into),
         tags,
+        recommended: false,
     })
 }
 

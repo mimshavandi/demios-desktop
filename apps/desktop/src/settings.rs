@@ -6,7 +6,7 @@ use dn_core::model::{Capability, ModelRef};
 use dn_store::{Connection, Result, StoreError, now_ms};
 use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The app's migration set (name `app`), composed by `dn_store::open`.
 pub fn migrations() -> &'static [&'static str] {
@@ -117,8 +117,8 @@ pub const SLOTS: &[SlotInfo] = &[
     },
     SlotInfo {
         slot_id: "embed",
-        label: "Embeddings",
-        description: "Knowledge search in projects. Without one, it searches by keywords only.",
+        label: "Project search",
+        description: "Finds passages in your project files by meaning. Without a model, it searches by keywords only.",
         capability: Capability::Embedding,
         shown: true,
     },
@@ -129,6 +129,10 @@ pub const SLOTS: &[SlotInfo] = &[
 pub struct Settings {
     /// slot id → `ModelRef` string. Missing = not configured (never a silent fallback).
     pub slots: BTreeMap<String, String>,
+    /// Slots that have had a model, chosen or filled by the first suitable model (#219):
+    /// never filled automatically again, so a slot the user cleared stays empty.
+    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+    pub slots_filled: BTreeSet<String>,
     /// Unused: no telemetry exists, and the switch was removed (T-STORE-11). Kept so older
     /// saved settings round-trip.
     pub telemetry_enabled: bool,
@@ -250,6 +254,29 @@ impl Settings {
     pub fn slot(&self, slot_id: &str) -> Option<ModelRef> {
         self.slots.get(slot_id).and_then(|s| s.parse().ok())
     }
+
+    /// The first suitable model fills an empty slot, once (#219). A slot that has a model is
+    /// recorded as filled; an empty slot that was never filled gets `only` when it is the one
+    /// suitable model. Several (`None`): the slot stays empty and its task asks for a choice.
+    /// Returns whether anything changed.
+    pub fn fill_slot(&mut self, slot_id: &str, only: Option<String>) -> bool {
+        if self.slots.contains_key(slot_id) {
+            return self.slots_filled.insert(slot_id.to_owned());
+        }
+        if self.slots_filled.contains(slot_id) {
+            return false;
+        }
+        let Some(model) = only else { return false };
+        self.slots.insert(slot_id.to_owned(), model);
+        self.slots_filled.insert(slot_id.to_owned());
+        true
+    }
+}
+
+/// The one model in `suitable`, if there is exactly one.
+pub fn only_one(mut suitable: Vec<String>) -> Option<String> {
+    suitable.dedup();
+    (suitable.len() == 1).then(|| suitable.remove(0))
 }
 
 const KEY: &str = "settings";
@@ -312,6 +339,49 @@ pub fn delete_all(conn: &Connection) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_first_suitable_model_fills_an_empty_slot_once() {
+        let mut s = Settings::default();
+        // Nothing suitable yet: stays empty, and may still be filled later.
+        assert!(!s.fill_slot("chat", None));
+        assert!(s.slots_filled.is_empty());
+        // The first model: saved as the choice.
+        assert!(s.fill_slot("chat", Some("local:a".into())));
+        assert_eq!(s.slots.get("chat").map(String::as_str), Some("local:a"));
+        // A later model never changes it.
+        assert!(!s.fill_slot("chat", Some("local:b".into())));
+        assert_eq!(s.slots.get("chat").map(String::as_str), Some("local:a"));
+        // Cleared by the user: stays empty.
+        s.slots.remove("chat");
+        assert!(!s.fill_slot("chat", Some("local:b".into())));
+        assert!(!s.slots.contains_key("chat"));
+        // A slot the user set is recorded, so clearing it later also keeps it empty.
+        let mut t = Settings::default();
+        t.slots.insert("embed".into(), "local:e".into());
+        assert!(t.fill_slot("embed", None));
+        t.slots.remove("embed");
+        assert!(!t.fill_slot("embed", Some("local:f".into())));
+        assert!(!t.slots.contains_key("embed"));
+    }
+
+    #[test]
+    fn only_one_suitable_model_counts() {
+        assert_eq!(only_one(vec![]), None);
+        assert_eq!(only_one(vec!["a".into()]).as_deref(), Some("a"));
+        // Several: none is picked; the task asks for a choice.
+        assert_eq!(only_one(vec!["a".into(), "b".into()]), None);
+    }
+
+    #[test]
+    fn filled_slots_round_trip_and_older_settings_load() {
+        let mut s = Settings::default();
+        assert!(s.fill_slot("chat", Some("local:a".into())));
+        let json = serde_json::to_string(&s).unwrap();
+        assert_eq!(serde_json::from_str::<Settings>(&json).unwrap(), s);
+        let old: Settings = serde_json::from_str(r#"{"slots":{"chat":"local:a"}}"#).unwrap();
+        assert!(old.slots_filled.is_empty());
+    }
 
     fn db() -> Connection {
         dn_store::open_in_memory(&[dn_store::MigrationSet::new("app", migrations())]).unwrap()

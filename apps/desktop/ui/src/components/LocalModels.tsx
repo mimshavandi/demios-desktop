@@ -4,17 +4,27 @@
 // model card are shown before download, with a warning for missing / non-commercial /
 // custom licences (any licence is allowed).
 
-import { Copy, Cpu, Download, Pause, Play, Plus, RotateCcw, TriangleAlert } from "lucide-react";
+import { Copy, Cpu, Download, Pause, Play, Plus, RotateCcw, ThumbsUp, TriangleAlert } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Api } from "../ipc/commands";
 import { errorMessage, type AddModelLink, type FitStatus, type LocalCompute, type LocalModelRow } from "../ipc/types";
 import { Badge, Button, ICON, IconButton, InlineMessage } from "./primitives";
+import { SetDefault } from "./SetDefault";
 import { useToast } from "./toast";
 import { AddFromHub } from "./AddFromHub";
 import { Dialog } from "./Dialog";
 import { onHubDownloadFinished, pauseHubDownload, startHubDownload, useHubDownloads } from "../hubDownloads";
 
 export const SMALL = { size: 12, strokeWidth: 1.5 } as const;
+
+/** One of the models we recommend, from the catalogue's flag (#219). */
+export function RecommendedBadge() {
+  return (
+    <Badge tone="neutral" icon={<ThumbsUp {...SMALL} aria-hidden="true" />}>
+      Recommended
+    </Badge>
+  );
+}
 
 export function formatBytes(b: number): string {
   if (b >= 1e9) return `${(b / 1e9).toFixed(1)} GB`;
@@ -289,6 +299,12 @@ function LocalModelRowView({ api, row }: { api: Api; row: LocalModelRow }) {
       <div className="row-main">
         <span className="row-title" id={nameId}>
           {row.name} <span className="dn-help">{row.quant} · {formatBytes(row.size)}</span>
+          {row.recommended && (
+            <>
+              {" "}
+              <RecommendedBadge />
+            </>
+          )}
         </span>
         {row.origin !== "catalog" && (
           <span className="dn-help local-origin">
@@ -375,9 +391,12 @@ function LocalModelRowView({ api, row }: { api: Api; row: LocalModelRow }) {
           </Button>
         )}
         {s.state === "ready" && (
-          <Badge tone="local" icon={<Cpu {...SMALL} aria-hidden="true" />}>
-            On this device
-          </Badge>
+          <>
+            <Badge tone="local" icon={<Cpu {...SMALL} aria-hidden="true" />}>
+              On this device
+            </Badge>
+            <SetDefault modelRef={row.model_ref} name={row.name} />
+          </>
         )}
         {row.fit.status === "memory_blocked" && s.state === "not_downloaded" && (
           <span className="dn-help local-blocked">

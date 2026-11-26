@@ -9,7 +9,7 @@ You can do both and switch between them.
 
 ## On this device
 
-The **On this device** card lists 13 open models in a built-in catalogue, from small ones to large ones: 11 for chat and 2 embedding models.
+The **On this device** card lists 14 open models in a built-in catalogue, from small ones to large ones: 11 for chat and 3 embedding models.
 
 Under its title, a line says where local models run on this computer:
 
@@ -36,7 +36,7 @@ To download a model, select **Download model**. While it downloads you see the p
 - Start it again after the app quit or the connection dropped: it continues from where it stopped instead of starting over.
 - Select **Retry** if it failed.
 
-When the download finishes, the app checks the file against its published checksum. Then the row shows **On this device** and the model can answer.
+When the download finishes, the app checks the file against its published checksum. Then the row shows **On this device** and the model can answer. If a model file is in the models folder but doesn't match its published checksum, the row says so, with **Retry** to download it again; the file isn't used.
 
 Models are stored in a folder shared with the `dn` command-line tool. **Settings → General → About** shows where.
 
@@ -121,6 +121,14 @@ Select **Refresh** after loading or removing models on the server. **Remove** de
 
 **Model for each task**, at the top of **Settings → Models**, sets which model does what. **Chat** is the model that answers in conversations.
 
-If you don't choose a Chat model, the app picks one that is ready and says which: "Not set (uses … automatically)". Models on your computer are listed under **On this device**, the others under their provider.
+Models on your computer are listed under **On this device**, the others under their provider.
 
-The **Fast** and **Embeddings** rows are for features that aren't in the app yet. You can leave them unset.
+**Your first model is saved as the choice.** When a task has no model and you download or add the first model that suits it (a chat model for **Chat**, a search model for **Project search**), Demios saves that model as the task's choice. Downloading or adding more models later doesn't change it; you change it in the menu, or with **Set as default** (below).
+
+If a task has no model and you have several that suit it (for example after updating from an earlier version), Demios doesn't pick one for you. The task says so, for example "Choose a model for Chat." under the message box, with **Choose a model**, which opens this page. If you clear a task's menu, it stays empty until you choose again.
+
+**Set as default:** each model you can use, under **On this device**, **Model servers** and **Providers** (once its key is saved), has **Set as default** for the task it suits. Selecting it makes that model the task's choice and says so ("Now used for Chat"); the row then shows **Default for Chat**. A search model shows it only if it runs on this device, since project search uses models on this device.
+
+**Project search** is the model that finds passages in your project files by meaning (see [Projects](projects.md)). It's chosen like **Chat**: pick a downloaded embedding model in the menu, or select **Set as default** on its row. While none is chosen, the row says "No model chosen: project files are searched by keywords." A search model's download, its progress and any problem show on its own row under **On this device**, like any other model.
+
+**Recommended:** models we recommend have a **Recommended** chip, in the **On this device** list and in **Add a model** results. Today that's Nomic Embed Text v2 MoE (Q5_K_M), the search model for project files.

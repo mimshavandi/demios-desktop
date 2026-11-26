@@ -138,7 +138,8 @@ function fakeApi() {
   ];
   const msgs = new Map<string, StoredMessage[]>();
   const artifacts: ArtifactDetail[] = [];
-  let settings: Settings = { slots: {}, telemetry_enabled: false };
+  // As the backend leaves it: the only chat model filled the empty Chat slot (#219).
+  let settings: Settings = { slots: { chat: "local:dev-fake" }, slots_filled: ["chat"], telemetry_enabled: false };
   let n = 0;
   const reports: [string, string | null][] = [];
   const links: string[] = [];
@@ -183,7 +184,7 @@ function fakeApi() {
     artifactChildFocus: async () => null,
     artifactChildClose: async () => null,
     messageSources: async () => null,
-    knowledgeStatus: async () => ({ offer: "ask", model: null, embedding: null, unused: null }),
+    knowledgeStatus: async () => ({ offer: "ask", model: null, embedding: null }),
     knowledgeOffer: async () => null,
     appInfo: async () => ({ version: "0.1.0", dev_fake_model: true, data_dir: "/tmp", models_dir: "/tmp/models", updates: launch.mode }),
     checkForUpdate: async () => ({ status: "up_to_date", current: "0.1.0" }) as const,
@@ -819,6 +820,90 @@ describe("App", () => {
     expect(await screen.findByRole("button", { name: "More actions for “New chat”" })).toBeTruthy();
     expect(restores).toBe(1);
     expect(deletes).toBe(1);
+  });
+
+  it("the Project search slot is a picker like Chat; while empty it says search uses keywords", async () => {
+    const { api } = fakeApi();
+    const list = api.listModels;
+    api.listModels = async () => {
+      const c = await list();
+      const slot = { slot_id: "embed", label: "Project search", description: "Finds passages by meaning.", capability: "embedding" as const };
+      const v2 = { model_ref: "local:nomic-embed-text-v2-moe-q5_k_m", label: "Nomic Embed Text v2 MoE · Q5_K_M", source: "local" as const, capabilities: ["embedding" as const], available: true, note: null };
+      return { ...c, slots: [...c.slots, slot], models: [...c.models, v2] };
+    };
+    render(<App api={api} />);
+    await openSettings("Models");
+    const picker = await screen.findByRole("combobox", { name: "Project search" });
+    expect(picker.textContent).toContain("Not set");
+    expect(screen.getByText("No model chosen: project files are searched by keywords.")).toBeTruthy();
+    // No separate offer or card: the model is downloaded and chosen like any other.
+    expect(screen.queryByText(/Recommended:/)).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Project search" })).toBeNull();
+    picker.focus();
+    fireEvent.keyDown(picker, { key: "ArrowDown" });
+    fireEvent.click(await screen.findByRole("option", { name: "Nomic Embed Text v2 MoE · Q5_K_M" }));
+    await waitFor(() => expect(screen.queryByText("No model chosen: project files are searched by keywords.")).toBeNull());
+    expect((await api.getSettings()).slots["embed"]).toBe("local:nomic-embed-text-v2-moe-q5_k_m");
+    // One line in the select; the full name is its tooltip and stays in the text.
+    const chosen = screen.getByRole("combobox", { name: "Project search" });
+    expect(chosen.getAttribute("title")).toBe("Nomic Embed Text v2 MoE · Q5_K_M");
+    expect(chosen.querySelector(".dn-select-value")?.textContent).toBe("Nomic Embed Text v2 MoE · Q5_K_M");
+  });
+
+  it("recommended catalogue models carry a Recommended chip, from the catalogue's flag", async () => {
+    const f = fakeApi();
+    f.localRows[0]!.recommended = true;
+    render(<App api={f.api} />);
+    await openSettings("Models");
+    const rows = await screen.findAllByTestId("local-model-row");
+    expect(within(rows[0]!).getByText("Recommended")).toBeTruthy();
+    expect(rows.slice(1).every((r) => within(r).queryByText("Recommended") === null)).toBe(true);
+  });
+
+  it("several chat models and no choice: the chat asks for one, never an automatic pick", async () => {
+    const { api } = fakeApi();
+    await api.updateSettings({ slots: {}, telemetry_enabled: false, ai_notice_seen: true });
+    const list = api.listModels;
+    api.listModels = async () => {
+      const c = await list();
+      const other = { model_ref: "local:m1", label: "Tiny Model · Q4_K_M", source: "local" as const, capabilities: ["chat" as const], available: true, note: null };
+      return { ...c, models: [...c.models, other] };
+    };
+    render(<App api={api} />);
+    expect(await screen.findByText("Choose a model for Chat.")).toBeTruthy();
+    // The notice and the composer both say so, each with a button to the picker.
+    expect(screen.getByLabelText("Message").getAttribute("placeholder")).toBe("Choose a model for Chat to start chatting");
+    const buttons = screen.getAllByRole("button", { name: "Choose a model" });
+    expect(buttons).toHaveLength(2);
+    fireEvent.click(buttons[0]!);
+    const chat = await screen.findByRole("combobox", { name: "Chat" });
+    expect(chat.textContent).toContain("Not set");
+    expect(document.body.textContent).not.toContain("automatically");
+  });
+
+  it("'Set as default' sets the task's model, confirms it, and the row says it's the default", async () => {
+    const f = fakeApi();
+    const { api } = f;
+    await api.updateSettings({ slots: {}, telemetry_enabled: false, ai_notice_seen: true });
+    f.localRows[0]!.state = { state: "ready" };
+    const list = api.listModels;
+    api.listModels = async () => {
+      const c = await list();
+      const tiny = { model_ref: "local:m1", label: "Tiny Model · Q4_K_M", source: "local" as const, capabilities: ["chat" as const], available: true, note: null };
+      const claude = { model_ref: "byok:openai:gpt-5", label: "OpenAI · gpt-5", source: "byok" as const, capabilities: ["chat" as const], available: true, note: null };
+      return { ...c, models: [...c.models, tiny, claude], providers: [{ id: "openai", name: "OpenAI", key: "saved" as const }] };
+    };
+    render(<App api={api} />);
+    await openSettings("Models");
+    fireEvent.click(await screen.findByRole("button", { name: "Set Tiny Model as default for Chat" }));
+    expect(await screen.findByText("Now used for Chat")).toBeTruthy();
+    expect((await api.getSettings()).slots["chat"]).toBe("local:m1");
+    expect(await screen.findByText("Default for Chat")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Set Tiny Model as default for Chat" })).toBeNull();
+    // A provider's models, once its key is saved, have it too.
+    fireEvent.click(screen.getByRole("tab", { name: "Providers" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Set gpt-5 as default for Chat" }));
+    await waitFor(async () => expect((await api.getSettings()).slots["chat"]).toBe("byok:openai:gpt-5"));
   });
 
   it("shows models and settings with telemetry off", async () => {

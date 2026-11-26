@@ -142,10 +142,11 @@ impl Agent {
         })
     }
 
-    /// Which model answers: the user's chat choice, the manifest default, then the first
-    /// ready source. Never falls back past a model the user named. `keys` says which provider
-    /// keys are saved; when the keychain didn't answer and a provider model could have been
-    /// the answer, the error is the keychain's, not "add a key" (#200).
+    /// Which model answers: the user's chat choice, and only that (#219: an empty Chat slot
+    /// is never filled by an automatic pick here; the first suitable model fills it once, see
+    /// [`Settings::fill_slot`]). Never falls back past the chosen model. `keys` says which
+    /// provider keys are saved; when the keychain didn't answer and a provider model could
+    /// have been the answer, the error is the keychain's, not "add a key" (#200).
     pub fn resolve_model(
         &self,
         settings: &Settings,
@@ -153,7 +154,10 @@ impl Agent {
         keys: &KeyCheck,
     ) -> Result<ModelRef, IpcError> {
         let slot = self.chat_slot();
-        let preference = settings.slot("chat");
+        let Some(preference) = settings.slot("chat") else {
+            return Err(choose_chat_model_error());
+        };
+        let preference = Some(preference);
         ModelResolver::new(models.sources(keys))
             .resolve(ResolveInput {
                 agent_id: &self.manifest.id,
@@ -171,6 +175,18 @@ impl Agent {
                     _ => model_error(e),
                 }
             })
+    }
+}
+
+/// No Chat model is chosen: the task asks for one, with a button to the picker (#219).
+pub fn choose_chat_model_error() -> IpcError {
+    IpcError {
+        code: "model_choice_required",
+        message: "Choose a model for Chat in Settings → Models.".into(),
+        recovery: vec![dn_core::RecoveryAction::ChooseModelForSlot {
+            agent_id: AGENT_ID.into(),
+            slot_id: "primary".into(),
+        }],
     }
 }
 
@@ -316,9 +332,10 @@ mod tests {
         let check = |k: &crate::secrets::Keys| KeyCheck::run(k, ["anthropic"]);
         let models = ModelRegistry::default();
         let mut s = Settings::default();
-        // Nothing configured, nothing ready.
+        // Nothing chosen: the task asks for a choice, with a button to the picker (#219).
         let e = agent.resolve_model(&s, &models, &check(&keys)).unwrap_err();
-        assert_eq!(e.code, "model_source_required");
+        assert_eq!(e.code, "model_choice_required");
+        assert!(!e.recovery.is_empty());
         // User picked a model whose key is missing: no fallback, a fix instead.
         s.slots
             .insert("chat".into(), "byok:anthropic:claude-sonnet-5-5".into());
