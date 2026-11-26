@@ -1,6 +1,6 @@
 # ADR-0014: Demios Node: the engine run headless on the user's own machine or server, with paired clients
 
-**Status:** Accepted (owner, 2026-11-26), amendment proposed (§4a, owner approval needed) · **Date:** 2026-11-25 (amended 2026-11-26: offline notice; amendment proposed 2026-11-26: §4a remote access) · **Deciders:** project owner, lead · **Extends:** [ADR-0001](0001-repo-and-crate-layout.md), [ADR-0006](0006-tools-mcp-capabilities.md), [ADR-0007](0007-local-storage-and-secrets.md), [ADR-0009](0009-security-baseline.md), [ADR-0013](0013-plugin-api.md), [ADR-0016](0016-demios-relay.md) · **Issue:** #203
+**Status:** Accepted (owner, 2026-11-26), amended (§4a, owner 2026-11-26) · **Date:** 2026-11-25 (amended 2026-11-26: offline notice; amended 2026-11-26: §4a remote access) · **Deciders:** project owner, lead · **Extends:** [ADR-0001](0001-repo-and-crate-layout.md), [ADR-0006](0006-tools-mcp-capabilities.md), [ADR-0007](0007-local-storage-and-secrets.md), [ADR-0009](0009-security-baseline.md), [ADR-0013](0013-plugin-api.md), [ADR-0016](0016-demios-relay.md) · **Issue:** #203
 
 ## Context
 Everything in Demios runs inside the desktop app today. When the app is closed or the computer sleeps, nothing runs:
@@ -60,11 +60,8 @@ This ADR decides the Node's shape: pairing, sync, models, approvals, secrets, op
   - The details (record format, clock, compaction) go into a `dn-sync` design note before implementation.
 
 ### 4. The Node never needs Demios servers
-- **Pairing, sync, models, tools and approvals all work with no Demios server.** Devices connect to the Node directly.
-- **How a client reaches the Node is the user's choice**, shown in the pairing screen:
-  - the same local network, found by mDNS or by entering an address;
-  - the user's own VPN or overlay network, such as WireGuard or Tailscale;
-  - a port the user forwards, or their own reverse proxy. TLS is still end to end with the pinned keys, so a proxy that terminates TLS breaks pairing on purpose.
+- **Pairing, sync, models, tools and approvals all work with no Demios server.** Devices connect to the Node directly or through a Relay the user runs (§4a).
+- **How a client reaches the Node** is set by §4a (amended 2026-11-26): on the same network directly, elsewhere through a Relay, and an opened path (a VPN or overlay, a forwarded port or a reverse proxy) only if the user chooses it. TLS is still end to end with the pinned keys, so a proxy that terminates TLS breaks pairing on purpose.
 - **The Demios Relay is optional** (ADR-0016). It's an encrypted store-and-forward mailbox service: when two devices aren't online at the same time, a device delivers its sealed changes, approvals or notifications to the other's mailbox there. It holds ciphertext only (§3), never decrypts and holds no keys. ADR-0016 states what it can still see: mailbox ids, timing and sizes.
   - **A Node can run its own Relay** (ADR-0016 §7), so even store-and-forward needs no Demios server.
   - **Without any Relay,** devices sync only when they reach the Node directly, and Settings › Node says so.
@@ -81,8 +78,8 @@ This ADR decides the Node's shape: pairing, sync, models, approvals, secrets, op
   - a paired phone or desktop that sees no fresh record for a set time says "Your Node has been offline since 03:12" (a local notification on the device; the Relay never sends it and can't read the record);
   - **the cost is metadata:** the Relay sees when the Node is up. Settings › Node says so where it's turned on. Without a Relay the notice isn't available, and a device that reaches the Node directly sees its status anyway.
 
-### 4a. Amendment proposed (2026-11-26, owner approval needed): how devices reach the Node by default
-> **Status of this section: proposed.** It follows the owner's direction of 2026-11-26. Once approved, it replaces §4's "How a client reaches the Node is the user's choice" with the defaults below. Everything else in §4 stays.
+### 4a. Amendment (accepted, owner 2026-11-26): how devices reach the Node by default
+> **Status of this section: accepted (owner, 2026-11-26).** It replaces §4's earlier "How a client reaches the Node is the user's choice" with the defaults below. Everything else in §4 stays.
 
 **Why:** the people who need a Node most are the least likely to set up port forwarding or a VPN. An always-on box with an open port is the most common way such boxes get attacked. So the default must reach the Node from anywhere without opening anything.
 
@@ -145,7 +142,7 @@ This ADR decides the Node's shape: pairing, sync, models, approvals, secrets, op
 | C. Always through the Relay, even at home | Yes | None | None | Slower at home for no gain, and every message's metadata reaches the Relay |
 | D. Open a port automatically (UPnP or NAT-PMP), or build in an overlay network | Yes | A port, or a network stack in the app | Low | Rejected: an exposed port by default, or a large component to maintain |
 
-#### Action items (to be filed as issues once approved)
+#### Action items (to be filed as issues)
 1. Node listener: local-network addresses only by default; the opt-in listeners with their warnings; no UPnP.
 2. Route selection on devices (direct first, then the Relay), and the route in the device list and status screen.
 3. Pairing through the Relay: the one-message pairing mailbox and a proof bound to the mailbox. That updates the pairing primitives (#234) and the design note (`docs/design/dn-sync.md`).
