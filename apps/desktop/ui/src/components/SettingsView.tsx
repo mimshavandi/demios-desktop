@@ -1,4 +1,4 @@
-import { Boxes, Cpu, ExternalLink, KeyRound, SlidersHorizontal, Sparkles, Trash2, Wrench } from "lucide-react";
+import { Boxes, Cpu, ExternalLink, KeyRound, Server, SlidersHorizontal, Sparkles, Trash2, Wrench } from "lucide-react";
 import { Fragment, useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { Api } from "../ipc/commands";
 import {
@@ -32,12 +32,13 @@ import { Licences } from "./Licences";
 import { McpServersCard } from "./McpServers";
 import { RemoteServersCard } from "./RemoteServers";
 import { SkillsCard } from "./Skills";
+import { NodeSettings } from "./NodeSettings";
 import { Updates } from "./Updates";
 import { LocalModelsCard, formatBytes } from "./LocalModels";
 import { DefaultsContext, SetDefault, type Defaults } from "./SetDefault";
 import { useToast } from "./toast";
 
-export type SettingsSection = "general" | "models" | "tools" | "skills";
+export type SettingsSection = "general" | "models" | "tools" | "skills" | "node";
 export type ModelsTab = "device" | "servers" | "providers";
 
 /** Where Settings opens: a section, and for Models which tab. Banners and hints link here. */
@@ -51,6 +52,7 @@ const SECTIONS: { id: SettingsSection; label: string; icon: typeof Cpu }[] = [
   { id: "models", label: "Models", icon: Boxes },
   { id: "tools", label: "Tools", icon: Wrench },
   { id: "skills", label: "Skills", icon: Sparkles },
+  { id: "node", label: "Node", icon: Server },
 ];
 
 const MODEL_TABS: TabItem<ModelsTab>[] = [
@@ -295,6 +297,8 @@ export function SettingsView({
           {section === "tools" && <McpServersCard api={api} live={servers} />}
 
           {section === "skills" && <SkillsCard api={api} />}
+
+          {section === "node" && <NodeSettings api={api} />}
         </div>
       </div>
     </section>

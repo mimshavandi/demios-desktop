@@ -375,6 +375,12 @@ function fakeApi() {
     },
     listModels: async () => catalog(),
     checkKeys: async () => catalog(),
+    nodeOverview: async () => ({ paired: null, online: false, status: null, devices: [], problem: null }),
+    nodeJoinBegin: async () => ({ numbers: ["0000", "0000", "0000"], address: "nas:7443" }),
+    nodeJoinWait: async () => ({ paired: null, online: false, status: null, devices: [], problem: null }),
+    nodeJoinCancel: async () => null,
+    nodeRemoveDevice: async () => ({ paired: null, online: false, status: null, devices: [], problem: null }),
+    nodeUnpair: async () => ({ paired: null, online: false, status: null, devices: [], problem: null }),
     setProviderKey: async () => catalog(),
     addRemoteServer: async () => catalog(),
     refreshRemoteServer: async () => catalog(),
@@ -1763,16 +1769,16 @@ describe("Settings sections (#174)", () => {
     await openSettings("General");
     const nav = screen.getByRole("navigation", { name: "Settings sections" });
     const items = within(nav).getAllByRole("button");
-    expect(items.map((b) => b.textContent)).toEqual(["General", "Models", "Tools", "Skills"]);
+    expect(items.map((b) => b.textContent)).toEqual(["General", "Models", "Tools", "Skills", "Node"]);
     expect(items[0]!.getAttribute("aria-current")).toBe("page");
     // Roving focus: only the open section is in the Tab order.
-    expect(items.map((b) => b.tabIndex)).toEqual([0, -1, -1, -1]);
+    expect(items.map((b) => b.tabIndex)).toEqual([0, -1, -1, -1, -1]);
     items[0]!.focus();
     fireEvent.keyDown(items[0]!, { key: "ArrowDown" });
     expect(await screen.findByRole("heading", { level: 1, name: "Models" })).toBeTruthy();
     await waitFor(() => expect(document.activeElement?.textContent).toBe("Models"));
     fireEvent.keyDown(document.activeElement!, { key: "End" });
-    expect(await screen.findByRole("heading", { level: 1, name: "Skills" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { level: 1, name: "Node" })).toBeTruthy();
     fireEvent.keyDown(document.activeElement!, { key: "Home" });
     expect(await screen.findByRole("heading", { level: 1, name: "General" })).toBeTruthy();
   });

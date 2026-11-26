@@ -585,6 +585,49 @@ export interface McpServerInput {
 export type ReportKind = "problem" | "answer";
 
 /** What "Delete all local data" removes (confirm dialog). */
+// ---- Settings › Node (ADR-0014)
+
+/** What a Node reports about itself. */
+export interface NodeStatus {
+  name: string;
+  version: string;
+  /** e.g. "systemd_credential" or "insecure_plaintext". */
+  secret_store: string;
+  secret_store_label: string;
+  protected_at_rest: boolean;
+  devices: number;
+}
+
+export interface NodeDevice {
+  id: string;
+  name: string;
+  kind: "desktop" | "node" | "phone";
+  /** Unix milliseconds. */
+  last_synced_at: number | null;
+  this_device: boolean;
+}
+
+export interface PairedNode {
+  name: string;
+  address: string;
+  paired_at: number;
+  last_reached_at: number | null;
+}
+
+/** `paired: null` when no Node is paired. Offline alone is `online: false` with no problem. */
+export interface NodeOverview {
+  paired: PairedNode | null;
+  online: boolean;
+  status: NodeStatus | null;
+  devices: NodeDevice[];
+  problem: string | null;
+}
+
+export interface JoinStarted {
+  numbers: [string, string, string];
+  address: string;
+}
+
 export interface LocalDataSummary {
   conversations: number;
   projects: number;

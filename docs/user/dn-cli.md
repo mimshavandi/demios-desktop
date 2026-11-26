@@ -65,6 +65,7 @@ dn node run --data-dir /var/lib/demios
   The key for an encrypted file is 32 random bytes, for example `openssl rand -hex 32`.
 - The Node refuses to start if API keys or tokens are set in environment variables (for example `OPENAI_API_KEY`), and refuses a secret store it can't open. It never falls back to another one.
 - **Pairing a device:** while `dn node run` is running, run `dn node pair --data-dir /var/lib/demios --address 192.168.1.20:7443` on the Node, as the same user. It shows a link that works once, for 10 minutes; open it on the device. When the device connects, `dn node pair` shows check numbers. Compare them with the device's screen, and type `yes` only if they match. Anything else, or closing `dn node pair`, adds nothing. On Windows this isn't available yet.
+- **In the app:** open **Settings → Node**, choose **Pair a Node**, and paste the link. The app shows the same check numbers; confirm on the Node with `yes`.
 - Not there yet:
   - a QR code in the terminal (the link holds the same thing);
   - a passphrase-protected store (`dn node unlock`);
