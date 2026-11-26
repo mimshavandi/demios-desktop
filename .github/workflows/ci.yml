@@ -9,16 +9,21 @@ permissions:
 # pull requests restore main's entry and never save, so they can't evict it.
 # cache-cleanup.yml removes superseded main entries and closed PRs' entries.
 jobs:
+  # Secret scanning (ADR-0009). On a pull request, only the PR's own commits: the checkout is
+  # GitHub's merge commit, so HEAD^1 is the base and HEAD^2 the PR's head. Scanning every
+  # fetched branch here would let one branch's finding fail every open PR. Full-history scans
+  # run on pushes to main and weekly in secrets-full.yml.
   secrets:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: gitleaks
+      - name: gitleaks (this PR's commits)
         run: |
           curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.28.0/gitleaks_8.28.0_linux_x64.tar.gz | tar xz gitleaks
-          ./gitleaks git --redact --verbose --config .gitleaks.toml .
+          ./gitleaks git --redact --verbose --config .gitleaks.toml --log-opts="HEAD^1..HEAD^2" .
   rust:
     env:
       # ggml-org/stories15M_MOE (MIT): stories15M_MOE-Q8_0.gguf.
