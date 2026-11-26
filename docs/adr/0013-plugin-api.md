@@ -228,7 +228,8 @@ Why: an add-on that reads mail and drafts replies showed four gaps, each of whic
 - **Enforced by the host,** through `Access` and `Caller::max_tool_tier` in `dn-plugin-api`, which already carry the tier.
   - `Access` gains a variant for `low_write`, so that `ReadWrite` means `external_write` and above.
   - `http()` is refused below `external_write`. That includes GET, since a GET can carry data out in its address.
-  - In practice this changes nothing for the `read` tier. Today an add-on holding `network` has a floor of `external_write`, so no `read`-tier handler could call `http()`.
+  - In practice this changes nothing for the `read` tier. Today an add-on holding `network` has a floor of `external_write`, so no `read`-tier handler could call `http()`. The rule in the API does change: `ReadOnly` allowed GET, so the conformance kit's read-tier test is updated with it.
+- **Access follows the tier the add-on declared, never the user's choice.** A user who sets a `read` tool to "ask every time" makes it ask more often. Its handler still gets a `read` `Host`, with no write or `http()` access. A higher tier the user chooses changes only when the tool asks.
 - **The floor goes away.** A tool's tier is what it declares, because its `Host` can't do more than that tier allows.
   - `dn_plugin_api::risk_floor` stays the one place the rule lives, and the `Registrar` stays its only caller. It changes from "the floor of the add-on" to "the lowest tier a tool may declare", which is `read` for every tool under this rule.
   - The function is kept rather than removed, so a later permission that can't be limited per handler has one place to put a floor back.
@@ -303,9 +304,10 @@ Why: an add-on that reads mail and drafts replies showed four gaps, each of whic
   - the `approval_required` declaration on tools;
   - `risk_floor` returns `read` (§9.1).
   - The conformance kit gains scenarios for each.
-- **`dn-core`:** `CapabilitySpec` gains `approval_required`. That's a contract change, and this ADR is its reference.
+- **`dn-core`:** `CapabilitySpec` gains `approval_required`, with `#[serde(default)]` so stored data stays readable. `CapabilitySpec` isn't `#[non_exhaustive]`, so every place that builds one changes with it (dn-tools' MCP capabilities, plugin tools, tests). That's a contract change, and this ADR is its reference.
 - **`dn-tools`:**
-  - the executor ignores standing choices for the class, and checks and consumes the token;
+  - the executor ignores standing choices for the class, and checks and consumes the token. It refuses the call with a clear error unless the call context carries a verified token for that exact call;
+  - a job's list of tools it may run without asking (`auto_tools`) never includes a tool in the class, whatever is stored;
   - the approval card hides "Always allow" for it, as it already does for destructive and sensitive tools.
 - **`dn-jobs`** (#252):
   - `withdrawn` and `replaced` states, linked to the call that replaced them;
