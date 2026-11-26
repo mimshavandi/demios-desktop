@@ -1,4 +1,4 @@
-import { Blocks, Boxes, Cpu, ExternalLink, KeyRound, SlidersHorizontal, Sparkles, Trash2, Wrench } from "lucide-react";
+import { Blocks, Boxes, Cpu, ExternalLink, KeyRound, Server, SlidersHorizontal, Sparkles, Trash2, Wrench } from "lucide-react";
 import { Fragment, useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { Api } from "../ipc/commands";
 import {
@@ -34,12 +34,13 @@ import { ConnectCard } from "./Connect";
 import { McpServersCard } from "./McpServers";
 import { RemoteServersCard } from "./RemoteServers";
 import { SkillsCard } from "./Skills";
+import { NodeSettings } from "./NodeSettings";
 import { Updates } from "./Updates";
 import { LocalModelsCard, formatBytes } from "./LocalModels";
 import { DefaultsContext, SetDefault, type Defaults } from "./SetDefault";
 import { useToast } from "./toast";
 
-export type SettingsSection = "general" | "models" | "tools" | "skills" | "addons";
+export type SettingsSection = "general" | "models" | "tools" | "skills" | "node" | "addons";
 export type ModelsTab = "device" | "servers" | "providers";
 
 /** Where Settings opens: a section, and for Models which tab. Banners and hints link here. */
@@ -53,6 +54,7 @@ const SECTIONS: { id: SettingsSection; label: string; icon: typeof Cpu }[] = [
   { id: "models", label: "Models", icon: Boxes },
   { id: "tools", label: "Tools", icon: Wrench },
   { id: "skills", label: "Skills", icon: Sparkles },
+  { id: "node", label: "Node", icon: Server },
   // Only in a build with add-ons (ADR-0013); the regular build never shows it.
   { id: "addons", label: "Add-ons", icon: Blocks },
 ];
@@ -320,6 +322,7 @@ export function SettingsView({
 
           {section === "skills" && <SkillsCard api={api} />}
 
+          {section === "node" && <NodeSettings api={api} />}
           {section === "addons" && <AddonsPage api={api} />}
         </div>
       </div>

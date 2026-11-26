@@ -23,6 +23,7 @@ pub mod links;
 pub mod local;
 pub mod mcp;
 pub mod models;
+pub mod node;
 pub mod projects;
 pub mod remote;
 pub mod secrets;
@@ -302,6 +303,13 @@ pub fn run_with_addons(addons: Vec<std::sync::Arc<dyn dn_plugin_api::Plugin>>) {
             commands::update_settings,
             commands::list_models,
             commands::check_keys,
+            commands::node_overview,
+            commands::node_join_begin,
+            commands::node_join_wait,
+            commands::node_join_cancel,
+            commands::node_remove_device,
+            commands::node_unpair,
+            commands::node_forget,
             commands::set_provider_key,
             remote::add_remote_server,
             remote::refresh_remote_server,

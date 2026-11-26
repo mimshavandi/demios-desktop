@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-node-join-cancel"
+description = "Enables the node_join_cancel command without any pre-configured scope."
+commands.allow = ["node_join_cancel"]
+
+[[permission]]
+identifier = "deny-node-join-cancel"
+description = "Denies the node_join_cancel command without any pre-configured scope."
+commands.deny = ["node_join_cancel"]

@@ -19,6 +19,7 @@ pub mod envelope;
 pub mod hlc;
 pub mod identity;
 pub mod inbox;
+pub mod link;
 pub mod pairing;
 pub mod transport;
 
@@ -28,7 +29,11 @@ pub use pairing::{CheckNumbers, PairingLink, PairingOffer};
 
 /// Schema migrations for this crate (tables prefixed `sync_`). `dn-store` runs them.
 pub fn migrations() -> &'static [&'static str] {
-    &[devices::MIGRATION_DEVICES, inbox::MIGRATION]
+    &[
+        devices::MIGRATION_DEVICES,
+        inbox::MIGRATION,
+        devices::MIGRATION_NODE_LINK,
+    ]
 }
 
 /// What can go wrong in this crate. No variant carries key material.
