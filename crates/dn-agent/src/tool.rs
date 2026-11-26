@@ -30,6 +30,11 @@ pub struct ToolContext {
     pub step: u32,
     /// Fires when the user stops the run. Long-running tools and approval waits must honour it.
     pub cancel: CancelToken,
+    /// Allowlists of capability-id patterns this call must match, one per narrowing layer
+    /// (a chat skill's `allowed-tools`, an add-on handler's inherited list). Empty means no
+    /// narrowing. Layers are only ever added, so a nested call can't widen what its caller
+    /// was allowed (ADR-0013 §4).
+    pub allowed_tools: Vec<Vec<String>>,
 }
 
 /// Result of a tool call, fed back to the model as a `Role::Tool` message.
@@ -107,6 +112,7 @@ mod tests {
             run_id: dn_core::Id::new(),
             step: 0,
             cancel: CancelToken::new(),
+            allowed_tools: Vec::new(),
         };
         let call = ToolCall {
             id: "c1".into(),

@@ -409,6 +409,7 @@ export function createMockApi(): Api {
       risk: "low_write",
       policy: "ask_once_per_conversation",
       arguments: args,
+      requester: { kind: "model" },
     };
     const finish = (text: string, isError: boolean) => {
       onEvent({ type: "tool_call_finished", message_id: a.id, call_id: callId, is_error: isError, summary: isError ? "The user denied this." : "Wrote 1 file." });
