@@ -96,6 +96,8 @@ jobs:
       - run: node ui/design-tokens/scripts/lint-ui.mjs
       # Release scripts (T-REL-02): signing checks and the updater manifest.
       - run: node --test "scripts/release/*.test.mjs"
+      # Connect catalogue scripts (ADR-0018): the release signature check, key and signing.
+      - run: node --test "scripts/connect/*.test.mjs"
   ui:
     runs-on: ubuntu-latest
     defaults:

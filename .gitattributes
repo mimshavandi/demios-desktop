@@ -6,3 +6,5 @@ crates/dn-providers/tests/fixtures/** -text
 apps/desktop/connect/catalogue.json -text
 apps/desktop/connect/catalogue.json.sig -text
 apps/desktop/connect/test-key.pub -text
+apps/desktop/connect/catalogue.json.test-sig -text
+apps/desktop/connect/catalogue.pub -text

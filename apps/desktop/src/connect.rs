@@ -10,41 +10,64 @@ use dn_core::capability::RiskTier;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
-/// The catalogue as shipped with the app, and its signature (hex Ed25519 over these exact
-/// bytes; `scripts/connect/sign-catalogue.mjs`).
+/// The catalogue as shipped with the app.
 const SHIPPED: &[u8] = include_bytes!("../connect/catalogue.json");
+/// The owner's signature of it (hex Ed25519 over these exact bytes), made by hand with
+/// `scripts/connect/sign-catalogue.mjs` and the key in `catalogue.pub`. Empty until then.
+// Unused in `connect_test_key` builds, which trust only the test key.
+#[cfg_attr(connect_test_key, allow(dead_code))]
 const SHIPPED_SIG: &str = include_str!("../connect/catalogue.json.sig");
+/// The owner's public key (64 hex digits), compiled into every build. Empty until the owner
+/// makes one (`scripts/connect/new-key.mjs`); `build.rs` refuses anything else.
+#[cfg_attr(connect_test_key, allow(dead_code))]
+const RELEASE_PUBLIC_KEY: &str = include_str!("../connect/catalogue.pub");
 
-/// The public half of the throwaway TEST key, as 64 hex digits. Its private half was never
-/// kept: `sign-catalogue.mjs --test` makes a new key pair, signs, writes this file and drops the
-/// private key. Only debug builds with the `connect-test-key` feature (and tests) trust it.
+/// The public half of the throwaway TEST key (64 hex digits) and its signature of the
+/// catalogue (`catalogue.json.test-sig`). The private half was never kept:
+/// `sign-catalogue.mjs --test` makes a new key pair, signs, writes both files and drops it.
+/// Only debug builds with the `connect-test-key` feature (and tests) trust it.
 #[cfg(any(test, connect_test_key))]
 const TEST_PUBLIC_KEY: &str = include_str!("../connect/test-key.pub");
-
-/// A public key written as 64 hex digits.
 #[cfg(any(test, connect_test_key))]
-fn parse_public_key(s: &str) -> Option<[u8; 32]> {
-    hex(s.trim())?.try_into().ok()
+const SHIPPED_TEST_SIG: &str = include_str!("../connect/catalogue.json.test-sig");
+
+/// A public key file's contents: empty (no key yet) or 64 hex digits.
+pub fn parse_public_key(s: &str) -> Result<Option<[u8; 32]>, CatalogueError> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Ok(None);
+    }
+    hex(s)
+        .and_then(|b| <[u8; 32]>::try_from(b).ok())
+        .map(Some)
+        .ok_or_else(|| CatalogueError::Format("catalogue.pub isn't 64 hex digits".into()))
 }
 
-/// The key this build trusts for the catalogue. None until the release key is decided: the
-/// Connect list then says the catalogue couldn't be checked (no unsigned fallback). A garbled
-/// test key file is a signature failure, not "no key".
-fn trusted_key() -> Option<Result<[u8; 32], CatalogueError>> {
+/// The test key; an empty or garbled `test-key.pub` is an error, not "no key".
+#[cfg(any(test, connect_test_key))]
+fn test_public_key() -> Result<[u8; 32], CatalogueError> {
+    parse_public_key(TEST_PUBLIC_KEY)?
+        .ok_or_else(|| CatalogueError::Format("test-key.pub is empty".into()))
+}
+
+/// The key this build trusts for the catalogue, and the signature to check with it. None
+/// while the owner has no key yet: the Connect list then says it isn't available (no
+/// unsigned fallback).
+fn trusted() -> Result<Option<([u8; 32], &'static str)>, CatalogueError> {
     #[cfg(connect_test_key)]
     {
-        Some(parse_public_key(TEST_PUBLIC_KEY).ok_or(CatalogueError::Signature))
+        Ok(Some((test_public_key()?, SHIPPED_TEST_SIG)))
     }
     #[cfg(not(connect_test_key))]
     {
-        None
+        Ok(parse_public_key(RELEASE_PUBLIC_KEY)?.map(|k| (k, SHIPPED_SIG)))
     }
 }
 
 /// The shipped catalogue, if its signature checks out with the key this build trusts.
 pub fn load() -> Result<Catalogue, CatalogueError> {
-    let key = trusted_key().ok_or(CatalogueError::NoKey)??;
-    verify(SHIPPED, SHIPPED_SIG, &key)?;
+    let (key, sig) = trusted()?.ok_or(CatalogueError::NoKey)?;
+    verify(SHIPPED, sig, &key)?;
     parse(SHIPPED)
 }
 
@@ -553,10 +576,6 @@ mod tests {
         }
     }
 
-    fn test_public_key() -> [u8; 32] {
-        parse_public_key(TEST_PUBLIC_KEY).expect("connect/test-key.pub is 64 hex digits")
-    }
-
     /// A key pair made for this test run only; no private key is stored anywhere.
     fn fresh_pair() -> aws_lc_rs::signature::Ed25519KeyPair {
         aws_lc_rs::signature::Ed25519KeyPair::generate().unwrap()
@@ -576,21 +595,13 @@ mod tests {
     }
 
     #[test]
-    fn a_public_key_is_exactly_64_hex_digits() {
-        assert_eq!(parse_public_key(&"ab".repeat(32)), Some([0xab; 32]));
-        assert_eq!(parse_public_key(&"ab".repeat(31)), None);
-        assert_eq!(parse_public_key(&"ab".repeat(33)), None);
-        assert_eq!(parse_public_key(&"zz".repeat(32)), None);
-    }
-
-    #[test]
     fn the_shipped_catalogue_is_signed_with_the_test_key() {
-        verify(SHIPPED, SHIPPED_SIG, &test_public_key()).unwrap();
+        verify(SHIPPED, SHIPPED_TEST_SIG, &test_public_key().unwrap()).unwrap();
     }
 
     #[test]
     fn a_tampered_catalogue_is_refused() {
-        let key = test_public_key();
+        let key = test_public_key().unwrap();
         // One changed byte: another server address.
         let tampered = String::from_utf8(SHIPPED.to_vec()).unwrap().replacen(
             "https://mcp.linear.app/mcp",
@@ -599,7 +610,7 @@ mod tests {
         );
         assert_ne!(tampered.as_bytes(), SHIPPED);
         assert_eq!(
-            verify(tampered.as_bytes(), SHIPPED_SIG, &key),
+            verify(tampered.as_bytes(), SHIPPED_TEST_SIG, &key),
             Err(CatalogueError::Signature)
         );
         // Signed by another key, it checks out with that key only: the check is about the
@@ -612,16 +623,41 @@ mod tests {
             Err(CatalogueError::Signature)
         );
         // Another key, a short or garbled signature: refused.
-        assert!(verify(SHIPPED, SHIPPED_SIG, &public(&other)).is_err());
-        assert!(verify(SHIPPED, &SHIPPED_SIG.trim()[..126], &key).is_err());
+        assert!(verify(SHIPPED, SHIPPED_TEST_SIG, &public(&other)).is_err());
+        assert!(verify(SHIPPED, &SHIPPED_TEST_SIG.trim()[..126], &key).is_err());
         assert!(verify(SHIPPED, "zz", &key).is_err());
         assert!(verify(SHIPPED, "", &key).is_err());
     }
 
     #[test]
+    fn the_owner_public_key_file_is_empty_or_64_hex_digits() {
+        assert_eq!(parse_public_key(""), Ok(None));
+        assert_eq!(parse_public_key("  \n"), Ok(None));
+        assert_eq!(parse_public_key(&"ab".repeat(32)), Ok(Some([0xab; 32])));
+        let hex = "ab".repeat(32);
+        assert!(parse_public_key(&"ab".repeat(33)).is_err());
+        assert!(parse_public_key(&"zz".repeat(32)).is_err());
+        assert!(parse_public_key(&hex[..62]).is_err());
+        assert!(parse_public_key("not a key").is_err());
+        // The committed file is one of those (build.rs refuses anything else).
+        assert!(parse_public_key(RELEASE_PUBLIC_KEY).is_ok());
+    }
+
+    #[test]
+    fn the_test_key_never_signs_the_release_signature() {
+        // A release signature made with the test key would be trusted by no release build, but
+        // it also mustn't pass the release check by mistake.
+        if !SHIPPED_SIG.trim().is_empty() {
+            assert!(verify(SHIPPED, SHIPPED_SIG, &test_public_key().unwrap()).is_err());
+        }
+    }
+
+    #[test]
     fn without_a_trusted_key_nothing_is_offered() {
         #[cfg(not(connect_test_key))]
-        assert_eq!(load(), Err(CatalogueError::NoKey));
+        if RELEASE_PUBLIC_KEY.trim().is_empty() {
+            assert_eq!(load(), Err(CatalogueError::NoKey));
+        }
         #[cfg(connect_test_key)]
         assert!(load().is_ok());
     }
