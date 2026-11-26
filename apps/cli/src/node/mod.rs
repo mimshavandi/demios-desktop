@@ -16,6 +16,7 @@
 //! already in the list are accepted.
 
 pub mod config;
+pub mod control;
 
 use clap::Subcommand;
 use config::{NodeConfig, SecretsConfig, parse_utc_offset, secret_env_vars};
@@ -42,6 +43,9 @@ use tokio::sync::{Notify, Semaphore};
 const HANDSHAKE_SECS: u64 = 10;
 /// A paired device that sends nothing for this long is disconnected; it reconnects.
 const IDLE_SECS: u64 = 15 * 60;
+/// An unpaired device must send its pairing request within this time after the handshake.
+/// No person waits on this step (the check numbers come after it).
+const JOIN_SECS: u64 = 30;
 /// Connections handled at once; more wait for a slot.
 const MAX_CONNECTIONS: usize = 64;
 
@@ -70,6 +74,16 @@ pub enum NodeCmd {
     Run {
         #[arg(long)]
         data_dir: PathBuf,
+    },
+    /// Pair a device with the running Node: shows a one-time link, then asks you to
+    /// compare the check numbers with the device.
+    Pair {
+        #[arg(long)]
+        data_dir: PathBuf,
+        /// The address devices use to reach this Node (`host:port`). Defaults to the
+        /// listen address when that is a specific address.
+        #[arg(long)]
+        address: Option<String>,
     },
 }
 
@@ -111,7 +125,45 @@ pub async fn command(cmd: NodeCmd) -> Result<(), String> {
             tokio::spawn(on_signal);
             node.serve(stop).await
         }
+        NodeCmd::Pair { data_dir, address } => pair_command(&data_dir, address).await,
     }
+}
+
+/// The address devices should use, from `--address` or a specific listen address.
+fn pair_address(config: &NodeConfig, address: Option<String>) -> Result<String, String> {
+    match address {
+        Some(a) => Ok(a),
+        None if !config.listen.ip().is_unspecified() => Ok(config.listen.to_string()),
+        None => Err(format!(
+            "the Node listens on all addresses ({}); say which one devices use, e.g. \
+             --address 192.168.1.20:{} or --address node.example.net:{}",
+            config.listen,
+            config.listen.port(),
+            config.listen.port()
+        )),
+    }
+}
+
+#[cfg(unix)]
+async fn pair_command(data_dir: &Path, address: Option<String>) -> Result<(), String> {
+    let config = NodeConfig::load(data_dir)?;
+    let address = pair_address(&config, address)?;
+    let ask = |name: &str, kind: &str, numbers: &str| -> bool {
+        eprintln!(
+            "\n{name} ({kind}) wants to join.\nCheck numbers: {numbers}\n\
+             Do they match the numbers on the device? Type yes to add it: "
+        );
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line).is_ok() && line.trim().eq_ignore_ascii_case("yes")
+    };
+    let name = control::client_pair(data_dir, address, ask, |text| eprintln!("{text}")).await?;
+    eprintln!("Paired with {name}.");
+    Ok(())
+}
+
+#[cfg(not(unix))]
+async fn pair_command(_data_dir: &Path, _address: Option<String>) -> Result<(), String> {
+    Err("dn node pair isn't available on Windows yet (#261)".into())
 }
 
 async fn shutdown_signal() {
@@ -174,6 +226,10 @@ impl JobHost for NoAddOns {
 
 /// A started Node, before it serves.
 pub struct Node {
+    data_dir: PathBuf,
+    pairing: control::PairingState,
+    #[cfg(unix)]
+    control: tokio::net::UnixListener,
     keys: Arc<DeviceKeys>,
     db: Arc<Mutex<Connection>>,
     store: StoreReport,
@@ -250,6 +306,8 @@ impl Node {
         let listener = TcpListener::bind(config.listen)
             .await
             .map_err(|e| format!("couldn't listen on {}: {e}", config.listen))?;
+        #[cfg(unix)]
+        let control = control::bind(data_dir)?;
         let db = Arc::new(Mutex::new(conn));
         let scheduler = Arc::new(Scheduler::new(
             Arc::new(NoAddOns),
@@ -265,6 +323,10 @@ impl Node {
             report.label
         );
         Ok(Self {
+            data_dir: data_dir.to_owned(),
+            pairing: Arc::new(tokio::sync::Mutex::new(None)),
+            #[cfg(unix)]
+            control,
             keys: Arc::new(keys),
             db,
             store: report,
@@ -292,6 +354,13 @@ impl Node {
             let jobs_stop = jobs_stop.clone();
             tokio::spawn(async move { scheduler.run(&jobs_stop).await })
         };
+        #[cfg(unix)]
+        let control = tokio::spawn(control::serve(
+            self.control,
+            self.data_dir.clone(),
+            self.keys.public(),
+            self.pairing.clone(),
+        ));
         let slots = Arc::new(Semaphore::new(MAX_CONNECTIONS));
         let base = Arc::new(StatusBase {
             name: self.name,
@@ -316,12 +385,19 @@ impl Node {
                     Err(_) => break,
                 },
             };
-            let (keys, db, base) = (self.keys.clone(), self.db.clone(), base.clone());
+            let (keys, db, base, pairing) = (
+                self.keys.clone(),
+                self.db.clone(),
+                base.clone(),
+                self.pairing.clone(),
+            );
             tokio::spawn(async move {
-                handle(stream, peer, &keys, &db, &base).await;
+                handle(stream, peer, &keys, &db, &base, &pairing).await;
                 drop(permit);
             });
         }
+        #[cfg(unix)]
+        control.abort();
         jobs_stop.notify_waiters();
         self.scheduler.cancel_current();
         match jobs.await {
@@ -349,6 +425,56 @@ fn status(base: &StatusBase, db: &Mutex<Connection>) -> Result<NodeStatus, SyncE
     })
 }
 
+fn devices(
+    db: &Mutex<Connection>,
+    asking: &dn_sync::Device,
+) -> Result<Vec<transport::DeviceInfo>, SyncError> {
+    Ok(DeviceList::members(&lock(db))?
+        .into_iter()
+        .map(|d| transport::DeviceInfo {
+            id: d.id.to_hex(),
+            name: d.name,
+            kind: transport::kind_name(d.kind).to_owned(),
+            last_synced_at: d.last_synced_at,
+            this_device: d.id == asking.id,
+        })
+        .collect())
+}
+
+/// A paired device removes a device, or itself to unpair (ADR-0014 §2). The Node can't be
+/// removed: that's `dn node delete-all` on the Node. The removed device is refused at its
+/// next request; the group key rotation comes with sync (docs/design/dn-sync.md §8).
+fn remove_device(
+    db: &Mutex<Connection>,
+    keys: &DeviceKeys,
+    asking: &dn_sync::Device,
+    id: &str,
+) -> Message {
+    let refused = |reason: &str| Message::Refused {
+        reason: reason.to_owned(),
+    };
+    let Some(id) = dn_sync::DeviceId::from_hex(id) else {
+        return refused("That isn't a device id.");
+    };
+    if id == keys.id() {
+        return refused("The Node can't be removed from a device. Use dn node on the Node.");
+    }
+    match DeviceList::remove(&lock(db), id, dn_store::now_ms()) {
+        Ok(()) => {
+            eprintln!(
+                "dn node: {} ({}) removed device {id}",
+                asking.name, asking.id
+            );
+            Message::Done
+        }
+        Err(SyncError::UnknownDevice) => refused("That device isn't paired with this Node."),
+        Err(e) => {
+            eprintln!("dn node: removing {id} failed: {e}");
+            refused("The Node couldn't remove that device. Try again.")
+        }
+    }
+}
+
 /// One device's connection. Logs events and errors only, never message content.
 async fn handle(
     stream: TcpStream,
@@ -356,6 +482,7 @@ async fn handle(
     keys: &DeviceKeys,
     db: &Mutex<Connection>,
     base: &StatusBase,
+    pairing: &control::PairingState,
 ) {
     let mut channel = match tokio::time::timeout(
         Duration::from_secs(HANDSHAKE_SECS),
@@ -380,13 +507,18 @@ async fn handle(
                 if let Err(e) = DeviceList::mark_synced(&conn, d.id, dn_store::now_ms()) {
                     eprintln!("dn node: couldn't record when {} last synced: {e}", d.id);
                 }
-                d
+                Some(d)
             }
+            Err(SyncError::UnknownDevice) => None,
             Err(e) => {
                 eprintln!("dn node: refused {peer}: {e}");
                 return;
             }
         }
+    };
+    let Some(device) = device else {
+        pair_device(channel, peer, keys, db, pairing).await;
+        return;
     };
     loop {
         let message =
@@ -412,6 +544,14 @@ async fn handle(
                     break;
                 }
             },
+            Message::DevicesRequest => match devices(db, &device) {
+                Ok(devices) => Message::Devices { devices },
+                Err(e) => {
+                    eprintln!("dn node: device list failed: {e}");
+                    break;
+                }
+            },
+            Message::RemoveDevice { id } => remove_device(db, keys, &device, &id),
             _ => {
                 eprintln!(
                     "dn node: {} ({}) sent a message this Node doesn't expect",
@@ -425,6 +565,83 @@ async fn handle(
             break;
         }
     }
+    let _ = channel.close().await;
+}
+
+/// A device that isn't paired: it may join only while `dn node pair` has a code open.
+async fn pair_device(
+    mut channel: transport::Channel<TcpStream>,
+    peer: SocketAddr,
+    keys: &DeviceKeys,
+    db: &Mutex<Connection>,
+    pairing: &control::PairingState,
+) {
+    let taken = {
+        let mut slot = pairing.lock().await;
+        slot.as_mut()
+            .and_then(|p| p.offer.take().map(|o| (o, p.joining.clone(), p.id)))
+    };
+    let Some((mut offer, joining_tx, pairing_id)) = taken else {
+        eprintln!("dn node: refused {peer}: not a paired device, and no pairing is open");
+        let _ = channel.close().await;
+        return;
+    };
+    let request = tokio::time::timeout(
+        Duration::from_secs(JOIN_SECS),
+        transport::read_join(db, &mut channel, &mut offer, || now_secs() as u64),
+    )
+    .await
+    .unwrap_or(Err(SyncError::Protocol("no pairing request in time")));
+    let request = match request {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("dn node: pairing from {peer} refused: {e}");
+            // Wrong proofs and late or bad requests count against the offer; it goes back
+            // only into the same pairing, and only while that pairing is still open.
+            if matches!(
+                e,
+                SyncError::WrongProof | SyncError::Protocol(_) | SyncError::BadName
+            ) && let Some(p) = pairing.lock().await.as_mut()
+                && p.id == pairing_id
+                && p.offer.is_none()
+            {
+                p.offer = Some(offer);
+            }
+            return;
+        }
+    };
+    let (answer_tx, answer_rx) = tokio::sync::oneshot::channel();
+    let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+    let asked = joining_tx
+        .send(control::Joining {
+            name: request.name.clone(),
+            kind: request.kind,
+            numbers: request.numbers,
+            answer: answer_tx,
+            result: result_rx,
+        })
+        .await
+        .is_ok();
+    // No time limit: the person is comparing the numbers. Closing `dn node pair` answers no.
+    let accepted = asked && answer_rx.await.unwrap_or(false);
+    let finished = transport::finish_join(
+        db,
+        &mut channel,
+        &request,
+        Some(keys.id()),
+        accepted,
+        dn_store::now_ms(),
+    )
+    .await;
+    let outcome = match finished {
+        Ok(Some(device)) => {
+            eprintln!("dn node: paired {} ({})", device.name, device.id);
+            Ok(device.name)
+        }
+        Ok(None) => Err("declined".to_owned()),
+        Err(e) => Err(format!("couldn't add the device: {e}")),
+    };
+    let _ = result_tx.send(outcome);
     let _ = channel.close().await;
 }
 
@@ -533,6 +750,100 @@ mod tests {
         serving.await.unwrap().unwrap();
     }
 
+    async fn request(
+        addr: SocketAddr,
+        keys: &DeviceKeys,
+        node: &[u8; 32],
+        messages: &[Message],
+    ) -> Result<Vec<Message>, SyncError> {
+        let stream = TcpStream::connect(addr).await.unwrap();
+        let mut ch = transport::connect(stream, keys, node).await?;
+        let mut out = Vec::new();
+        for m in messages {
+            ch.send(m).await?;
+            out.push(ch.recv().await?);
+        }
+        Ok(out)
+    }
+
+    #[tokio::test]
+    async fn a_paired_device_lists_devices_and_removes_one_but_not_the_node() {
+        let dir = TempDir::new("devices");
+        init(&dir.0, SecretsConfig::InsecurePlaintext);
+        let laptop = DeviceKeys::generate().unwrap();
+        let phone = DeviceKeys::generate().unwrap();
+        let node = started(&dir.0).await;
+        let node_key = DeviceList::members(&lock(&node.db)).unwrap()[0]
+            .keys
+            .ed25519;
+        let node_id = node.device_id();
+        {
+            let conn = lock(&node.db);
+            DeviceList::add(
+                &conn,
+                &laptop.public(),
+                "Laptop",
+                DeviceKind::Desktop,
+                None,
+                1,
+            )
+            .unwrap();
+            DeviceList::add(
+                &conn,
+                &phone.public(),
+                "Work phone",
+                DeviceKind::Phone,
+                None,
+                2,
+            )
+            .unwrap();
+        }
+        let addr = node.local_addr().unwrap();
+        let stop = Arc::new(Notify::new());
+        let serving = tokio::spawn(node.serve(stop.clone()));
+
+        let replies = request(
+            addr,
+            &laptop,
+            &node_key,
+            &[
+                Message::DevicesRequest,
+                Message::RemoveDevice {
+                    id: node_id.to_hex(),
+                },
+                Message::RemoveDevice {
+                    id: phone.id().to_hex(),
+                },
+                Message::DevicesRequest,
+            ],
+        )
+        .await
+        .unwrap();
+        let Message::Devices { devices: before } = &replies[0] else {
+            panic!("{:?}", replies[0])
+        };
+        assert_eq!(before.len(), 3);
+        assert!(before.iter().any(|d| d.this_device && d.name == "Laptop"));
+        assert!(before.iter().any(|d| d.kind == "node"));
+        assert!(
+            matches!(&replies[1], Message::Refused { .. }),
+            "the Node stays"
+        );
+        assert_eq!(replies[2], Message::Done);
+        let Message::Devices { devices: after } = &replies[3] else {
+            panic!()
+        };
+        assert_eq!(after.len(), 2);
+        // The removed phone is refused from now on.
+        assert!(
+            request(addr, &phone, &node_key, &[Message::StatusRequest])
+                .await
+                .is_err()
+        );
+        stop.notify_waiters();
+        serving.await.unwrap().unwrap();
+    }
+
     #[tokio::test]
     async fn a_removed_device_is_refused() {
         let dir = TempDir::new("removed");
@@ -615,5 +926,183 @@ mod tests {
         let again = started(&dir.0).await;
         assert_eq!(first, again.device_id());
         assert_eq!(DeviceList::members(&lock(&again.db)).unwrap().len(), 1);
+    }
+
+    #[cfg(unix)]
+    mod pairing {
+        use super::*;
+        use dn_sync::pairing::{CheckNumbers, PairingLink};
+
+        /// Starts a Node, runs `dn node pair` with `answer`, and has `laptop` join with the
+        /// link it shows. Returns what `dn node pair` and the device each saw.
+        async fn pair_with(
+            dir: &Path,
+            laptop: &DeviceKeys,
+            answer: bool,
+        ) -> (Result<String, String>, Result<(), SyncError>, Node2) {
+            let node = started(dir).await;
+            let addr = node.local_addr().unwrap();
+            let node_pub = DeviceList::members(&lock(&node.db)).unwrap()[0].keys;
+            let db = node.db.clone();
+            let stop = Arc::new(Notify::new());
+            let serving = tokio::spawn(node.serve(stop.clone()));
+            let (link_tx, mut link_rx) = tokio::sync::watch::channel(String::new());
+            let want = CheckNumbers::new(&node_pub, &laptop.public()).to_string();
+            let cli = control::client_pair(
+                dir,
+                addr.to_string(),
+                move |_, _, numbers| {
+                    assert_eq!(numbers, want, "both sides show the same numbers");
+                    answer
+                },
+                move |text| {
+                    if let Some(link) = text
+                        .lines()
+                        .map(str::trim)
+                        .find(|l| l.starts_with("demios://"))
+                    {
+                        let _ = link_tx.send(link.to_owned());
+                    }
+                },
+            );
+            let device = async {
+                link_rx.changed().await.unwrap();
+                let link =
+                    PairingLink::parse(&link_rx.borrow().clone(), now_secs() as u64).unwrap();
+                let stream = TcpStream::connect(addr).await.unwrap();
+                let pending =
+                    transport::join(stream, laptop, &link, "MacBook Pro", DeviceKind::Desktop)
+                        .await?;
+                pending.answer().await.map(|_| ())
+            };
+            let (cli, device) = tokio::join!(cli, device);
+            (cli, device, Node2 { db, stop, serving })
+        }
+
+        struct Node2 {
+            db: Arc<Mutex<Connection>>,
+            stop: Arc<Notify>,
+            serving: tokio::task::JoinHandle<Result<(), String>>,
+        }
+
+        impl Node2 {
+            async fn stop(self) {
+                self.stop.notify_waiters();
+                self.serving.await.unwrap().unwrap();
+            }
+        }
+
+        #[tokio::test]
+        async fn dn_node_pair_adds_a_device_only_after_the_numbers_are_confirmed() {
+            let dir = TempDir::new("pair");
+            init(&dir.0, SecretsConfig::InsecurePlaintext);
+            let laptop = DeviceKeys::generate().unwrap();
+            let (cli, device, node) = pair_with(&dir.0, &laptop, true).await;
+            assert_eq!(cli.unwrap(), "MacBook Pro");
+            device.unwrap();
+            let members = DeviceList::members(&lock(&node.db)).unwrap();
+            assert!(members.iter().any(|d| d.keys == laptop.public()));
+            node.stop().await;
+        }
+
+        #[tokio::test]
+        async fn answering_no_adds_nothing() {
+            let dir = TempDir::new("decline");
+            init(&dir.0, SecretsConfig::InsecurePlaintext);
+            let laptop = DeviceKeys::generate().unwrap();
+            let (cli, device, node) = pair_with(&dir.0, &laptop, false).await;
+            assert!(cli.unwrap_err().contains("Nothing was added"));
+            assert!(matches!(device, Err(SyncError::Declined)));
+            assert_eq!(DeviceList::members(&lock(&node.db)).unwrap().len(), 1);
+            node.stop().await;
+        }
+
+        #[tokio::test]
+        async fn one_pairing_at_a_time_and_closing_it_ends_the_code() {
+            let dir = TempDir::new("one");
+            init(&dir.0, SecretsConfig::InsecurePlaintext);
+            let node = started(&dir.0).await;
+            let addr = node.local_addr().unwrap();
+            let stop = Arc::new(Notify::new());
+            let serving = tokio::spawn(node.serve(stop.clone()));
+            // The first `dn node pair` holds the code open until it's dropped.
+            let (shown_tx, shown_rx) = tokio::sync::oneshot::channel();
+            let mut shown_tx = Some(shown_tx);
+            let first = tokio::spawn({
+                let dir = dir.0.clone();
+                async move {
+                    control::client_pair(
+                        &dir,
+                        addr.to_string(),
+                        |_, _, _| false,
+                        move |_| {
+                            if let Some(tx) = shown_tx.take() {
+                                let _ = tx.send(());
+                            }
+                        },
+                    )
+                    .await
+                }
+            });
+            shown_rx.await.unwrap();
+            let second =
+                control::client_pair(&dir.0, addr.to_string(), |_, _, _| true, |_| {}).await;
+            assert!(second.unwrap_err().contains("already open"));
+            first.abort();
+            let _ = first.await;
+            // With no pairing open, an unknown device is refused again.
+            let stranger = DeviceKeys::generate().unwrap();
+            let node_key = {
+                let conn = dn_store::open(
+                    &dir.0.join(config::DATABASE_FILE),
+                    &[
+                        MigrationSet::new("sync", dn_sync::migrations()),
+                        MigrationSet::new("jobs", dn_jobs::migrations()),
+                    ],
+                )
+                .unwrap();
+                DeviceList::members(&conn).unwrap()[0].keys.ed25519
+            };
+            let mut refused = false;
+            for _ in 0..50 {
+                if ask_status(addr, &stranger, &node_key).await.is_err() {
+                    refused = true;
+                    break;
+                }
+            }
+            assert!(refused);
+            let third = control::client_pair(&dir.0, addr.to_string(), |_, _, _| false, |_| {});
+            // A new pairing can start once the first one closed.
+            let third = tokio::time::timeout(Duration::from_millis(500), third).await;
+            assert!(third.is_err(), "it waits for a device, so it's still open");
+            stop.notify_waiters();
+            serving.await.unwrap().unwrap();
+        }
+
+        #[test]
+        fn the_address_must_be_one_devices_can_reach() {
+            let config = |listen: &str| {
+                NodeConfig::new(
+                    "N".into(),
+                    listen.parse().unwrap(),
+                    SecretsConfig::InsecurePlaintext,
+                    0,
+                )
+                .unwrap()
+            };
+            assert!(
+                pair_address(&config("0.0.0.0:7443"), None)
+                    .unwrap_err()
+                    .contains("--address")
+            );
+            assert_eq!(
+                pair_address(&config("192.168.1.20:7443"), None).unwrap(),
+                "192.168.1.20:7443"
+            );
+            assert_eq!(
+                pair_address(&config("0.0.0.0:7443"), Some("nas:7443".into())).unwrap(),
+                "nas:7443"
+            );
+        }
     }
 }

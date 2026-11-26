@@ -673,3 +673,14 @@ pre.code .code-copy { position: absolute; top: var(--dn-space-1); right: var(--d
 @media (max-width: 720px) {
   .dn-dialog-large, .dn-dialog-medium { inset: 0; transform: none; width: 100vw; height: 100vh; max-height: none; border-radius: 0; }
 }
+
+/* Settings › Node (design: NodeSettings, PairDevice). */
+.node-card h2 { display: flex; align-items: center; gap: var(--dn-space-2); }
+.node-facts { display: grid; grid-template-columns: max-content 1fr; gap: var(--dn-space-2) var(--dn-space-4); margin: var(--dn-space-2) 0 0; }
+.node-facts dt { color: var(--dn-color-text-muted); }
+.node-facts dd { margin: 0; }
+.node-devices { list-style: none; margin: 0; padding: 0; }
+.node-device { display: flex; flex-direction: row; gap: var(--dn-space-3); align-items: center; }
+.node-device > svg { color: var(--dn-color-text-muted); flex: none; }
+.pd-numbers { font-family: var(--dn-font-mono); font-size: var(--dn-text-xl); line-height: var(--dn-leading-xl); letter-spacing: 0.08em; text-align: center; padding: var(--dn-space-4); border-radius: var(--dn-radius-lg); background: var(--dn-color-surface-sunken); margin: 0; }
+.pd-live { color: var(--dn-color-text-muted); }

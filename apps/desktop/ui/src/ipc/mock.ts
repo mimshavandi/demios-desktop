@@ -4,6 +4,7 @@
 
 import type { Api } from "./commands";
 import type {
+  NodeOverview,
   DownloadState,
   KnowledgeStatus,
   ApprovalDecision,
@@ -40,6 +41,32 @@ const REPLY = (q: string, turn: number) =>
   "```rust\nfn main() {\n    let answer = 6 * 7;\n    println!(\"the answer is {answer}\");\n}\n```\n\n" +
   "- Pick a real model in **Models** once local inference or a provider key is available.\n" +
   "- *Stop* and *Retry* work on this reply too.";
+
+function noNode(): NodeOverview {
+  return { paired: null, online: false, status: null, devices: [], problem: null };
+}
+
+function mockPairedNode(): NodeOverview {
+  const now = Date.now();
+  return {
+    paired: { name: "Home server", address: "192.168.1.20:7443", paired_at: now, last_reached_at: now },
+    online: true,
+    status: {
+      name: "Home server",
+      version: "1.4.0",
+      secret_store: "systemd_credential",
+      secret_store_label: "Encrypted file, key from a systemd credential",
+      protected_at_rest: true,
+      devices: 3,
+    },
+    devices: [
+      { id: "a1", name: "Home server", kind: "node", last_synced_at: now - 120_000, this_device: false },
+      { id: "b2", name: "MacBook Pro", kind: "desktop", last_synced_at: now, this_device: true },
+      { id: "c3", name: "Work phone", kind: "phone", last_synced_at: now - 3_600_000, this_device: false },
+    ],
+    problem: null,
+  };
+}
 
 export function createMockApi(): Api {
   const convs: Conversation[] = [];
@@ -264,6 +291,7 @@ export function createMockApi(): Api {
   const removedMcp = new Map<string, { server: McpServerView; at: number }>();
   const removals = new Map<string, { slots: [string, string][]; timer: number }>();
   let settings: Settings = { slots: {}, telemetry_enabled: false };
+  let nodeView: NodeOverview = noNode();
   const timers = new Map<string, number>();
   const id = () => crypto.randomUUID();
   const now = () => Date.now();
@@ -744,6 +772,31 @@ export function createMockApi(): Api {
     },
     listModels: async () => catalog(),
     checkKeys: async () => catalog(),
+    nodeOverview: async () => nodeView,
+    nodeJoinBegin: async (link) => {
+      await new Promise((r) => setTimeout(r, 300));
+      if (!link.startsWith("demios://pair?"))
+        throw { code: "node_link", message: "That isn't a Demios pairing link: it doesn't start with demios://pair." };
+      return { numbers: ["4821", "0937", "5512"], address: "192.168.1.20:7443" };
+    },
+    nodeJoinWait: async () => {
+      await new Promise((r) => setTimeout(r, 2500));
+      nodeView = mockPairedNode();
+      return nodeView;
+    },
+    nodeJoinCancel: async () => null,
+    nodeRemoveDevice: async (id) => {
+      nodeView = { ...nodeView, devices: nodeView.devices.filter((d) => d.id !== id) };
+      return nodeView;
+    },
+    nodeUnpair: async () => {
+      nodeView = noNode();
+      return nodeView;
+    },
+    nodeForget: async () => {
+      nodeView = noNode();
+      return nodeView;
+    },
     setProviderKey: async (p) => {
       keys.add(p);
       return catalog();

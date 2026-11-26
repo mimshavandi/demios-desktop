@@ -94,6 +94,7 @@ pub fn migration_sets() -> Vec<MigrationSet> {
         MigrationSet::new("tool_ledger", dn_tools::migrations()),
         MigrationSet::new("artifact", dn_artifacts::migrations()),
         MigrationSet::new("knowledge", dn_knowledge::migrations()),
+        MigrationSet::new("sync", dn_sync::migrations()),
     ]
 }
 
@@ -212,6 +213,8 @@ pub struct AppState {
     pub local_servers: bool,
     /// Running Hugging Face downloads (add-model screen).
     pub hub_pulls: Arc<crate::hub::HubPulls>,
+    /// Settings › Node: a join waiting for the person to confirm on the Node.
+    pub node: crate::node::NodeState,
     /// `demios://models/add` links waiting for or shown on the confirmation screen.
     pub add_links: crate::deeplink::AddLinks,
     /// Asks before a local MCP server starts (native dialog in the app; tests set a fake).
@@ -291,6 +294,7 @@ impl AppState {
             mcp_epoch: AtomicU64::new(0),
             local_servers: crate::mcp::local_servers_allowed(),
             hub_pulls: Default::default(),
+            node: Default::default(),
             add_links: Default::default(),
             launch_approver: std::sync::OnceLock::new(),
             tools_settling: Default::default(),
@@ -589,6 +593,8 @@ impl AppState {
     /// a failure and returns the parts it could not delete, in the user's words.
     pub async fn delete_all_local_data(self: &Arc<Self>) -> Vec<&'static str> {
         let mut failed = Vec::new();
+        // A join waiting for confirmation on a Node must not record it afterwards.
+        crate::node::join_cancel(&self.node).await;
         if !self.stop_all_and_wait(REPLY_STOP_TIMEOUT).await {
             eprintln!("some replies did not stop in time; deleting anyway");
             failed.push("an answer that was still being written (it may have been saved again)");
@@ -731,6 +737,11 @@ impl AppState {
                 keys_ok = false;
             }
         }
+        // This computer's device keys (Settings › Node): a new identity after Delete all.
+        if let Err(e) = self.keys.store.delete(&dn_sync::identity::secret_id()) {
+            eprintln!("could not delete this computer's device keys: {e}");
+            keys_ok = false;
+        }
         lock(&self.removed_keys).clear();
         lock(&self.removed_servers).clear();
         lock(&self.removed_mcp).clear();
@@ -758,6 +769,10 @@ impl AppState {
                 }
                 if r.is_ok() {
                     self.models.set_remote_servers(&[]);
+                }
+                if let Err(e) = dn_sync::link::forget(&db) {
+                    eprintln!("could not forget the paired Node: {e}");
+                    failed.push("the paired Node");
                 }
                 if let Err(e) = dn_knowledge::delete_all(&db) {
                     eprintln!("could not delete the knowledge index: {e}");

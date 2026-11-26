@@ -52,6 +52,10 @@ dn-artifacts = { path = "../../crates/dn-artifacts", version = "0.1.0" }
 dn-inference = { path = "../../crates/dn-inference", version = "0.1.0" }
 dn-knowledge = { path = "../../crates/dn-knowledge", version = "0.1.0" }
 dn-models = { path = "../../crates/dn-models", version = "0.1.0" }
+# Settings › Node: this computer's device keys, pairing and the paired channel (ADR-0014).
+dn-sync.workspace = true
+# This computer's name on the Node's device list.
+sysinfo.workspace = true
 futures-core.workspace = true
 rusqlite.workspace = true
 serde.workspace = true
@@ -75,7 +79,7 @@ tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 # No `zip` feature: it only unpacks the old v1 update archives (.zip, .AppImage.tar.gz), and
 # its `zip` 4 has open advisories. We publish v2 bundles (`createUpdaterArtifacts: true`).
 tauri-plugin-updater = { version = "2", optional = true, default-features = false, features = ["rustls-tls", "system-proxy"] }
-tokio = { workspace = true, features = ["sync", "macros", "time", "rt"] }
+tokio = { workspace = true, features = ["sync", "macros", "time", "rt", "net", "io-util"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "net", "io-util"] }

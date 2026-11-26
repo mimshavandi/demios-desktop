@@ -1369,3 +1369,54 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+// Settings › Node (ADR-0014): see crate::node.
+
+/// The paired Node's status and devices, asked now; `paired: null` when none.
+#[tauri::command]
+pub async fn node_overview(state: AppStateRef<'_>) -> IpcResult<crate::node::NodeOverview> {
+    crate::node::overview(state.inner()).await
+}
+
+/// Starts joining the Node in `link` (from `dn node pair`); returns the check numbers.
+#[tauri::command]
+pub async fn node_join_begin(
+    state: AppStateRef<'_>,
+    link: String,
+) -> IpcResult<crate::node::JoinStarted> {
+    let st = state.inner().clone();
+    crate::node::join_begin(&st, &st.node, &link).await
+}
+
+/// Waits until the person answers on the Node, then records it.
+#[tauri::command]
+pub async fn node_join_wait(state: AppStateRef<'_>) -> IpcResult<crate::node::NodeOverview> {
+    let st = state.inner().clone();
+    crate::node::join_wait(&st, &st.node).await
+}
+
+/// "They don't match" or Cancel: nothing is added.
+#[tauri::command]
+pub async fn node_join_cancel(state: AppStateRef<'_>) -> IpcResult<()> {
+    crate::node::join_cancel(&state.inner().node).await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn node_remove_device(
+    state: AppStateRef<'_>,
+    id: String,
+) -> IpcResult<crate::node::NodeOverview> {
+    crate::node::remove_device(state.inner(), &id).await
+}
+
+#[tauri::command]
+pub async fn node_unpair(state: AppStateRef<'_>) -> IpcResult<crate::node::NodeOverview> {
+    crate::node::unpair(state.inner()).await
+}
+
+/// Forgets the Node on this computer only (a Node that is gone or removed this computer).
+#[tauri::command]
+pub async fn node_forget(state: AppStateRef<'_>) -> IpcResult<crate::node::NodeOverview> {
+    crate::node::forget(state.inner()).await
+}
