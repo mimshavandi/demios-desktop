@@ -138,6 +138,8 @@ export function createMockApi(): Api {
       fit: fit("ready", "Fits this computer with room to spare."),
       traits: { kind: "chat", tool_support: "supported", source: "header", label: "Chat · Tools" },
       remove_blocked: null,
+      // The mock is an 8 GB machine: this is its recommended chat model.
+      recommended: true,
     },
     {
       id: "example-70b-nc",

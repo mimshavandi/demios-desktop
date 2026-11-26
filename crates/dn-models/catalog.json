@@ -28,6 +28,7 @@
       "params_b": 3.2,
       "capabilities": ["chat"],
       "license": "llama3.2",
+      "recommended": {"memory_gb": 8},
       "notes": "Good default for 8 GB machines.",
       "tool_support": "supported"
     },
@@ -103,6 +104,7 @@
       "params_b": 8.2,
       "capabilities": ["chat"],
       "license": "apache-2.0",
+      "recommended": {"memory_gb": 16},
       "notes": "Default for 16 GB machines.",
       "tool_support": "supported"
     },

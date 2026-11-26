@@ -1563,7 +1563,7 @@ mod tests {
         let catalog = dn_models::Catalog {
             version: 1,
             models: vec![dn_models::CatalogEntry {
-                recommended: false,
+                recommended: None,
                 id: "tiny".into(),
                 name: "Tiny".into(),
                 repo: "o/r".into(),
@@ -1612,7 +1612,7 @@ mod tests {
         let catalog = dn_models::Catalog {
             version: 1,
             models: vec![dn_models::CatalogEntry {
-                recommended: false,
+                recommended: None,
                 id: "huge".into(),
                 name: "Huge Model".into(),
                 repo: "o/r".into(),
@@ -1665,7 +1665,7 @@ mod tests {
         let catalog = dn_models::Catalog {
             version: 1,
             models: vec![dn_models::CatalogEntry {
-                recommended: false,
+                recommended: None,
                 id: "tiny".into(),
                 name: "Tiny".into(),
                 repo: "o/r".into(),

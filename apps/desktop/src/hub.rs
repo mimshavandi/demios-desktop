@@ -214,12 +214,13 @@ pub fn client(keys: &Keys) -> IpcResult<HubClient> {
     HubClient::new(cfg).map_err(hub_error)
 }
 
-/// Search hits from a repo of a recommended catalogue model get the chip (#219), from the
-/// built-in catalogue only.
-fn mark_recommended(mut page: SearchPage) -> SearchPage {
+/// Search hits from the repo of a catalogue model recommended on this machine get the chip
+/// (#219), from the built-in catalogue only. `total_ram` is this machine's memory: the chat
+/// pick depends on it.
+fn mark_recommended(mut page: SearchPage, total_ram: u64) -> SearchPage {
     let catalog = dn_models::Catalog::builtin();
     for item in &mut page.items {
-        item.recommended = catalog.recommends(&item.id, None);
+        item.recommended = catalog.recommends(&item.id, None, total_ram);
     }
     page
 }
@@ -229,6 +230,7 @@ pub async fn search(
     text: &str,
     sort: SearchSort,
     cursor: Option<&str>,
+    total_ram: u64,
 ) -> IpcResult<SearchPage> {
     if text.chars().count() > 200 {
         return Err(IpcError::invalid("Search text is too long."));
@@ -245,7 +247,7 @@ pub async fn search(
         }
     }
     .map_err(hub_error)
-    .map(mark_recommended)
+    .map(|page| mark_recommended(page, total_ram))
 }
 
 /// The base variant whose header is read for the fit: the smallest model variant (cheapest
@@ -335,7 +337,11 @@ fn build_view(
             downloaded: downloaded.get(&v.name).cloned(),
             progress: pulls.progress_of(&pull_key(&info.id, &info.sha, &v.name)),
             recommended: v.files.len() == 1
-                && dn_models::Catalog::builtin().recommends(&info.id, Some(&v.files[0].path)),
+                && dn_models::Catalog::builtin().recommends(
+                    &info.id,
+                    Some(&v.files[0].path),
+                    local.machine().total_ram,
+                ),
         })
         .collect();
     RepoView {
@@ -476,15 +482,28 @@ mod tests {
             traits_hint: None,
             recommended: false,
         };
-        let page = mark_recommended(SearchPage {
-            items: vec![
-                hit("nomic-ai/nomic-embed-text-v2-moe-GGUF"),
-                hit("Qwen/Qwen2.5-0.5B-Instruct-GGUF"),
-            ],
-            next: None,
-        });
-        let marked: Vec<_> = page.items.iter().map(|i| i.recommended).collect();
-        assert_eq!(marked, [true, false]);
+        let page = |gb: u64| {
+            mark_recommended(
+                SearchPage {
+                    items: vec![
+                        hit("nomic-ai/nomic-embed-text-v2-moe-GGUF"),
+                        hit("bartowski/Llama-3.2-3B-Instruct-GGUF"),
+                        hit("Qwen/Qwen3-8B-GGUF"),
+                        hit("Qwen/Qwen2.5-0.5B-Instruct-GGUF"),
+                    ],
+                    next: None,
+                },
+                gb * dn_models::fit::GIB,
+            )
+            .items
+            .iter()
+            .map(|i| i.recommended)
+            .collect::<Vec<_>>()
+        };
+        // The search model everywhere; the chat pick for this machine's memory only.
+        assert_eq!(page(4), [true, false, false, false]);
+        assert_eq!(page(8), [true, true, false, false]);
+        assert_eq!(page(16), [true, false, true, false]);
     }
 
     fn v(name: &str, size: u64, kind: VariantKind) -> GgufVariant {
@@ -599,7 +618,7 @@ mod tests {
         })
         .unwrap();
         let long = "x".repeat(201);
-        let err = search(&hub, &long, SearchSort::Downloads, None)
+        let err = search(&hub, &long, SearchSort::Downloads, None, 0)
             .await
             .unwrap_err();
         assert!(err.message.contains("too long"));

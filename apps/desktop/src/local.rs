@@ -353,7 +353,7 @@ fn external_entry(
     let name = repo.rsplit('/').next().unwrap_or(repo).to_string();
     let variant = id.rsplit('/').next().unwrap_or("").to_string();
     CatalogEntry {
-        recommended: false,
+        recommended: None,
         quant: dn_models::hub::quant_label(&variant).unwrap_or_default(),
         id,
         name,
@@ -817,6 +817,7 @@ impl<B: InferenceBackend> LocalModels<B> {
             .get(&e.id)
             .cloned()
             .unwrap_or_else(|| self.estimated_fit(e));
+        let recommended = ext.is_none() && self.recommended_here(e, &fit);
         LocalModelRow {
             id: e.id.clone(),
             origin: ext.as_ref().map_or(ModelOrigin::Catalog, |x| x.origin),
@@ -849,8 +850,19 @@ impl<B: InferenceBackend> LocalModels<B> {
                 })
                 .map(Into::into),
             remove_blocked: self.remove_blocked(&e.id),
-            recommended: ext.is_none() && e.recommended,
+            recommended,
         }
+    }
+
+    /// A catalogue model recommended on this machine (#219): the search model, and the chat
+    /// pick for this machine's memory, unless it won't fit after all.
+    fn recommended_here(&self, e: &CatalogEntry, fit: &FitView) -> bool {
+        fit.status != FitStatus::MemoryBlocked
+            && self
+                .catalog
+                .recommended_for(self.machine().total_ram)
+                .iter()
+                .any(|r| r.id == e.id)
     }
 
     pub fn rows(&self) -> Vec<LocalModelRow> {
@@ -1639,7 +1651,7 @@ mod tests {
 
     fn entry(id: &str, size: u64, sha: &str) -> CatalogEntry {
         CatalogEntry {
-            recommended: false,
+            recommended: None,
             id: id.into(),
             name: format!("Model {id}"),
             repo: "org/repo".into(),
@@ -1661,6 +1673,30 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    /// The chat chip follows this machine's memory (#219): one chat model at most, none
+    /// below 8 GB; the search model everywhere.
+    #[test]
+    fn recommended_chips_follow_the_machine_memory() {
+        let dir = Dir(std::env::temp_dir().join(format!("dn-local-rec-{}", dn_core::Id::new())));
+        std::fs::create_dir_all(&dir.0).unwrap();
+        let chips = |gb: u64| -> Vec<String> {
+            LocalModels::new(
+                dir.0.clone(),
+                Catalog::builtin(),
+                Machine::unified(gb << 30),
+            )
+            .rows()
+            .into_iter()
+            .filter(|r| r.recommended)
+            .map(|r| r.id)
+            .collect()
+        };
+        let search = "nomic-embed-text-v2-moe-q5_k_m";
+        assert_eq!(chips(4), [search]);
+        assert_eq!(chips(8), ["llama-3.2-3b-instruct-q4_k_m", search]);
+        assert_eq!(chips(16), ["qwen3-8b-q4_k_m", search]);
     }
 
     #[test]
