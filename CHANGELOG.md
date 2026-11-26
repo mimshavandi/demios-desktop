@@ -6,6 +6,10 @@ Only changes people using the app or the `dn` command-line tool can notice are l
 
 ## [Unreleased]
 
+### Added
+
+- **Settings → Models → On this device:** **Remove** on a downloaded model frees its space. It takes effect at once, with Undo for 10 seconds; a task that used the model then asks you to choose one. Models in your Hugging Face cache or a folder you chose are never deleted. **Cancel download** stops a running or paused download and deletes the part already downloaded ([#231](https://github.com/mimshavandi/demios-desktop/pull/231)).
+
 ### Changed
 
 - Removing a tool server in **Settings → Tools** happens at once, without a confirmation, and **Undo** on the message puts it back for 10 seconds, with its secrets, sign-in, tool choices and chat approvals. Only **Delete all local data** still asks first ([#230](https://github.com/mimshavandi/demios-desktop/pull/230)).

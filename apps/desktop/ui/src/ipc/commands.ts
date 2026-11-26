@@ -135,6 +135,7 @@ interface Commands {
   download_model: { args: { modelId: string }; ret: null };
   pause_download: { args: { modelId: string }; ret: null };
   remove_local_model: { args: { modelId: string }; ret: null };
+  undo_remove_local_model: { args: { modelId: string }; ret: null };
   cancel_download: { args: { modelId: string }; ret: null };
   check_model_tools: { args: { modelId: string }; ret: ModelTraits };
   // Windows artifact webview (artifactWebview.ts, ADR-0012).
@@ -320,8 +321,14 @@ export const api = {
     call("watch_local_models", { onEvent: channel(onEvent) }),
   downloadModel: (modelId: string) => call("download_model", { modelId }),
   pauseDownload: (modelId: string) => call("pause_download", { modelId }),
-  /** Removes a downloaded model (#176); refused with a user message when `remove_blocked` is set. */
+  /**
+   * Removes a downloaded model with Undo (#176): it stops being offered at once, the tasks it
+   * was the model for are emptied, and its files are deleted when the undo window ends.
+   * Refused with a user message when `remove_blocked` is set.
+   */
   removeLocalModel: (modelId: string) => call("remove_local_model", { modelId }),
+  /** Undo for `removeLocalModel` within its window: the model and its tasks come back. */
+  undoRemoveLocalModel: (modelId: string) => call("undo_remove_local_model", { modelId }),
   /** Cancels a catalogue download and deletes its partial file (#176). */
   cancelDownload: (modelId: string) => call("cancel_download", { modelId }),
   /**

@@ -82,6 +82,7 @@
     "allow-download-model",
     "allow-pause-download",
     "allow-remove-local-model",
+    "allow-undo-remove-local-model",
     "allow-cancel-download",
     "allow-check-model-tools",
     "allow-check-for-update",

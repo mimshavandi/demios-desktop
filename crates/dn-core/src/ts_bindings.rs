@@ -26,6 +26,7 @@ fn export_all(dir: &Path) {
         RiskTier,
         ApprovalPolicy,
         CapabilitySource,
+        ApprovalRequester,
         CapabilitySpec,
         Preflight,
         Role,

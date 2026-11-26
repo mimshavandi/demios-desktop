@@ -4,7 +4,7 @@
 // model card are shown before download, with a warning for missing / non-commercial /
 // custom licences (any licence is allowed).
 
-import { Copy, Cpu, Download, Pause, Play, Plus, RotateCcw, ThumbsUp, TriangleAlert } from "lucide-react";
+import { Copy, Cpu, Download, Pause, Play, Plus, RotateCcw, ThumbsUp, Trash2, TriangleAlert, Undo2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Api } from "../ipc/commands";
 import { errorMessage, type AddModelLink, type FitStatus, type LocalCompute, type LocalModelRow } from "../ipc/types";
@@ -16,6 +16,9 @@ import { Dialog } from "./Dialog";
 import { onHubDownloadFinished, pauseHubDownload, startHubDownload, useHubDownloads } from "../hubDownloads";
 
 export const SMALL = { size: 12, strokeWidth: 1.5 } as const;
+
+/** How long Undo stays on the toast after Remove (#176); the app deletes the file a little later. */
+export const REMOVE_UNDO_MS = 10_000;
 
 /** One of the models we recommend, from the catalogue's flag (#219). */
 export function RecommendedBadge() {
@@ -76,6 +79,7 @@ export function LocalModelsCard({
   // Rows updated by events before the snapshot arrived: the snapshot must not undo them.
   const fresh = useRef<Set<string>>(new Set());
   const prev = useRef<Map<string, string>>(new Map(initial.map((r) => [r.id, r.state.state])));
+  const wasRemoving = useRef<Set<string>>(new Set(initial.filter((r) => r.removing === true).map((r) => r.id)));
 
   useEffect(() => {
     let alive = true;
@@ -93,6 +97,11 @@ export function LocalModelsCard({
         setRows((list) => (list.some((r) => r.id === ev.row.id) ? list.map((r) => (r.id === ev.row.id ? ev.row : r)) : [...list, ev.row]));
         const was = prev.current.get(ev.row.id);
         prev.current.set(ev.row.id, ev.row.state.state);
+        const removing = ev.row.removing === true;
+        // A removal ended (deleted, undone or failed): the pickers may have changed.
+        if (wasRemoving.current.has(ev.row.id) && !removing) onReady();
+        if (removing) wasRemoving.current.add(ev.row.id);
+        else wasRemoving.current.delete(ev.row.id);
         if (ev.row.state.state === "ready" && was !== "ready") {
           onReady();
           // Polite, once per finished download (design-system §7).
@@ -248,7 +257,7 @@ export function LocalModelsCard({
       )}
       {watchError === null && rows.length === 0 && <p className="dn-help">No models in the catalogue.</p>}
       {rows.map((r) => (
-        <LocalModelRowView key={r.id} api={api} row={r} />
+        <LocalModelRowView key={r.id} api={api} row={r} onChanged={onReady} />
       ))}
       <div className="dn-visually-hidden" role="status" aria-live="polite">
         {announce}
@@ -257,7 +266,16 @@ export function LocalModelsCard({
   );
 }
 
-function LocalModelRowView({ api, row }: { api: Api; row: LocalModelRow }) {
+function LocalModelRowView({
+  api,
+  row,
+  onChanged,
+}: {
+  api: Api;
+  row: LocalModelRow;
+  /** The model's tasks or availability changed (Remove, Undo): refresh pickers. */
+  onChanged: () => void;
+}) {
   const toast = useToast();
   const [busy, setBusy] = useState(false);
   const s = row.state;
@@ -276,6 +294,31 @@ function LocalModelRowView({ api, row }: { api: Api; row: LocalModelRow }) {
   };
   const download = () => act(() => api.downloadModel(row.id));
   const pause = () => act(() => api.pauseDownload(row.id));
+  const cancel = () =>
+    act(async () => {
+      await api.cancelDownload(row.id);
+      toast({ tone: "info", title: `Download of ${row.name} cancelled` });
+    });
+  const undo = () =>
+    void api
+      .undoRemoveLocalModel(row.id)
+      // The row update that follows refreshes the pickers (the removal ended).
+      .then(() => toast({ tone: "success", title: `${row.name} restored` }))
+      .catch((e: unknown) => toast({ tone: "error", title: errorMessage(e) }));
+  // Acts at once with Undo (design standard): the file is deleted when the window ends.
+  const remove = () =>
+    act(async () => {
+      await api.removeLocalModel(row.id);
+      onChanged();
+      toast({
+        tone: "info",
+        title: `${row.name} removed (${formatBytes(row.size)})`,
+        duration: REMOVE_UNDO_MS,
+        action: { label: "Undo", onAction: undo },
+      });
+    });
+  const removing = row.removing === true;
+  const blockedId = `local-${row.id}-blocked`;
 
   const progress = (done: number, total: number, label: string) => (
     <div className="dl-progress">
@@ -363,6 +406,15 @@ function LocalModelRowView({ api, row }: { api: Api; row: LocalModelRow }) {
         {s.state === "failed" && (
           <InlineMessage tone="error">{s.message}</InlineMessage>
         )}
+        {removing && <span className="dn-help">Removed. The file is deleted in a few seconds.</span>}
+        {!removing && row.remove_error != null && (
+          <InlineMessage tone="error">Couldn't remove {row.name}. {row.remove_error}</InlineMessage>
+        )}
+        {s.state === "ready" && !removing && row.remove_blocked !== null && (
+          <span className="dn-help" id={blockedId}>
+            {row.remove_blocked}
+          </span>
+        )}
       </div>
       <div className="row-actions local-actions">
         {s.state === "not_downloaded" && (
@@ -385,17 +437,44 @@ function LocalModelRowView({ api, row }: { api: Api; row: LocalModelRow }) {
             Resume
           </Button>
         )}
+        {(s.state === "downloading" || s.state === "queued" || s.state === "paused") && (
+          <Button
+            size="sm"
+            icon={<X {...ICON} aria-hidden="true" />}
+            disabled={busy}
+            aria-label={`Cancel download of ${row.name}`}
+            onClick={() => void cancel()}
+          >
+            Cancel download
+          </Button>
+        )}
         {s.state === "failed" && (
           <Button icon={<RotateCcw {...ICON} aria-hidden="true" />} loading={busy} onClick={() => void download()}>
             Retry
           </Button>
         )}
-        {s.state === "ready" && (
+        {s.state === "ready" && removing && (
+          <Button size="sm" icon={<Undo2 {...ICON} aria-hidden="true" />} aria-label={`Undo removing ${row.name}`} onClick={undo}>
+            Undo
+          </Button>
+        )}
+        {s.state === "ready" && !removing && (
           <>
             <Badge tone="local" icon={<Cpu {...SMALL} aria-hidden="true" />}>
               On this device
             </Badge>
             <SetDefault modelRef={row.model_ref} name={row.name} />
+            <Button
+              size="sm"
+              icon={<Trash2 {...ICON} aria-hidden="true" />}
+              loading={busy}
+              disabled={row.remove_blocked !== null}
+              aria-label={`Remove ${row.name} (${formatBytes(row.size)})`}
+              {...(row.remove_blocked !== null ? { "aria-describedby": blockedId } : {})}
+              onClick={() => void remove()}
+            >
+              Remove
+            </Button>
           </>
         )}
         {row.fit.status === "memory_blocked" && s.state === "not_downloaded" && (

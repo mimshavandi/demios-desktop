@@ -6,8 +6,18 @@ license.workspace = true
 publish.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+description = "The stable interface that Demios add-ons build against (ADR-0013)"
 
+# ADR-0013 §7: only dn-core and serde/serde_json, so add-ons don't pin other app crates.
 [dependencies]
+dn-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[features]
+# The conformance kit: an in-memory host that runs an add-on through the ADR-0013 §7
+# scenarios. For add-on tests only; the app never enables it.
+testing = []
 
 [lints]
 workspace = true

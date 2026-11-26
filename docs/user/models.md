@@ -33,10 +33,13 @@ Each row shows:
 To download a model, select **Download model**. While it downloads you see the progress and the time left. You can:
 
 - Select **Pause**, and later **Resume**.
+- Select **Cancel download** to stop it and delete the part already downloaded. A paused download can be cancelled too.
 - Start it again after the app quit or the connection dropped: it continues from where it stopped instead of starting over.
 - Select **Retry** if it failed.
 
 When the download finishes, the app checks the file against its published checksum. Then the row shows **On this device** and the model can answer. If a model file is in the models folder but doesn't match its published checksum, the row says so, with **Retry** to download it again; the file isn't used.
+
+To free the space a downloaded model takes, select **Remove** on its row. It's removed at once: it's no longer offered in the menus, and a task it was the model for (such as **Chat**) is emptied, so that task asks you to choose a model instead of using another one on its own. You can undo it for 10 seconds, from the message or from the row; the file is deleted after that. The app never deletes models in your Hugging Face cache or in a models folder you chose: there **Remove** is turned off, and the row says why.
 
 Models are stored in a folder shared with the `dn` command-line tool. **Settings → General → About** shows where.
 

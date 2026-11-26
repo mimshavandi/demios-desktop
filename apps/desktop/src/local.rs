@@ -118,6 +118,11 @@ pub struct LocalModelRow {
     pub remove_blocked: Option<String>,
     /// One of the models we recommend (#219): a "Recommended" chip on its row.
     pub recommended: bool,
+    /// Removed, with Undo still possible (#176): the file goes when the undo window ends.
+    /// Meanwhile the model isn't offered or loaded.
+    pub removing: bool,
+    /// Why the last removal failed, in the user's words (the file is still there).
+    pub remove_error: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -241,6 +246,11 @@ pub struct LocalModels<B: InferenceBackend = LlamaCppBackend> {
     traits: Mutex<HashMap<String, dn_models::kind::ModelTraits>>,
     /// Results of the user-started tool-call check for "unknown" models (T-INF-26).
     probes: Mutex<crate::tool_probe::Store>,
+    /// Models removed with Undo still possible (#176), each with the token of its removal so
+    /// an old timer never finishes a later removal of the same model.
+    removing: Mutex<HashMap<String, u64>>,
+    /// The last failed removal per model, for its row.
+    remove_errors: Mutex<HashMap<String, String>>,
     /// Where local models run (graphics card, shared graphics or processor), for the UI;
     /// `None` when not detected (tests).
     compute: Mutex<Option<dn_models::compute::Compute>>,
@@ -613,6 +623,8 @@ impl<B: InferenceBackend> LocalModels<B> {
             traits: Mutex::new(HashMap::new()),
             probes: Mutex::new(crate::tool_probe::Store::default()),
             compute: Mutex::new(None),
+            removing: Mutex::new(HashMap::new()),
+            remove_errors: Mutex::new(HashMap::new()),
         };
         lm.scan();
         lm
@@ -851,6 +863,8 @@ impl<B: InferenceBackend> LocalModels<B> {
                 .map(Into::into),
             remove_blocked: self.remove_blocked(&e.id),
             recommended,
+            removing: lock(&self.removing).contains_key(&e.id),
+            remove_error: lock(&self.remove_errors).get(&e.id).cloned(),
         }
     }
 
@@ -869,8 +883,10 @@ impl<B: InferenceBackend> LocalModels<B> {
         self.entries().iter().map(|e| self.row(e)).collect()
     }
 
+    /// Downloaded, verified and not being removed (#176): the model can be offered and loaded.
     pub fn is_ready(&self, id: &str) -> bool {
         matches!(lock(&self.state).get(id), Some(DownloadState::Ready))
+            && !lock(&self.removing).contains_key(id)
     }
 
     /// The model is too big for this machine: never auto-picked, never loaded.
@@ -978,6 +994,14 @@ impl<B: InferenceBackend> LocalModels<B> {
             .get(id)
             .cloned()
             .ok_or_else(|| format!("Unknown model `{id}`."))?;
+        // Removed with Undo still possible (#176): the end of the window would delete a fresh
+        // download, so it waits for Undo or the window to end.
+        if lock(&self.removing).contains_key(id) {
+            return Err(format!(
+                "{} is being removed. Select Undo to keep it, or download it again in a few seconds.",
+                e.name
+            ));
+        }
         if self.is_ready(id) {
             return Ok(());
         }
@@ -1210,6 +1234,78 @@ impl<B: InferenceBackend> LocalModels<B> {
         Ok(())
     }
 
+    /// First step of Remove with Undo (#176): checks the model can be removed, stops its
+    /// download and marks it removed, so it is no longer offered or loaded. Nothing is deleted
+    /// yet: [`Self::finish_remove`] does that when the undo window ends, unless
+    /// [`Self::undo_remove`] came first. Returns the token for `finish_remove`.
+    pub fn begin_remove(&self, id: &str) -> Result<u64, CoreError> {
+        let e = self.find(id).ok_or_else(|| CoreError::ModelUnavailable {
+            user_message: format!("`local:{id}` isn't a model this app knows."),
+            developer_message: format!("begin_remove: unknown model id {id}"),
+            recovery: vec![],
+        })?;
+        if let Some(reason) = self.remove_blocked(id) {
+            return Err(CoreError::ModelUnavailable {
+                user_message: reason,
+                developer_message: format!("{id}: removal refused (not Demios's folder)"),
+                recovery: vec![],
+            });
+        }
+        if matches!(
+            lock(&self.state).get(id),
+            None | Some(DownloadState::NotDownloaded)
+        ) && !self.is_external(id)
+        {
+            return Err(CoreError::ModelUnavailable {
+                user_message: format!("{} isn't downloaded, so there's nothing to remove.", e.name),
+                developer_message: format!("begin_remove: {id} not downloaded"),
+                recovery: vec![],
+            });
+        }
+        if let Some(task) = lock(&self.tasks).remove(id) {
+            task.handle.abort();
+        }
+        let token = self.next_generation.fetch_add(1, Ordering::Relaxed);
+        lock(&self.removing).insert(id.to_string(), token);
+        lock(&self.remove_errors).remove(id);
+        self.emit(&e);
+        Ok(token)
+    }
+
+    /// Undo for [`Self::begin_remove`]: the model is offered again. `false` when it isn't
+    /// being removed (the undo window ended, or it was never removed).
+    pub fn undo_remove(&self, id: &str) -> bool {
+        let was = lock(&self.removing).remove(id).is_some();
+        if was && let Some(e) = self.find(id) {
+            self.emit(&e);
+        }
+        was
+    }
+
+    /// The end of the undo window: deletes the model's files ([`Self::remove`]) if removal
+    /// `token` is still pending. `None` when Undo came first or a later removal replaced it.
+    /// On failure the model stays, offered again, and its row says why.
+    pub async fn finish_remove(&self, id: &str, token: u64) -> Option<Result<(), CoreError>> {
+        {
+            let mut removing = lock(&self.removing);
+            if removing.get(id) != Some(&token) {
+                return None;
+            }
+            removing.remove(id);
+        }
+        let result = self.remove(id).await;
+        if let Err(err) = &result {
+            lock(&self.remove_errors).insert(
+                id.to_string(),
+                crate::agent::model_error(err.clone()).message,
+            );
+            if let Some(e) = self.find(id) {
+                self.emit(&e);
+            }
+        }
+        Some(result)
+    }
+
     /// Removes a downloaded model from this computer (#176): stops its download, unloads it
     /// if nothing is using it, and deletes what Demios wrote for it ([`Self::files_of`]).
     /// Refused, with nothing deleted, for models in the Hugging Face cache or a folder the
@@ -1326,7 +1422,8 @@ impl<B: InferenceBackend> LocalModels<B> {
             task.handle.abort();
         }
         let _files = self.model_lock(id).lock_owned().await;
-        if self.is_ready(id) {
+        // A downloaded model, or one being removed (its removal deletes the files), is left alone.
+        if self.is_ready(id) || lock(&self.removing).contains_key(id) {
             return Ok(());
         }
         let p = self.path(&e);
@@ -2384,6 +2481,132 @@ mod tests {
         lm.cancel_download("half").await.unwrap();
         assert!(!dir.0.join("half.gguf.part").exists());
         assert_eq!(lm.rows()[0].state, DownloadState::NotDownloaded);
+    }
+
+    /// A downloaded catalogue model in a folder Demios owns, for the Remove tests (#176).
+    fn owned_with_ready(tag: &str) -> (Dir, LocalModels) {
+        let dir = Dir(std::env::temp_dir().join(format!("dn-local-{tag}-{}", dn_core::Id::new())));
+        std::fs::create_dir_all(&dir.0).unwrap();
+        std::fs::write(dir.0.join("m.gguf"), b"12345").unwrap();
+        std::fs::write(dir.0.join("m.gguf.sha256"), "aa\n").unwrap();
+        let mut lm = LocalModels::new(
+            dir.0.clone(),
+            Catalog {
+                version: 1,
+                models: vec![entry("m", 5, "aa")],
+            },
+            Machine::cpu_only(16 << 30),
+        );
+        lm.set_owns_dir(true);
+        assert!(lm.is_ready("m"));
+        (dir, lm)
+    }
+
+    /// Remove, then Undo within the window: nothing is deleted and the model is offered again.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn remove_with_undo_keeps_the_file() {
+        let (dir, lm) = owned_with_ready("undo");
+        let token = lm.begin_remove("m").unwrap();
+        assert!(lm.rows()[0].removing);
+        assert!(!lm.is_ready("m"), "not offered or loaded while removing");
+        assert!(lm.ready().is_empty());
+        assert!(lm.undo_remove("m"));
+        assert!(!lm.rows()[0].removing);
+        assert!(lm.is_ready("m"));
+        // The end of the window finds nothing to do.
+        assert!(lm.finish_remove("m", token).await.is_none());
+        assert!(dir.0.join("m.gguf").exists());
+        assert!(!lm.undo_remove("m"), "a second Undo has nothing to undo");
+    }
+
+    /// Remove and let the window end: the files are deleted and the row is "not downloaded".
+    #[tokio::test(flavor = "multi_thread")]
+    async fn remove_after_the_undo_window_deletes_the_file() {
+        let (dir, lm) = owned_with_ready("expire");
+        let token = lm.begin_remove("m").unwrap();
+        assert!(
+            dir.0.join("m.gguf").exists(),
+            "nothing deleted before the window ends"
+        );
+        lm.finish_remove("m", token).await.unwrap().unwrap();
+        assert!(!dir.0.join("m.gguf").exists());
+        assert!(!dir.0.join("m.gguf.sha256").exists());
+        let row = &lm.rows()[0];
+        assert_eq!(row.state, DownloadState::NotDownloaded);
+        assert!(!row.removing);
+        assert!(!lm.undo_remove("m"), "too late for Undo");
+    }
+
+    /// While a model is being removed, a new download of it waits: the end of the undo window
+    /// would delete the fresh file. Cancel leaves it to the removal.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn no_download_or_cancel_while_a_model_is_being_removed() {
+        let (dir, lm) = owned_with_ready("redownload");
+        let lm = Arc::new(lm);
+        let token = lm.begin_remove("m").unwrap();
+        let err = lm.download("m").unwrap_err();
+        assert!(err.contains("is being removed"), "{err}");
+        lm.cancel_download("m").await.unwrap();
+        assert!(lm.rows()[0].removing);
+        assert_eq!(lm.rows()[0].state, DownloadState::Ready);
+        lm.finish_remove("m", token).await.unwrap().unwrap();
+        assert!(!dir.0.join("m.gguf").exists());
+    }
+
+    /// Remove, Undo, Remove again: the first removal's timer never finishes the second early.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_old_undo_window_never_ends_a_later_removal() {
+        let (dir, lm) = owned_with_ready("again");
+        let first = lm.begin_remove("m").unwrap();
+        assert!(lm.undo_remove("m"));
+        let second = lm.begin_remove("m").unwrap();
+        assert!(lm.finish_remove("m", first).await.is_none());
+        assert!(dir.0.join("m.gguf").exists());
+        assert!(lm.rows()[0].removing);
+        lm.finish_remove("m", second).await.unwrap().unwrap();
+        assert!(!dir.0.join("m.gguf").exists());
+    }
+
+    /// Remove is refused, with nothing marked, for a folder the user chose and for a model
+    /// that isn't downloaded.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn remove_is_refused_before_anything_changes() {
+        let (dir, mut lm) = owned_with_ready("refused");
+        lm.set_owns_dir(false);
+        let err = lm.begin_remove("m").unwrap_err();
+        assert!(format!("{err:?}").contains("folder you chose"), "{err:?}");
+        assert!(!lm.rows()[0].removing);
+        assert!(lm.is_ready("m"));
+        lm.set_owns_dir(true);
+        lm.finish_remove("m", lm.begin_remove("m").unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        let err = lm.begin_remove("m").unwrap_err();
+        assert!(format!("{err:?}").contains("isn't downloaded"), "{err:?}");
+        drop(dir);
+    }
+
+    /// Cancel while the download is running: the transfer stops, the partial file goes and
+    /// the row is back to "not downloaded".
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cancel_mid_download_stops_it_and_deletes_the_partial_file() {
+        let (d, lm) = racing(scripted(Arc::new(|_, e, dir, mut progress| {
+            Box::pin(async move {
+                std::fs::write(dir.join(format!("{}.part", e.file)), b"12").unwrap();
+                progress(2, e.size);
+                std::future::pending().await
+            })
+        })));
+        lm.download("m").unwrap();
+        until(|| matches!(state_of(&lm), DownloadState::Downloading { .. })).await;
+        until(|| d.0.join("m.gguf.part").exists()).await;
+        lm.cancel_download("m").await.unwrap();
+        assert!(!d.0.join("m.gguf.part").exists());
+        assert_eq!(state_of(&lm), DownloadState::NotDownloaded);
+        // A late progress report from the stopped transfer changes nothing.
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        assert_eq!(state_of(&lm), DownloadState::NotDownloaded);
     }
 
     #[tokio::test(flavor = "multi_thread")]
