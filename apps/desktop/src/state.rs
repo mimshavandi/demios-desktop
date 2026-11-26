@@ -199,6 +199,9 @@ pub struct AppState {
     live: Mutex<HashMap<Id, Live>>,
     removed_keys: Mutex<HashMap<String, RemovedKey>>,
     removed_servers: Mutex<HashMap<String, RemovedServer>>,
+    /// Local models removed with Undo still possible (#176): the tasks they were the model
+    /// for, put back by Undo.
+    local_removals: Mutex<HashMap<String, Vec<(String, String)>>>,
     next_token: AtomicU64,
     /// Bumped by "Delete all local data": a background MCP connect started before it must
     /// not add its server afterwards.
@@ -280,6 +283,7 @@ impl AppState {
             live: Mutex::new(HashMap::new()),
             removed_keys: Mutex::new(HashMap::new()),
             removed_servers: Mutex::new(HashMap::new()),
+            local_removals: Mutex::new(HashMap::new()),
             next_token: AtomicU64::new(1),
             mcp_epoch: AtomicU64::new(0),
             local_servers: crate::mcp::local_servers_allowed(),
@@ -1250,6 +1254,19 @@ impl AppState {
         );
     }
 
+    /// Remembers the tasks a removed local model was the model for, until Undo or the end
+    /// of its undo window (#176).
+    pub fn remember_local_removal(&self, model_id: &str, slots: Vec<(String, String)>) {
+        lock(&self.local_removals).insert(model_id.to_string(), slots);
+    }
+
+    /// The tasks a removed local model was the model for (taken once).
+    pub fn take_local_removal(&self, model_id: &str) -> Vec<(String, String)> {
+        lock(&self.local_removals)
+            .remove(model_id)
+            .unwrap_or_default()
+    }
+
     /// The removed server, if still within the undo window.
     pub fn take_removed_server(&self, server_id: &str) -> Option<RemovedServer> {
         let mut m = lock(&self.removed_servers);
@@ -1280,6 +1297,7 @@ mod tests {
             risk,
             policy: ApprovalPolicy::AskOncePerConversation,
             arguments: serde_json::json!({ "path": "notes/todo.md" }),
+            requester: Default::default(),
         }
     }
 

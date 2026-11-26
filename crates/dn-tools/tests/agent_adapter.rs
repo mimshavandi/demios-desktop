@@ -18,6 +18,7 @@ fn tool_ctx(cancel: CancelToken) -> ToolContext {
         run_id: Id::new(),
         step: 0,
         cancel,
+        allowed_tools: Vec::new(),
     }
 }
 

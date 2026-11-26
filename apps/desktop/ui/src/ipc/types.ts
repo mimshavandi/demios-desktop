@@ -5,6 +5,7 @@
 //   app:       apps/desktop/src/{chat,commands,models,settings,error}.rs
 
 import type { ApprovalPolicy } from "@dn-core/ApprovalPolicy";
+import type { ApprovalRequester } from "@dn-core/ApprovalRequester";
 import type { ArtifactType } from "@dn-core/ArtifactType";
 import type { ArtifactVersion } from "@dn-core/ArtifactVersion";
 import type { Capability } from "@dn-core/Capability";
@@ -199,6 +200,8 @@ export interface ApprovalPrompt {
   policy: ApprovalPolicy;
   /** Exactly what the tool will receive; always shown. */
   arguments: unknown;
+  /** Who asked: the chat's model, or an add-on (ADR-0013). */
+  requester: ApprovalRequester;
 }
 
 /** Connection state of a configured MCP server. */
@@ -339,6 +342,10 @@ export interface LocalModelRow {
   traits: ModelTraits | null;
   /** Why "Remove" can't delete this model, in the user's words (#176); null when it can. */
   remove_blocked: string | null;
+  /** Removed, with Undo still possible (#176): the file goes when the undo window ends. */
+  removing?: boolean;
+  /** Why the last removal failed (the file is still there). */
+  remove_error?: string | null;
 }
 
 /**

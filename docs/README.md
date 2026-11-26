@@ -31,6 +31,7 @@ Docs for people who use, build or contribute to Demios Desktop. Start with the [
 |---|---|
 | [design/design-system.md](design/design-system.md) | Tokens, components, states, writing and accessibility rules |
 | [design/preview.html](design/preview.html) | A preview of the tokens and components |
+| [design/dn-sync.md](design/dn-sync.md) | How devices and a Demios Node keep one data set: records, clock, deletes, conflicts, the group key, and Relay mailboxes (draft) |
 
 ## Security and privacy
 

@@ -1346,6 +1346,11 @@ dependencies = [
 [[package]]
 name = "dn-plugin-api"
 version = "0.1.0"
+dependencies = [
+ "dn-core",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "dn-providers"
@@ -1391,12 +1396,16 @@ dependencies = [
  "dn-secrets",
  "dn-store",
  "rusqlite",
+<<<<<<< HEAD
  "rustls",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
  "tokio-rustls",
+=======
+ "thiserror 2.0.21",
+>>>>>>> origin/main
  "zeroize",
 ]
 
