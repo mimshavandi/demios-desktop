@@ -575,6 +575,10 @@ pub fn apply(
 ) -> Result<()> {
     let tx = conn.unchecked_transaction()?;
     for op in &change.ops {
+        // Ids from other devices must be in the one form this app writes (see
+        // `dn_store::sync_rows::canonical_id`), so tombstones and keys always match.
+        let (Op::Purge { id, .. } | Op::Append { id, .. } | Op::Put { id, .. }) = op;
+        sync_rows::canonical_id(id).map_err(store)?;
         match op {
             Op::Purge { collection: c, id } => {
                 let col = collection(cols, c)?;
@@ -615,6 +619,11 @@ pub fn apply(
                 value,
             } => {
                 let col = collection(cols, c)?;
+                if col.kind() != CollectionKind::Append {
+                    return Err(SyncError::Protocol(
+                        "an append on a collection that isn't append-only",
+                    ));
+                }
                 let Value::Object(fields) = value else {
                     return Err(SyncError::Protocol("an appended record isn't an object"));
                 };
@@ -1039,6 +1048,62 @@ mod tests {
         let e = a.send(&key, NOW + 1);
         b.take(&e, &key, &members, NOW + 2);
         assert!(b.messages(c.id).is_empty());
+    }
+
+    #[test]
+    fn a_change_naming_a_record_by_another_spelling_of_its_id_is_refused() {
+        let (mut a, mut b, key, members) = pair();
+        let c = chat::create_conversation(&a.conn, "Secret plans").unwrap();
+        let e = a.send(&key, NOW);
+        b.take(&e, &key, &members, NOW);
+        chat::delete_conversation(&b.conn, c.id).unwrap();
+        chat::purge_deleted(&b.conn, i64::MAX).unwrap();
+        b.send(&key, NOW + 1);
+        // A member crafts a Put for the purged chat under its id in upper case.
+        let mut fields = BTreeMap::new();
+        for (k, v) in [
+            ("title", Value::String("Back again".into())),
+            ("model", Value::Null),
+            ("project_id", Value::Null),
+            ("deleted_at", Value::Null),
+            ("created_at", Value::from(1)),
+            ("updated_at", Value::from(1)),
+        ] {
+            fields.insert(k.to_owned(), v);
+        }
+        let crafted = inbox::next_change(
+            &a.conn,
+            a.keys.id(),
+            GROUP,
+            0,
+            vec![Op::Put {
+                collection: "chat".into(),
+                id: c.id.to_string().to_uppercase(),
+                fields,
+            }],
+            NOW + 2,
+        )
+        .unwrap();
+        // b has a's earlier changes; apply the crafted one directly.
+        let err = apply(
+            &b.conn,
+            &store_collections(),
+            &crafted,
+            b.keys.id(),
+            NOW + 3,
+        );
+        assert!(err.is_err());
+        assert!(b.chats().is_empty(), "the purged chat doesn't come back");
+        // And an Append on a collection that isn't append-only is refused.
+        let append = Change {
+            ops: vec![Op::Append {
+                collection: "chat".into(),
+                id: dn_core::Id::new().to_string(),
+                value: Value::Object(Map::new()),
+            }],
+            ..crafted
+        };
+        assert!(apply(&b.conn, &store_collections(), &append, b.keys.id(), NOW + 3).is_err());
     }
 
     #[test]
