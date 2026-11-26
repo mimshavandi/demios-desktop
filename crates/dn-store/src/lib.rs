@@ -15,6 +15,7 @@ pub mod chat;
 pub mod migrate;
 pub mod paths;
 pub mod project;
+pub mod sync_rows;
 
 pub use migrate::{MigrationSet, run_migrations};
 pub use rusqlite::Connection;
