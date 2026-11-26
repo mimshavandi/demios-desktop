@@ -3,6 +3,7 @@
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
+  ConnectView,
   KnowledgeStatus,
   MessageSources,
   AppInfo,
@@ -58,6 +59,8 @@ interface Commands {
   list_mcp_servers: { args: Record<string, never>; ret: McpServersView };
   save_mcp_server: { args: { input: McpServerInput; editing: string | null }; ret: McpServersView };
   remove_mcp_server: { args: { serverId: string }; ret: McpServersView };
+  connect_catalogue: { args: Record<string, never>; ret: ConnectView };
+  connect_service: { args: { entryId: string }; ret: ConnectView };
   restore_mcp_server: { args: { serverId: string }; ret: McpServersView };
   reconnect_mcp_server: { args: { serverId: string }; ret: null };
   sign_in_mcp_server: { args: { serverId: string }; ret: null };
@@ -210,6 +213,10 @@ export const api = {
   removeMcpServer: (serverId: string) => call("remove_mcp_server", { serverId }),
   restoreMcpServer: (serverId: string) => call("restore_mcp_server", { serverId }),
   reconnectMcpServer: (serverId: string) => call("reconnect_mcp_server", { serverId }),
+  /** Connect (ADR-0018): the reviewed services, if the catalogue's signature checks out. */
+  connectCatalogue: () => call("connect_catalogue", {}),
+  /** Adds a reviewed service as an ordinary tool server; sign in with `signInMcpServer`. */
+  connectService: (entryId: string) => call("connect_service", { entryId }),
   /** Opens the server's sign-in page in the browser and waits (up to 5 minutes). */
   signInMcpServer: (serverId: string) => call("sign_in_mcp_server", { serverId }),
   /** Deletes the server's stored sign-in tokens. */

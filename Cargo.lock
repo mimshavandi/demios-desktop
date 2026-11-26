@@ -1091,6 +1091,7 @@ dependencies = [
 name = "demios-desktop"
 version = "0.1.0"
 dependencies = [
+ "aws-lc-rs",
  "dn-agent",
  "dn-artifacts",
  "dn-core",

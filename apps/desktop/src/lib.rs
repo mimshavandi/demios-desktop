@@ -10,6 +10,7 @@ pub mod artifact_child;
 pub mod artifacts;
 pub mod chat;
 pub mod commands;
+pub mod connect;
 pub mod deeplink;
 pub mod distribution;
 pub mod error;
@@ -229,6 +230,8 @@ pub fn run() {
             commands::list_mcp_servers,
             commands::save_mcp_server,
             commands::remove_mcp_server,
+            commands::connect_catalogue,
+            commands::connect_service,
             commands::restore_mcp_server,
             commands::reconnect_mcp_server,
             commands::sign_in_mcp_server,
