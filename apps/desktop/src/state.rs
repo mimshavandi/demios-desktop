@@ -593,6 +593,8 @@ impl AppState {
     /// a failure and returns the parts it could not delete, in the user's words.
     pub async fn delete_all_local_data(self: &Arc<Self>) -> Vec<&'static str> {
         let mut failed = Vec::new();
+        // A join waiting for confirmation on a Node must not record it afterwards.
+        crate::node::join_cancel(&self.node).await;
         if !self.stop_all_and_wait(REPLY_STOP_TIMEOUT).await {
             eprintln!("some replies did not stop in time; deleting anyway");
             failed.push("an answer that was still being written (it may have been saved again)");

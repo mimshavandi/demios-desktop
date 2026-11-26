@@ -381,6 +381,7 @@ function fakeApi() {
     nodeJoinCancel: async () => null,
     nodeRemoveDevice: async () => ({ paired: null, online: false, status: null, devices: [], problem: null }),
     nodeUnpair: async () => ({ paired: null, online: false, status: null, devices: [], problem: null }),
+    nodeForget: async () => ({ paired: null, online: false, status: null, devices: [], problem: null }),
     setProviderKey: async () => catalog(),
     addRemoteServer: async () => catalog(),
     refreshRemoteServer: async () => catalog(),

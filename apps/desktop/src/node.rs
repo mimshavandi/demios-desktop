@@ -244,11 +244,11 @@ pub async fn overview(state: &std::sync::Arc<AppState>) -> IpcResult<NodeOvervie
             view.status = Some(status);
             view.devices = devices;
         }
-        // The Node closed right after the handshake: it doesn't accept this device.
+        // The Node closed right after the handshake: it most likely removed this device.
         (Err(SyncError::Io(_)), _) => {
             view.problem = Some(
-                "Your Node doesn't accept this device any more; it may have been removed. \
-                 Unpair it here, then pair again."
+                "Your Node closed the connection; it may have removed this device. If so, \
+                 forget it here, then pair again."
                     .into(),
             );
         }
@@ -380,6 +380,20 @@ pub async fn remove_device(state: &std::sync::Arc<AppState>, id: &str) -> IpcRes
             "Your Node sent an answer this app doesn't understand.",
         )),
     }
+}
+
+/// Forgets the Node on this computer only, for a Node that is gone or has already removed
+/// this computer. The Node keeps listing this computer until it's removed there; the
+/// confirmation says so.
+pub async fn forget(state: &std::sync::Arc<AppState>) -> IpcResult<NodeOverview> {
+    join_cancel(&state.node).await;
+    let st = state.clone();
+    tauri::async_runtime::spawn_blocking(move || -> IpcResult<()> {
+        link::forget(&*st.db()?).map_err(|e| IpcError::new("node", e.to_string()))
+    })
+    .await
+    .map_err(|e| IpcError::new("node", e.to_string()))??;
+    overview(state).await
 }
 
 /// Unpairs this computer: the Node removes it, then this computer forgets the Node. If the

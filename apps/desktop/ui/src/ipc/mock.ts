@@ -793,6 +793,10 @@ export function createMockApi(): Api {
       nodeView = noNode();
       return nodeView;
     },
+    nodeForget: async () => {
+      nodeView = noNode();
+      return nodeView;
+    },
     setProviderKey: async (p) => {
       keys.add(p);
       return catalog();

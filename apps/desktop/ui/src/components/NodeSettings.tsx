@@ -42,6 +42,7 @@ export function NodeSettings({ api }: { api: Api }) {
   const [load, setLoad] = useState<Load>({ kind: "loading" });
   const [joining, setJoining] = useState(false);
   const [removing, setRemoving] = useState<NodeDevice | null>(null);
+  const [forgetting, setForgetting] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const pairRef = useRef<HTMLButtonElement>(null);
@@ -90,6 +91,20 @@ export function NodeSettings({ api }: { api: Api }) {
           : `${removing.name} removed. It can't connect or sync again.`,
       });
       setRemoving(null);
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const confirmForget = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      setLoad({ kind: "ready", view: await api.nodeForget() });
+      toast({ tone: "success", title: "This computer forgot the Node. Your data stays here." });
+      setForgetting(false);
     } catch (e) {
       setError(errorMessage(e));
     } finally {
@@ -183,6 +198,20 @@ export function NodeSettings({ api }: { api: Api }) {
           <dt>Phone wake-ups</dt>
           <dd>Off</dd>
         </dl>
+        {(!view.online || view.problem !== null) && (
+          <div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setError(null);
+                setForgetting(true);
+              }}
+            >
+              Forget this Node
+            </Button>
+          </div>
+        )}
       </section>
 
       <section className="card" aria-labelledby="node-devices-h">
@@ -265,6 +294,20 @@ export function NodeSettings({ api }: { api: Api }) {
           {removing?.this_device
             ? "This device stops syncing. Your data stays here."
             : "It won't be able to connect or sync again. Its copy of your data stays on it, because it may be offline or lost. If you have it, use Delete all on it first."}
+        </p>
+      </ConfirmDialog>
+      <ConfirmDialog
+        open={forgetting}
+        onOpenChange={setForgetting}
+        title={`Forget ${paired.name}?`}
+        confirmLabel="Forget this Node"
+        busy={busy}
+        error={error}
+        onConfirm={() => void confirmForget()}
+      >
+        <p>
+          This computer stops syncing with it. Your data stays here. The Node still lists this
+          computer until you remove it there, or from another device.
         </p>
       </ConfirmDialog>
     </>

@@ -1414,3 +1414,9 @@ pub async fn node_remove_device(
 pub async fn node_unpair(state: AppStateRef<'_>) -> IpcResult<crate::node::NodeOverview> {
     crate::node::unpair(state.inner()).await
 }
+
+/// Forgets the Node on this computer only (a Node that is gone or removed this computer).
+#[tauri::command]
+pub async fn node_forget(state: AppStateRef<'_>) -> IpcResult<crate::node::NodeOverview> {
+    crate::node::forget(state.inner()).await
+}

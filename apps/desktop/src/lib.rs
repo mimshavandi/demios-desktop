@@ -284,6 +284,7 @@ pub fn run() {
             commands::node_join_cancel,
             commands::node_remove_device,
             commands::node_unpair,
+            commands::node_forget,
             commands::set_provider_key,
             remote::add_remote_server,
             remote::refresh_remote_server,

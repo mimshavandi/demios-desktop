@@ -57,6 +57,7 @@
     "allow-node-join-cancel",
     "allow-node-remove-device",
     "allow-node-unpair",
+    "allow-node-forget",
     "allow-set-provider-key",
     "allow-delete-provider-key",
     "allow-restore-conversation",

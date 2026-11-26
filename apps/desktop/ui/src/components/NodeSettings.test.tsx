@@ -66,6 +66,11 @@ function fake(start: NodeOverview, over: Partial<Api> = {}) {
       view = none;
       return view;
     },
+    nodeForget: async () => {
+      calls.push(["forget"]);
+      view = none;
+      return view;
+    },
     ...over,
   } as unknown as Api;
   return { api, calls, confirmOnNode: (v: NodeOverview) => release(v) };
@@ -190,6 +195,26 @@ describe("Settings › Node (ADR-0014)", () => {
     show(fake(mismatch).api);
     expect(await screen.findByRole("alert")).toBeTruthy();
     expect(screen.getByText(/Update this app to sync/)).toBeTruthy();
+  });
+
+  it("a Node that is gone or removed this computer can be forgotten here, after a confirmation", async () => {
+    const gone: NodeOverview = { ...paired, online: false, status: null, devices: [] };
+    const f = fake(gone);
+    show(f.api);
+    fireEvent.click(await screen.findByRole("button", { name: "Forget this Node" }));
+    const confirm = await screen.findByRole("alertdialog");
+    expect(within(confirm).getByText(/still lists this computer/)).toBeTruthy();
+    const button = within(confirm).getByRole("button", { name: "Forget this Node" }) as HTMLButtonElement;
+    await waitFor(() => expect(button.disabled).toBe(false));
+    fireEvent.click(button);
+    expect(await screen.findByRole("heading", { name: "No Node paired" })).toBeTruthy();
+    expect(f.calls).toContainEqual(["forget"]);
+  });
+
+  it("an online Node doesn't offer Forget (Unpair removes this computer there too)", async () => {
+    show(fake(paired).api);
+    await screen.findByText("Online");
+    expect(screen.queryByRole("button", { name: "Forget this Node" })).toBeNull();
   });
 
   it("removing a device asks first, then removes it", async () => {

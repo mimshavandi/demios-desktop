@@ -64,6 +64,7 @@ const COMMANDS: &[&str] = &[
     "node_join_cancel",
     "node_remove_device",
     "node_unpair",
+    "node_forget",
     "set_provider_key",
     "add_remote_server",
     "refresh_remote_server",
