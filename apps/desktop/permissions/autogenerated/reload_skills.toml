@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-reload-skills"
+description = "Enables the reload_skills command without any pre-configured scope."
+commands.allow = ["reload_skills"]
+
+[[permission]]
+identifier = "deny-reload-skills"
+description = "Denies the reload_skills command without any pre-configured scope."
+commands.deny = ["reload_skills"]

@@ -231,6 +231,7 @@ export function SettingsView({
                   className={id === section ? "nav active" : "nav"}
                   aria-current={id === section ? "page" : undefined}
                   data-section={id}
+                  data-testid={`settings-nav-${id}`}
                   tabIndex={id === section ? 0 : -1}
                   onClick={() => go(id)}
                 >

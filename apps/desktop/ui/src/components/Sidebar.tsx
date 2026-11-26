@@ -157,6 +157,7 @@ export function Sidebar(p: Props) {
           className={p.settingsOpen ? "nav active" : "nav"}
           aria-current={p.settingsOpen ? "page" : undefined}
           onClick={() => p.onSettings()}
+          data-testid="open-settings"
           aria-keyshortcuts={`${mod},`}
         >
           <Settings {...ICON} aria-hidden="true" />
