@@ -5,7 +5,7 @@
 //! answer is remembered for the conversation), `auto`.
 
 use dn_core::Id;
-use dn_core::capability::{ApprovalPolicy, RiskTier};
+use dn_core::capability::{ApprovalPolicy, ApprovalRequester, RiskTier};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::Mutex;
@@ -42,6 +42,10 @@ pub struct ApprovalPrompt {
     /// The exact arguments the tool will receive. The UI must show these: the model may have
     /// been prompt-injected (docs/security/mcp-tools.md).
     pub arguments: serde_json::Value,
+    /// Who asked: the chat's model, or an add-on (and its job). The UI names an add-on on
+    /// the prompt, so its request never looks like the model's own (ADR-0013 §4).
+    #[serde(default)]
+    pub requester: ApprovalRequester,
 }
 
 /// A pending approval. Dropping it without answering counts as `Deny`.
@@ -218,6 +222,7 @@ mod tests {
             risk: RiskTier::LowWrite,
             policy,
             arguments: serde_json::json!({}),
+            requester: ApprovalRequester::Model,
         }
     }
 

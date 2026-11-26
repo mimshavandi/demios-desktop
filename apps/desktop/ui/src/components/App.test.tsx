@@ -1047,6 +1047,7 @@ describe("App", () => {
       risk,
       policy: "ask_once_per_conversation",
       arguments: { path: "notes/todo.md", content: "milk" },
+      requester: { kind: "model" },
     });
     act(() => f.approve({ type: "requested", prompt: prompt("low_write") }));
     const card = await screen.findByTestId("approval-card");
@@ -1180,6 +1181,7 @@ describe("App", () => {
           risk: "low_write",
           policy: "ask_once_per_conversation",
           arguments: { path: "notes/todo.md" },
+          requester: { kind: "model" },
         },
       }),
     );
@@ -1209,6 +1211,7 @@ describe("App", () => {
           risk: "low_write",
           policy: "always_ask",
           arguments: {},
+          requester: { kind: "model" },
         },
       }),
     );
@@ -1243,6 +1246,7 @@ describe("App", () => {
           risk: "low_write",
           policy: "always_ask",
           arguments: {},
+          requester: { kind: "model" },
         },
       }),
     );

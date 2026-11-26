@@ -279,6 +279,7 @@ pub async fn run_loop(
             run_id,
             step,
             cancel: cancel.clone(),
+            allowed_tools: Vec::new(),
         };
         for (i, call) in calls.iter().enumerate() {
             on_event(AgentEvent::ToolCallStarted {
