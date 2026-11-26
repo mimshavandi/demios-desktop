@@ -142,6 +142,29 @@ impl ApprovalGate {
         }
     }
 
+    /// Like [`Self::clear_capability_prefix`], and returns the grants it forgot as
+    /// `(scope, capability)` pairs, so an Undo can put them back ([`Self::restore_grants`]).
+    /// A poisoned lock forgets nothing it can return: the calls then ask again.
+    pub fn take_capability_prefix(&self, prefix: &str) -> Vec<(String, String)> {
+        let Ok(mut g) = self.grants.lock() else {
+            return Vec::new();
+        };
+        let taken: Vec<(String, String)> = g
+            .iter()
+            .filter(|(_, cap)| cap.starts_with(prefix))
+            .cloned()
+            .collect();
+        g.retain(|(_, cap)| !cap.starts_with(prefix));
+        taken
+    }
+
+    /// Puts back grants returned by [`Self::take_capability_prefix`] (Undo of a removal).
+    pub fn restore_grants(&self, grants: impl IntoIterator<Item = (String, String)>) {
+        if let Ok(mut g) = self.grants.lock() {
+            g.extend(grants);
+        }
+    }
+
     /// Forget every "allow for this chat" grant ("Delete all local data").
     pub fn clear_all(&self) {
         if let Ok(mut g) = self.grants.lock() {

@@ -261,6 +261,7 @@ export function createMockApi(): Api {
   // OpenAI-compatible servers: an Ollama-like server on localhost has two models.
   let remotes: RemoteServerView[] = [];
   const removedRemotes = new Map<string, RemoteServerView>();
+  const removedMcp = new Map<string, { server: McpServerView; at: number }>();
   let settings: Settings = { slots: {}, telemetry_enabled: false };
   const timers = new Map<string, number>();
   const id = () => crypto.randomUUID();
@@ -913,9 +914,20 @@ export function createMockApi(): Api {
       return mcpView();
     },
     removeMcpServer: async (id) => {
+      const at = mcpServers.findIndex((s) => s.id === id);
+      const gone = mcpServers[at];
+      if (gone !== undefined) removedMcp.set(id, { server: gone, at });
       mcpServers = mcpServers.filter((s) => s.id !== id);
       mcpStatus.delete(id);
       approvalSink?.({ type: "mcp_server_removed", server_id: id });
+      return mcpView();
+    },
+    restoreMcpServer: async (id) => {
+      const r = removedMcp.get(id);
+      if (r === undefined) throw { code: "expired", message: "The server can no longer be restored. Add it again." };
+      removedMcp.delete(id);
+      mcpServers = [...mcpServers.slice(0, r.at), r.server, ...mcpServers.slice(r.at)];
+      mcpSet(r.server, "connected");
       return mcpView();
     },
     reconnectMcpServer: async (id) => {

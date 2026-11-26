@@ -14,6 +14,7 @@
     "allow-list-mcp-servers",
     "allow-save-mcp-server",
     "allow-remove-mcp-server",
+    "allow-restore-mcp-server",
     "allow-reconnect-mcp-server",
     "allow-sign-in-mcp-server",
     "allow-list-mcp-tools",

@@ -199,6 +199,8 @@ pub struct AppState {
     live: Mutex<HashMap<Id, Live>>,
     removed_keys: Mutex<HashMap<String, RemovedKey>>,
     removed_servers: Mutex<HashMap<String, RemovedServer>>,
+    /// Removed tool servers, held for [`KEY_UNDO_WINDOW`] so Undo can put them back (#189).
+    pub(crate) removed_mcp: Mutex<HashMap<String, crate::mcp::RemovedMcpServer>>,
     next_token: AtomicU64,
     /// Bumped by "Delete all local data": a background MCP connect started before it must
     /// not add its server afterwards.
@@ -253,7 +255,7 @@ impl Drop for Reservation {
     }
 }
 
-fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     // These maps only hold handles and buffers; recover rather than fail chats.
     m.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
@@ -280,6 +282,7 @@ impl AppState {
             live: Mutex::new(HashMap::new()),
             removed_keys: Mutex::new(HashMap::new()),
             removed_servers: Mutex::new(HashMap::new()),
+            removed_mcp: Mutex::new(HashMap::new()),
             next_token: AtomicU64::new(1),
             mcp_epoch: AtomicU64::new(0),
             local_servers: crate::mcp::local_servers_allowed(),
@@ -726,6 +729,7 @@ impl AppState {
         }
         lock(&self.removed_keys).clear();
         lock(&self.removed_servers).clear();
+        lock(&self.removed_mcp).clear();
         if !keys_ok {
             failed.push("keys in the system keychain");
         }
