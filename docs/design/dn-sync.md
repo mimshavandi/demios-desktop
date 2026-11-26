@@ -205,7 +205,7 @@ The membership is a **hash-chained list of signed events**. Each event names the
 | `Rename` | a device's display name |
 
 - **Every device keeps the whole chain** and checks each event's signature and its link to the event before. A fork in the chain, meaning two events naming the same previous event, can only come from a compromised Node key. The device stops syncing and says so.
-- **A removal can be asked for from any paired device** (ADR-0014 §2). The request is signed and goes to the Node, directly or through the Node's mailbox. Once the Node has written `Remove`, **every device refuses that device's changes after its last accepted `seq`, and the Node refuses its connections.** The device that asked stops accepting from the removed device at once, without waiting for the Node.
+- **A removal can be asked for from any paired device** (ADR-0014 §2). The request is signed and goes to the Node, directly or through the Node's mailbox. Once the Node has written `Remove`, **every device refuses that device's changes after its last accepted `seq`, and the Node refuses its connections.** The device that asked **holds** the removed device's new changes in its inbox at once, without waiting for the Node. Once `Remove` arrives, it applies those up to the last accepted `seq` and drops the rest. It never refuses on its own, because another device might accept the same changes, and the two devices would then differ for good.
 - Changes from the removed device up to its last accepted `seq` stay, so nothing already synced is undone.
 
 ### 8.3 The group key
@@ -238,7 +238,7 @@ An incoming envelope is checked (§7.2) and stored in `sync_inbox` before it's a
 ### 9.3 Replays and duplicates
 - A change is identified by **(author, seq)**. If it was already applied, a second copy is ignored. That makes every route safe to repeat, and an old envelope sent again does nothing.
 - The signed bytes include the group, the epoch and the change number, so an envelope can't be replayed into another group or under another number.
-- **Two different envelopes with the same (author, seq)** mean the author's key was used to sign two histories (equivocation). Both are refused. That device is marked "sent conflicting changes" in the device list, its later changes are held, and the user is offered **Remove device**.
+- **Two different envelopes with the same (author, seq)** mean the author's key was used to sign two histories (equivocation). A device that already applied one copy keeps it. The other copy is refused everywhere, and the conflicting pair is passed on to the other devices as evidence. Which copy wins is decided by the Node: it names the copy in its vector, and devices that applied the other one undo it from the snapshot (§9.4). That device is marked "sent conflicting changes" in the device list, its later changes are held, and the user is offered **Remove device**.
 
 ### 9.4 Snapshots
 - A new device, or one past the 90-day line, starts from a **snapshot**: the current state of every synced record, the tombstones, the membership chain and the sender's vector.
@@ -284,7 +284,8 @@ This extends ADR-0014 action 10. A full Node threat model is its own document, `
 | An old envelope is sent again (replay) | (author, seq) dedupe; the group and the number are signed | Replay is a no-op; replay into another group refused |
 | A removed (stolen) device keeps sending | `Remove` names its last accepted `seq`; the Node refuses its connections; mailboxes rotate | Its later changes refused, through any route |
 | A removed device reads new changes | Group key rotated; it can't fetch from the new mailboxes or the Node | New epoch can't be opened with the old key |
-| A member signs two histories | Equivocation detected (§9.3) | Both refused, and the device is flagged |
+| A member signs two histories | Equivocation detected; the Node's copy wins everywhere (§9.3) | Second copy refused, devices converge on the Node's, and the device is flagged |
+| The device that asked for a removal and the others disagree | The asking device holds, never refuses, until `Remove` arrives (§8.2) | Removal asked offline: every device ends with the same changes |
 | A device's clock is far off | The 10-minute limit; the change is held, and the device is named (§4.3) | Change from the future held, then applied once the clock allows |
 | A purge leaves content behind | Tombstones win; the log is compacted once all have applied; Relay TTL | Content gone from state and logs after acknowledgements |
 | Sync drops an edit without saying so | Text conflicts keep both versions; dropped writes to purged records show a notice | Concurrent text edit keeps both; notice on a dropped edit |
