@@ -122,14 +122,15 @@ pub trait Collection: Sync {
     /// The record's fields as they are now, or `None` when it isn't here.
     fn read(&self, conn: &Connection, id: &str) -> Result<Option<Map<String, Value>>>;
     /// Writes fields from another device: all of them for a new record, the changed ones
-    /// otherwise. `by` is the change that wrote them; `sync_fields` records it right after,
-    /// in the same transaction (the Node binds the sealed record to it).
+    /// otherwise. `written` is the write behind each of these fields (`""` for an appended
+    /// record), which `sync_fields` records right after, in the same transaction; the Node
+    /// binds the sealed record to it.
     fn write(
         &self,
         conn: &Connection,
         id: &str,
         fields: &Map<String, Value>,
-        by: WriteBy,
+        written: &[Written<'_>],
     ) -> Result<()>;
     /// Deletes the record for good.
     fn purge(&self, conn: &Connection, id: &str, at_ms: i64) -> Result<()>;
@@ -163,9 +164,11 @@ pub trait Collection: Sync {
     }
 }
 
-/// The change behind a write: its author, number and hybrid-logical time.
+/// The write behind one field: the change's author, number and hybrid-logical time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct WriteBy {
+pub struct Written<'a> {
+    /// `""` for an appended record.
+    pub field: &'a str,
     pub author: DeviceId,
     pub seq: u64,
     pub hlc: Hlc,
@@ -262,7 +265,7 @@ impl Collection for Chats {
         conn: &Connection,
         id: &str,
         fields: &Map<String, Value>,
-        _by: WriteBy,
+        _written: &[Written<'_>],
     ) -> Result<()> {
         let row: ChatRow = merged(sync_rows::chat(conn, id).map_err(store)?, id, fields)?;
         sync_rows::put_chat(conn, &row).map_err(store)
@@ -309,7 +312,7 @@ impl Collection for Projects {
         conn: &Connection,
         id: &str,
         fields: &Map<String, Value>,
-        _by: WriteBy,
+        _written: &[Written<'_>],
     ) -> Result<()> {
         let row: ProjectRow = merged(sync_rows::project(conn, id).map_err(store)?, id, fields)?;
         sync_rows::put_project(conn, &row).map_err(store)
@@ -341,7 +344,7 @@ impl Collection for Messages {
         conn: &Connection,
         id: &str,
         fields: &Map<String, Value>,
-        _by: WriteBy,
+        _written: &[Written<'_>],
     ) -> Result<()> {
         let row: MessageRow = merged(None, id, fields)?;
         sync_rows::insert_message(conn, &row)
@@ -736,11 +739,14 @@ pub fn apply(
 ) -> Result<Vec<(String, String)>> {
     let tx = conn.unchecked_transaction()?;
     let mut purged = Vec::new();
-    let by = WriteBy {
-        author: change.author,
-        seq: change.seq,
-        hlc: change.hlc,
-    };
+    fn by<'a>(change: &Change, field: &'a str) -> Written<'a> {
+        Written {
+            field,
+            author: change.author,
+            seq: change.seq,
+            hlc: change.hlc,
+        }
+    }
     for op in &change.ops {
         // Ids from other devices must be in the one form this app writes (see
         // `dn_store::sync_rows::canonical_id`), so tombstones and keys always match.
@@ -805,7 +811,7 @@ pub fn apply(
                 {
                     continue; // Its parent was deleted for good: a delete wins.
                 }
-                col.write(&tx, id, fields, by)?;
+                col.write(&tx, id, fields, &[by(change, "")])?;
                 record_field(
                     &tx,
                     col,
@@ -898,7 +904,8 @@ pub fn apply(
                     }
                 }
                 if !winners.is_empty() {
-                    col.write(&tx, id, &winners, by)?;
+                    let written: Vec<Written<'_>> = winners.keys().map(|f| by(change, f)).collect();
+                    col.write(&tx, id, &winners, &written)?;
                     for (field, value) in &winners {
                         record_field(
                             &tx,

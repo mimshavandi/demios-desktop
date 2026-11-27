@@ -34,7 +34,7 @@
 
 use crate::b64;
 use crate::identity::DeviceId;
-use crate::records::{self, Collection, CollectionKind, ConflictAt, WriteBy};
+use crate::records::{self, Collection, CollectionKind, ConflictAt, Written};
 use crate::{Result, SyncError};
 use aws_lc_rs::aead::{AES_256_GCM, Aad, LessSafeKey, NONCE_LEN, Nonce, UnboundKey};
 use aws_lc_rs::{hkdf, hmac};
@@ -154,13 +154,13 @@ fn aad(n: u32, parts: &[&[u8]]) -> Vec<u8> {
     out
 }
 
-/// The writes `sync_fields` records for a record, as they will be once `pending` (fields
-/// about to be written by one change) is recorded too, in a fixed order.
+/// The writes `sync_fields` records for a record, as they will be once `pending` (the writes
+/// about to be recorded with it) is recorded too, in a fixed order.
 fn writes(
     conn: &Connection,
     collection: &str,
     id: &str,
-    pending: Option<(&mut dyn Iterator<Item = &str>, WriteBy)>,
+    pending: &[Written<'_>],
 ) -> Result<Vec<u8>> {
     let mut map: BTreeMap<String, (String, i64, i64)> = BTreeMap::new();
     {
@@ -175,11 +175,11 @@ fn writes(
             map.insert(field, w);
         }
     }
-    if let Some((fields, by)) = pending {
-        let w = (by.author.to_hex(), by.seq as i64, by.hlc.0 as i64);
-        for f in fields {
-            map.insert(f.to_owned(), w.clone());
-        }
+    for w in pending {
+        map.insert(
+            w.field.to_owned(),
+            (w.author.to_hex(), w.seq as i64, w.hlc.0 as i64),
+        );
     }
     let mut out = Vec::new();
     for (field, (author, seq, hlc)) in map {
@@ -397,7 +397,7 @@ impl RecordsKeys {
         };
         let room = limit.saturating_sub(rows.len());
         for (col, id, sealed) in rows {
-            let w = writes(&tx, &col, &id, None)?;
+            let w = writes(&tx, &col, &id, &[])?;
             let plain = Zeroizing::new(self.open(|n| record_aad(n, &col, &id, &w), &sealed)?);
             let fresh = self.seal(|n| record_aad(n, &col, &id, &w), &plain)?;
             tx.execute(
@@ -616,7 +616,7 @@ impl Sealed {
         let Some(sealed) = sealed else {
             return Ok(None);
         };
-        let w = writes(conn, name, id, None)?;
+        let w = writes(conn, name, id, &[])?;
         let plain = Zeroizing::new(self.keys.open(|n| record_aad(n, name, id, &w), &sealed)?);
         match serde_json::from_slice(&plain) {
             Ok(Value::Object(m)) => Ok(Some(m)),
@@ -626,22 +626,21 @@ impl Sealed {
         }
     }
 
-    /// Seals and keeps `fields` (the whole record). `by` names the fields this change
-    /// writes and the change, which `sync_fields` records right after; `None` when the
-    /// bookkeeping doesn't change (a purge's side effect, a rotation).
+    /// Seals and keeps `fields` (the whole record). `written` is what `sync_fields` records
+    /// right after; empty when the bookkeeping doesn't change (a purge's side effect).
     fn put(
         &self,
         conn: &Connection,
         id: &str,
         parent: Option<&str>,
         fields: &Map<String, Value>,
-        by: Option<(&mut dyn Iterator<Item = &str>, WriteBy)>,
+        written: &[Written<'_>],
     ) -> Result<()> {
         let name = self.name();
         let plain = Zeroizing::new(
             serde_json::to_vec(fields).map_err(|_| SyncError::Protocol("record isn't JSON"))?,
         );
-        let w = writes(conn, name, id, by)?;
+        let w = writes(conn, name, id, written)?;
         let sealed = self.keys.seal(|n| record_aad(n, name, id, &w), &plain)?;
         conn.execute(
             "INSERT INTO sync_node_records (collection, id, parent, key_n, sealed)
@@ -688,17 +687,13 @@ impl Collection for Sealed {
         conn: &Connection,
         id: &str,
         fields: &Map<String, Value>,
-        by: WriteBy,
+        written: &[Written<'_>],
     ) -> Result<()> {
-        // A field record's changed fields, or `""` for an appended record (as `apply`
-        // records them).
-        let mut changed = fields.keys().map(String::as_str);
-        let mut appended = std::iter::once("");
         match self.spec {
             Spec::Projects => {
                 let (row, m): (ProjectRow, _) = checked(self.get(conn, id)?, id, fields)?;
                 sync_rows::canonical_id(&row.id).map_err(store_err)?;
-                self.put(conn, id, None, &m, Some((&mut changed, by)))
+                self.put(conn, id, None, &m, written)
             }
             Spec::Chats => {
                 let (row, m): (ChatRow, _) = checked(self.get(conn, id)?, id, fields)?;
@@ -706,13 +701,7 @@ impl Collection for Sealed {
                 if let Some(p) = &row.project_id {
                     sync_rows::canonical_id(p).map_err(store_err)?;
                 }
-                self.put(
-                    conn,
-                    id,
-                    row.project_id.as_deref(),
-                    &m,
-                    Some((&mut changed, by)),
-                )
+                self.put(conn, id, row.project_id.as_deref(), &m, written)
             }
             Spec::Messages => {
                 let (row, m): (MessageRow, _) = checked(None, id, fields)?;
@@ -734,13 +723,7 @@ impl Collection for Sealed {
                 if self.get(conn, id)?.is_some() {
                     return Ok(());
                 }
-                self.put(
-                    conn,
-                    id,
-                    Some(&row.conversation_id),
-                    &m,
-                    Some((&mut appended, by)),
-                )
+                self.put(conn, id, Some(&row.conversation_id), &m, written)
             }
         }
     }
@@ -755,7 +738,7 @@ impl Collection for Sealed {
                     };
                     if let Some(mut m) = chats.get(conn, &chat)? {
                         m.insert("project_id".into(), Value::Null);
-                        chats.put(conn, &chat, None, &m, None)?;
+                        chats.put(conn, &chat, None, &m, &[])?;
                     }
                 }
                 Self::delete(conn, "project", id)
@@ -1228,11 +1211,12 @@ mod tests {
                     &node.conn,
                     &m.id.to_string(),
                     &fields,
-                    WriteBy {
+                    &[Written {
+                        field: "",
                         author: a.keys.id(),
                         seq: 99,
                         hlc: crate::hlc::Hlc::from_parts(NOW, 0),
-                    },
+                    }],
                 )
                 .is_err()
         );
