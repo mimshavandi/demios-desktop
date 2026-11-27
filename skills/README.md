@@ -46,7 +46,7 @@ The front matter follows the Agent Skills `SKILL.md` layout, with one difference
 | `compare` | none | Side-by-side table of options, then a conclusion |
 | `outline` | artifacts | Outline for a talk, presentation or document |
 | `critique` | none | Specific feedback with fixes on writing or a design |
-| `design-review` | artifacts, `contrast_check` | Reviews a UI design in seven categories (hierarchy, spacing, type scale, WCAG AA contrast, grid, touch targets, content), with exact fixes. Contrast ratios come only from the `contrast_check` tool, never from the model; without the tool it lists the colour pairs to check |
+| `design-review` | artifacts, `contrast.check` | Reviews a UI design in seven categories (hierarchy, spacing, type scale, WCAG AA contrast, grid, touch targets, content), with exact fixes. Contrast ratios come only from the `contrast_check` tool, never from the model; without the tool it lists the colour pairs to check |
 
 **Your own skills.** The same files can go in the `skills` folder of the app's data directory: `<data dir>/skills/<name>/SKILL.md`. Settings › General › Skills opens that folder and reloads it. Your skills follow exactly the same rules: `allowed-tools` only narrows, and approvals always apply. A file that doesn't load is listed there with its error (for example, `name: … must match its folder name`). A skill can't take the name of a built-in one. At most 100 load, and each file is limited to 64 KB. "Delete all local data" leaves this folder alone, because the files are yours.
 

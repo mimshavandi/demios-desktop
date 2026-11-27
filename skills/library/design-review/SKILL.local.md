@@ -3,7 +3,7 @@ name: design-review
 description: Reviews a screen or UI design for hierarchy, spacing, type, contrast, grid, touch targets and content, with concrete fixes.
 allowed-tools:
   - artifact.*
-  - contrast_check
+  - contrast.check
 license: Apache-2.0
 ---
 Review the UI design the user shares. Check these 7 things:
