@@ -146,9 +146,60 @@ pub type EventStream = std::pin::Pin<
     Box<dyn futures_core::Stream<Item = Result<StreamEvent, crate::CoreError>> + Send>,
 >;
 
+/// Where a model's context size comes from (ADR-0020 §2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
+pub enum LimitSource {
+    /// The context a local model was loaded with.
+    Loaded,
+    /// The provider or server reported it for this model.
+    Provider,
+    /// Demios' table of published sizes.
+    Published,
+    /// The person set it for this model.
+    User,
+}
+
+/// How much a model reads at once (ADR-0020 §2). `None`: nobody knows, and the runtime
+/// fails the turn with a way to set it; it never guesses.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct ModelLimits {
+    /// The whole context in tokens: input and output together.
+    pub context_tokens: Option<u32>,
+    pub source: Option<LimitSource>,
+}
+
+impl ModelLimits {
+    /// A known size and where it came from.
+    pub fn known(context_tokens: u32, source: LimitSource) -> Self {
+        Self {
+            context_tokens: Some(context_tokens),
+            source: Some(source),
+        }
+    }
+}
+
+/// A boxed future, for the trait's async methods.
+pub type BoxFuture<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
+
 /// Anything that can answer a [`ChatRequest`]: a local backend (`dn-inference`) or a
 /// remote/BYOK provider (`dn-providers`). The agent loop (`dn-agent`) only sees this trait.
 /// Dropping the stream cancels the call.
 pub trait ChatModel: Send + Sync {
     fn chat(&self, req: ChatRequest) -> EventStream;
+
+    /// How much `model` reads at once (ADR-0020 §2). A remote adapter serves several
+    /// models, so it's asked per model. The default: unknown.
+    fn limits<'a>(&'a self, _model: &'a ModelRef) -> BoxFuture<'a, ModelLimits> {
+        Box::pin(async { ModelLimits::default() })
+    }
+
+    /// The exact number of input tokens `req` takes with this model's own tokenizer and
+    /// template, when the backend can count it (a local model). `None`: it can't, and the
+    /// runtime estimates and says so (ADR-0020 §2.1).
+    fn count_tokens(&self, _req: &ChatRequest) -> Option<Result<u32, crate::CoreError>> {
+        None
+    }
 }
