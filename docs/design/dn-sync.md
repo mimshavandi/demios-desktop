@@ -244,12 +244,22 @@ An incoming envelope is checked (§7.2) and stored in `sync_inbox` before it's a
 - A new device, or one past the 90-day line, starts from a **snapshot**: the current state of every synced record, the tombstones, the membership chain and the sender's vector.
 - It's sent only over the paired channel (ADR-0014 §2), never through a Relay, because it's large and it's the whole data set.
 - **How it's built and installed (#294):**
-  - The Node applies every change it keeps, so it holds the records too. Every snapshot is of its applied state, with the write behind each field, the open text conflicts, the tombstones, its vector and its clock.
+  - The Node applies every change it keeps, so it holds the records too, sealed at rest (§9.5). Every snapshot is of its applied state, with the write behind each field, the open text conflicts, the tombstones, its vector and its clock.
   - It is sealed with the group key under its own label, so it can never be opened as an envelope.
   - A device first records and pushes all its own changes, and the Node applies them, so the snapshot covers everything the device has. Installing it is then a replace, in one transaction.
   - If the snapshot doesn't cover the device (a local edit since the push, or a change the Node hasn't applied yet), it is refused before anything is written, and the next round tries again.
 - **Where the log starts:** each round says what the device has applied. The Node drops envelopes that every current member has applied, and so has the Node, then tells the device where its log now starts. A device missing a change below that point gets the snapshot.
 - A snapshot is signed by the device that sends it, usually the Node. Records in it are accepted on that device's signature. That's the one place a device vouches for others' data. It's limited to devices that are already members, at pairing or on their return.
+
+### 9.5 The Node's records at rest
+The Node applies changes so it can send snapshots (§9.4), and it keeps what it applies **sealed** (`dn_sync::at_rest`), never in dn-store's readable tables:
+- **Records:** one row per record in `sync_node_records`. The fields are JSON, sealed with AES-256-GCM under the **records key**, with a random nonce. The associated data is `"dn-sync v1 at rest" ‖ key number ‖ "record" ‖ collection ‖ id ‖ the record's writes in `sync_fields` (field, author, change number, HLC)`. A row moved to another record doesn't open, and neither does an older copy of a row or a purged one put back, unless the bookkeeping is rolled back with it, which amounts to rolling back the whole database.
+- **Conflicts:** the version not shown (§6.2) is sealed the same way, bound to its record, field, author, change number and HLC.
+- **Field hashes** in `sync_fields` are HMAC-SHA256 under a key derived from the records key, so a hash can't confirm a guess. The Node never scans local edits, so it never compares them; devices keep plain hashes.
+- **The records key** is 32 random bytes in the Node's secret store (`device/records.<n>`). It's separate from the group keys, which a removed device still knows. A missing key is an error at start; a new one is never made in its place.
+- **Readable metadata:** ids, collections, a message's chat (`parent`, to purge children), sealed sizes, and the bookkeeping in the other `sync_*` tables.
+- **Rotation** (`dn node rotate-records-key`): key `n + 1` seals new writes at once; older rows are re-sealed in batches, one transaction each; when none is left, every older key is deleted from the store (so a run that stopped before deleting is completed by the next) and the database is vacuumed and its WAL truncated.
+- Devices keep their data in dn-store's tables as before; protecting a device's disk is the operating system's job.
 
 ## 10. Routes: direct, and Relay mailboxes
 
@@ -296,6 +306,7 @@ This extends ADR-0014 action 10. A full Node threat model is its own document, `
 | A purge leaves content behind | Tombstones win; the log is compacted once all have applied; Relay TTL | Content gone from state and logs after acknowledgements |
 | Sync drops an edit without saying so | Text conflicts keep both versions; dropped writes to purged records show a notice | Concurrent text edit keeps both; notice on a dropped edit |
 | Forged or replayed approval answer | Signed answer, checked against members; arguments hash; applies once (§6.5) | Forged answer refused; second answer not applied |
+| Someone copies the Node's database or a backup of it | Records and conflict text sealed under the records key, kept in the secret store; keyed field hashes (§9.5) | No known plaintext in the database file or its WAL; a moved, older or purged row doesn't open; a missing key stops the start |
 | The Node's key is stolen | Out of scope, like root on the Node (ADR-0014 §7). A fork in the membership chain is detected | Forked chain stops sync |
 
 ## 12. Changes needed in other crates (each by its owner, with tests)

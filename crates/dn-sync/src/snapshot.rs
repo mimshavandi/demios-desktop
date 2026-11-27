@@ -35,7 +35,7 @@ use crate::hlc::Hlc;
 use crate::identity::{DeviceId, DeviceKeys, PublicIdentity};
 use crate::inbox;
 use crate::membership::Chain;
-use crate::records::{self, Collection, CollectionKind};
+use crate::records::{self, Collection, CollectionKind, ConflictAt, Written};
 use crate::{Result, SyncError};
 use dn_store::sync_rows;
 use rusqlite::{Connection, OptionalExtension, params};
@@ -245,7 +245,20 @@ pub fn build(
                 hlc: to_u64(r.get(6)?),
             })
         })?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()?
+        let mut out = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        // As kept here (sealed on the Node), back to JSON text.
+        for c in &mut out {
+            let col = records::collection(cols, &c.collection)?;
+            let at = ConflictAt {
+                id: &c.id,
+                field: &c.field,
+                author: device(&c.author)?,
+                seq: c.seq,
+                hlc: c.hlc,
+            };
+            c.value = col.open_conflict(&at, std::mem::take(&mut c.value))?;
+        }
+        out
     };
     let tombstones = {
         let mut stmt = tx.prepare(
@@ -448,10 +461,22 @@ pub fn install(
         if records::is_purged(&tx, col.name(), &r.id)? {
             continue;
         }
+        let written = r
+            .writes
+            .iter()
+            .map(|w| {
+                Ok(Written {
+                    field: &w.field,
+                    author: device(&w.author)?,
+                    seq: w.seq,
+                    hlc: Hlc(w.hlc),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
         match col.kind() {
             CollectionKind::Append => {
                 if records::field_write(&tx, col.name(), &r.id, "")?.is_none() {
-                    col.write(&tx, &r.id, &r.fields)?;
+                    col.write(&tx, &r.id, &r.fields, &written)?;
                 }
             }
             CollectionKind::Fields(spec) => {
@@ -462,7 +487,7 @@ pub fn install(
                         ));
                     }
                 }
-                col.write(&tx, &r.id, &r.fields)?;
+                col.write(&tx, &r.id, &r.fields, &written)?;
             }
         }
         for w in &r.writes {
@@ -473,7 +498,7 @@ pub fn install(
             };
             records::record_field(
                 &tx,
-                col.name(),
+                col,
                 &r.id,
                 &w.field,
                 &value,
@@ -484,9 +509,17 @@ pub fn install(
         }
     }
     for c in &body.conflicts {
-        records::collection(cols, &c.collection)?;
+        let col = records::collection(cols, &c.collection)?;
         serde_json::from_str::<Value>(&c.value)
             .map_err(|_| SyncError::Protocol("a damaged conflict in a snapshot"))?;
+        let at = ConflictAt {
+            id: &c.id,
+            field: &c.field,
+            author: device(&c.author)?,
+            seq: c.seq,
+            hlc: c.hlc,
+        };
+        let kept = col.seal_conflict(&at, c.value.clone())?;
         tx.execute(
             "INSERT OR IGNORE INTO sync_conflicts (collection, id, field, value, author, seq, hlc)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -494,8 +527,8 @@ pub fn install(
                 c.collection,
                 c.id,
                 c.field,
-                c.value,
-                device(&c.author)?.to_hex(),
+                kept,
+                at.author.to_hex(),
                 i64::try_from(c.seq).unwrap_or(i64::MAX),
                 i64::try_from(c.hlc).unwrap_or(i64::MAX)
             ],

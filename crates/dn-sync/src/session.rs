@@ -626,6 +626,8 @@ mod tests {
         db: Mutex<Connection>,
         store: MemoryStore,
         group: Mutex<NodeGroup>,
+        /// Sealed at rest, as the real Node keeps them (#335).
+        records: crate::at_rest::NodeRecords,
     }
 
     impl Node {
@@ -635,11 +637,15 @@ mod tests {
                 .unwrap();
             let store = MemoryStore::new();
             let group = NodeGroup::load_or_create(&conn, &store, &keys, "Home server").unwrap();
+            let records = crate::at_rest::NodeRecords::new(std::sync::Arc::new(
+                crate::at_rest::RecordsKeys::load(&conn, &store).unwrap(),
+            ));
             Self {
                 keys,
                 db: Mutex::new(conn),
                 store,
                 group: Mutex::new(group),
+                records,
             }
         }
 
@@ -681,7 +687,7 @@ mod tests {
                 return;
             };
             ch.allow_sync_frames();
-            let cols = records::store_collections();
+            let cols = self.records.collections();
             let sync = NodeSync {
                 db: &self.db,
                 store: &self.store,
@@ -869,7 +875,7 @@ mod tests {
             chat::create_conversation(&conn, "Mine").unwrap();
         }
         laptop.sync(&node).await.unwrap();
-        let cols = records::store_collections();
+        let cols = node.records.collections();
         let sync = NodeSync {
             db: &node.db,
             store: &node.store,
@@ -1069,6 +1075,21 @@ mod tests {
             1,
             "the open conflict came with the snapshot"
         );
+        // The Node had all of it, sealed: nothing in dn-store's readable tables, and the
+        // conflict text isn't in its database as written.
+        {
+            let conn = node.db.lock().unwrap();
+            assert!(chat::list_conversations(&conn).unwrap().is_empty());
+            let kept: Vec<String> = conn
+                .prepare("SELECT value FROM sync_conflicts")
+                .unwrap()
+                .query_map([], |r| r.get(0))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap();
+            assert!(!kept.is_empty());
+            assert!(kept.iter().all(|v| !v.contains("Trip")));
+        }
 
         // From now on C syncs as usual, and its edits merge like anyone's.
         chat::rename_conversation(&c.db.lock().unwrap(), trip.id, "Trip to Rome in May").unwrap();
@@ -1125,8 +1146,14 @@ mod tests {
             let chain = g.chain();
             (chain.group(), g.key(&node.store, chain.epoch()).unwrap())
         };
-        let (_, sealed) =
-            snapshot::build(&node.db.lock().unwrap(), &cols, &node.keys, group, &key).unwrap();
+        let (_, sealed) = snapshot::build(
+            &node.db.lock().unwrap(),
+            &node.records.collections(),
+            &node.keys,
+            group,
+            &key,
+        )
+        .unwrap();
         let fresh = Dev::new();
         let install = |sealed: &[u8], key: &GroupKey, signer: &PublicIdentity, g| {
             snapshot::install(
@@ -1140,8 +1167,14 @@ mod tests {
             )
         };
         // Signed by a member, not the Node pinned at pairing.
-        let (_, by_member) =
-            snapshot::build(&node.db.lock().unwrap(), &cols, &a.keys, group, &key).unwrap();
+        let (_, by_member) = snapshot::build(
+            &node.db.lock().unwrap(),
+            &node.records.collections(),
+            &a.keys,
+            group,
+            &key,
+        )
+        .unwrap();
         assert!(matches!(
             install(&by_member, &key, &node.keys.public(), group),
             Err(SyncError::BadSignature)
@@ -1189,8 +1222,14 @@ mod tests {
             let chain = g.chain();
             (chain.group(), g.key(&node.store, chain.epoch()).unwrap())
         };
-        let (_, sealed) =
-            snapshot::build(&node.db.lock().unwrap(), &cols, &node.keys, group, &key).unwrap();
+        let (_, sealed) = snapshot::build(
+            &node.db.lock().unwrap(),
+            &node.records.collections(),
+            &node.keys,
+            group,
+            &key,
+        )
+        .unwrap();
         // An edit not recorded yet.
         chat::rename_conversation(&a.db.lock().unwrap(), c.id, "Final").unwrap();
         let r = snapshot::install(
@@ -1229,13 +1268,14 @@ mod tests {
         gone.sync(&node).await.unwrap();
         node.remove(&gone);
         a.sync(&node).await.unwrap();
+        let node_cols = node.records.collections();
         let cols = store_collections();
         let sync = NodeSync {
             db: &node.db,
             store: &node.store,
             group: &node.group,
             me: &node.keys,
-            collections: &cols,
+            collections: &node_cols,
             peer_minor: crate::transport::PROTOCOL_MINOR,
         };
         // Asked directly, on a channel it still had: refused.
@@ -1269,7 +1309,7 @@ mod tests {
             let cur = g.key(&node.store, chain.epoch()).unwrap();
             let (_, sealed) = snapshot::build(
                 &node.db.lock().unwrap(),
-                &cols,
+                &node_cols,
                 &node.keys,
                 chain.group(),
                 &cur,
@@ -1304,7 +1344,7 @@ mod tests {
         assert_eq!(log_len(&node.db), 0);
         let late = Dev::new();
         node.add(&late);
-        let cols = store_collections();
+        let cols = node.records.collections();
         let sync = |minor| NodeSync {
             db: &node.db,
             store: &node.store,

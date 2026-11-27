@@ -17,6 +17,7 @@
 //! - [`snapshot`]: snapshots and compaction, so a new device doesn't replay the whole
 //!   history (#294).
 
+pub mod at_rest;
 pub mod b64;
 pub mod change;
 pub mod devices;
@@ -46,6 +47,7 @@ pub fn migrations() -> &'static [&'static str] {
         membership::MIGRATION,
         records::MIGRATION,
         session::MIGRATION,
+        at_rest::MIGRATION,
         snapshot::MIGRATION,
     ]
 }
