@@ -18,7 +18,7 @@
 //! Data Protection *Complete*. It holds the paired Node and its keys, nothing else yet.
 //!
 //! **Unsafe code:** none is written here. UniFFI's generated scaffolding is the only
-//! `unsafe` in this crate, and `scripts/check-mobile-unsafe.sh` fails CI otherwise
+//! `unsafe` in this crate, and `scripts/check-unsafe.py` fails CI otherwise
 //! (ADR-0009, ADR-0019 §2).
 
 use dn_secrets::{Secret, SecretError, SecretId, SecretStore};

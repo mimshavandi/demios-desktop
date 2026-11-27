@@ -35,7 +35,7 @@ tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread"] }
 
 # ADR-0009 / ADR-0019 §2: the one crate besides dn-inference that isn't under the workspace's
 # `forbid(unsafe_code)`, because UniFFI's generated scaffolding uses `unsafe`. Hand-written
-# `unsafe` is still refused: scripts/check-mobile-unsafe.sh fails CI on any in src/.
+# `unsafe` is still refused: scripts/check-unsafe.py fails CI on any in src/.
 [lints.rust]
 unsafe_code = "deny"
 
