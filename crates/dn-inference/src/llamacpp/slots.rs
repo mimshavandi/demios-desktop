@@ -105,6 +105,12 @@ impl<T: PartialEq, S: ByteLen> SlotCache<T, S> {
         s
     }
 
+    /// The most bytes a saved state may have. Checked before a state is copied out of the
+    /// context, so a sequence larger than the cap is never copied.
+    pub fn cap(&self) -> usize {
+        self.cap
+    }
+
     pub fn bytes(&self) -> usize {
         self.bytes
     }
@@ -201,6 +207,7 @@ mod tests {
         assert_eq!(c.bytes(), 80);
         assert_eq!(c.best(&[1, 1, 5]), None);
         assert_eq!(c.best(&[3, 3, 5]), Some((1, 2)));
+        assert_eq!(c.cap(), 100);
         c.put(saved(&[4], 101));
         assert_eq!(c.len(), 2, "a state larger than the cap isn't kept");
     }

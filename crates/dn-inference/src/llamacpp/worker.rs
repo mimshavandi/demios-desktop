@@ -165,6 +165,7 @@ impl<'m> Worker<'m> {
     /// already in the cache (0 with reuse off, or when the model can't keep a prefix).
     fn reuse(&mut self, prompt: &[LlamaToken]) -> Result<usize> {
         let enabled = self.l.opts.prompt_cache.enabled && self.l.prefix_reuse.is_ok();
+        let cap = self.cache.cap();
         let l = self.l;
         if !enabled {
             let live = self.live()?;
@@ -182,7 +183,10 @@ impl<'m> Worker<'m> {
                 let saved = self.cache.take(index);
                 let live = self.live()?;
                 let old = std::mem::take(&mut live.tokens);
-                let stash = if old.len() >= slots::MIN_SAVE {
+                let size = live
+                    .ctx
+                    .state_seq_get_size_ext(0, LlamaStateSeqFlags::empty());
+                let stash = if old.len() >= slots::MIN_SAVE && size <= cap {
                     Some(live.ctx.state_seq_get(0, LlamaStateSeqFlags::empty()))
                 } else {
                     None
@@ -207,7 +211,10 @@ impl<'m> Worker<'m> {
         // The rest of the live sequence goes. Before it does, save it if a real part of it
         // goes (another chat, not just the re-rendered end of this one's last answer), so the
         // chat it belongs to can come back to it.
-        if slots::worth_saving(live.tokens.len(), keep) {
+        let size = live
+            .ctx
+            .state_seq_get_size_ext(0, LlamaStateSeqFlags::empty());
+        if slots::worth_saving(live.tokens.len(), keep) && size <= cap {
             let state = live
                 .ctx
                 .state_seq_get(0, LlamaStateSeqFlags::empty())
@@ -541,9 +548,13 @@ impl Speculation<'_, '_> {
         batch: &mut LlamaBatch<'_>,
     ) -> Result<Option<FinishReason>> {
         flow!(out.start());
-        // The draft keeps what it shares with the prompt; the rest it decodes with the
-        // first step.
-        let keep = slots::common_prefix(&self.draft.tokens, &self.live.tokens);
+        // The draft keeps what it shares with the prompt (nothing with prompt reuse off); the
+        // rest it decodes with the first step.
+        let keep = if self.l.opts.prompt_cache.enabled {
+            slots::common_prefix(&self.draft.tokens, &self.live.tokens)
+        } else {
+            0
+        };
         trim(self.draft, keep)?;
         let mut dbatch = LlamaBatch::new(self.n_batch, 1);
         let mut greedy = LlamaSampler::greedy();

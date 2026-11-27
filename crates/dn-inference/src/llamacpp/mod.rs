@@ -493,6 +493,7 @@ fn load_blocking(spec: &ModelSpec, opts: &LoadOptions) -> Result<Loaded> {
             d,
             gpu_layers,
             opts.mmap,
+            opts.n_batch,
         )?),
     };
     Ok(Loaded {
@@ -518,6 +519,7 @@ fn load_draft(
     d: &crate::DraftModel,
     gpu_layers: u32,
     mmap: bool,
+    n_batch: u32,
 ) -> Result<DraftLoaded> {
     let fail =
         |why: String| InferenceError::Load(format!("draft model {}: {why}", d.path.display()));
@@ -543,7 +545,10 @@ fn load_draft(
     Ok(DraftLoaded {
         model,
         path: d.path.clone(),
-        max_tokens: (d.max_tokens as usize).max(draft::MIN_K),
+        // The target checks the drafted tokens and one more in one batch.
+        max_tokens: (d.max_tokens as usize)
+            .min((n_batch as usize).saturating_sub(1))
+            .max(draft::MIN_K),
     })
 }
 
