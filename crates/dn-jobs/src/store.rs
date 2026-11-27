@@ -333,13 +333,46 @@ pub fn record_skip(
     not_fresh: bool,
     now: i64,
 ) -> Result<()> {
+    insert_skip(conn, key, scheduled_for, missed, not_fresh, None, now)
+}
+
+/// Records a run that didn't start because it didn't fit in the daily token budget, with
+/// the reason as its error ([`crate::budget::over_budget_message`]).
+pub fn record_budget_skip(
+    conn: &Connection,
+    key: &JobKey,
+    scheduled_for: i64,
+    covers_runs: u64,
+    reason: &str,
+    now: i64,
+) -> Result<()> {
+    insert_skip(
+        conn,
+        key,
+        scheduled_for,
+        covers_runs,
+        false,
+        Some(reason),
+        now,
+    )
+}
+
+fn insert_skip(
+    conn: &Connection,
+    key: &JobKey,
+    scheduled_for: i64,
+    missed: u64,
+    not_fresh: bool,
+    error: Option<&str>,
+    now: i64,
+) -> Result<()> {
     let (p, j) = key_params(key);
     let tx = conn.unchecked_transaction()?;
     settle(&tx, key, scheduled_for)?;
     tx.execute(
         "INSERT INTO jobs_runs (id, plugin_id, job_id, scheduled_for, started_at, finished_at,
-                               late, covers_runs, outcome, not_fresh)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?5, 1, ?6, 'skipped', ?7)",
+                               late, covers_runs, outcome, not_fresh, error)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?5, 1, ?6, 'skipped', ?7, ?8)",
         params![
             Id::new().to_string(),
             p,
@@ -347,7 +380,8 @@ pub fn record_skip(
             scheduled_for,
             now,
             i64::try_from(missed).unwrap_or(i64::MAX),
-            not_fresh
+            not_fresh,
+            error
         ],
     )?;
     tx.commit()?;
@@ -550,6 +584,7 @@ pub fn set_quiet_hours(conn: &Connection, start_min: u16, end_min: u16) -> Resul
 /// Deletes one add-on's job settings, history and questions (its held approvals go with
 /// [`crate::held::delete_plugin`]).
 pub fn delete_plugin(conn: &Connection, plugin: &dn_plugin_api::PluginId) -> Result<()> {
+    crate::budget::delete_plugin(conn, plugin)?;
     for table in ["jobs_jobs", "jobs_runs", "jobs_questions"] {
         conn.execute(
             &format!("DELETE FROM {table} WHERE plugin_id = ?1"),
@@ -563,7 +598,7 @@ pub fn delete_plugin(conn: &Connection, plugin: &dn_plugin_api::PluginId) -> Res
 pub fn delete_all(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "DELETE FROM jobs_jobs; DELETE FROM jobs_runs; DELETE FROM jobs_questions;
-         DELETE FROM jobs_runtime;",
+         DELETE FROM jobs_runtime; DELETE FROM jobs_usage;",
     )?;
     Ok(())
 }
