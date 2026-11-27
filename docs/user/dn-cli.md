@@ -50,6 +50,8 @@ A `demios://models/add?…` link names a Hugging Face model, and can name one ve
 
 A Node is the Demios engine running as a service on a machine you own, such as a home PC, a Mac mini or a server, so background work can go on while the app is closed. It keeps your data on that machine, unencrypted while it works on it, so only run one on hardware you control.
 
+For pairing, what syncs, removing devices and the current limits, see [Your Demios Node](node.md).
+
 ```sh
 dn node init --data-dir /var/lib/demios --name "Home server" --secrets systemd-credential:demios-node --time-zone Europe/Berlin
 dn node run --data-dir /var/lib/demios
