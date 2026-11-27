@@ -100,7 +100,7 @@ const COMMANDS: &[&str] = &[
     "addon_consent",
     "addon_set_permission",
     "addon_set_enabled",
-    "addons_set_utc_offset",
+    "addons_start_jobs",
     "addons_paused",
     "addons_set_paused",
     "addon_set_job_enabled",
