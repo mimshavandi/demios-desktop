@@ -16,6 +16,13 @@ sdk-extensions:
   - org.freedesktop.Sdk.Extension.node22
   # libclang for llama.cpp's bindgen step (llama-cpp-sys-2).
   - org.freedesktop.Sdk.Extension.llvm20
+# Local models run on the GPU through Vulkan (#190). The SDK (freedesktop 25.08) has most of
+# what llama.cpp's Vulkan backend needs to build: the Vulkan headers and loader, and glslc
+# (shaderc) for its shaders. It lacks SPIRV-Headers' CMake package, so the spirv-headers
+# module below adds it, for the build only. At run time the GNOME runtime's Vulkan loader finds the GPU
+# driver in the GL extension (Mesa for AMD and Intel, the NVIDIA extension for NVIDIA),
+# through --device=dri below. Without a usable GPU the app runs models on the processor
+# and says so.
 command: demios-desktop
 
 finish-args:
@@ -27,7 +34,7 @@ finish-args:
   # The window: WebKitGTK on Wayland, X11 only where Wayland is not available.
   - --socket=wayland
   - --socket=fallback-x11
-  # GPU acceleration for WebKitGTK rendering.
+  # The GPU: WebKitGTK rendering, and local models through Vulkan.
   - --device=dri
   # Provider keys, the Hugging Face token and MCP secrets go in the user's keyring through the
   # Secret Service D-Bus API (keyring crate, async-secret-service). It has no Secret-portal
@@ -67,10 +74,28 @@ modules:
       - generated/cargo-about.json
       - generated/cargo-about-sources.json
 
+  # SPIRV-Headers (header-only) for ggml-vulkan's `find_package(SPIRV-Headers CONFIG
+  # REQUIRED)`. The tag matches the SDK's Vulkan 1.4.321. A build tool only: installed into
+  # the build sandbox and deleted from the final app.
+  - name: spirv-headers
+    buildsystem: cmake-ninja
+    config-opts:
+      - -DSPIRV_HEADERS_ENABLE_TESTS=OFF
+    cleanup:
+      - '*'
+    sources:
+      - type: archive
+        url: https://github.com/KhronosGroup/SPIRV-Headers/archive/refs/tags/vulkan-sdk-1.4.321.0.tar.gz
+        sha256: 5bbea925663d4cd2bab23efad53874f2718248a73dcaf9dd21dff8cb48e602fc
+
   - name: demios-desktop
     buildsystem: simple
     build-options:
       env:
+        # ggml-vulkan adds $VULKAN_SDK to CMake's search path, which is how it finds the
+        # spirv-headers module above in /app. Headers, loader and glslc still come from the
+        # SDK in /usr: CMake only adds /app to where it looks.
+        VULKAN_SDK: /app
         # Offline npm from the generated cache (flatpak-node-generator layout).
         npm_config_cache: /run/build/demios-desktop/flatpak-node/npm-cache
         npm_config_offline: 'true'
@@ -85,7 +110,7 @@ modules:
       - cd apps/desktop && npm ci --offline --no-audit --no-fund
       # prebuild builds the artifact sandbox; build writes the licences list and the UI.
       - cd apps/desktop && PATH="/app/bin:$PATH" npm run build
-      - cargo build --release --locked --offline -p demios-desktop --features custom-protocol,flatpak
+      - cargo build --release --locked --offline -p demios-desktop --features custom-protocol,flatpak,vulkan
       - install -Dm755 target/release/demios-desktop /app/bin/demios-desktop
       - install -Dm644 apps/desktop/icons/32x32.png /app/share/icons/hicolor/32x32/apps/io.demios.app.png
       - install -Dm644 apps/desktop/icons/128x128.png /app/share/icons/hicolor/128x128/apps/io.demios.app.png

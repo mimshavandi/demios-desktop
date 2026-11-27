@@ -10,7 +10,7 @@
 //!   computer slept or quiet hours ended): `dn_plugin_api::missed_runs` decides, and the
 //!   answer is at most one run.
 
-use dn_plugin_api::{MissedRunRule, MissedRuns, Schedule, missed_runs};
+use dn_plugin_api::{LocalTime, MissedRunRule, MissedRuns, Schedule, missed_runs};
 
 /// How late a run may start and still count as on time, in seconds.
 pub const ON_TIME_GRACE_SECS: i64 = 120;
@@ -42,9 +42,9 @@ pub fn decide(
     rule: &MissedRunRule,
     since: i64,
     now: i64,
-    utc_offset_secs: i64,
+    zone: &dyn LocalTime,
 ) -> Decision {
-    let Some(due) = schedule.due_between(since, now, utc_offset_secs) else {
+    let Some(due) = schedule.due_between(since, now, zone) else {
         return Decision::Wait;
     };
     if due.count == 1 && now - due.latest <= ON_TIME_GRACE_SECS {
@@ -54,7 +54,7 @@ pub fn decide(
             covers_runs: 1,
         };
     }
-    match missed_runs(schedule, rule, since, now, utc_offset_secs) {
+    match missed_runs(schedule, rule, since, now, zone) {
         MissedRuns::None => Decision::Wait,
         MissedRuns::RunLate {
             scheduled_for,
@@ -83,14 +83,14 @@ pub fn decide(
     }
 }
 
-/// Whether local time `now` (Unix seconds, with the local offset) is inside quiet hours,
+/// Whether `now` (Unix seconds) is inside quiet hours in local time,
 /// given as minutes after local midnight. A window may wrap past midnight (22:00–07:00).
 /// Equal start and end means no quiet hours.
-pub fn in_quiet_hours(now: i64, utc_offset_secs: i64, start_min: u16, end_min: u16) -> bool {
+pub fn in_quiet_hours(now: i64, zone: &dyn LocalTime, start_min: u16, end_min: u16) -> bool {
     if start_min == end_min {
         return false;
     }
-    let minute = ((now + utc_offset_secs).rem_euclid(86_400) / 60) as u16;
+    let minute = (zone.to_local(now).rem_euclid(86_400) / 60) as u16;
     if start_min < end_min {
         (start_min..end_min).contains(&minute)
     } else {
@@ -101,6 +101,7 @@ pub fn in_quiet_hours(now: i64, utc_offset_secs: i64, start_min: u16, end_min: u
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dn_plugin_api::FixedOffset;
 
     const H: i64 = 3600;
     // 2026-11-23 00:00 UTC.
@@ -113,7 +114,7 @@ mod tests {
     #[test]
     fn a_run_within_the_grace_is_on_time() {
         assert_eq!(
-            decide(&SEVEN, &FRESH_6H, MON, MON + 7 * H + 30, 0),
+            decide(&SEVEN, &FRESH_6H, MON, MON + 7 * H + 30, &FixedOffset(0)),
             Decision::Run {
                 scheduled_for: MON + 7 * H,
                 late: false,
@@ -121,7 +122,7 @@ mod tests {
             }
         );
         assert_eq!(
-            decide(&SEVEN, &FRESH_6H, MON, MON + 7 * H - 1, 0),
+            decide(&SEVEN, &FRESH_6H, MON, MON + 7 * H - 1, &FixedOffset(0)),
             Decision::Wait
         );
     }
@@ -130,7 +131,7 @@ mod tests {
     fn a_late_start_follows_the_missed_run_rule() {
         // The app opened at 10:00: catch up once, marked late.
         assert_eq!(
-            decide(&SEVEN, &FRESH_6H, MON, MON + 10 * H, 0),
+            decide(&SEVEN, &FRESH_6H, MON, MON + 10 * H, &FixedOffset(0)),
             Decision::Run {
                 scheduled_for: MON + 7 * H,
                 late: true,
@@ -139,7 +140,13 @@ mod tests {
         );
         // Not fresh any more at 14:00 the next day... but 07:00 that day is fresh.
         assert_eq!(
-            decide(&SEVEN, &FRESH_6H, MON, MON + 24 * H + 14 * H, 0),
+            decide(
+                &SEVEN,
+                &FRESH_6H,
+                MON,
+                MON + 24 * H + 14 * H,
+                &FixedOffset(0)
+            ),
             Decision::Skip {
                 scheduled_for: MON + 31 * H,
                 missed: 2,
@@ -147,21 +154,37 @@ mod tests {
             }
         );
         // Three days away: still at most one run.
-        let Decision::Run { covers_runs, .. } =
-            decide(&SEVEN, &FRESH_6H, MON, MON + 72 * H + 8 * H, 0)
-        else {
+        let Decision::Run { covers_runs, .. } = decide(
+            &SEVEN,
+            &FRESH_6H,
+            MON,
+            MON + 72 * H + 8 * H,
+            &FixedOffset(0),
+        ) else {
             panic!("expected one late run");
         };
         assert_eq!(covers_runs, 4);
         assert_eq!(
-            decide(&SEVEN, &MissedRunRule::Ask, MON, MON + 10 * H, 0),
+            decide(
+                &SEVEN,
+                &MissedRunRule::Ask,
+                MON,
+                MON + 10 * H,
+                &FixedOffset(0)
+            ),
             Decision::Ask {
                 scheduled_for: MON + 7 * H,
                 missed: 1
             }
         );
         assert_eq!(
-            decide(&SEVEN, &MissedRunRule::Skip, MON, MON + 10 * H, 0),
+            decide(
+                &SEVEN,
+                &MissedRunRule::Skip,
+                MON,
+                MON + 10 * H,
+                &FixedOffset(0)
+            ),
             Decision::Skip {
                 scheduled_for: MON + 7 * H,
                 missed: 1,
@@ -174,8 +197,8 @@ mod tests {
     fn the_same_inputs_give_the_same_answer() {
         for now in [MON, MON + 7 * H, MON + 9 * H, MON + 90 * H] {
             assert_eq!(
-                decide(&SEVEN, &FRESH_6H, MON, now, 3600),
-                decide(&SEVEN, &FRESH_6H, MON, now, 3600)
+                decide(&SEVEN, &FRESH_6H, MON, now, &FixedOffset(3600)),
+                decide(&SEVEN, &FRESH_6H, MON, now, &FixedOffset(3600))
             );
         }
     }
@@ -183,12 +206,17 @@ mod tests {
     #[test]
     fn quiet_hours_wrap_past_midnight() {
         let at = |h: i64, m: i64| MON + h * H + m * 60;
-        assert!(in_quiet_hours(at(23, 0), 0, 22 * 60, 7 * 60));
-        assert!(in_quiet_hours(at(6, 59), 0, 22 * 60, 7 * 60));
-        assert!(!in_quiet_hours(at(7, 0), 0, 22 * 60, 7 * 60));
-        assert!(in_quiet_hours(at(13, 0), 0, 12 * 60, 14 * 60));
-        assert!(!in_quiet_hours(at(13, 0), 0, 600, 600));
+        assert!(in_quiet_hours(at(23, 0), &FixedOffset(0), 22 * 60, 7 * 60));
+        assert!(in_quiet_hours(at(6, 59), &FixedOffset(0), 22 * 60, 7 * 60));
+        assert!(!in_quiet_hours(at(7, 0), &FixedOffset(0), 22 * 60, 7 * 60));
+        assert!(in_quiet_hours(at(13, 0), &FixedOffset(0), 12 * 60, 14 * 60));
+        assert!(!in_quiet_hours(at(13, 0), &FixedOffset(0), 600, 600));
         // 06:30 UTC is 07:30 at UTC+1, after the window.
-        assert!(!in_quiet_hours(at(6, 30), 3600, 22 * 60, 7 * 60));
+        assert!(!in_quiet_hours(
+            at(6, 30),
+            &FixedOffset(3600),
+            22 * 60,
+            7 * 60
+        ));
     }
 }

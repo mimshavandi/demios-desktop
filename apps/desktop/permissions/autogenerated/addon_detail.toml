@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-addon-detail"
+description = "Enables the addon_detail command without any pre-configured scope."
+commands.allow = ["addon_detail"]
+
+[[permission]]
+identifier = "deny-addon-detail"
+description = "Denies the addon_detail command without any pre-configured scope."
+commands.deny = ["addon_detail"]

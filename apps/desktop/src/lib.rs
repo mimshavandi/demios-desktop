@@ -5,11 +5,13 @@
 #[cfg(all(fake_model, not(debug_assertions)))]
 compile_error!("the dev fake model must never be in a release build");
 
+pub mod addons;
 pub mod agent;
 pub mod artifact_child;
 pub mod artifacts;
 pub mod chat;
 pub mod commands;
+pub mod connect;
 pub mod deeplink;
 pub mod distribution;
 pub mod error;
@@ -21,6 +23,7 @@ pub mod links;
 pub mod local;
 pub mod mcp;
 pub mod models;
+pub mod node;
 pub mod projects;
 pub mod remote;
 pub mod secrets;
@@ -152,6 +155,12 @@ impl mcp::LaunchApprover for NativeLaunchApprover {
 }
 
 pub fn run() {
+    run_with_addons(Vec::new());
+}
+
+/// [`run`] with add-ons (ADR-0013 §1): an add-on build's `main` passes its registry list.
+/// The regular build passes none, and Settings › Add-ons doesn't appear.
+pub fn run_with_addons(addons: Vec<std::sync::Arc<dyn dn_plugin_api::Plugin>>) {
     let builder = tauri::Builder::default()
         // First: a second launch (e.g. from a demios:// link) hands over to this one. With
         // the `deep-link` feature the link is forwarded to the deep-link plugin below; the
@@ -192,7 +201,7 @@ pub fn run() {
         .manage(updates::Updates::default())
         .manage(window_state::Tracker::default())
         .on_window_event(window_state::on_event)
-        .setup(|app| {
+        .setup(move |app| {
             use tauri::Manager;
             let dir = data_dir().ok_or("no home directory to keep app data in")?;
             let resources = app.path().resource_dir().ok();
@@ -212,6 +221,7 @@ pub fn run() {
             })?;
             install_add_links(app.handle(), &state);
             knowledge::start(&state);
+            addons::Addons::install(&state, addons);
             // The page's first commands need these, so they come before the window.
             app.manage(state.clone());
             app.manage(artifact_child::ChildState::default());
@@ -221,6 +231,20 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            addons::commands::addons_list,
+            addons::commands::addons_watch,
+            addons::commands::addon_detail,
+            addons::commands::addons_pending_consent,
+            addons::commands::addon_consent,
+            addons::commands::addon_set_permission,
+            addons::commands::addon_set_enabled,
+            addons::commands::addons_set_utc_offset,
+            addons::commands::addons_paused,
+            addons::commands::addons_set_paused,
+            addons::commands::addon_set_job_enabled,
+            addons::commands::addon_set_missed_rule,
+            addons::commands::addon_answer_question,
+            addons::commands::addon_answer_held,
             commands::app_info,
             commands::delete_all_local_data,
             commands::local_data_summary,
@@ -229,6 +253,8 @@ pub fn run() {
             commands::list_mcp_servers,
             commands::save_mcp_server,
             commands::remove_mcp_server,
+            commands::connect_catalogue,
+            commands::connect_service,
             commands::restore_mcp_server,
             commands::reconnect_mcp_server,
             commands::sign_in_mcp_server,
@@ -277,6 +303,13 @@ pub fn run() {
             commands::update_settings,
             commands::list_models,
             commands::check_keys,
+            commands::node_overview,
+            commands::node_join_begin,
+            commands::node_join_wait,
+            commands::node_join_cancel,
+            commands::node_remove_device,
+            commands::node_unpair,
+            commands::node_forget,
             commands::set_provider_key,
             remote::add_remote_server,
             remote::refresh_remote_server,

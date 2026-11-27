@@ -93,6 +93,7 @@ Keys follow `context.state` from ui-ux-behaves; each maps to a component above.
 | Artifact pane | render skeleton | – (pane closed) | render | error bar + Ask to fix | network blocked notice |
 | MCP servers | Skeleton | EmptyState + Add server | rows with status | Reconnect | risky permissions notice |
 | Settings forms | – | – | form | field errors + summary at top on save | unsaved changes guard on leave |
+| Settings › Add-ons (only with add-ons; AddonsSettings, AddonConsent) | Skeleton rows | – (no page without add-ons) | rows; an add-on's page with permissions and background jobs | InlineMessage + Retry; why an add-on isn't running | Waiting for you (held calls, "Run it now?"); a new version asks for more |
 
 Destructive actions (delete chat, delete model, remove server): act immediately, show a toast with **Undo** (soft delete for 10 s / trash). A confirmation dialog only when undo is impossible (e.g. deleting a downloaded model file > 1 GB), and it names the object and size.
 

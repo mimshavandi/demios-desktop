@@ -929,6 +929,36 @@ pub async fn restore_mcp_server(
     blocking(&state, |s| s.mcp_servers_view()).await
 }
 
+/// Settings › Tools › Connect (ADR-0018): the reviewed services and whether each is added.
+#[tauri::command]
+pub async fn connect_catalogue(state: AppStateRef<'_>) -> IpcResult<crate::connect::ConnectView> {
+    blocking(&state, |s| s.connect_view()).await
+}
+
+/// Adds a catalogue entry as an ordinary tool server and connects it; sign-in follows with
+/// [`sign_in_mcp_server`].
+#[tauri::command]
+pub async fn connect_service(
+    state: AppStateRef<'_>,
+    entry_id: String,
+) -> IpcResult<crate::connect::ConnectView> {
+    let cat = crate::connect::load().map_err(|e| crate::connect::unavailable(&e))?;
+    let cfg = {
+        let st = Arc::clone(state.inner());
+        let cat = cat.clone();
+        tauri::async_runtime::spawn_blocking(move || st.connect_entry(&cat, &entry_id))
+            .await
+            .map_err(|_| IpcError::new("internal", "Something went wrong. Try again."))??
+    };
+    let st = Arc::clone(state.inner());
+    let exec = tools_executor(&st)?;
+    let epoch = st.mcp_epoch_now();
+    tauri::async_runtime::spawn(async move {
+        st.connect_mcp_server(&exec, cfg, epoch).await;
+    });
+    blocking(&state, |s| s.connect_view()).await
+}
+
 #[tauri::command]
 pub async fn reconnect_mcp_server(state: AppStateRef<'_>, server_id: String) -> IpcResult<()> {
     let cfg = blocking(&state, move |s| s.mcp_server(&server_id)).await?;
@@ -1056,8 +1086,13 @@ pub async fn sign_in_mcp_server(
             Ok(())
         }
         Err(e) => {
-            // A server removed meanwhile gets no status back.
-            if e.code != "changed" {
+            // A server removed meanwhile (or while the browser was open: Connect's Cancel)
+            // gets no status back.
+            let id = cfg.id.clone();
+            let still_saved = blocking(&state, move |s| Ok(s.mcp_server(&id).is_ok()))
+                .await
+                .unwrap_or(false);
+            if e.code != "changed" && still_saved {
                 set("needs_auth", Some(e.message.clone()));
             }
             Err(e)
@@ -1368,4 +1403,55 @@ mod tests {
         assert_eq!(chat(&st), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
+}
+
+// Settings › Node (ADR-0014): see crate::node.
+
+/// The paired Node's status and devices, asked now; `paired: null` when none.
+#[tauri::command]
+pub async fn node_overview(state: AppStateRef<'_>) -> IpcResult<crate::node::NodeOverview> {
+    crate::node::overview(state.inner()).await
+}
+
+/// Starts joining the Node in `link` (from `dn node pair`); returns the check numbers.
+#[tauri::command]
+pub async fn node_join_begin(
+    state: AppStateRef<'_>,
+    link: String,
+) -> IpcResult<crate::node::JoinStarted> {
+    let st = state.inner().clone();
+    crate::node::join_begin(&st, &st.node, &link).await
+}
+
+/// Waits until the person answers on the Node, then records it.
+#[tauri::command]
+pub async fn node_join_wait(state: AppStateRef<'_>) -> IpcResult<crate::node::NodeOverview> {
+    let st = state.inner().clone();
+    crate::node::join_wait(&st, &st.node).await
+}
+
+/// "They don't match" or Cancel: nothing is added.
+#[tauri::command]
+pub async fn node_join_cancel(state: AppStateRef<'_>) -> IpcResult<()> {
+    crate::node::join_cancel(&state.inner().node).await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn node_remove_device(
+    state: AppStateRef<'_>,
+    id: String,
+) -> IpcResult<crate::node::NodeOverview> {
+    crate::node::remove_device(state.inner(), &id).await
+}
+
+#[tauri::command]
+pub async fn node_unpair(state: AppStateRef<'_>) -> IpcResult<crate::node::NodeOverview> {
+    crate::node::unpair(state.inner()).await
+}
+
+/// Forgets the Node on this computer only (a Node that is gone or removed this computer).
+#[tauri::command]
+pub async fn node_forget(state: AppStateRef<'_>) -> IpcResult<crate::node::NodeOverview> {
+    crate::node::forget(state.inner()).await
 }
