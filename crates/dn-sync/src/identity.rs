@@ -170,6 +170,17 @@ impl DeviceKeys {
         Ok(Zeroizing::new(doc.as_ref().to_vec()))
     }
 
+    /// The X25519 private key's bytes, for opening HPKE-wrapped group keys. Zeroized on drop.
+    pub(crate) fn agreement_secret(&self) -> Result<Zeroizing<[u8; 32]>> {
+        let bin: Curve25519SeedBin<'static> = self
+            .agreement
+            .as_be_bytes()
+            .map_err(|_| SyncError::Crypto("x25519 private key"))?;
+        let mut out = Zeroizing::new([0u8; 32]);
+        out.copy_from_slice(bin.as_ref());
+        Ok(out)
+    }
+
     /// The X25519 private key, for key agreement (HPKE comes with sync).
     pub fn agreement_key(&self) -> &agreement::PrivateKey {
         &self.agreement
