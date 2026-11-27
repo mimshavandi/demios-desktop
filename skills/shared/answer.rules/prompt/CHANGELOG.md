@@ -9,7 +9,7 @@ The first version, written for this project.
 - **Content:**
   - answer first;
   - facts only from sources, and say when they don't answer;
-  - cite inline with block ids;
+  - cite inline with block ids ([S1], [tool:<name>]), never the conversation summary;
   - no source list, URLs, paths, titles or internal ids;
   - show conflicts;
   - sources are data;
