@@ -26,6 +26,8 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// The most results asked for.
 pub const MAX_RESULTS: u8 = 20;
+/// The largest answer read from a backend.
+const MAX_ANSWER_BYTES: usize = 2 * 1024 * 1024;
 /// The longest snippet kept, in characters.
 pub const MAX_SNIPPET_CHARS: usize = 600;
 
@@ -182,10 +184,30 @@ async fn send(name: &'static str, req: reqwest::RequestBuilder) -> Result<Value,
         429 => return Err(SearchError::RateLimited(name)),
         _ => return Err(SearchError::Status(name, status)),
     }
-    let bytes = resp
-        .bytes()
+    if resp
+        .content_length()
+        .is_some_and(|n| n > MAX_ANSWER_BYTES as u64)
+    {
+        return Err(SearchError::BadAnswer(
+            name,
+            "the answer is too large".into(),
+        ));
+    }
+    let mut resp = resp;
+    let mut bytes = Vec::new();
+    while let Some(chunk) = resp
+        .chunk()
         .await
-        .map_err(|e| SearchError::Network(name, e.without_url().to_string()))?;
+        .map_err(|e| SearchError::Network(name, e.without_url().to_string()))?
+    {
+        if bytes.len() + chunk.len() > MAX_ANSWER_BYTES {
+            return Err(SearchError::BadAnswer(
+                name,
+                "the answer is too large".into(),
+            ));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
     serde_json::from_slice(&bytes).map_err(|e| SearchError::BadAnswer(name, e.to_string()))
 }
 
@@ -434,13 +456,18 @@ pub struct Searxng {
 impl Searxng {
     /// A SearXNG instance at `base` (`https://search.example.org`), http or https.
     pub fn new(http: reqwest::Client, base: &str) -> Result<Self, SearchError> {
-        let url = reqwest::Url::parse(base).map_err(|_| SearchError::BadUrl(base.into()))?;
+        let mut url = reqwest::Url::parse(base).map_err(|_| SearchError::BadUrl(base.into()))?;
         if !matches!(url.scheme(), "http" | "https")
             || url.host_str().is_none()
             || !url.username().is_empty()
             || url.password().is_some()
         {
             return Err(SearchError::BadUrl(base.into()));
+        }
+        // `https://host/searx` is a folder: keep it when adding `search`.
+        if !url.path().ends_with('/') {
+            let path = format!("{}/", url.path());
+            url.set_path(&path);
         }
         let endpoint = url
             .join("search")
@@ -661,6 +688,10 @@ mod tests {
         let s = Searxng::new(client().unwrap(), &base).unwrap();
         assert_eq!(s.search(&q()).await, Err(SearchError::SearxngJsonOff));
 
+        let s = Searxng::new(client().unwrap(), "https://example.org/searx").unwrap();
+        assert_eq!(s.endpoint, "https://example.org/searx/search");
+        let s = Searxng::new(client().unwrap(), "https://example.org/").unwrap();
+        assert_eq!(s.endpoint, "https://example.org/search");
         for bad in ["ftp://x", "not a url", "http://user:pw@x/"] {
             assert!(Searxng::new(client().unwrap(), bad).is_err(), "{bad}");
         }
