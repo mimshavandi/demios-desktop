@@ -357,8 +357,10 @@ fn start(
     let model_ref = model.to_string();
     let sink: Arc<dyn EventSink> = Arc::new(sink);
     // Artifacts only through tool calls (ADR-0004): a model without tool calling gets none.
+    let contrast = crate::artifacts::contrast_offered(&state, mode, skill.as_deref());
     let tools: Arc<dyn ToolExecutor> = Arc::new(RunTools {
         base: Arc::clone(&state.tools),
+        contrast,
         artifacts: (mode == ArtifactMode::Tools).then(|| ArtifactTools {
             state: Arc::clone(&state),
             conversation_id,
@@ -1387,6 +1389,76 @@ mod tests {
         assert!(system_text(&reqs[0]).contains("Answer in bullet points."));
         // The listed tool ran.
         assert_eq!(crate::artifacts::list(&st, conv).unwrap().len(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn contrast_check_is_offered_only_to_a_skill_that_names_it() {
+        let rec = Arc::new(Recorder::default());
+        let (st, conv) = skill_state(rec.clone(), true, &["contrast.check"]);
+        turn(&st, conv, "check my colours").await;
+        let names: Vec<String> = rec.requests.lock().unwrap()[0]
+            .tools
+            .iter()
+            .map(|t| t.name.clone())
+            .collect();
+        assert_eq!(names, ["contrast_check"]);
+
+        // A skill that doesn't name it, and a chat without a skill, don't get it.
+        let rec = Arc::new(Recorder::default());
+        let (st, conv) = skill_state(rec.clone(), true, &["artifact.*"]);
+        turn(&st, conv, "hi").await;
+        crate::skills::set_chat_skill(&st.db().unwrap(), conv, None).unwrap();
+        turn(&st, conv, "hi").await;
+        for req in rec.requests.lock().unwrap().iter() {
+            assert!(req.tools.iter().all(|t| t.name != "contrast_check"));
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn contrast_check_runs_in_code() {
+        use dn_agent::ToolExecutor;
+        let tools = RunTools {
+            base: Arc::new(Calc(false)),
+            artifacts: None,
+            contrast: true,
+        };
+        let ctx = dn_agent::ToolContext {
+            agent_id: "assistant.default".into(),
+            caller: "chat.reply".into(),
+            conversation_id: None,
+            run_id: Id::new(),
+            step: 0,
+            cancel: Default::default(),
+            allowed_tools: vec![],
+        };
+        let call = |args: serde_json::Value| dn_core::chat::ToolCall {
+            id: "c1".into(),
+            name: "contrast_check".into(),
+            arguments: args,
+        };
+        let out = tools
+            .execute(
+                &call(serde_json::json!({"foreground": "#777777", "background": "white"})),
+                &ctx,
+            )
+            .await
+            .unwrap();
+        assert!(!out.is_error);
+        let text = match &out.content[..] {
+            [dn_core::chat::ContentPart::Text { text }] => text.clone(),
+            other => panic!("{other:?}"),
+        };
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(v["ratio"], 4.47);
+        assert_eq!(v["aa_normal_text"], false);
+        let bad = tools
+            .execute(
+                &call(serde_json::json!({"foreground": "#zzz", "background": "#fff"})),
+                &ctx,
+            )
+            .await
+            .unwrap();
+        assert!(bad.is_error);
     }
 
     #[tokio::test(flavor = "multi_thread")]
