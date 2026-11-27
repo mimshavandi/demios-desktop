@@ -347,6 +347,7 @@ impl Node {
                 group: &group,
                 me: &keys,
                 collections: &cols,
+                peer_minor: dn_sync::transport::PROTOCOL_MINOR,
             }
             .catch_up(dn_store::now_ms() as u64)
             .map_err(|e| format!("couldn't apply the changes this Node keeps: {e}"))?;
@@ -658,6 +659,7 @@ async fn handle(stream: TcpStream, peer: SocketAddr, shared: &Shared) {
         group: &shared.group,
         me: &shared.keys,
         collections: &cols,
+        peer_minor: channel.peer_minor(),
     };
     loop {
         let message =

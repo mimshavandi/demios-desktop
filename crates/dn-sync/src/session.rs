@@ -161,6 +161,10 @@ fn open_with(
     envelope::open(env, &key, |author, _| chain.author_key(author))
 }
 
+/// Why a minor-0 device behind the Node's log is refused.
+pub const OLD_DEVICE: &str = "update Demios on this device to sync: your Node no longer keeps \
+     the older changes this device lacks, and this version can't start from a snapshot";
+
 /// The Node's side of sync messages from a checked member (after
 /// [`crate::transport::authorize_member`]).
 pub struct NodeSync<'a> {
@@ -171,6 +175,9 @@ pub struct NodeSync<'a> {
     pub me: &'a DeviceKeys,
     /// The collections it applies, the same as the devices'.
     pub collections: &'a [&'a dyn Collection],
+    /// The device's protocol minor ([`Channel::peer_minor`]): a minor-0 device can't start
+    /// from a snapshot, so one behind the log is refused with a clear message.
+    pub peer_minor: u16,
 }
 
 impl NodeSync<'_> {
@@ -232,10 +239,17 @@ impl NodeSync<'_> {
         }
         match message {
             Message::SyncStart {
-                chain_len, applied, ..
+                chain_len,
+                vector,
+                applied,
             } => {
-                snapshot::record_ack(&conn, from, &from_wire(&applied)?, now_ms)?;
+                if self.peer_minor >= 1 {
+                    snapshot::record_ack(&conn, from, &from_wire(&applied)?, now_ms)?;
+                }
                 let floor = snapshot::compact(&conn, chain, now_ms)?;
+                if self.peer_minor < 1 && snapshot::behind(&from_wire(&vector)?, &floor) {
+                    return Err(SyncError::Refused(OLD_DEVICE.into()));
+                }
                 let have = usize::try_from(chain_len).unwrap_or(usize::MAX);
                 let entries = chain
                     .entries()
@@ -674,6 +688,7 @@ mod tests {
                 group: &self.group,
                 me: &self.keys,
                 collections: &cols,
+                peer_minor: ch.peer_minor(),
             };
             while let Ok(m) = ch.recv().await {
                 if m == Message::Done {
@@ -861,6 +876,7 @@ mod tests {
             group: &node.group,
             me: &node.keys,
             collections: &cols,
+            peer_minor: crate::transport::PROTOCOL_MINOR,
         };
         let envs: Vec<String> = {
             let conn = laptop.db.lock().unwrap();
@@ -1201,6 +1217,130 @@ mod tests {
         );
         assert!(matches!(r, Err(SyncError::NotYet(_))), "{r:?}");
         assert_eq!(a.titles(), ["Final"]);
+    }
+
+    #[tokio::test]
+    async fn a_removed_device_or_an_old_key_never_gets_the_snapshot() {
+        let node = Node::new();
+        let (a, gone) = (Dev::new(), Dev::new());
+        node.add(&a);
+        node.add(&gone);
+        chat::create_conversation(&a.db.lock().unwrap(), "After the removal").unwrap();
+        gone.sync(&node).await.unwrap();
+        node.remove(&gone);
+        a.sync(&node).await.unwrap();
+        let cols = store_collections();
+        let sync = NodeSync {
+            db: &node.db,
+            store: &node.store,
+            group: &node.group,
+            me: &node.keys,
+            collections: &cols,
+            peer_minor: crate::transport::PROTOCOL_MINOR,
+        };
+        // Asked directly, on a channel it still had: refused.
+        assert!(matches!(
+            sync.answer(gone.keys.id(), Message::SnapshotRequest, NOW),
+            Err(SyncError::Removed)
+        ));
+        let Message::Snapshot { vector, size } = sync
+            .answer(a.keys.id(), Message::SnapshotRequest, NOW)
+            .unwrap()
+        else {
+            panic!("expected the snapshot");
+        };
+        assert!(size > 0);
+        assert!(matches!(
+            sync.answer(
+                gone.keys.id(),
+                Message::SnapshotPull { vector, offset: 0 },
+                NOW
+            ),
+            Err(SyncError::Removed)
+        ));
+        assert!(gone.sync(&node).await.is_err());
+        // The snapshot is sealed with the key of the epoch after the removal: the old key
+        // the removed device holds doesn't open it.
+        let (group, old_key, sealed) = {
+            let g = node.group.lock().unwrap();
+            let chain = g.chain();
+            assert!(chain.epoch() >= 1);
+            let old = g.key(&node.store, chain.epoch() - 1).unwrap();
+            let cur = g.key(&node.store, chain.epoch()).unwrap();
+            let (_, sealed) = snapshot::build(
+                &node.db.lock().unwrap(),
+                &cols,
+                &node.keys,
+                chain.group(),
+                &cur,
+            )
+            .unwrap();
+            (chain.group(), old, sealed)
+        };
+        let fresh = Dev::new();
+        assert!(
+            snapshot::install(
+                &fresh.db.lock().unwrap(),
+                &cols,
+                &sealed,
+                &old_key,
+                &node.keys.public(),
+                group,
+                NOW
+            )
+            .is_err()
+        );
+        assert!(fresh.titles().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_device_of_the_older_version_behind_the_log_is_told_to_update() {
+        let node = Node::new();
+        let a = Dev::new();
+        node.add(&a);
+        chat::create_conversation(&a.db.lock().unwrap(), "Old history").unwrap();
+        a.sync(&node).await.unwrap();
+        a.sync(&node).await.unwrap();
+        assert_eq!(log_len(&node.db), 0);
+        let late = Dev::new();
+        node.add(&late);
+        let cols = store_collections();
+        let sync = |minor| NodeSync {
+            db: &node.db,
+            store: &node.store,
+            group: &node.group,
+            me: &node.keys,
+            collections: &cols,
+            peer_minor: minor,
+        };
+        let start = |v: Vector| Message::SyncStart {
+            chain_len: 0,
+            vector: to_wire(&v),
+            applied: to_wire(&v),
+        };
+        // Minor 0 and behind the log: a clear refusal, not a sync that never completes.
+        match sync(0).answer(late.keys.id(), start(Vector::default()), NOW) {
+            Err(SyncError::Refused(reason)) => {
+                assert_eq!(reason, OLD_DEVICE);
+                assert!(reason.starts_with("update Demios on this device"));
+            }
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+        // Minor 0 and not behind: syncs as before.
+        let held_a = held(&a.db.lock().unwrap()).unwrap();
+        assert!(matches!(
+            sync(0).answer(a.keys.id(), start(held_a), NOW),
+            Ok(Message::SyncState { .. })
+        ));
+        // Minor 1: told where the log starts, and fetches the snapshot.
+        let Ok(Message::SyncState { floor, .. }) =
+            sync(1).answer(late.keys.id(), start(Vector::default()), NOW)
+        else {
+            panic!("expected the sync state");
+        };
+        assert!(!floor.is_empty());
+        assert!(late.sync(&node).await.unwrap().snapshot);
+        assert_eq!(late.titles(), ["Old history"]);
     }
 
     fn key_for(dev: &Dev, node: &Node) -> GroupKey {
