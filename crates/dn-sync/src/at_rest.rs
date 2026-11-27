@@ -5,8 +5,11 @@
 //!
 //! - **Records:** one row per record in `sync_node_records`. The record's fields are JSON,
 //!   sealed with AES-256-GCM under the records key, with a random nonce. The associated
-//!   data binds the row to its collection, id and key number, so a row moved to another id
-//!   doesn't open.
+//!   data binds the row to its collection, id and key number, and to the writes
+//!   `sync_fields` records for it (field, author, change number, time). A row moved to
+//!   another id doesn't open, and neither does an older copy of a row, or a purged one put
+//!   back, unless the bookkeeping is rolled back with it (a whole-database rollback, which
+//!   this doesn't cover).
 //! - **Conflicts:** the version not shown is sealed the same way, bound to its record,
 //!   field, author and change number.
 //! - **Field hashes:** keyed (HMAC-SHA256 with a key derived from the records key), so a
@@ -25,12 +28,13 @@
 //! **Rotation:** [`RecordsKeys::rotate`] makes key `n + 1`, which new writes use at once.
 //! [`RecordsKeys::reseal_batch`] re-seals what still uses an older key, a batch per
 //! transaction, so an interrupted rotation goes on where it stopped. [`RecordsKeys::finish`]
-//! then deletes the old keys from the secret store and vacuums the database, so no page
-//! keeps rows under them.
+//! then deletes every older key from the secret store and vacuums the database, so no page
+//! keeps rows under them. It deletes all older keys each time, so a run that stopped after
+//! moving on but before deleting is completed by the next one.
 
 use crate::b64;
 use crate::identity::DeviceId;
-use crate::records::{self, Collection, CollectionKind, ConflictAt};
+use crate::records::{self, Collection, CollectionKind, ConflictAt, WriteBy};
 use crate::{Result, SyncError};
 use aws_lc_rs::aead::{AES_256_GCM, Aad, LessSafeKey, NONCE_LEN, Nonce, UnboundKey};
 use aws_lc_rs::{hkdf, hmac};
@@ -150,8 +154,50 @@ fn aad(n: u32, parts: &[&[u8]]) -> Vec<u8> {
     out
 }
 
-fn record_aad(n: u32, collection: &str, id: &str) -> Vec<u8> {
-    aad(n, &[b"record", collection.as_bytes(), id.as_bytes()])
+/// The writes `sync_fields` records for a record, as they will be once `pending` (fields
+/// about to be written by one change) is recorded too, in a fixed order.
+fn writes(
+    conn: &Connection,
+    collection: &str,
+    id: &str,
+    pending: Option<(&mut dyn Iterator<Item = &str>, WriteBy)>,
+) -> Result<Vec<u8>> {
+    let mut map: BTreeMap<String, (String, i64, i64)> = BTreeMap::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT field, author, seq, hlc FROM sync_fields WHERE collection = ?1 AND id = ?2",
+        )?;
+        let rows = stmt.query_map(params![collection, id], |r| {
+            Ok((r.get(0)?, (r.get(1)?, r.get(2)?, r.get(3)?)))
+        })?;
+        for row in rows {
+            let (field, w) = row?;
+            map.insert(field, w);
+        }
+    }
+    if let Some((fields, by)) = pending {
+        let w = (by.author.to_hex(), by.seq as i64, by.hlc.0 as i64);
+        for f in fields {
+            map.insert(f.to_owned(), w.clone());
+        }
+    }
+    let mut out = Vec::new();
+    for (field, (author, seq, hlc)) in map {
+        for part in [field.as_bytes(), author.as_bytes()] {
+            out.extend_from_slice(&u32::try_from(part.len()).unwrap_or(u32::MAX).to_be_bytes());
+            out.extend_from_slice(part);
+        }
+        out.extend_from_slice(&seq.to_be_bytes());
+        out.extend_from_slice(&hlc.to_be_bytes());
+    }
+    Ok(out)
+}
+
+fn record_aad(n: u32, collection: &str, id: &str, writes: &[u8]) -> Vec<u8> {
+    aad(
+        n,
+        &[b"record", collection.as_bytes(), id.as_bytes(), writes],
+    )
 }
 
 fn conflict_aad(n: u32, collection: &str, at: &ConflictAt<'_>) -> Vec<u8> {
@@ -164,6 +210,7 @@ fn conflict_aad(n: u32, collection: &str, at: &ConflictAt<'_>) -> Vec<u8> {
             at.field.as_bytes(),
             &at.author.0,
             &at.seq.to_be_bytes(),
+            &at.hlc.to_be_bytes(),
         ],
     )
 }
@@ -350,8 +397,9 @@ impl RecordsKeys {
         };
         let room = limit.saturating_sub(rows.len());
         for (col, id, sealed) in rows {
-            let plain = Zeroizing::new(self.open(|n| record_aad(n, &col, &id), &sealed)?);
-            let fresh = self.seal(|n| record_aad(n, &col, &id), &plain)?;
+            let w = writes(&tx, &col, &id, None)?;
+            let plain = Zeroizing::new(self.open(|n| record_aad(n, &col, &id, &w), &sealed)?);
+            let fresh = self.seal(|n| record_aad(n, &col, &id, &w), &plain)?;
             tx.execute(
                 "UPDATE sync_node_records SET key_n = ?3, sealed = ?4 WHERE collection = ?1 AND id = ?2",
                 params![col, id, current, fresh],
@@ -387,21 +435,21 @@ impl RecordsKeys {
             return Ok(false);
         }
         let mut ring = self.ring.write().unwrap_or_else(|p| p.into_inner());
-        let (oldest, current) = (ring.oldest, ring.current);
-        if oldest == current {
-            return Ok(true);
-        }
-        // The row moves first: a key it no longer names is never needed again.
-        conn.execute(
-            "UPDATE sync_records_key SET oldest = ?1 WHERE id = 1",
-            [current],
-        )?;
-        ring.oldest = current;
-        for n in oldest..current {
-            ring.keys.remove(&n);
+        let current = ring.current;
+        // The row moves first: a key it no longer names is never needed again, so a start
+        // never looks for a key already deleted.
+        if ring.oldest != current {
+            conn.execute(
+                "UPDATE sync_records_key SET oldest = ?1 WHERE id = 1",
+                [current],
+            )?;
+            ring.oldest = current;
+            ring.keys.retain(|n, _| *n == current);
         }
         drop(ring);
-        for n in oldest..current {
+        // Every older key, not only the last rotation's, so a run that stopped after moving
+        // the row but before deleting is completed here.
+        for n in 1..current {
             store.delete(&key_id(n))?;
         }
         conn.execute_batch("VACUUM; PRAGMA wal_checkpoint(TRUNCATE);")?;
@@ -415,6 +463,7 @@ struct OldConflict {
     field: String,
     author: DeviceId,
     seq: u64,
+    hlc: u64,
     sealed: Vec<u8>,
 }
 
@@ -425,6 +474,7 @@ impl OldConflict {
             field: &self.field,
             author: self.author,
             seq: self.seq,
+            hlc: self.hlc,
         }
     }
 }
@@ -436,7 +486,7 @@ fn old_conflicts(conn: &Connection, current: u32, limit: usize) -> Result<Vec<Ol
         return Ok(out);
     }
     let mut stmt =
-        conn.prepare("SELECT collection, id, field, author, seq, value FROM sync_conflicts")?;
+        conn.prepare("SELECT collection, id, field, author, seq, hlc, value FROM sync_conflicts")?;
     let rows = stmt.query_map([], |r| {
         Ok((
             r.get::<_, String>(0)?,
@@ -444,12 +494,13 @@ fn old_conflicts(conn: &Connection, current: u32, limit: usize) -> Result<Vec<Ol
             r.get::<_, String>(2)?,
             r.get::<_, String>(3)?,
             r.get::<_, i64>(4)?,
-            r.get::<_, String>(5)?,
+            r.get::<_, i64>(5)?,
+            r.get::<_, String>(6)?,
         ))
     })?;
     let damaged = || SyncError::Protocol("a sealed conflict in the Node's database is damaged");
     for row in rows {
-        let (collection, id, field, author, seq, value) = row?;
+        let (collection, id, field, author, seq, hlc, value) = row?;
         let sealed = b64::decode(&value).ok_or_else(damaged)?;
         if key_n(&sealed)? < current {
             out.push(OldConflict {
@@ -458,6 +509,7 @@ fn old_conflicts(conn: &Connection, current: u32, limit: usize) -> Result<Vec<Ol
                 field,
                 author: DeviceId::from_hex(&author).ok_or_else(damaged)?,
                 seq: u64::try_from(seq).map_err(|_| damaged())?,
+                hlc: u64::try_from(hlc).map_err(|_| damaged())?,
                 sealed,
             });
             if out.len() == limit {
@@ -564,7 +616,8 @@ impl Sealed {
         let Some(sealed) = sealed else {
             return Ok(None);
         };
-        let plain = Zeroizing::new(self.keys.open(|n| record_aad(n, name, id), &sealed)?);
+        let w = writes(conn, name, id, None)?;
+        let plain = Zeroizing::new(self.keys.open(|n| record_aad(n, name, id, &w), &sealed)?);
         match serde_json::from_slice(&plain) {
             Ok(Value::Object(m)) => Ok(Some(m)),
             _ => Err(SyncError::Protocol(
@@ -573,18 +626,23 @@ impl Sealed {
         }
     }
 
+    /// Seals and keeps `fields` (the whole record). `by` names the fields this change
+    /// writes and the change, which `sync_fields` records right after; `None` when the
+    /// bookkeeping doesn't change (a purge's side effect, a rotation).
     fn put(
         &self,
         conn: &Connection,
         id: &str,
         parent: Option<&str>,
         fields: &Map<String, Value>,
+        by: Option<(&mut dyn Iterator<Item = &str>, WriteBy)>,
     ) -> Result<()> {
         let name = self.name();
         let plain = Zeroizing::new(
             serde_json::to_vec(fields).map_err(|_| SyncError::Protocol("record isn't JSON"))?,
         );
-        let sealed = self.keys.seal(|n| record_aad(n, name, id), &plain)?;
+        let w = writes(conn, name, id, by)?;
+        let sealed = self.keys.seal(|n| record_aad(n, name, id, &w), &plain)?;
         conn.execute(
             "INSERT INTO sync_node_records (collection, id, parent, key_n, sealed)
              VALUES (?1, ?2, ?3, ?4, ?5)
@@ -625,12 +683,22 @@ impl Collection for Sealed {
     fn read(&self, conn: &Connection, id: &str) -> Result<Option<Map<String, Value>>> {
         self.get(conn, id)
     }
-    fn write(&self, conn: &Connection, id: &str, fields: &Map<String, Value>) -> Result<()> {
+    fn write(
+        &self,
+        conn: &Connection,
+        id: &str,
+        fields: &Map<String, Value>,
+        by: WriteBy,
+    ) -> Result<()> {
+        // A field record's changed fields, or `""` for an appended record (as `apply`
+        // records them).
+        let mut changed = fields.keys().map(String::as_str);
+        let mut appended = std::iter::once("");
         match self.spec {
             Spec::Projects => {
                 let (row, m): (ProjectRow, _) = checked(self.get(conn, id)?, id, fields)?;
                 sync_rows::canonical_id(&row.id).map_err(store_err)?;
-                self.put(conn, id, None, &m)
+                self.put(conn, id, None, &m, Some((&mut changed, by)))
             }
             Spec::Chats => {
                 let (row, m): (ChatRow, _) = checked(self.get(conn, id)?, id, fields)?;
@@ -638,7 +706,13 @@ impl Collection for Sealed {
                 if let Some(p) = &row.project_id {
                     sync_rows::canonical_id(p).map_err(store_err)?;
                 }
-                self.put(conn, id, row.project_id.as_deref(), &m)
+                self.put(
+                    conn,
+                    id,
+                    row.project_id.as_deref(),
+                    &m,
+                    Some((&mut changed, by)),
+                )
             }
             Spec::Messages => {
                 let (row, m): (MessageRow, _) = checked(None, id, fields)?;
@@ -660,7 +734,13 @@ impl Collection for Sealed {
                 if self.get(conn, id)?.is_some() {
                     return Ok(());
                 }
-                self.put(conn, id, Some(&row.conversation_id), &m)
+                self.put(
+                    conn,
+                    id,
+                    Some(&row.conversation_id),
+                    &m,
+                    Some((&mut appended, by)),
+                )
             }
         }
     }
@@ -675,7 +755,7 @@ impl Collection for Sealed {
                     };
                     if let Some(mut m) = chats.get(conn, &chat)? {
                         m.insert("project_id".into(), Value::Null);
-                        chats.put(conn, &chat, None, &m)?;
+                        chats.put(conn, &chat, None, &m, None)?;
                     }
                 }
                 Self::delete(conn, "project", id)
@@ -985,12 +1065,12 @@ mod tests {
         assert_eq!(shown["title"], Value::String("Quarterly numbers".into()));
         let all = dump(&node.conn);
         assert!(!all.contains("Surprise party"));
-        let (field, value, author, seq): (String, String, String, i64) = node
+        let (field, value, author, seq, hlc): (String, String, String, i64, i64) = node
             .conn
             .query_row(
-                "SELECT field, value, author, seq FROM sync_conflicts",
+                "SELECT field, value, author, seq, hlc FROM sync_conflicts",
                 [],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
             )
             .unwrap();
         let id = c.id.to_string();
@@ -999,6 +1079,7 @@ mod tests {
             field: &field,
             author: DeviceId::from_hex(&author).unwrap(),
             seq: seq as u64,
+            hlc: hlc as u64,
         };
         let chats = node.records.collections()[CHATS];
         assert_eq!(
@@ -1034,6 +1115,83 @@ mod tests {
     }
 
     #[test]
+    fn an_older_copy_of_a_row_or_a_purged_one_put_back_does_not_open() {
+        let (mut a, node, key, members) = device_and_node();
+        let c = chat::create_conversation(&a.conn, "Before").unwrap();
+        let m = chat::add_message(&a.conn, c.id, NewMessage::user_text("Hi")).unwrap();
+        node.take(&a.send(&key, NOW), &key, &members, NOW);
+        let saved = |collection: &str, id: String| -> Vec<u8> {
+            node.conn
+                .query_row(
+                    "SELECT sealed FROM sync_node_records WHERE collection = ?1 AND id = ?2",
+                    params![collection, id],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        };
+        let old_chat = saved("chat", c.id.to_string());
+        let old_message = saved("message", m.id.to_string());
+        chat::rename_conversation(&a.conn, c.id, "After").unwrap();
+        node.take(&a.send(&key, NOW + 1), &key, &members, NOW + 1);
+        assert_eq!(node.read(CHATS, c.id).unwrap()["title"], "After");
+        // The row from before the rename, put back under the same key: refused.
+        node.conn
+            .execute(
+                "UPDATE sync_node_records SET sealed = ?1 WHERE collection = 'chat'",
+                [&old_chat],
+            )
+            .unwrap();
+        assert!(
+            node.records.collections()[CHATS]
+                .read(&node.conn, &c.id.to_string())
+                .is_err()
+        );
+        // A purged message put back: refused too (its bookkeeping went with it).
+        node.records.collections()[MESSAGES]
+            .purge(&node.conn, &m.id.to_string(), 0)
+            .unwrap();
+        node.conn
+            .execute("DELETE FROM sync_fields WHERE id = ?1", [m.id.to_string()])
+            .unwrap();
+        node.conn
+            .execute(
+                "INSERT INTO sync_node_records (collection, id, parent, key_n, sealed)
+                 VALUES ('message', ?1, ?2, 1, ?3)",
+                params![m.id.to_string(), c.id.to_string(), old_message],
+            )
+            .unwrap();
+        assert!(
+            node.records.collections()[MESSAGES]
+                .read(&node.conn, &m.id.to_string())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn a_rotation_that_stopped_before_deleting_is_completed_by_the_next_run() {
+        let (mut a, node, key, members) = device_and_node();
+        chat::create_conversation(&a.conn, "Plans").unwrap();
+        node.take(&a.send(&key, NOW), &key, &members, NOW);
+        let keys = node.records.keys();
+        keys.rotate(&node.conn, &node.store).unwrap();
+        while keys.reseal_batch(&node.conn, 10).unwrap() > 0 {}
+        // It stopped after moving on, before deleting key 1.
+        node.conn
+            .execute("UPDATE sync_records_key SET oldest = 2 WHERE id = 1", [])
+            .unwrap();
+        let again = RecordsKeys::load(&node.conn, &node.store).unwrap();
+        assert!(node.store.get(&key_id(1)).unwrap().is_some());
+        // The next run starts key 3 and, when done, deletes every older key.
+        again.rotate(&node.conn, &node.store).unwrap();
+        while again.reseal_batch(&node.conn, 10).unwrap() > 0 {}
+        assert!(again.finish(&node.conn, &node.store).unwrap());
+        for n in [1, 2] {
+            assert!(node.store.get(&key_id(n)).unwrap().is_none(), "key {n}");
+        }
+        assert!(node.store.get(&key_id(3)).unwrap().is_some());
+    }
+
+    #[test]
     fn purges_on_the_node_match_a_device() {
         let (mut a, node, key, members) = device_and_node();
         let p = project::create_project(&a.conn, "Trip").unwrap();
@@ -1066,7 +1224,16 @@ mod tests {
         );
         assert!(
             node.records.collections()[MESSAGES]
-                .write(&node.conn, &m.id.to_string(), &fields)
+                .write(
+                    &node.conn,
+                    &m.id.to_string(),
+                    &fields,
+                    WriteBy {
+                        author: a.keys.id(),
+                        seq: 99,
+                        hlc: crate::hlc::Hlc::from_parts(NOW, 0),
+                    },
+                )
                 .is_err()
         );
     }

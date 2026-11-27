@@ -122,8 +122,15 @@ pub trait Collection: Sync {
     /// The record's fields as they are now, or `None` when it isn't here.
     fn read(&self, conn: &Connection, id: &str) -> Result<Option<Map<String, Value>>>;
     /// Writes fields from another device: all of them for a new record, the changed ones
-    /// otherwise.
-    fn write(&self, conn: &Connection, id: &str, fields: &Map<String, Value>) -> Result<()>;
+    /// otherwise. `by` is the change that wrote them; `sync_fields` records it right after,
+    /// in the same transaction (the Node binds the sealed record to it).
+    fn write(
+        &self,
+        conn: &Connection,
+        id: &str,
+        fields: &Map<String, Value>,
+        by: WriteBy,
+    ) -> Result<()>;
     /// Deletes the record for good.
     fn purge(&self, conn: &Connection, id: &str, at_ms: i64) -> Result<()>;
     /// For a child record: its parent (collection, id), to drop children of a purged parent.
@@ -156,6 +163,14 @@ pub trait Collection: Sync {
     }
 }
 
+/// The change behind a write: its author, number and hybrid-logical time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WriteBy {
+    pub author: DeviceId,
+    pub seq: u64,
+    pub hlc: Hlc,
+}
+
 /// Where a kept conflict version belongs: its record, field and the change that wrote it.
 #[derive(Clone, Copy, Debug)]
 pub struct ConflictAt<'a> {
@@ -163,6 +178,8 @@ pub struct ConflictAt<'a> {
     pub field: &'a str,
     pub author: DeviceId,
     pub seq: u64,
+    /// The change's hybrid-logical time.
+    pub hlc: u64,
 }
 
 fn store(e: dn_store::StoreError) -> SyncError {
@@ -240,7 +257,13 @@ impl Collection for Chats {
             .map(to_map)
             .transpose()
     }
-    fn write(&self, conn: &Connection, id: &str, fields: &Map<String, Value>) -> Result<()> {
+    fn write(
+        &self,
+        conn: &Connection,
+        id: &str,
+        fields: &Map<String, Value>,
+        _by: WriteBy,
+    ) -> Result<()> {
         let row: ChatRow = merged(sync_rows::chat(conn, id).map_err(store)?, id, fields)?;
         sync_rows::put_chat(conn, &row).map_err(store)
     }
@@ -281,7 +304,13 @@ impl Collection for Projects {
             .map(to_map)
             .transpose()
     }
-    fn write(&self, conn: &Connection, id: &str, fields: &Map<String, Value>) -> Result<()> {
+    fn write(
+        &self,
+        conn: &Connection,
+        id: &str,
+        fields: &Map<String, Value>,
+        _by: WriteBy,
+    ) -> Result<()> {
         let row: ProjectRow = merged(sync_rows::project(conn, id).map_err(store)?, id, fields)?;
         sync_rows::put_project(conn, &row).map_err(store)
     }
@@ -307,7 +336,13 @@ impl Collection for Messages {
             .map(to_map)
             .transpose()
     }
-    fn write(&self, conn: &Connection, id: &str, fields: &Map<String, Value>) -> Result<()> {
+    fn write(
+        &self,
+        conn: &Connection,
+        id: &str,
+        fields: &Map<String, Value>,
+        _by: WriteBy,
+    ) -> Result<()> {
         let row: MessageRow = merged(None, id, fields)?;
         sync_rows::insert_message(conn, &row)
             .map_err(store)
@@ -701,6 +736,11 @@ pub fn apply(
 ) -> Result<Vec<(String, String)>> {
     let tx = conn.unchecked_transaction()?;
     let mut purged = Vec::new();
+    let by = WriteBy {
+        author: change.author,
+        seq: change.seq,
+        hlc: change.hlc,
+    };
     for op in &change.ops {
         // Ids from other devices must be in the one form this app writes (see
         // `dn_store::sync_rows::canonical_id`), so tombstones and keys always match.
@@ -765,7 +805,7 @@ pub fn apply(
                 {
                     continue; // Its parent was deleted for good: a delete wins.
                 }
-                col.write(&tx, id, fields)?;
+                col.write(&tx, id, fields, by)?;
                 record_field(
                     &tx,
                     col,
@@ -832,6 +872,7 @@ pub fn apply(
                                         field,
                                         author: keep_author,
                                         seq: keep_seq,
+                                        hlc: keep_hlc.0,
                                     },
                                     keep_value.to_string(),
                                 )?;
@@ -857,7 +898,7 @@ pub fn apply(
                     }
                 }
                 if !winners.is_empty() {
-                    col.write(&tx, id, &winners)?;
+                    col.write(&tx, id, &winners, by)?;
                     for (field, value) in &winners {
                         record_field(
                             &tx,
