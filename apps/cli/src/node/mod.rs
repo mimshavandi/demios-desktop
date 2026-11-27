@@ -401,19 +401,30 @@ impl Node {
             let jobs_stop = jobs_stop.clone();
             tokio::spawn(async move { scheduler.run(&jobs_stop).await })
         };
-        #[cfg(unix)]
-        let control = tokio::spawn(control::serve(
-            self.control,
-            self.data_dir.clone(),
-            self.keys.public(),
-            self.pairing.clone(),
-        ));
         let slots = Arc::new(Semaphore::new(MAX_CONNECTIONS));
         let base = Arc::new(StatusBase {
             name: self.name,
             store: self.store,
             reach: self.reach,
         });
+        #[cfg(unix)]
+        let control = {
+            let ops: Arc<dyn control::NodeOps> = Arc::new(Shared {
+                keys: self.keys.clone(),
+                db: self.db.clone(),
+                base: base.clone(),
+                pairing: self.pairing.clone(),
+                secrets: self.secrets.clone(),
+                group: self.group.clone(),
+            });
+            tokio::spawn(control::serve(
+                self.control,
+                self.data_dir.clone(),
+                self.keys.public(),
+                self.pairing.clone(),
+                ops,
+            ))
+        };
         loop {
             let accepted = tokio::select! {
                 () = stop.notified() => break,
@@ -560,16 +571,43 @@ fn devices(
 /// next request, its changes after the last one the Node holds are refused, and the group
 /// key rotates to the remaining devices (docs/design/dn-sync.md §8).
 fn remove_device(shared: &Shared, asking: &dn_sync::Device, id: &str) -> Message {
-    let (db, keys) = (&*shared.db, &*shared.keys);
     let refused = |reason: &str| Message::Refused {
         reason: reason.to_owned(),
     };
     let Some(id) = dn_sync::DeviceId::from_hex(id) else {
         return refused("That isn't a device id.");
     };
-    if id == keys.id() {
+    if id == shared.keys.id() {
         return refused("The Node can't be removed from a device. Use dn node on the Node.");
     }
+    match remove_member(shared, id, asking.id) {
+        Ok(_) => {
+            eprintln!(
+                "dn node: {} ({}) removed device {id}",
+                asking.name, asking.id
+            );
+            Message::Done
+        }
+        Err(SyncError::UnknownDevice) => refused("That device isn't paired with this Node."),
+        Err(e) => {
+            eprintln!("dn node: removing {id} failed: {e}");
+            refused("The Node couldn't remove that device. Try again.")
+        }
+    }
+}
+
+/// Removes a member from the device list and the group together (the key rotates), as
+/// asked by `by`. Returns the removed device's name.
+fn remove_member(
+    shared: &Shared,
+    id: dn_sync::DeviceId,
+    by: dn_sync::DeviceId,
+) -> Result<String, SyncError> {
+    let (db, keys) = (&*shared.db, &*shared.keys);
+    let name = DeviceList::get(&lock(db), id)?
+        .filter(dn_sync::Device::is_member)
+        .ok_or(SyncError::UnknownDevice)?
+        .name;
     let removed = {
         let mut group = lock_group(&shared.group);
         let conn = lock(db);
@@ -579,7 +617,7 @@ fn remove_device(shared: &Shared, asking: &dn_sync::Device, id: &str) -> Message
             .map_err(SyncError::from)
             .and_then(|tx| {
                 DeviceList::remove(&tx, id, dn_store::now_ms())?;
-                group.remove(&tx, &*shared.secrets, keys, id, asking.id)?;
+                group.remove(&tx, &*shared.secrets, keys, id, by)?;
                 tx.commit()?;
                 Ok(())
             });
@@ -592,18 +630,46 @@ fn remove_device(shared: &Shared, asking: &dn_sync::Device, id: &str) -> Message
         }
         done
     };
-    match removed {
-        Ok(()) => {
-            eprintln!(
-                "dn node: {} ({}) removed device {id}",
-                asking.name, asking.id
+    removed.map(|()| name)
+}
+
+/// `dn node devices` and `dn node remove-device`, from the control channel. Only the
+/// Node's own user reaches it (control.rs).
+#[cfg(unix)]
+impl control::NodeOps for Shared {
+    fn devices(&self) -> Result<Vec<control::DeviceRow>, String> {
+        let members = DeviceList::members(&lock(&self.db))
+            .map_err(|e| format!("couldn't read the device list: {e}"))?;
+        Ok(members
+            .into_iter()
+            .map(|d| control::DeviceRow {
+                id: d.id.to_hex(),
+                name: d.name,
+                kind: transport::kind_name(d.kind).to_owned(),
+                last_synced_at: d.last_synced_at,
+            })
+            .collect())
+    }
+
+    fn remove(&self, id: &str) -> Result<String, String> {
+        let id = dn_sync::DeviceId::from_hex(id)
+            .ok_or("that isn't a device id; `dn node devices` lists them")?;
+        if id == self.keys.id() {
+            return Err(
+                "that's this Node. To delete the Node and everything on it, stop it and run \
+                 `dn node delete-all`"
+                    .into(),
             );
-            Message::Done
         }
-        Err(SyncError::UnknownDevice) => refused("That device isn't paired with this Node."),
-        Err(e) => {
-            eprintln!("dn node: removing {id} failed: {e}");
-            refused("The Node couldn't remove that device. Try again.")
+        match remove_member(self, id, self.keys.id()) {
+            Ok(name) => {
+                eprintln!("dn node: removed device {name} ({id}) from the Node");
+                Ok(name)
+            }
+            Err(SyncError::UnknownDevice) => {
+                Err("no paired device has that id; `dn node devices` lists them".into())
+            }
+            Err(e) => Err(format!("couldn't remove the device: {e}")),
         }
     }
 }
