@@ -25,6 +25,11 @@ pub struct Decimal {
 /// Most decimals kept exactly; more are rounded.
 pub const MAX_SCALE: u32 = 9;
 
+/// Most significant digits a number may have to be computed with. Longer ones (an id, a
+/// crafted cell) aren't numbers here, so sums of a whole column and the scaling in means
+/// stay far inside `i128` (18 digits × 2·10^5 rows × 10^11 is about 2·10^34).
+pub const MAX_DIGITS: usize = 18;
+
 impl Decimal {
     pub fn from_f64(v: f64) -> Option<Self> {
         if !v.is_finite() {
@@ -93,6 +98,10 @@ fn parse_plain(s: &str) -> Option<Decimal> {
         return None;
     }
     if !int.bytes().all(|b| b.is_ascii_digit()) || !frac.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let significant = int.trim_start_matches('0').len() + frac.len().min(MAX_SCALE as usize);
+    if significant > MAX_DIGITS {
         return None;
     }
     if frac.len() > MAX_SCALE as usize {
@@ -344,6 +353,14 @@ mod tests {
         assert_eq!(n("", Dot), None);
         assert_eq!(n("1.2.3", Dot), None);
         assert_eq!(n("1e3", Dot), None);
+        // More than 18 significant digits isn't a number to compute with.
+        assert_eq!(
+            n("123456789012345678", Dot).as_deref(),
+            Some("123456789012345678")
+        );
+        assert_eq!(n("1234567890123456789", Dot), None);
+        assert_eq!(n(&"9".repeat(38), Dot), None);
+        assert!(Decimal::from_f64(1e37).is_none());
     }
 
     #[test]

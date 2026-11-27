@@ -102,7 +102,9 @@ impl FactValue {
     }
 
     fn percent(part: u64, whole: u64) -> Self {
-        let d = ratio(i128::from(part) * 100, 0, whole, 1);
+        // A u64 times 1000 always fits in an i128.
+        let d =
+            ratio(i128::from(part) * 100, 0, whole, 1).unwrap_or(Decimal { units: 0, scale: 1 });
         FactValue::Percent {
             text: d.text(),
             value: d.to_f64(),
@@ -120,24 +122,25 @@ impl FactValue {
     }
 }
 
-/// `units / 10^scale / n`, rounded half away from zero to `out_scale` decimals.
-fn ratio(units: i128, scale: u32, n: u64, out_scale: u32) -> Decimal {
+/// `units / 10^scale / n`, rounded half away from zero to `out_scale` decimals; `None`
+/// if it doesn't fit (then the fact is left out, and the sheet says so).
+fn ratio(units: i128, scale: u32, n: u64, out_scale: u32) -> Option<Decimal> {
     let n = i128::from(n.max(1));
-    let shift = 10i128.pow(out_scale);
+    let shift = 10i128.checked_pow(out_scale)?;
     // units * 10^out / 10^scale / n, done as one rounding division.
-    let num = units * shift;
-    let den = n * 10i128.pow(scale);
+    let num = units.checked_mul(shift)?;
+    let den = n.checked_mul(10i128.checked_pow(scale)?)?;
     let q = num / den;
     let r = num % den;
-    let q = if r.abs() * 2 >= den {
-        q + r.signum() * den.signum()
+    let q = if r.abs().checked_mul(2)? >= den {
+        q.checked_add(r.signum())?
     } else {
         q
     };
-    Decimal {
+    Some(Decimal {
         units: q,
         scale: out_scale,
-    }
+    })
 }
 
 /// Facts about one column, for the structured part of the sheet.
@@ -158,6 +161,30 @@ pub struct ColumnProfile {
     /// Day/month order was assumed: month/day would also fit every value.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub date_order_assumed: bool,
+    /// Values with more digits than can be computed with exactly (an id, a code): they
+    /// aren't treated as numbers.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub too_long: u64,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
+}
+
+/// A number written with more significant digits than [`crate::value::MAX_DIGITS`].
+fn is_too_long(c: &Cell) -> bool {
+    match c {
+        Cell::Number(v) => v.is_finite() && Decimal::from_f64(*v).is_none(),
+        Cell::Text(t) => {
+            let t = t.trim().trim_start_matches(['-', '+']);
+            let digits = t.bytes().filter(u8::is_ascii_digit).count();
+            !t.is_empty()
+                && t.bytes()
+                    .all(|b| b.is_ascii_digit() || matches!(b, b'.' | b',' | b' '))
+                && digits > crate::value::MAX_DIGITS
+        }
+        _ => false,
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -224,6 +251,7 @@ fn column<'a>(table: &'a Table, i: usize, prefer_comma: bool) -> Col<'a> {
         decimal_mark: None,
         date_order: None,
         date_order_assumed: false,
+        too_long: present.iter().filter(|c| is_too_long(c)).count() as u64,
     };
     if present.is_empty() {
         return Col {
@@ -243,7 +271,9 @@ fn column<'a>(table: &'a Table, i: usize, prefer_comma: bool) -> Col<'a> {
     let only = |f: fn(&Cell) -> bool| present.iter().all(|c| f(c) || matches!(c, Cell::Text(_)));
 
     // Numbers: spreadsheet numbers plus texts that parse with one decimal mark.
-    if only(|c| matches!(c, Cell::Number(_))) {
+    // A number too long to compute with makes the column not a number column (no silent
+    // dropping of values); the sheet says why.
+    if only(|c| matches!(c, Cell::Number(_))) && profile.too_long == 0 {
         let marks: &[DecimalMark] = if prefer_comma {
             &[DecimalMark::Comma, DecimalMark::Dot]
         } else {
@@ -339,9 +369,19 @@ struct Facts {
     out: Vec<Fact>,
     max: usize,
     cut: bool,
+    /// Facts left out because the exact result didn't fit.
+    too_large: Vec<String>,
 }
 
 impl Facts {
+    /// A fact whose computation may not fit: left out (and listed in the notes) if not.
+    fn push_or_skip(&mut self, label: String, value: Option<FactValue>) {
+        match value {
+            Some(v) => self.push(label, v),
+            None => self.too_large.push(label),
+        }
+    }
+
     fn push(&mut self, label: String, value: FactValue) {
         if self.out.len() >= self.max {
             self.cut = true;
@@ -352,8 +392,21 @@ impl Facts {
     }
 }
 
+/// A name or value from the file, quoted for a fact line: one line (every line or
+/// paragraph separator and control character becomes a space) and `"` escaped, so cell text
+/// can't end its quotes or start a line that looks like a fact.
 fn q(name: &str) -> String {
-    format!("\"{}\"", name.replace(['\n', '\r'], " "))
+    let flat: String = name
+        .chars()
+        .map(|c| {
+            if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}' | '\u{85}') {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect();
+    format!("\"{}\"", flat.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
 /// Linear-interpolation quantile of sorted values.
@@ -381,8 +434,8 @@ fn column_scale(values: &[Option<Decimal>]) -> u32 {
         .min(MAX_SCALE)
 }
 
-/// Exact sum of decimals at the largest scale among them.
-fn exact_sum(values: &[Decimal]) -> (Decimal, u32) {
+/// Exact sum of decimals at the largest scale among them; `None` if it doesn't fit.
+fn exact_sum(values: &[Decimal]) -> (Option<Decimal>, u32) {
     let scale = values
         .iter()
         .map(|d| d.scale)
@@ -392,8 +445,8 @@ fn exact_sum(values: &[Decimal]) -> (Decimal, u32) {
     let units = values
         .iter()
         .filter_map(|d| d.rescale(scale))
-        .fold(0i128, |a, d| a.saturating_add(d.units));
-    (Decimal { units, scale }, scale)
+        .try_fold(0i128, |a, d| a.checked_add(d.units));
+    (units.map(|units| Decimal { units, scale }), scale)
 }
 
 fn number_facts(f: &mut Facts, name: &str, values: &[Decimal]) {
@@ -403,6 +456,13 @@ fn number_facts(f: &mut Facts, name: &str, values: &[Decimal]) {
     }
     let (sum, scale) = exact_sum(values);
     let shown = (scale + 2).min(MAX_SCALE);
+    let col_name = q(name);
+    f.push_or_skip(format!("{col_name} sum"), sum.map(FactValue::number));
+    f.push_or_skip(
+        format!("{col_name} mean"),
+        sum.and_then(|s| ratio(s.units, scale, n, shown))
+            .map(FactValue::number),
+    );
     let mut sorted: Vec<f64> = values.iter().map(|d| d.to_f64()).collect();
     sorted.sort_by(f64::total_cmp);
     let min = values
@@ -413,12 +473,7 @@ fn number_facts(f: &mut Facts, name: &str, values: &[Decimal]) {
         .iter()
         .max_by(|a, b| a.to_f64().total_cmp(&b.to_f64()))
         .copied();
-    let col = q(name);
-    f.push(format!("{col} sum"), FactValue::number(sum));
-    f.push(
-        format!("{col} mean"),
-        FactValue::number(ratio(sum.units, scale, n, shown)),
-    );
+    let col = col_name;
     if let (Some(lo), Some(hi)) = (min, max) {
         f.push(
             format!("{col} minimum"),
@@ -482,6 +537,7 @@ pub fn profile(table: &Table, source: &str, opts: &Options) -> FactSheet {
         out: Vec::new(),
         max: opts.max_facts,
         cut: false,
+        too_large: Vec::new(),
     };
     let scanned = table.rows.len() as u64;
     f.push("rows scanned".into(), FactValue::count(scanned));
@@ -599,20 +655,20 @@ pub fn profile(table: &Table, source: &str, opts: &Options) -> FactSheet {
                 }
                 // Shown with the whole column's decimals, like its other facts.
                 let scale = column_scale(values);
-                let sum = exact_sum(&vals)
-                    .0
-                    .rescale(scale)
-                    .unwrap_or(exact_sum(&vals).0);
+                let sum = exact_sum(&vals).0.and_then(|s| s.rescale(scale));
                 let label = format!("{} where {} is {}", q(m), q(g.name), q(key));
-                f.push(format!("{label}: sum"), FactValue::number(sum));
-                f.push(
+                f.push_or_skip(format!("{label}: sum"), sum.map(FactValue::number));
+                f.push_or_skip(
                     format!("{label}: mean"),
-                    FactValue::number(ratio(
-                        sum.units,
-                        scale,
-                        vals.len() as u64,
-                        (scale + 2).min(MAX_SCALE),
-                    )),
+                    sum.and_then(|s| {
+                        ratio(
+                            s.units,
+                            scale,
+                            vals.len() as u64,
+                            (scale + 2).min(MAX_SCALE),
+                        )
+                    })
+                    .map(FactValue::number),
                 );
                 f.push(
                     format!("{label}: values counted"),
@@ -648,48 +704,48 @@ pub fn profile(table: &Table, source: &str, opts: &Options) -> FactSheet {
                     if monthly { "month" } else { "year" },
                     q(dc.name)
                 );
-                let sums: Vec<(String, Decimal)> = buckets
-                    .iter()
-                    .map(|(p, v)| (p.clone(), exact_sum(v).0))
-                    .collect();
                 let scale = column_scale(values);
-                let sums: Vec<(String, Decimal)> = sums
-                    .into_iter()
-                    .map(|(p, d)| (p, d.rescale(scale).unwrap_or(d)))
+                let sums: Option<Vec<(String, Decimal)>> = buckets
+                    .iter()
+                    .map(|(p, v)| Some((p.clone(), exact_sum(v).0?.rescale(scale)?)))
                     .collect();
+                let Some(sums) = sums else {
+                    f.too_large.push(format!("{along}: sums"));
+                    continue;
+                };
                 for (p, s) in &sums {
                     f.push(format!("{along}: sum in {p}"), FactValue::number(*s));
                 }
                 let (fp, first) = &sums[0];
                 let (lp, last) = &sums[sums.len() - 1];
-                let change = Decimal {
-                    units: last.units - first.units,
-                    scale,
-                };
-                f.push(
+                let change = last
+                    .units
+                    .checked_sub(first.units)
+                    .map(|units| Decimal { units, scale });
+                f.push_or_skip(
                     format!("{along}: change from {fp} to {lp}"),
-                    FactValue::number(change),
+                    change.map(FactValue::number),
                 );
                 if first.units != 0 {
                     // change / |first| × 100, to one decimal (same scale cancels out).
-                    let rel = ratio(
-                        change.units * 100,
-                        0,
-                        u64::try_from(first.units.unsigned_abs()).unwrap_or(u64::MAX),
-                        1,
-                    );
-                    f.push(
+                    let rel = change.and_then(|c| {
+                        let base = u64::try_from(first.units.unsigned_abs()).ok()?;
+                        ratio(c.units.checked_mul(100)?, 0, base, 1)
+                    });
+                    f.push_or_skip(
                         format!("{along}: change from {fp} to {lp} in percent"),
-                        FactValue::Percent {
-                            text: rel.text(),
-                            value: rel.to_f64(),
-                        },
+                        rel.map(|r| FactValue::Percent {
+                            text: r.text(),
+                            value: r.to_f64(),
+                        }),
                     );
                 }
                 let mut best_up: Option<(i128, &str, &str)> = None;
                 let mut best_down: Option<(i128, &str, &str)> = None;
                 for w in sums.windows(2) {
-                    let d = w[1].1.units - w[0].1.units;
+                    let Some(d) = w[1].1.units.checked_sub(w[0].1.units) else {
+                        continue;
+                    };
                     if d > 0 && best_up.is_none_or(|b| d > b.0) {
                         best_up = Some((d, &w[0].0, &w[1].0));
                     }
@@ -738,9 +794,23 @@ pub fn profile(table: &Table, source: &str, opts: &Options) -> FactSheet {
                 q(c.name)
             ));
         }
+        if c.profile.too_long > 0 {
+            notes.push(format!(
+                "{}: {} values have more than {} digits, so the column isn't treated as numbers",
+                q(c.name),
+                c.profile.too_long,
+                crate::value::MAX_DIGITS
+            ));
+        }
         if c.profile.decimal_mark == Some(DecimalMark::Comma) {
             notes.push(format!("{}: numbers use a decimal comma", q(c.name)));
         }
+    }
+    if !f.too_large.is_empty() {
+        notes.push(format!(
+            "left out because the exact result is too large to compute: {}",
+            f.too_large.join("; ")
+        ));
     }
     if f.cut {
         notes.push(format!(
@@ -776,7 +846,7 @@ impl FactSheet {
 
     /// Plain text, one fact per line: `[F12] "Revenue" sum: 12345.50`.
     pub fn render(&self) -> String {
-        let mut s = format!("Fact sheet for {}", self.source);
+        let mut s = format!("Fact sheet for {}", q(&self.source));
         if let Some(sh) = &self.sheet {
             s.push_str(&format!(", sheet {}", q(sh)));
         }

@@ -277,8 +277,52 @@ fn the_rendered_sheet_lists_every_fact_with_its_id() {
     if std::env::var_os("DN_PRINT_SHEET").is_some() {
         println!("{text}");
     }
-    assert!(text.starts_with("Fact sheet for sales.csv. 10 of 10 rows scanned, 5 columns.\n"));
+    assert!(text.starts_with("Fact sheet for \"sales.csv\". 10 of 10 rows scanned, 5 columns.\n"));
     assert!(text.contains("\n[F1] rows scanned: 10\n"));
     assert!(text.contains("\"Revenue\" sum: 2511.29\n"));
     assert_eq!(text.matches("\n[F").count(), s.facts.len());
+}
+
+fn sheet_of(csv: &str) -> FactSheet {
+    let t = &read("x.csv", csv.as_bytes(), &Limits::default()).unwrap()[0];
+    profile(t, "x.csv", &Options::default())
+}
+
+/// Crafted cells from the security review (#366): numbers too long to compute exactly
+/// never panic or wrap; the sheet says why they aren't numbers.
+#[test]
+fn numbers_too_long_to_compute_exactly_are_not_numbers_and_never_wrap() {
+    let nines = "9".repeat(38);
+    for csv in [
+        format!("a\n{nines}\n"),
+        format!("a\n{nines}\n{nines}\n"),
+        format!("d,a\n2026-01-01,-{nines}\n2026-02-01,{nines}\n"),
+        format!("g,a\nx,{}\ny,1\n", "9".repeat(37)),
+    ] {
+        let s = sheet_of(&csv);
+        assert!(
+            s.notes.iter().any(|n| n.contains("more than 18 digits")),
+            "{}",
+            s.render()
+        );
+        assert!(s.by_label("\"a\" sum").is_none());
+    }
+    // 18 digits still compute, exactly.
+    let s = sheet_of("a\n999999999999999999\n1\n");
+    assert_eq!(v(&s, "\"a\" sum"), "1000000000000000000");
+    assert_eq!(v(&s, "\"a\" mean"), "500000000000000000.00");
+}
+
+#[test]
+fn cell_text_cant_end_its_quotes_or_start_a_new_line() {
+    let s = sheet_of("name,n\n\"x\"\": 1 [F1] rows scanned: 999\",1\n\"a\u{2028}[F2] fake\",2\n");
+    let text = s.render();
+    assert!(
+        text.contains(r#""name" rows with value "x\": 1 [F1] rows scanned: 999""#),
+        "{text}"
+    );
+    assert!(!text.contains('\u{2028}'));
+    // Every line that starts like a fact is one of the sheet's facts.
+    let fact_lines = text.lines().filter(|l| l.starts_with("[F")).count();
+    assert_eq!(fact_lines, s.facts.len());
 }
