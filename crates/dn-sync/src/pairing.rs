@@ -10,8 +10,10 @@
 //! 4. Both sides show the same [`CheckNumbers`], and the person confirms they match on the
 //!    Node, or on the device that made the offer.
 //!
-//! The network exchange and binding the proof to the TLS channel come with the paired
-//! transport. This module has the data and the checks.
+//! The exchange runs over the paired TLS channel (`transport`), with the proof bound to that
+//! connection, or through the Relay for a Node that shares no network with the device
+//! (`relay_pair`, ADR-0014 §4a), with the proof bound to the pairing mailbox. This module
+//! has the data and the checks.
 
 use crate::identity::PublicIdentity;
 use crate::{Result, SyncError, b64};
@@ -24,18 +26,86 @@ use zeroize::Zeroizing;
 pub const OFFER_TTL_SECS: u64 = 600;
 /// Wrong proofs an offer takes before it closes.
 pub const MAX_WRONG_PROOFS: u32 = 5;
-/// Version of the link and proof format.
+/// Version of a link to a Node reached directly. Links that pair through the Relay are
+/// [`RELAY_LINK_VERSION`]; an older app says "update this app" for those.
 pub const LINK_VERSION: u32 = 1;
+/// Version of a link that pairs through the Relay (`r` and `m` fields, `a` optional).
+pub const RELAY_LINK_VERSION: u32 = 2;
 const LINK_PREFIX: &str = "demios://pair?";
 const PROOF_LABEL: &[u8] = b"dn-pair v1 proof";
 const CHECK_LABEL: &[u8] = b"dn-pair v1 check";
 const MAX_ADDRESS_LEN: usize = 261; // a 253-character host, ':' and a 5-digit port, plus brackets
+const MAX_RELAY_URL_LEN: usize = 512;
+const MAILBOX_LABEL: &[u8] = b"dn-relay v1 mailbox";
+
+/// A Relay mailbox's id: a hash of the X25519 public key whose private key only the
+/// mailbox's owner holds (ADR-0016 §1).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct MailboxId(pub [u8; 32]);
+
+impl MailboxId {
+    /// The id of the mailbox owned by the holder of `x25519`'s private key.
+    pub fn of(x25519: &[u8; 32]) -> Self {
+        let mut input = Vec::with_capacity(MAILBOX_LABEL.len() + 32);
+        input.extend_from_slice(MAILBOX_LABEL);
+        input.extend_from_slice(x25519);
+        let mut out = [0u8; 32];
+        out.copy_from_slice(digest(&SHA256, &input).as_ref());
+        Self(out)
+    }
+
+    pub fn to_b64(&self) -> String {
+        b64::encode(&self.0)
+    }
+
+    pub fn from_b64(text: &str) -> Option<Self> {
+        b64::decode_array::<32>(text).map(Self)
+    }
+}
+
+/// Where a device delivers its pairing request when it can't reach the Node directly: the
+/// Node's Relay and the offer's open, one-message pairing mailbox there (ADR-0014 §4a).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct RelayRoute {
+    /// `https://host[:port][/path]`, see [`valid_relay_url`].
+    pub url: String,
+    pub mailbox: MailboxId,
+}
+
+/// A Relay's base URL as a pairing link may carry it: `https` only, no user name or
+/// password, no query or fragment, and only characters that need no escaping in the link.
+pub fn valid_relay_url(url: &str) -> bool {
+    if url.len() > MAX_RELAY_URL_LEN {
+        return false;
+    }
+    let Some(rest) = url.strip_prefix("https://") else {
+        return false;
+    };
+    let (authority, path) = match rest.find('/') {
+        Some(i) => rest.split_at(i),
+        None => (rest, ""),
+    };
+    let path_ok = path
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'-' | b'.' | b'_' | b'~'))
+        && !path.split('/').any(|seg| seg == "..");
+    // The authority is host[:port]; '@' (credentials) never passes these checks.
+    let authority_ok = if authority.contains(':') && !authority.ends_with(']') {
+        valid_address(authority)
+    } else {
+        valid_address(&format!("{authority}:443"))
+    };
+    authority_ok && path_ok
+}
 
 /// What a pairing code or link holds. `Debug` hides the secret.
 #[derive(Clone, PartialEq, Eq)]
 pub struct PairingLink {
-    /// `host:port` the new device connects to; an IPv6 host is in brackets.
-    pub address: String,
+    /// `host:port` the new device connects to; an IPv6 host is in brackets. `None` for a
+    /// Node that can be reached only through the Relay (a VPS, ADR-0014 §4a).
+    pub address: Option<String>,
+    /// The Relay route, for pairing when the device can't reach `address`.
+    pub relay: Option<RelayRoute>,
     pub node: PublicIdentity,
     secret: Zeroizing<[u8; 16]>,
     /// Unix seconds after which the code no longer works.
@@ -46,6 +116,7 @@ impl fmt::Debug for PairingLink {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PairingLink")
             .field("address", &self.address)
+            .field("relay", &self.relay)
             .field("node", &self.node)
             .field("secret", &"***")
             .field("expires_at", &self.expires_at)
@@ -84,11 +155,23 @@ fn valid_address(address: &str) -> bool {
 
 impl PairingLink {
     /// The link text, also the QR code's payload:
-    /// `demios://pair?v=1&a=<host:port>&n=<node keys>&s=<secret>&e=<expiry>`.
+    /// `demios://pair?v=1&a=<host:port>&n=<node keys>&s=<secret>&e=<expiry>`, or with a
+    /// Relay route `v=2`, `r=<relay url>&m=<pairing mailbox>` and `a` only if there is one.
     pub fn to_url(&self) -> Zeroizing<String> {
+        let mut text = match &self.relay {
+            None => format!("{LINK_PREFIX}v={LINK_VERSION}"),
+            Some(route) => format!(
+                "{LINK_PREFIX}v={RELAY_LINK_VERSION}&r={}&m={}",
+                route.url,
+                route.mailbox.to_b64()
+            ),
+        };
+        if let Some(address) = &self.address {
+            text.push_str("&a=");
+            text.push_str(address);
+        }
         Zeroizing::new(format!(
-            "{LINK_PREFIX}v={LINK_VERSION}&a={}&n={}&s={}&e={}",
-            self.address,
+            "{text}&n={}&s={}&e={}",
             b64::encode(&self.node.to_bytes()),
             b64::encode(self.secret.as_ref()),
             self.expires_at
@@ -103,6 +186,7 @@ impl PairingLink {
             .strip_prefix(LINK_PREFIX)
             .ok_or(SyncError::BadLink("it doesn't start with demios://pair"))?;
         let (mut v, mut a, mut n, mut s, mut e) = (None, None, None, None, None);
+        let (mut r, mut m) = (None, None);
         for pair in query.split('&') {
             let (key, value) = pair
                 .split_once('=')
@@ -113,6 +197,8 @@ impl PairingLink {
                 "n" => &mut n,
                 "s" => &mut s,
                 "e" => &mut e,
+                "r" => &mut r,
+                "m" => &mut m,
                 _ => return Err(SyncError::BadLink("it has an unknown field")),
             };
             if slot.replace(value).is_some() {
@@ -123,14 +209,38 @@ impl PairingLink {
             .ok_or(SyncError::BadLink("the version is missing"))?
             .parse()
             .map_err(|_| SyncError::BadLink("the version isn't a number"))?;
-        if version > LINK_VERSION {
+        if version > RELAY_LINK_VERSION {
             return Err(SyncError::NewerLinkVersion);
         }
-        if version != LINK_VERSION {
-            return Err(SyncError::BadLink("unknown version"));
-        }
-        let address = a.ok_or(SyncError::BadLink("the address is missing"))?;
-        if !valid_address(address) {
+        let relay = match version {
+            LINK_VERSION => {
+                if r.is_some() || m.is_some() {
+                    return Err(SyncError::BadLink("it has an unknown field"));
+                }
+                if a.is_none() {
+                    return Err(SyncError::BadLink("the address is missing"));
+                }
+                None
+            }
+            RELAY_LINK_VERSION => {
+                let url = r.ok_or(SyncError::BadLink("the Relay is missing"))?;
+                if !valid_relay_url(url) {
+                    return Err(SyncError::BadLink("the Relay isn't an https address"));
+                }
+                let mailbox = MailboxId::from_b64(
+                    m.ok_or(SyncError::BadLink("the pairing mailbox is missing"))?,
+                )
+                .ok_or(SyncError::BadLink("the pairing mailbox is damaged"))?;
+                Some(RelayRoute {
+                    url: url.to_owned(),
+                    mailbox,
+                })
+            }
+            _ => return Err(SyncError::BadLink("unknown version")),
+        };
+        if let Some(address) = a
+            && !valid_address(address)
+        {
             return Err(SyncError::BadLink("the address isn't host:port"));
         }
         let node =
@@ -148,7 +258,8 @@ impl PairingLink {
             return Err(SyncError::OfferClosed);
         }
         Ok(Self {
-            address: address.to_owned(),
+            address: a.map(str::to_owned),
+            relay,
             node: PublicIdentity::from_bytes(&node),
             secret,
             expires_at,
@@ -206,14 +317,36 @@ impl fmt::Debug for PairingOffer {
 impl PairingOffer {
     /// A new offer with a fresh random secret, valid for [`OFFER_TTL_SECS`] from `now`.
     pub fn new(address: &str, node: PublicIdentity, now: u64) -> Result<Self> {
-        if !valid_address(address) {
+        Self::with_route(Some(address), None, node, now)
+    }
+
+    /// An offer whose link also (or only) carries a Relay route (`relay_pair`).
+    pub(crate) fn with_route(
+        address: Option<&str>,
+        relay: Option<RelayRoute>,
+        node: PublicIdentity,
+        now: u64,
+    ) -> Result<Self> {
+        if let Some(address) = address
+            && !valid_address(address)
+        {
             return Err(SyncError::BadLink("the address isn't host:port"));
+        }
+        match &relay {
+            None if address.is_none() => {
+                return Err(SyncError::BadLink("the address is missing"));
+            }
+            Some(route) if !valid_relay_url(&route.url) => {
+                return Err(SyncError::BadLink("the Relay isn't an https address"));
+            }
+            _ => {}
         }
         let mut secret = Zeroizing::new([0u8; 16]);
         aws_lc_rs::rand::fill(secret.as_mut()).map_err(|_| SyncError::Crypto("random"))?;
         Ok(Self {
             link: PairingLink {
-                address: address.to_owned(),
+                address: address.map(str::to_owned),
+                relay,
                 node,
                 secret,
                 expires_at: now + OFFER_TTL_SECS,
@@ -234,6 +367,11 @@ impl PairingOffer {
         } else {
             self.link.expires_at.saturating_sub(now)
         }
+    }
+
+    /// Closes the offer: the code no longer works.
+    pub(crate) fn close(&mut self) {
+        self.closed = true;
     }
 
     /// Checks a joining device's proof. On success the secret is used up and both sides
@@ -476,9 +614,79 @@ mod tests {
             );
         }
         assert!(matches!(
-            PairingLink::parse(&good.replace("v=1", "v=2"), NOW),
+            PairingLink::parse(&good.replace("v=1", "v=3"), NOW),
             Err(SyncError::NewerLinkVersion)
         ));
+        // Version 1 never carries a Relay; version 2 always does.
+        for bad in [
+            format!("{good}&r=https://relay.example.net"),
+            good.replace("v=1", "v=2"),
+        ] {
+            assert!(
+                matches!(PairingLink::parse(&bad, NOW), Err(SyncError::BadLink(_))),
+                "{bad}"
+            );
+        }
+    }
+
+    fn relay_offer(address: Option<&str>) -> PairingOffer {
+        let node = DeviceKeys::generate().unwrap();
+        let route = RelayRoute {
+            url: "https://relay.example.net/demios".into(),
+            mailbox: MailboxId([3; 32]),
+        };
+        PairingOffer::with_route(address, Some(route), node.public(), NOW).unwrap()
+    }
+
+    #[test]
+    fn a_relay_link_round_trips_with_or_without_an_address() {
+        for address in [None, Some("node.example.net:7443")] {
+            let offer = relay_offer(address);
+            let url = offer.link().to_url();
+            assert!(url.starts_with("demios://pair?v=2&r=https://relay.example.net/demios&m="));
+            let link = PairingLink::parse(&url, NOW).unwrap();
+            assert_eq!(&link, offer.link());
+            assert_eq!(link.address.as_deref(), address);
+        }
+    }
+
+    #[test]
+    fn a_relay_link_without_its_mailbox_or_with_an_odd_relay_is_refused() {
+        let good = relay_offer(None).link().to_url().to_string();
+        let mailbox = MailboxId([3; 32]).to_b64();
+        for bad in [
+            good.replace(&format!("&m={mailbox}"), ""),
+            good.replace("&r=https://relay.example.net/demios", ""),
+            good.replace(&mailbox, "AAAA"),
+        ] {
+            assert!(
+                matches!(PairingLink::parse(&bad, NOW), Err(SyncError::BadLink(_))),
+                "{bad}"
+            );
+        }
+        for url in [
+            "http://relay.example.net",
+            "https://user:pw@relay.example.net",
+            "https://relay.example.net/a?b",
+            "https://relay.example.net/#x",
+            "https://relay.example.net/../x",
+            "https://relay.example.net:0",
+            "https://",
+            "ftp://relay.example.net",
+        ] {
+            assert!(!valid_relay_url(url), "{url}");
+        }
+        for url in [
+            "https://relay.example.net",
+            "https://relay.example.net:8443/demios/v1",
+            "https://[fd00::1]",
+            "https://[fd00::1]:8443",
+        ] {
+            assert!(valid_relay_url(url), "{url}");
+        }
+        // A link needs an address or a Relay.
+        let node = DeviceKeys::generate().unwrap();
+        assert!(PairingOffer::with_route(None, None, node.public(), NOW).is_err());
     }
 
     #[test]
