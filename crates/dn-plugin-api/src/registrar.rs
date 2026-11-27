@@ -36,6 +36,13 @@ pub struct ToolDecl {
     /// An argument whose value makes a write idempotent, so a retry replays the first
     /// result instead of repeating the side effect.
     pub idempotency_key_field: Option<String>,
+    /// The tool always needs a fresh approval (ADR-0013 §9.4), for tools that act for the
+    /// user in a way that can't be taken back: sending a message, answering an invitation,
+    /// paying. The host then offers no standing permission for it, always holds a job's
+    /// call to it, and runs it only after a person allowed that one call. No setting can
+    /// remove the mark. Set it with [`ToolDecl::requiring_approval`].
+    #[serde(default)]
+    pub approval_required: bool,
 }
 
 impl ToolDecl {
@@ -55,7 +62,15 @@ impl ToolDecl {
             output_schema: None,
             risk,
             idempotency_key_field: None,
+            approval_required: false,
         }
+    }
+
+    /// Marks the tool as always needing a fresh approval (see
+    /// [`ToolDecl::approval_required`]).
+    pub fn requiring_approval(mut self) -> Self {
+        self.approval_required = true;
+        self
     }
 }
 

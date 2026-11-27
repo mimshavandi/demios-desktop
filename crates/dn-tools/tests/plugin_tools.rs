@@ -54,6 +54,7 @@ fn tool(name: &str, risk: RiskTier, floor: RiskTier, h: Arc<Recorder>) -> Plugin
         risk,
         floor,
         idempotency_key_field: None,
+        approval_required: false,
         handler: h,
     }
 }

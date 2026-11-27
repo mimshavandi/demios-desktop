@@ -1544,6 +1544,8 @@ dependencies = [
  "axum",
  "dn-agent",
  "dn-core",
+ "dn-jobs",
+ "dn-plugin-api",
  "dn-secrets",
  "process-wrap",
  "reqwest",
