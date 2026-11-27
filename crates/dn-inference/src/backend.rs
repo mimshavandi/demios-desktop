@@ -3,7 +3,8 @@
 
 use crate::stream::LazyStream;
 use crate::{BackendCaps, LoadOptions, ModelHandle, ModelSpec, Result};
-use dn_core::chat::{ChatModel, ChatRequest, EventStream};
+use dn_core::chat::{BoxFuture, ChatModel, ChatRequest, EventStream, LimitSource, ModelLimits};
+use dn_core::model::ModelRef;
 use std::future::Future;
 use std::sync::Arc;
 
@@ -44,6 +45,18 @@ pub trait InferenceBackend: Send + Sync + 'static {
     ) -> impl Future<Output = Result<Vec<Vec<f32>>>> + Send;
 
     fn unload(&self, h: ModelHandle) -> impl Future<Output = Result<()>> + Send;
+
+    /// The context `h` was loaded with, in tokens (input and output together). `None` when
+    /// the backend doesn't know it (a server that doesn't report one).
+    fn context_tokens(&self, _h: &ModelHandle) -> Option<u32> {
+        None
+    }
+
+    /// The exact number of prompt tokens `req` takes on `h`: the same template and
+    /// tokenizer generation uses (ADR-0020 §2.1). `None` when the backend can't count.
+    fn count_tokens(&self, _h: &ModelHandle, _req: &ChatRequest) -> Option<Result<u32>> {
+        None
+    }
 }
 
 /// A loaded model usable anywhere a [`ChatModel`] is expected (the agent loop).
@@ -87,6 +100,25 @@ impl<B: InferenceBackend> ChatModel for LoadedModel<B> {
         Box::pin(LazyStream::Pending(Box::pin(async move {
             backend.chat(&handle, req).await
         })))
+    }
+
+    /// The context this model was loaded with (whatever `model` the caller names: this
+    /// value serves one model).
+    fn limits<'a>(&'a self, _model: &'a ModelRef) -> BoxFuture<'a, ModelLimits> {
+        let limits = match self.backend.context_tokens(&self.handle) {
+            Some(n) => ModelLimits::known(n, LimitSource::Loaded),
+            None => ModelLimits::default(),
+        };
+        Box::pin(async move { limits })
+    }
+
+    fn count_tokens(
+        &self,
+        req: &ChatRequest,
+    ) -> Option<std::result::Result<u32, dn_core::CoreError>> {
+        self.backend
+            .count_tokens(&self.handle, req)
+            .map(|r| r.map_err(Into::into))
     }
 }
 

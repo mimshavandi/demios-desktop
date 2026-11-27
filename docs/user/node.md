@@ -8,7 +8,13 @@ There's no Demios account and no Demios server in this. Your devices talk to you
 
 Run a Node only on a machine you control. It keeps its database on that machine without encrypting it (see [Current limits](#current-limits)), so use full-disk encryption on it.
 
-The machine should be on the same network as your devices, or reachable over your own VPN, such as WireGuard or Tailscale. Don't forward its port on your router.
+The Node accepts devices on its own network only: private, link-local and loopback addresses. It turns away every other address before any connection is set up, and never asks your router to open a port.
+
+- **On the same network:** nothing to set up.
+- **Over your own VPN:** a VPN that gives your devices private addresses, such as 10.x or 192.168.x, works as it is. An overlay network such as Tailscale uses addresses the Node counts as outside its network, so set the Node up with `--reachable-from-outside` (see below).
+- **Through a forwarded port or a proxy:** this also needs `--reachable-from-outside`, and anyone who can reach the port can then try to connect. Only paired devices get in. A VPN is the safer choice.
+
+If a proxy or port forwarder runs on the Node's own machine, such as a reverse proxy or a container's published port, every connection seems to come from the machine itself. Then the Node can't tell who is outside, so treat it as reachable from outside.
 
 ## Set up and start the Node
 
@@ -21,7 +27,8 @@ dn node run --data-dir /var/lib/demios
 
 - `dn node init` creates the data folder, readable by your user only. `dn node run` refuses to start if other users can read it.
 - `--name` is the name your devices show for the Node.
-- `--listen` sets the address and port devices connect to. Without it, the Node listens on port 7443 on all of the machine's addresses.
+- `--listen` sets the address and port the Node listens on. Without it, the Node listens on port 7443 on all of the machine's addresses. It doesn't change who may connect.
+- `--reachable-from-outside` lets devices connect from any address, not only the Node's own network. Use it for an overlay VPN, a forwarded port or a proxy. Without it, the Node accepts devices on its network only.
 - `--time-zone` sets the time zone for background jobs, such as `Europe/Berlin`. Without it, the Node uses the machine's time zone.
 - `dn node run` runs in the foreground, so a service manager such as systemd can start it. Ctrl+C stops it.
 
@@ -78,7 +85,7 @@ Sync is encrypted end to end between your paired devices and your Node.
 
 ## Sync in Settings → Node
 
-Once paired, this computer syncs about once a minute while the app is open. **Settings → Node** shows the Node's name, whether it's online, its version, the address it's reached through and where it keeps secrets.
+Once paired, this computer syncs about once a minute while the app is open. **Settings → Node** shows the Node's name, whether it's online, its version, the address it's reached through, who can connect and where it keeps secrets. **Who can connect** says **Devices on its network**, or **Reachable from outside your network** if the Node was set up with `--reachable-from-outside`.
 
 Your row in **Devices** says where sync stands:
 
@@ -112,7 +119,7 @@ To pair again after any of these, start over with `dn node pair`.
 ## Current limits
 
 - **A new device replays every change.** Pairing a device sends it every change your devices have made since the first one paired, so the first sync can take a while with a long history.
-- **Same network or your own VPN only.** Devices sync only when they can reach the Node directly. There's no relay for devices away from home yet. Settings → Node shows **Relay: None**.
+- **Your devices reach the Node directly.** That means on its network, or over a VPN, a forwarded port or a proxy (see [Where to run it](#where-to-run-it)). There's no relay for devices away from home yet. Settings → Node shows **Relay: None**.
 - **On Windows, a Node can't pair devices yet.** `dn node pair` isn't available, and the Node turns away devices that aren't paired.
 - **Pair from the Node only.** You can't pair another device from this computer yet; use `dn node pair`.
 - **The Node's database isn't encrypted** on disk. Use full-disk encryption on the Node's machine.

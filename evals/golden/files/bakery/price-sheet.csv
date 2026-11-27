@@ -1,0 +1,13 @@
+product,weight_g,price_eur,allergens,vegan
+Sourdough white loaf,800,5.20,gluten,yes
+Seeded rye loaf,750,4.80,"gluten, sesame",yes
+Spelt tin loaf,700,5.40,gluten,yes
+Baguette,280,2.30,gluten,yes
+Butter croissant,75,2.10,"gluten, milk, egg",no
+Pain au chocolat,80,2.40,"gluten, milk, egg, soya",no
+Cinnamon bun,110,2.60,"gluten, milk, egg",no
+Hazelnut morning bun,120,2.90,"gluten, milk, egg, nuts (hazelnut)",no
+Plum crumble slice,140,3.20,"gluten, milk",no
+Vegan oat cookie,60,1.80,gluten (oats),yes
+Focaccia slice,150,3.10,gluten,yes
+Lemon drizzle slice,120,2.90,"gluten, milk, egg",no

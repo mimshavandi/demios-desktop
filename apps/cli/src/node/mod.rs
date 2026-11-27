@@ -289,7 +289,6 @@ pub struct Node {
     keys: Arc<DeviceKeys>,
     db: Arc<Mutex<Connection>>,
     /// The synced records, sealed at rest (#335).
-    #[cfg_attr(not(unix), allow(dead_code))]
     records: Arc<NodeRecords>,
     secrets: Arc<dyn SecretStore>,
     group: Arc<Mutex<NodeGroup>>,
@@ -384,6 +383,26 @@ impl Node {
             db.clone(),
             Arc::new(ZoneClock(zone::Zone::named(&config.time_zone)?)),
         ));
+        let keys = Arc::new(keys);
+        let group = Arc::new(Mutex::new(group));
+        // The Node applies what it keeps (#294), into its sealed collections (#335);
+        // envelopes kept before it did are applied now, once.
+        {
+            let cols = records.collections();
+            let applied = NodeSync {
+                db: &db,
+                store: store_ref,
+                group: &group,
+                me: &keys,
+                collections: &cols,
+                peer_minor: dn_sync::transport::PROTOCOL_MINOR,
+            }
+            .catch_up(dn_store::now_ms() as u64)
+            .map_err(|e| format!("couldn't apply the changes this Node keeps: {e}"))?;
+            if applied > 0 {
+                eprintln!("dn node: applied {applied} kept changes");
+            }
+        }
         eprintln!(
             "dn node: {} ({}) on {}, {}, secrets: {}; synced records sealed with key {} from it",
             config.name,
@@ -403,11 +422,11 @@ impl Node {
             pairing: Arc::new(tokio::sync::Mutex::new(None)),
             #[cfg(unix)]
             control,
-            keys: Arc::new(keys),
+            keys,
             db,
             records,
             secrets: store.clone() as Arc<dyn SecretStore>,
-            group: Arc::new(Mutex::new(group)),
+            group,
             store: report,
             name: config.name,
             listener,
@@ -489,6 +508,7 @@ impl Node {
                 pairing: self.pairing.clone(),
                 secrets: self.secrets.clone(),
                 group: self.group.clone(),
+                records: self.records.clone(),
             };
             tokio::spawn(async move {
                 handle(stream, peer, &shared).await;
@@ -516,6 +536,7 @@ struct Shared {
     pairing: control::PairingState,
     secrets: Arc<dyn SecretStore>,
     group: Arc<Mutex<NodeGroup>>,
+    records: Arc<NodeRecords>,
 }
 
 /// Loads the group (creating it on first start), and brings it in line with the device
@@ -706,10 +727,14 @@ async fn handle(stream: TcpStream, peer: SocketAddr, shared: &Shared) {
     };
     // A checked member may send sync-sized frames.
     channel.allow_sync_frames();
+    let cols = shared.records.collections();
     let sync = NodeSync {
         db,
         store: &*shared.secrets,
         group: &shared.group,
+        me: &shared.keys,
+        collections: &cols,
+        peer_minor: channel.peer_minor(),
     };
     loop {
         let message =

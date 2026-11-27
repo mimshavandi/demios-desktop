@@ -54,6 +54,9 @@ pub struct PluginTool {
     pub floor: RiskTier,
     /// An argument whose value makes a write idempotent.
     pub idempotency_key_field: Option<String>,
+    /// The add-on declared that the tool always needs a fresh approval (ADR-0013 §9.4).
+    /// No setting can remove this.
+    pub approval_required: bool,
     /// Runs the calls.
     pub handler: Arc<dyn InProcessTool>,
 }
@@ -64,6 +67,7 @@ impl std::fmt::Debug for PluginTool {
             .field("name", &self.name)
             .field("risk", &self.risk)
             .field("floor", &self.floor)
+            .field("approval_required", &self.approval_required)
             .finish_non_exhaustive()
     }
 }

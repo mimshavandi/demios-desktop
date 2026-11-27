@@ -46,6 +46,10 @@ pub struct ApprovalPrompt {
     /// the prompt, so its request never looks like the model's own (ADR-0013 §4).
     #[serde(default)]
     pub requester: ApprovalRequester,
+    /// The tool always needs a fresh approval (ADR-0013 §9.4): the card offers Allow once
+    /// and Deny only. "Always allow in this chat" isn't offered, and isn't accepted.
+    #[serde(default)]
+    pub approval_required: bool,
 }
 
 /// A pending approval. Dropping it without answering counts as `Deny`.
@@ -78,6 +82,9 @@ pub enum GateOutcome {
     Denied,
     /// No answer within the timeout, or the UI side is gone.
     Unanswered,
+    /// "Always allow in this chat" for a tool that always needs a fresh approval: not
+    /// accepted, so the call doesn't run (ADR-0013 §9.4).
+    StandingRefused,
 }
 
 impl GateOutcome {
@@ -176,9 +183,12 @@ impl ApprovalGate {
         }
     }
 
-    /// Ask if the policy requires it and wait for the answer.
+    /// Ask if the policy requires it and wait for the answer. A prompt with
+    /// `approval_required` always asks, whatever its policy and grants say, and only a plain
+    /// Allow once approves it.
     pub async fn check(&self, prompt: ApprovalPrompt) -> GateOutcome {
-        if self.is_satisfied(&prompt.scope, &prompt.capability_id, prompt.policy) {
+        let required = prompt.approval_required;
+        if !required && self.is_satisfied(&prompt.scope, &prompt.capability_id, prompt.policy) {
             return GateOutcome::AutoAllowed;
         }
         let key = (prompt.scope.clone(), prompt.capability_id.clone());
@@ -201,6 +211,9 @@ impl ApprovalGate {
         };
         match decision {
             Some(ApprovalDecision::Approve) => GateOutcome::Approved,
+            Some(ApprovalDecision::ApproveForConversation) if required => {
+                GateOutcome::StandingRefused
+            }
             Some(ApprovalDecision::ApproveForConversation) => {
                 if policy == ApprovalPolicy::AskOncePerConversation
                     && let Ok(mut g) = self.grants.lock()
@@ -246,7 +259,30 @@ mod tests {
             policy,
             arguments: serde_json::json!({}),
             requester: ApprovalRequester::Model,
+            approval_required: false,
         }
+    }
+
+    #[tokio::test]
+    async fn approval_required_always_asks_and_refuses_always_allow() {
+        let (gate, mut rx) = ApprovalGate::new(4);
+        let gate = std::sync::Arc::new(gate);
+        let required = || ApprovalPrompt {
+            approval_required: true,
+            ..prompt(ApprovalPolicy::Auto)
+        };
+        // Even with policy `auto`, it asks.
+        let g = gate.clone();
+        let check = tokio::spawn(async move { g.check(required()).await });
+        let req = rx.recv().await.unwrap();
+        assert!(req.prompt.approval_required);
+        req.respond(ApprovalDecision::ApproveForConversation);
+        assert_eq!(check.await.unwrap(), GateOutcome::StandingRefused);
+        // Nothing was remembered: it asks again, and Allow once approves.
+        let g = gate.clone();
+        let check = tokio::spawn(async move { g.check(required()).await });
+        rx.recv().await.unwrap().respond(ApprovalDecision::Approve);
+        assert_eq!(check.await.unwrap(), GateOutcome::Approved);
     }
 
     #[tokio::test]

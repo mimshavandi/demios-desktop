@@ -11,8 +11,8 @@
 //! recorded, and queries return the rows set with [`FakeBackend::set_query_rows`].
 
 use crate::data::{
-    ChatMessage, ConversationSummary, HttpRequest, HttpResponse, KnowledgeHit, MemoryItem,
-    ModelPrompt, ModelSlot, NewMemory, Row, SqlValue, ToolResult,
+    ChatMessage, ConversationSummary, HeldCall, HttpRequest, HttpResponse, KnowledgeHit,
+    MemoryItem, ModelPrompt, ModelSlot, NewMemory, Row, SqlValue, ToolResult,
 };
 use crate::error::{ErrorKind, PluginError};
 use crate::host::{Caller, ChatScope, Consent, Grants, GrantsHandle, Host, HostBackend};
@@ -92,6 +92,8 @@ struct State {
     files: BTreeMap<String, Vec<u8>>,
     query_rows: Vec<Row>,
     tool_results: BTreeMap<String, (RiskTier, ToolResult)>,
+    /// Held calls: the call, and whether it is still held (ADR-0013 §9.2).
+    held: Vec<(HeldCall, bool)>,
     log: Vec<Recorded>,
     clock: i64,
 }
@@ -125,6 +127,12 @@ impl FakeBackend {
         self.st()
             .tool_results
             .insert(capability_id.to_owned(), (tier, result));
+    }
+
+    /// Every call a job held, with whether it is still held (false once withdrawn or
+    /// replaced), oldest first.
+    pub fn held_calls(&self) -> Vec<(HeldCall, bool)> {
+        self.st().held.clone()
     }
 
     /// The rows every query returns.
@@ -322,7 +330,7 @@ impl HostBackend for FakeBackend {
         &'a self,
         caller: &'a Caller,
         capability_id: String,
-        _arguments: serde_json::Value,
+        arguments: serde_json::Value,
     ) -> BoxFuture<'a, Result<ToolResult, PluginError>> {
         let mut s = self.st();
         s.log.push(Recorded::Tool {
@@ -338,13 +346,94 @@ impl HostBackend for FakeBackend {
                 ErrorKind::TierLimit,
                 format!("`{capability_id}` is above what this run may call"),
             )),
-            Some((tier, _)) if caller.is_job() && *tier > RiskTier::Read => Err(PluginError::new(
-                ErrorKind::Held,
-                "Held for the user's answer",
-            )),
+            Some((tier, _)) if caller.is_job() && *tier > RiskTier::Read => {
+                let held = HeldCall::new(
+                    Id::new(),
+                    capability_id.clone(),
+                    arguments,
+                    capability_id.clone(),
+                    s.clock,
+                    None,
+                );
+                s.held.push((held, true));
+                Err(PluginError::new(
+                    ErrorKind::Held,
+                    "Held for the user's answer",
+                ))
+            }
             Some((_, r)) => Ok(r.clone()),
         };
         ready(r)
+    }
+
+    fn held_list<'a>(&'a self, _: &'a Caller) -> BoxFuture<'a, Result<Vec<HeldCall>, PluginError>> {
+        let s = self.st();
+        ready(Ok(s
+            .held
+            .iter()
+            .filter(|(_, waiting)| *waiting)
+            .map(|(h, _)| h.clone())
+            .collect()))
+    }
+
+    fn held_withdraw<'a>(
+        &'a self,
+        _: &'a Caller,
+        id: Id,
+    ) -> BoxFuture<'a, Result<(), PluginError>> {
+        let mut s = self.st();
+        let r = match s.held.iter_mut().find(|(h, _)| h.id == id) {
+            Some((_, waiting @ true)) => {
+                *waiting = false;
+                Ok(())
+            }
+            Some(_) => Err(PluginError::not_allowed("That call isn't waiting any more")),
+            None => Err(PluginError::not_allowed(
+                "There is no held call with that id",
+            )),
+        };
+        ready(r)
+    }
+
+    fn held_replace<'a>(
+        &'a self,
+        caller: &'a Caller,
+        id: Id,
+        arguments: serde_json::Value,
+    ) -> BoxFuture<'a, Result<HeldCall, PluginError>> {
+        let mut s = self.st();
+        let clock = s.clock;
+        let Some(i) = s.held.iter().position(|(h, _)| h.id == id) else {
+            return ready(Err(PluginError::not_allowed(
+                "There is no held call with that id",
+            )));
+        };
+        if !s.held[i].1 {
+            return ready(Err(PluginError::not_allowed(
+                "That call isn't waiting any more",
+            )));
+        }
+        let tool = s.held[i].0.tool.clone();
+        if s.tool_results
+            .get(&tool)
+            .is_some_and(|(t, _)| *t > caller.max_tool_tier)
+        {
+            return ready(Err(PluginError::new(
+                ErrorKind::TierLimit,
+                format!("`{tool}` is above what this run may call"),
+            )));
+        }
+        s.held[i].1 = false;
+        let new = HeldCall::new(
+            Id::new(),
+            tool,
+            arguments,
+            s.held[i].0.summary.clone(),
+            clock,
+            Some(id),
+        );
+        s.held.push((new.clone(), true));
+        ready(Ok(new))
     }
 
     fn notify<'a>(
@@ -961,6 +1050,45 @@ mod tests {
     }
 
     #[test]
+    fn a_job_lists_withdraws_and_replaces_its_own_held_calls() {
+        let (host, backend) =
+            host_for(|m| Caller::for_job_at(m, "drafts", Id::new(), Some(RiskTier::ExternalWrite)));
+        let e = block_on(host.tools().call("mcp.files.send", json!({"body": "v1"}))).unwrap_err();
+        assert_eq!(e.kind, ErrorKind::Held);
+        let held = block_on(host.held().list()).unwrap();
+        assert_eq!(held.len(), 1);
+        assert_eq!(held[0].arguments, json!({"body": "v1"}));
+
+        // Edited draft: replace, linked to the old one; only the new one waits.
+        let new = block_on(host.held().replace(held[0].id, json!({"body": "v2"}))).unwrap();
+        assert_eq!(new.replaces, Some(held[0].id));
+        let waiting = block_on(host.held().list()).unwrap();
+        assert_eq!(waiting, std::slice::from_ref(&new));
+        // The old one is gone for good.
+        let e = block_on(host.held().withdraw(held[0].id)).unwrap_err();
+        assert_eq!(e.kind, ErrorKind::NotAllowed);
+
+        // Discarded draft: withdraw.
+        block_on(host.held().withdraw(new.id)).unwrap();
+        assert!(block_on(host.held().list()).unwrap().is_empty());
+        assert_eq!(backend.held_calls().len(), 2);
+        assert!(backend.held_calls().iter().all(|(_, waiting)| !waiting));
+    }
+
+    #[test]
+    fn a_read_handler_can_list_its_held_calls_but_not_change_them() {
+        let (host, _) =
+            host_for(|m| Caller::for_job_at(m, "scan", Id::new(), Some(RiskTier::Read)));
+        assert!(block_on(host.held().list()).is_ok());
+        for e in [
+            block_on(host.held().withdraw(Id::new())).unwrap_err(),
+            block_on(host.held().replace(Id::new(), json!({}))).unwrap_err(),
+        ] {
+            assert_eq!(e.kind, ErrorKind::TierLimit, "{e}");
+        }
+    }
+
+    #[test]
     fn a_job_is_limited_by_its_declared_tier_and_one_without_keeps_todays_access() {
         let (host, _) =
             host_for(|m| Caller::for_job_at(m, "scan", Id::new(), Some(RiskTier::Read)));
@@ -1019,8 +1147,9 @@ mod tests {
         .unwrap();
         let out = block_on(kit.call_tool("t", json!({}))).unwrap();
         assert_eq!(out, ToolResult::text("TierLimit"));
-        // A declaration carries a tier and nothing else about approval: the only way to
-        // skip asking is the user's own choice in Settings.
+        // A declaration carries a tier and, about approval, only a mark that makes it ask
+        // more (ADR-0013 §9.4): the only way to skip asking is the user's own choice in
+        // Settings.
         let d = serde_json::to_value(ToolDecl::new(
             "x",
             "X",
@@ -1030,7 +1159,9 @@ mod tests {
         ))
         .unwrap();
         let keys: Vec<&str> = d.as_object().unwrap().keys().map(String::as_str).collect();
-        assert!(!keys.iter().any(|k| k.contains("approv")), "{keys:?}");
+        let about_approval: Vec<&&str> = keys.iter().filter(|k| k.contains("approv")).collect();
+        assert_eq!(about_approval, [&"approval_required"], "{keys:?}");
+        assert_eq!(d["approval_required"], json!(false));
     }
 
     #[test]
