@@ -28,6 +28,8 @@ tauri-build = { version = "~2.6", features = [] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2", "charset"] }
 zeroize = "1"
 tokio = { version = "1", default-features = false }
+# Structured spans for model and tool calls (ADR-0020 §8); kept local.
+tracing = { version = "0.1", default-features = false, features = ["std"] }
 # Maintained fork of the archived serde_yaml (the approved dependency set allows "serde_yaml or a maintained successor").
 serde_yaml_ng = "0.10"
 # No remote/file $ref resolution: schemas are bundled.

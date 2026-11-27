@@ -27,6 +27,7 @@ pub mod node;
 pub mod node_sync;
 pub mod projects;
 pub mod remote;
+pub mod runs;
 pub mod secrets;
 pub mod settings;
 pub mod skills;

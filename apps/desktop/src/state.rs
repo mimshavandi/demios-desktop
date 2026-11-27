@@ -97,6 +97,7 @@ pub fn migration_sets() -> Vec<MigrationSet> {
         MigrationSet::new("sync", dn_sync::migrations()),
         MigrationSet::new("app_addons", crate::addons::store::migrations()),
         MigrationSet::new("jobs", dn_jobs::migrations()),
+        MigrationSet::new("app_runs", crate::runs::migrations()),
     ]
 }
 
@@ -290,6 +291,10 @@ fn forget_chat_data(
     if let Err(e) = crate::skills::forget_chat(conn, id) {
         eprintln!("could not forget the skill of a deleted chat: {e}");
         failed.push("its skill");
+    }
+    if let Err(e) = crate::runs::forget_chat(conn, id) {
+        eprintln!("could not delete the run records of a deleted chat: {e}");
+        failed.push("its usage records");
     }
     if let Err(e) = dn_knowledge::remove_conversation_sources(conn, &id.to_string()) {
         eprintln!("could not delete the sources of a deleted chat: {e}");
@@ -824,7 +829,8 @@ impl AppState {
             Ok(db) => {
                 let r = store::delete_all(&db)
                     .and_then(|()| settings::delete_all(&db))
-                    .and_then(|()| crate::skills::delete_all(&db));
+                    .and_then(|()| crate::skills::delete_all(&db))
+                    .and_then(|()| crate::runs::delete_all(&db));
                 let artifacts = dn_artifacts::ArtifactStore::new(&db).delete_all();
                 if let Err(e) = &artifacts {
                     eprintln!("could not delete artifacts: {e}");

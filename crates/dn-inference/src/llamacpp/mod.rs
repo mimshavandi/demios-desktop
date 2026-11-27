@@ -651,6 +651,7 @@ fn generate(l: &Loaded, req: &ChatRequest, thinking: bool, tx: &mpsc::Sender<Ite
             usage: Usage {
                 input_tokens: n_prompt as u32,
                 output_tokens: generated as u32,
+                ..Default::default()
             },
         },
     );

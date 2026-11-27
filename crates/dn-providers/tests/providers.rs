@@ -141,7 +141,8 @@ async fn openai_streams_text() {
             FinishReason::Stop,
             Usage {
                 input_tokens: 12,
-                output_tokens: 4
+                output_tokens: 4,
+                ..Default::default()
             }
         )
     );
@@ -370,7 +371,8 @@ async fn anthropic_streams_text_and_thinking() {
             FinishReason::Stop,
             Usage {
                 input_tokens: 21,
-                output_tokens: 18
+                output_tokens: 18,
+                ..Default::default()
             }
         )
     );
@@ -413,7 +415,8 @@ async fn anthropic_tool_call_round_trip() {
             FinishReason::ToolCalls,
             Usage {
                 input_tokens: 402,
-                output_tokens: 54
+                output_tokens: 54,
+                ..Default::default()
             }
         )
     );
@@ -477,7 +480,8 @@ async fn gemini_streams_text_and_thoughts() {
             FinishReason::Stop,
             Usage {
                 input_tokens: 8,
-                output_tokens: 24
+                output_tokens: 24,
+                ..Default::default()
             }
         )
     );

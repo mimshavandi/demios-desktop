@@ -117,8 +117,34 @@ pub enum FinishReason {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Usage {
+    /// The whole prompt, cached tokens included.
     pub input_tokens: u32,
     pub output_tokens: u32,
+    /// Of `input_tokens`, those served from a cache (llama.cpp prefix or slot reuse, a
+    /// provider's prompt cache). ADR-0020 §6, §8.
+    #[serde(default)]
+    pub cached_input_tokens: u32,
+    /// Of `input_tokens`, those written to a provider's prompt cache.
+    #[serde(default)]
+    pub cache_write_tokens: u32,
+    /// Tokens a draft model proposed (speculative decoding); 0 without one.
+    #[serde(default)]
+    pub draft_tokens: u32,
+    /// Of `draft_tokens`, those the model accepted.
+    #[serde(default)]
+    pub draft_accepted_tokens: u32,
+}
+
+impl Usage {
+    /// Adds another call's usage (a run sums its model calls).
+    pub fn add(&mut self, o: &Usage) {
+        self.input_tokens += o.input_tokens;
+        self.output_tokens += o.output_tokens;
+        self.cached_input_tokens += o.cached_input_tokens;
+        self.cache_write_tokens += o.cache_write_tokens;
+        self.draft_tokens += o.draft_tokens;
+        self.draft_accepted_tokens += o.draft_accepted_tokens;
+    }
 }
 
 /// One item of a streamed response.
