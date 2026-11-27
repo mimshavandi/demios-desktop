@@ -11,11 +11,15 @@
 //!   changes in causal order.
 //! - [`transport`]: the paired channel (TLS 1.3, each side pinning the other's key), its
 //!   version handshake, and pairing over it.
+//! - [`membership`], [`group`]: the Node-signed membership chain and the group key (step 2).
+//! - [`records`]: synced records, conflicts and tombstones (step 3).
+//! - [`session`]: a sync round between a device and its Node on the direct route (step 4).
 
 pub mod b64;
 pub mod change;
 pub mod devices;
 pub mod envelope;
+pub mod group;
 pub mod hlc;
 pub mod identity;
 pub mod inbox;
@@ -23,6 +27,7 @@ pub mod link;
 pub mod membership;
 pub mod pairing;
 pub mod records;
+pub mod session;
 pub mod transport;
 
 pub use devices::{Device, DeviceKind, DeviceList};
@@ -37,6 +42,7 @@ pub fn migrations() -> &'static [&'static str] {
         devices::MIGRATION_NODE_LINK,
         membership::MIGRATION,
         records::MIGRATION,
+        session::MIGRATION,
     ]
 }
 
@@ -85,6 +91,8 @@ pub enum SyncError {
     ForkedChain,
     #[error("device {0} sent two different changes under one number")]
     Equivocation(DeviceId),
+    #[error("the Node refused the sync: {0}")]
+    Refused(String),
     #[error("the local store refused a synced record: {0}")]
     Store(String),
     #[error("database: {0}")]

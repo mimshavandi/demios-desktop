@@ -27,11 +27,13 @@ use dn_jobs::JobKey;
 use dn_jobs::scheduler::{Clock, Event, JobHost, Scheduler};
 use dn_plugin_api::{BoxFuture, JobContext, PluginError};
 use dn_secrets::SecretStore;
-use dn_secrets::server::{self, StoreReport};
+use dn_secrets::server::{self, ServerStore, StoreReport};
 use dn_store::{Connection, MigrationSet};
 use dn_sync::SyncError;
 use dn_sync::devices::{DeviceKind, DeviceList};
+use dn_sync::group::NodeGroup;
 use dn_sync::identity::DeviceKeys;
+use dn_sync::session::NodeSync;
 use dn_sync::transport::{self, Message, NodeStatus};
 use std::ffi::OsString;
 use std::net::SocketAddr;
@@ -245,6 +247,8 @@ pub struct Node {
     control: tokio::net::UnixListener,
     keys: Arc<DeviceKeys>,
     db: Arc<Mutex<Connection>>,
+    secrets: Arc<dyn SecretStore>,
+    group: Arc<Mutex<NodeGroup>>,
     store: StoreReport,
     name: String,
     listener: TcpListener,
@@ -273,8 +277,10 @@ impl Node {
         }
         config::check_private_dir(data_dir)?;
         let config = NodeConfig::load(data_dir)?;
-        let store = server::open(&config.secrets.choice(), data_dir, env)
-            .map_err(|e| format!("couldn't open the secret store: {e}"))?;
+        let store: Arc<dyn ServerStore> = Arc::from(
+            server::open(&config.secrets.choice(), data_dir, env)
+                .map_err(|e| format!("couldn't open the secret store: {e}"))?,
+        );
         let report = store.report();
         if report.locked {
             return Err(
@@ -316,6 +322,7 @@ impl Node {
             }
             Err(e) => return Err(format!("couldn't read the device list: {e}")),
         }
+        let group = node_group(&conn, store_ref, &keys, &config.name)?;
         let listener = TcpListener::bind(config.listen)
             .await
             .map_err(|e| format!("couldn't listen on {}: {e}", config.listen))?;
@@ -344,6 +351,8 @@ impl Node {
             control,
             keys: Arc::new(keys),
             db,
+            secrets: store.clone() as Arc<dyn SecretStore>,
+            group: Arc::new(Mutex::new(group)),
             store: report,
             name: config.name,
             listener,
@@ -400,20 +409,17 @@ impl Node {
                     Err(_) => break,
                 },
             };
-            let (keys, db, base) = (self.keys.clone(), self.db.clone(), base.clone());
-            #[cfg(unix)]
-            let pairing = self.pairing.clone();
+            let shared = Shared {
+                keys: self.keys.clone(),
+                db: self.db.clone(),
+                base: base.clone(),
+                #[cfg(unix)]
+                pairing: self.pairing.clone(),
+                secrets: self.secrets.clone(),
+                group: self.group.clone(),
+            };
             tokio::spawn(async move {
-                handle(
-                    stream,
-                    peer,
-                    &keys,
-                    &db,
-                    &base,
-                    #[cfg(unix)]
-                    &pairing,
-                )
-                .await;
+                handle(stream, peer, &shared).await;
                 drop(permit);
             });
         }
@@ -427,6 +433,57 @@ impl Node {
             Err(e) => Err(format!("the job scheduler failed: {e}")),
         }
     }
+}
+
+/// What every connection uses.
+struct Shared {
+    keys: Arc<DeviceKeys>,
+    db: Arc<Mutex<Connection>>,
+    base: Arc<StatusBase>,
+    #[cfg(unix)]
+    pairing: control::PairingState,
+    secrets: Arc<dyn SecretStore>,
+    group: Arc<Mutex<NodeGroup>>,
+}
+
+/// Loads the group (creating it on first start), and brings it in line with the device
+/// list: devices paired before sync came are added, devices removed are removed (which
+/// rotates the key).
+fn node_group(
+    conn: &Connection,
+    store: &dyn SecretStore,
+    keys: &DeviceKeys,
+    name: &str,
+) -> Result<NodeGroup, String> {
+    let fail = |e: SyncError| format!("couldn't load the device group: {e}");
+    let mut group = NodeGroup::load_or_create(conn, store, keys, name).map_err(fail)?;
+    let all = DeviceList::all(conn).map_err(fail)?;
+    for d in all {
+        if d.id == keys.id() {
+            continue;
+        }
+        let in_chain = group.chain().member(d.id).map(|m| m.removed.is_none());
+        if in_chain.is_none() {
+            group
+                .add(conn, store, keys, &d.keys, &d.name, d.kind, d.approved_by)
+                .map_err(fail)?;
+        }
+        if !d.is_member()
+            && group
+                .chain()
+                .member(d.id)
+                .is_some_and(|m| m.removed.is_none())
+        {
+            group
+                .remove(conn, store, keys, d.id, keys.id())
+                .map_err(fail)?;
+        }
+    }
+    Ok(group)
+}
+
+fn lock_group(group: &Mutex<NodeGroup>) -> std::sync::MutexGuard<'_, NodeGroup> {
+    group.lock().unwrap_or_else(|p| p.into_inner())
 }
 
 struct StatusBase {
@@ -464,13 +521,10 @@ fn devices(
 
 /// A paired device removes a device, or itself to unpair (ADR-0014 §2). The Node can't be
 /// removed: that's `dn node delete-all` on the Node. The removed device is refused at its
-/// next request; the group key rotation comes with sync (docs/design/dn-sync.md §8).
-fn remove_device(
-    db: &Mutex<Connection>,
-    keys: &DeviceKeys,
-    asking: &dn_sync::Device,
-    id: &str,
-) -> Message {
+/// next request, its changes after the last one the Node holds are refused, and the group
+/// key rotates to the remaining devices (docs/design/dn-sync.md §8).
+fn remove_device(shared: &Shared, asking: &dn_sync::Device, id: &str) -> Message {
+    let (db, keys) = (&*shared.db, &*shared.keys);
     let refused = |reason: &str| Message::Refused {
         reason: reason.to_owned(),
     };
@@ -480,7 +534,29 @@ fn remove_device(
     if id == keys.id() {
         return refused("The Node can't be removed from a device. Use dn node on the Node.");
     }
-    match DeviceList::remove(&lock(db), id, dn_store::now_ms()) {
+    let removed = {
+        let mut group = lock_group(&shared.group);
+        let conn = lock(db);
+        // Both lists change together, or neither does.
+        let done = conn
+            .unchecked_transaction()
+            .map_err(SyncError::from)
+            .and_then(|tx| {
+                DeviceList::remove(&tx, id, dn_store::now_ms())?;
+                group.remove(&tx, &*shared.secrets, keys, id, asking.id)?;
+                tx.commit()?;
+                Ok(())
+            });
+        if done.is_err() {
+            // The chain in memory may be ahead of the database: read it again.
+            match NodeGroup::load_or_create(&conn, &*shared.secrets, keys, &shared.base.name) {
+                Ok(g) => *group = g,
+                Err(e) => eprintln!("dn node: couldn't reload the device group: {e}"),
+            }
+        }
+        done
+    };
+    match removed {
         Ok(()) => {
             eprintln!(
                 "dn node: {} ({}) removed device {id}",
@@ -497,14 +573,8 @@ fn remove_device(
 }
 
 /// One device's connection. Logs events and errors only, never message content.
-async fn handle(
-    stream: TcpStream,
-    peer: SocketAddr,
-    keys: &DeviceKeys,
-    db: &Mutex<Connection>,
-    base: &StatusBase,
-    #[cfg(unix)] pairing: &control::PairingState,
-) {
+async fn handle(stream: TcpStream, peer: SocketAddr, shared: &Shared) {
+    let (keys, db, base) = (&*shared.keys, &*shared.db, &*shared.base);
     let mut channel = match tokio::time::timeout(
         Duration::from_secs(HANDSHAKE_SECS),
         transport::accept(stream, keys),
@@ -521,25 +591,35 @@ async fn handle(
             return;
         }
     };
-    let device = {
+    let checked = {
         let conn = lock(db);
-        match transport::authorize_member(&conn, &channel) {
-            Ok(d) => {
-                if let Err(e) = DeviceList::mark_synced(&conn, d.id, dn_store::now_ms()) {
-                    eprintln!("dn node: couldn't record when {} last synced: {e}", d.id);
-                }
-                Some(d)
+        transport::authorize_member(&conn, &channel).inspect(|d| {
+            if let Err(e) = DeviceList::mark_synced(&conn, d.id, dn_store::now_ms()) {
+                eprintln!("dn node: couldn't record when {} last synced: {e}", d.id);
             }
-            Err(SyncError::UnknownDevice) => None,
-            Err(e) => {
-                eprintln!("dn node: refused {peer}: {e}");
-                return;
+        })
+    };
+    let device = match checked {
+        Ok(d) => Some(d),
+        Err(SyncError::UnknownDevice) => None,
+        Err(e) => {
+            eprintln!("dn node: refused {peer}: {e}");
+            // The device proved its key in TLS: tell it why, so it stops trying.
+            if matches!(e, SyncError::Removed) {
+                let _ = channel.recv().await;
+                let _ = channel
+                    .send(&Message::Refused {
+                        reason: "this device was removed from the Node".into(),
+                    })
+                    .await;
             }
+            let _ = channel.close().await;
+            return;
         }
     };
     let Some(device) = device else {
         #[cfg(unix)]
-        pair_device(channel, peer, keys, db, pairing).await;
+        pair_device(channel, peer, shared).await;
         #[cfg(not(unix))]
         {
             eprintln!(
@@ -549,6 +629,13 @@ async fn handle(
             let _ = channel.close().await;
         }
         return;
+    };
+    // A checked member may send sync-sized frames.
+    channel.allow_sync_frames();
+    let sync = NodeSync {
+        db,
+        store: &*shared.secrets,
+        group: &shared.group,
     };
     loop {
         let message =
@@ -567,6 +654,21 @@ async fn handle(
             break;
         }
         let reply = match message {
+            Message::Done => break,
+            m if NodeSync::handles(&m) => {
+                match sync.answer(device.id, m, dn_store::now_ms() as u64) {
+                    Ok(reply) => reply,
+                    Err(e) => {
+                        eprintln!(
+                            "dn node: sync with {} ({}) refused: {e}",
+                            device.name, device.id
+                        );
+                        Message::Refused {
+                            reason: e.to_string(),
+                        }
+                    }
+                }
+            }
             Message::StatusRequest => match status(base, db) {
                 Ok(s) => Message::Status(s),
                 Err(e) => {
@@ -581,7 +683,7 @@ async fn handle(
                     break;
                 }
             },
-            Message::RemoveDevice { id } => remove_device(db, keys, &device, &id),
+            Message::RemoveDevice { id } => remove_device(shared, &device, &id),
             _ => {
                 eprintln!(
                     "dn node: {} ({}) sent a message this Node doesn't expect",
@@ -603,10 +705,9 @@ async fn handle(
 async fn pair_device(
     mut channel: transport::Channel<TcpStream>,
     peer: SocketAddr,
-    keys: &DeviceKeys,
-    db: &Mutex<Connection>,
-    pairing: &control::PairingState,
+    shared: &Shared,
 ) {
+    let (keys, db, pairing) = (&*shared.keys, &*shared.db, &shared.pairing);
     let taken = {
         let mut slot = pairing.lock().await;
         slot.as_mut()
@@ -666,8 +767,31 @@ async fn pair_device(
     .await;
     let outcome = match finished {
         Ok(Some(device)) => {
-            eprintln!("dn node: paired {} ({})", device.name, device.id);
-            Ok(device.name)
+            // The device joins the group: the chain gives it every epoch's key.
+            let added = {
+                let mut group = lock_group(&shared.group);
+                let conn = lock(db);
+                group.add(
+                    &conn,
+                    &*shared.secrets,
+                    keys,
+                    &device.keys,
+                    &device.name,
+                    device.kind,
+                    device.approved_by,
+                )
+            };
+            match added {
+                Ok(()) => {
+                    eprintln!("dn node: paired {} ({})", device.name, device.id);
+                    Ok(device.name)
+                }
+                Err(e) => {
+                    eprintln!("dn node: couldn't add {} to the group: {e}", device.id);
+                    let _ = DeviceList::remove(&lock(db), device.id, dn_store::now_ms());
+                    Err(format!("couldn't add the device to the group: {e}"))
+                }
+            }
         }
         Ok(None) => Err("declined".to_owned()),
         Err(e) => Err(format!("couldn't add the device: {e}")),
@@ -829,6 +953,10 @@ mod tests {
             )
             .unwrap();
         }
+        // As pairing does: the devices join the group too.
+        let regrouped =
+            node_group(&lock(&node.db), &*node.secrets, &node.keys, "Home server").unwrap();
+        *lock_group(&node.group) = regrouped;
         let addr = node.local_addr().unwrap();
         let stop = Arc::new(Notify::new());
         let serving = tokio::spawn(node.serve(stop.clone()));
@@ -865,11 +993,13 @@ mod tests {
             panic!()
         };
         assert_eq!(after.len(), 2);
-        // The removed phone is refused from now on.
+        // The removed phone is refused from now on, and told why.
+        let refused = request(addr, &phone, &node_key, &[Message::StatusRequest])
+            .await
+            .unwrap();
         assert!(
-            request(addr, &phone, &node_key, &[Message::StatusRequest])
-                .await
-                .is_err()
+            matches!(&refused[0], Message::Refused { .. }),
+            "{refused:?}"
         );
         stop.notify_waiters();
         serving.await.unwrap().unwrap();
@@ -900,7 +1030,10 @@ mod tests {
         let addr = node.local_addr().unwrap();
         let stop = Arc::new(Notify::new());
         let serving = tokio::spawn(node.serve(stop.clone()));
-        assert!(ask_status(addr, &phone, &node_key).await.is_err());
+        assert!(matches!(
+            ask_status(addr, &phone, &node_key).await,
+            Ok(Message::Refused { .. })
+        ));
         stop.notify_waiters();
         serving.await.unwrap().unwrap();
     }
@@ -977,8 +1110,21 @@ mod tests {
             let db = node.db.clone();
             let stop = Arc::new(Notify::new());
             let serving = tokio::spawn(node.serve(stop.clone()));
+            let (cli, device) = pair_one(dir, addr, &node_pub, laptop, answer).await;
+            (cli, device, Node2 { db, stop, serving })
+        }
+
+        /// Runs `dn node pair` against a serving Node with `answer`, and has `device` join
+        /// with the link it shows, as the app does.
+        async fn pair_one(
+            dir: &Path,
+            addr: SocketAddr,
+            node_pub: &PublicIdentity,
+            device: &DeviceKeys,
+            answer: bool,
+        ) -> (Result<String, String>, Result<(), SyncError>) {
             let (link_tx, mut link_rx) = tokio::sync::watch::channel(String::new());
-            let want = CheckNumbers::new(&node_pub, &laptop.public()).to_string();
+            let want = CheckNumbers::new(node_pub, &device.public()).to_string();
             let cli = control::client_pair(
                 dir,
                 addr.to_string(),
@@ -996,18 +1142,17 @@ mod tests {
                     }
                 },
             );
-            let device = async {
+            let joining = async {
                 link_rx.changed().await.unwrap();
                 let link =
                     PairingLink::parse(&link_rx.borrow().clone(), now_secs() as u64).unwrap();
                 let stream = TcpStream::connect(addr).await.unwrap();
                 let pending =
-                    transport::join(stream, laptop, &link, "MacBook Pro", DeviceKind::Desktop)
+                    transport::join(stream, device, &link, "MacBook Pro", DeviceKind::Desktop)
                         .await?;
                 pending.answer().await.map(|_| ())
             };
-            let (cli, device) = tokio::join!(cli, device);
-            (cli, device, Node2 { db, stop, serving })
+            tokio::join!(cli, joining)
         }
 
         struct Node2 {
@@ -1046,6 +1191,143 @@ mod tests {
             assert!(matches!(device, Err(SyncError::Declined)));
             assert_eq!(DeviceList::members(&lock(&node.db)).unwrap().len(), 1);
             node.stop().await;
+        }
+
+        /// A device as the app is: its own store, keys in its secret store, sync logging on.
+        struct App {
+            keys: DeviceKeys,
+            db: Mutex<Connection>,
+            secrets: dn_secrets::MemoryStore,
+        }
+
+        impl App {
+            fn new() -> Self {
+                let conn =
+                    dn_store::open_in_memory(&[MigrationSet::new("sync", dn_sync::migrations())])
+                        .unwrap();
+                dn_store::sync_rows::enable(&conn).unwrap();
+                Self {
+                    keys: DeviceKeys::generate().unwrap(),
+                    db: Mutex::new(conn),
+                    secrets: dn_secrets::MemoryStore::new(),
+                }
+            }
+
+            /// One sync round over TCP, as the app's background task runs it.
+            async fn sync(
+                &self,
+                addr: SocketAddr,
+                node: &PublicIdentity,
+            ) -> Result<dn_sync::session::Report, SyncError> {
+                let stream = TcpStream::connect(addr).await?;
+                let mut ch = transport::connect(stream, &self.keys, &node.ed25519).await?;
+                let cols = dn_sync::records::store_collections();
+                let now = || dn_store::now_ms() as u64;
+                let dev = dn_sync::session::Device {
+                    db: &self.db,
+                    store: &self.secrets,
+                    me: &self.keys,
+                    node,
+                    collections: &cols,
+                    now_ms: &now,
+                };
+                let report = dn_sync::session::run(&mut ch, &dev).await;
+                let _ = ch.close().await;
+                report
+            }
+
+            fn titles(&self) -> Vec<String> {
+                let mut v: Vec<String> = dn_store::chat::list_conversations(&lock(&self.db))
+                    .unwrap()
+                    .into_iter()
+                    .map(|c| c.title)
+                    .collect();
+                v.sort();
+                v
+            }
+
+            fn new_chat(&self, title: &str) -> dn_core::Id {
+                let conn = lock(&self.db);
+                let c = dn_store::chat::create_conversation(&conn, title).unwrap();
+                dn_store::chat::add_message(
+                    &conn,
+                    c.id,
+                    dn_store::chat::NewMessage::user_text(format!("About {title}")),
+                )
+                .unwrap();
+                c.id
+            }
+        }
+
+        /// End to end over the real transport: `dn node run`, two devices paired with
+        /// `dn node pair`, edits going both ways, a removal that rotates the key, and a
+        /// restart of the Node.
+        #[tokio::test]
+        async fn two_devices_sync_through_a_running_node() {
+            let dir = TempDir::new("e2e");
+            init(&dir.0, SecretsConfig::InsecurePlaintext);
+            let node = started(&dir.0).await;
+            let addr = node.local_addr().unwrap();
+            let node_pub = DeviceList::members(&lock(&node.db)).unwrap()[0].keys;
+            let stop = Arc::new(Notify::new());
+            let serving = tokio::spawn(node.serve(stop.clone()));
+            let (laptop, phone) = (App::new(), App::new());
+
+            // Before pairing, the Node refuses to sync.
+            assert!(laptop.sync(addr, &node_pub).await.is_err());
+
+            for app in [&laptop, &phone] {
+                let (cli, joined) = pair_one(&dir.0, addr, &node_pub, &app.keys, true).await;
+                cli.unwrap();
+                joined.unwrap();
+            }
+
+            let chat = laptop.new_chat("Trip");
+            let r = laptop.sync(addr, &node_pub).await.unwrap();
+            assert!(r.pushed > 0);
+            let r = phone.sync(addr, &node_pub).await.unwrap();
+            assert!(r.applied > 0);
+            assert_eq!(phone.titles(), ["Trip"]);
+            assert_eq!(
+                dn_store::chat::list_messages(&lock(&phone.db), chat)
+                    .unwrap()
+                    .len(),
+                1
+            );
+            dn_store::chat::rename_conversation(&lock(&phone.db), chat, "Trip in May").unwrap();
+            phone.sync(addr, &node_pub).await.unwrap();
+            laptop.sync(addr, &node_pub).await.unwrap();
+            assert_eq!(laptop.titles(), ["Trip in May"]);
+
+            // The laptop removes the phone: the phone can't sync any more.
+            let stream = TcpStream::connect(addr).await.unwrap();
+            let mut ch = transport::connect(stream, &laptop.keys, &node_pub.ed25519)
+                .await
+                .unwrap();
+            ch.send(&Message::RemoveDevice {
+                id: phone.keys.id().to_hex(),
+            })
+            .await
+            .unwrap();
+            assert_eq!(ch.recv().await.unwrap(), Message::Done);
+            let _ = ch.close().await;
+            phone.new_chat("After removal");
+            let err = phone.sync(addr, &node_pub).await.unwrap_err();
+            assert!(matches!(err, SyncError::Refused(_)), "{err}");
+
+            // The Node restarts with the same group; the laptop syncs under the new key.
+            stop.notify_waiters();
+            serving.await.unwrap().unwrap();
+            let node = started(&dir.0).await;
+            let addr = node.local_addr().unwrap();
+            let stop = Arc::new(Notify::new());
+            let serving = tokio::spawn(node.serve(stop.clone()));
+            laptop.new_chat("Packing list");
+            laptop.sync(addr, &node_pub).await.unwrap();
+            assert!(phone.sync(addr, &node_pub).await.is_err());
+            assert_eq!(laptop.titles(), ["Packing list", "Trip in May"]);
+            stop.notify_waiters();
+            serving.await.unwrap().unwrap();
         }
 
         #[tokio::test]

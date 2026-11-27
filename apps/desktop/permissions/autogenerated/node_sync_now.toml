@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-node-sync-now"
+description = "Enables the node_sync_now command without any pre-configured scope."
+commands.allow = ["node_sync_now"]
+
+[[permission]]
+identifier = "deny-node-sync-now"
+description = "Denies the node_sync_now command without any pre-configured scope."
+commands.deny = ["node_sync_now"]

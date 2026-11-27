@@ -60,6 +60,7 @@
     "allow-node-remove-device",
     "allow-node-unpair",
     "allow-node-forget",
+    "allow-node-sync-now",
     "allow-set-provider-key",
     "allow-delete-provider-key",
     "allow-restore-conversation",

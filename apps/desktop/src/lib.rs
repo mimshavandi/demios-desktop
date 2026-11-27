@@ -24,6 +24,7 @@ pub mod local;
 pub mod mcp;
 pub mod models;
 pub mod node;
+pub mod node_sync;
 pub mod projects;
 pub mod remote;
 pub mod secrets;
@@ -221,6 +222,7 @@ pub fn run_with_addons(addons: Vec<std::sync::Arc<dyn dn_plugin_api::Plugin>>) {
             })?;
             install_add_links(app.handle(), &state);
             knowledge::start(&state);
+            node_sync::start(&state);
             addons::Addons::install(&state, addons);
             // The page's first commands need these, so they come before the window.
             app.manage(state.clone());
@@ -310,6 +312,7 @@ pub fn run_with_addons(addons: Vec<std::sync::Arc<dyn dn_plugin_api::Plugin>>) {
             commands::node_remove_device,
             commands::node_unpair,
             commands::node_forget,
+            commands::node_sync_now,
             commands::set_provider_key,
             remote::add_remote_server,
             remote::refresh_remote_server,

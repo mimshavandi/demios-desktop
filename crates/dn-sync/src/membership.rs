@@ -67,6 +67,9 @@ pub enum Event {
         /// The current epoch and its key, wrapped to the new device.
         epoch: u32,
         key: Wrapped,
+        /// Every earlier epoch's key, wrapped to the new device (index = epoch), so it can
+        /// read the group's history.
+        earlier: Vec<Wrapped>,
     },
     Remove {
         device: String,
@@ -307,6 +310,7 @@ impl Chain {
                 kind,
                 epoch,
                 key,
+                earlier,
                 ..
             } => {
                 let keys = parse_identity(keys)?;
@@ -321,6 +325,13 @@ impl Chain {
                 if *epoch != self.epoch || device(&key.device)? != keys.id() {
                     return Err(SyncError::Protocol(
                         "Add must carry the current key for that device",
+                    ));
+                }
+                if earlier.len() != self.epoch as usize
+                    || earlier.iter().any(|w| w.device != key.device)
+                {
+                    return Err(SyncError::Protocol(
+                        "Add must carry every earlier epoch's key for that device",
                     ));
                 }
                 self.members.insert(
@@ -432,8 +443,18 @@ impl Chain {
             let wire: EntryWire = serde_json::from_slice(&entry.bytes)
                 .map_err(|_| SyncError::Protocol("unreadable chain entry"))?;
             match &wire.event {
-                Event::Add { epoch: e, key, .. } if *e == epoch && key.device == my => {
-                    return unwrap(&self.group, epoch, key, me);
+                Event::Add {
+                    epoch: e,
+                    key,
+                    earlier,
+                    ..
+                } if key.device == my && *e >= epoch => {
+                    let w = if *e == epoch {
+                        key
+                    } else {
+                        &earlier[epoch as usize]
+                    };
+                    return unwrap(&self.group, epoch, w, me);
                 }
                 Event::Rotate { epoch: e, keys } if *e == epoch => {
                     if let Some(w) = keys.iter().find(|w| w.device == my) {
@@ -501,12 +522,26 @@ impl NodeChain {
         })
     }
 
+    /// A Node's chain as loaded, with its current group key.
+    pub fn from_parts(chain: Chain, key: GroupKey) -> Result<Self> {
+        if key.epoch != chain.epoch() {
+            return Err(SyncError::Protocol(
+                "the group key isn't the chain's current epoch",
+            ));
+        }
+        Ok(Self { chain, key })
+    }
+
     pub fn chain(&self) -> &Chain {
         &self.chain
     }
 
     pub fn key(&self) -> &GroupKey {
         &self.key
+    }
+
+    pub(crate) fn key_bytes(&self) -> &[u8; 32] {
+        self.key.bytes()
     }
 
     fn push(&mut self, node: &DeviceKeys, event: Event) -> Result<Entry> {
@@ -523,8 +558,23 @@ impl NodeChain {
         name: &str,
         kind: DeviceKind,
         approved_by: Option<DeviceId>,
+        earlier_keys: &[GroupKey],
     ) -> Result<Entry> {
         let key = wrap(&self.chain.group, &self.key, keys)?;
+        if earlier_keys.len() != self.key.epoch as usize
+            || earlier_keys
+                .iter()
+                .enumerate()
+                .any(|(i, k)| k.epoch != i as u32)
+        {
+            return Err(SyncError::Protocol(
+                "every earlier epoch's key is needed to add a device",
+            ));
+        }
+        let earlier = earlier_keys
+            .iter()
+            .map(|k| wrap(&self.chain.group, k, keys))
+            .collect::<Result<Vec<_>>>()?;
         self.push(
             node,
             Event::Add {
@@ -534,6 +584,7 @@ impl NodeChain {
                 approved_by: approved_by.map(|d| d.to_hex()),
                 epoch: self.key.epoch,
                 key,
+                earlier,
             },
         )
     }
@@ -582,8 +633,23 @@ CREATE TABLE sync_membership (
 ";
 
 /// Stores the entries of `chain` not stored yet. Entries are append-only.
+///
+/// Runs in a savepoint, so it joins the caller's transaction when there is one.
 pub fn save(conn: &rusqlite::Connection, chain: &Chain) -> Result<()> {
-    let tx = conn.unchecked_transaction()?;
+    conn.execute_batch("SAVEPOINT sync_membership_save")?;
+    match save_entries(conn, chain) {
+        Ok(()) => {
+            conn.execute_batch("RELEASE sync_membership_save")?;
+            Ok(())
+        }
+        Err(e) => {
+            conn.execute_batch("ROLLBACK TO sync_membership_save; RELEASE sync_membership_save")?;
+            Err(e)
+        }
+    }
+}
+
+fn save_entries(tx: &rusqlite::Connection, chain: &Chain) -> Result<()> {
     let mut stmt = tx.prepare("SELECT n, bytes, signature FROM sync_membership ORDER BY n")?;
     let stored = stmt
         .query_map([], |r| {
@@ -610,7 +676,6 @@ pub fn save(conn: &rusqlite::Connection, chain: &Chain) -> Result<()> {
             rusqlite::params![n as i64, e.bytes, e.signature.as_slice()],
         )?;
     }
-    tx.commit()?;
     Ok(())
 }
 
@@ -718,6 +783,7 @@ mod tests {
             "Laptop",
             DeviceKind::Desktop,
             Some(node.id()),
+            &[],
         )
         .unwrap();
         nc.add(
@@ -726,6 +792,7 @@ mod tests {
             "Work phone",
             DeviceKind::Phone,
             Some(node.id()),
+            &[],
         )
         .unwrap();
         Group {
@@ -797,6 +864,42 @@ mod tests {
     }
 
     #[test]
+    fn a_device_added_after_a_rotation_gets_every_epochs_key() {
+        let mut g = group();
+        let k0 = GroupKey::from_bytes(0, g.nc.key().bytes());
+        g.nc.remove(&g.node, g.phone.id(), g.node.id(), 0).unwrap();
+        let tablet = DeviceKeys::generate().unwrap();
+        // Without the earlier keys the Node refuses to add it.
+        assert!(
+            g.nc.add(
+                &g.node,
+                &tablet.public(),
+                "Tablet",
+                DeviceKind::Phone,
+                None,
+                &[]
+            )
+            .is_err()
+        );
+        g.nc.add(
+            &g.node,
+            &tablet.public(),
+            "Tablet",
+            DeviceKind::Phone,
+            None,
+            std::slice::from_ref(&k0),
+        )
+        .unwrap();
+        let chain = Chain::from_entries(g.nc.chain().entries(), &g.node.public()).unwrap();
+        assert_eq!(chain.key_for(&tablet, 0).unwrap().bytes(), k0.bytes());
+        assert_eq!(
+            chain.key_for(&tablet, 1).unwrap().bytes(),
+            g.nc.key().bytes()
+        );
+        assert!(chain.key_for(&tablet, 2).is_err());
+    }
+
+    #[test]
     fn a_forked_chain_is_detected() {
         let g = group();
         let mut chain = Chain::from_entries(g.nc.chain().entries(), &g.node.public()).unwrap();
@@ -865,6 +968,7 @@ mod tests {
                     approved_by: None,
                     epoch: 0,
                     key: wrap(&chain.group(), g.nc.key(), &attacker.public()).unwrap(),
+                    earlier: vec![],
                 },
             )
             .unwrap();

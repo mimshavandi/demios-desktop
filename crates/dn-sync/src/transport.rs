@@ -52,6 +52,9 @@ pub const PROTOCOL_MAJOR: u16 = 1;
 pub const PROTOCOL_MINOR: u16 = 0;
 /// Largest frame accepted, in bytes.
 pub const MAX_FRAME: usize = 64 * 1024;
+/// Largest frame once the other side is a checked member and the channel carries sync
+/// (envelopes up to 1 MiB, base64, a few per frame).
+pub const MAX_SYNC_FRAME: usize = 4 * 1024 * 1024;
 const EXPORTER_LABEL: &[u8] = b"EXPORTER-demios-node-channel";
 /// DER prefix of an Ed25519 SubjectPublicKeyInfo (RFC 8410), followed by the 32 key bytes.
 const ED25519_SPKI_PREFIX: [u8; 12] = [
@@ -310,10 +313,45 @@ pub enum Message {
     },
     /// The request was done.
     Done,
+    /// A device starts a sync round: how much of the membership chain it has, and what it
+    /// has applied (author id hex -> seq).
+    SyncStart {
+        chain_len: u64,
+        vector: std::collections::BTreeMap<String, u64>,
+    },
+    /// The Node's answer: the chain entries the device lacks, and what the Node has applied.
+    SyncState {
+        entries: Vec<ChainEntry>,
+        vector: std::collections::BTreeMap<String, u64>,
+    },
+    /// Envelopes (base64) for the Node to keep and apply.
+    Push {
+        envelopes: Vec<String>,
+    },
+    /// How many were new to the Node.
+    Pushed {
+        stored: u32,
+    },
+    /// A device asks for envelopes after its vector.
+    Pull {
+        vector: std::collections::BTreeMap<String, u64>,
+    },
+    /// Envelopes (base64) the device lacks; `more` when another `Pull` gets more.
+    Envelopes {
+        envelopes: Vec<String>,
+        more: bool,
+    },
     /// The request was refused; the reason is shown as plain text.
     Refused {
         reason: String,
     },
+}
+
+/// One membership chain entry on the wire (base64).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChainEntry {
+    pub bytes: String,
+    pub signature: String,
 }
 
 /// One device in the list a client shows.
@@ -348,6 +386,7 @@ pub struct NodeStatus {
 /// An open, authenticated channel whose versions match.
 pub struct Channel<S> {
     tls: TlsStream<S>,
+    max_frame: usize,
     peer: [u8; 32],
     binding: [u8; 32],
     peer_minor: u16,
@@ -387,6 +426,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Channel<S> {
         .map_err(tls_error)?;
         Ok(Self {
             tls,
+            max_frame: MAX_FRAME,
             peer,
             binding,
             peer_minor: 0,
@@ -403,6 +443,12 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Channel<S> {
         &self.binding
     }
 
+    /// Allows sync-sized frames ([`MAX_SYNC_FRAME`]). Call it only once the other side is
+    /// a checked member (the Node after [`authorize_member`], a device after [`connect`]).
+    pub fn allow_sync_frames(&mut self) {
+        self.max_frame = MAX_SYNC_FRAME;
+    }
+
     /// The other side's protocol minor version.
     pub fn peer_minor(&self) -> u16 {
         self.peer_minor
@@ -410,7 +456,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Channel<S> {
 
     pub async fn send(&mut self, message: &Message) -> Result<()> {
         let body = serde_json::to_vec(message).map_err(|_| SyncError::Protocol("encode"))?;
-        if body.len() > MAX_FRAME {
+        if body.len() > self.max_frame {
             return Err(SyncError::Protocol("frame too large"));
         }
         let len = u32::try_from(body.len()).map_err(|_| SyncError::Protocol("frame too large"))?;
@@ -424,7 +470,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Channel<S> {
         let mut len = [0u8; 4];
         self.tls.read_exact(&mut len).await?;
         let len = u32::from_be_bytes(len) as usize;
-        if len > MAX_FRAME {
+        if len > self.max_frame {
             return Err(SyncError::Protocol("frame too large"));
         }
         let mut body = vec![0u8; len];
