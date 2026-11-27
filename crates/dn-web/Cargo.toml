@@ -9,6 +9,7 @@ rust-version.workspace = true
 description = "Web search providers and the local page fetcher: private-network guard, redirects, caps, rate limits (#369)"
 
 [dependencies]
+dom_smoothie = "=0.17.0"
 reqwest.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["net", "sync", "time"] }

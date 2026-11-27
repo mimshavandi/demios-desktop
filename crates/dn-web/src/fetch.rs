@@ -13,7 +13,10 @@
 //!   [`FetcherConfig::per_host_concurrent`] requests at once and one start per
 //!   [`FetcherConfig::per_host_interval`].
 //!
-//! robots.txt and extraction to markdown come with their dependencies (#369).
+//! - **robots.txt:** read per site and kept for a day (RFC 9309): a missing one allows
+//!   everything, one the site can't serve allows nothing. Only the requested site's rules
+//!   are read; a redirect to another site follows that site's address checks, not its
+//!   robots.txt.
 
 use crate::guard::{self, BlockedHost, GuardResolver};
 use crate::rate::RateLimit;
@@ -93,6 +96,47 @@ pub enum FetchError {
     TooManyRedirects(usize),
     #[error("couldn't reach the site: {0}")]
     Network(String),
+    #[error("the site's robots.txt doesn't allow fetching this page")]
+    Robots,
+    #[error("{0}")]
+    Unreadable(String),
+}
+
+/// How long a site's robots.txt is kept.
+pub const ROBOTS_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+/// The most of a robots.txt downloaded; [`crate::robots`] parses the first 500 KiB.
+const ROBOTS_MAX_BYTES: usize = 512 * 1024;
+/// The product token robots.txt groups are matched against.
+pub const ROBOTS_AGENT: &str = "Demios";
+const ROBOTS_TYPES: &[&str] = &["text/plain"];
+
+/// A site's robots.txt, as it applies to Demios.
+#[derive(Clone)]
+enum Robots {
+    AllowAll,
+    DisallowAll,
+    Rules(Arc<crate::robots::Robots>),
+}
+
+impl Robots {
+    fn parse(text: &str) -> Self {
+        Self::Rules(Arc::new(crate::robots::Robots::parse(text, ROBOTS_AGENT)))
+    }
+
+    fn allows(&self, url: &Url) -> bool {
+        match self {
+            Self::AllowAll => true,
+            Self::DisallowAll => false,
+            Self::Rules(r) => {
+                let mut path = url.path().to_owned();
+                if let Some(q) = url.query() {
+                    path.push('?');
+                    path.push_str(q);
+                }
+                r.allows(&path)
+            }
+        }
+    }
 }
 
 /// Media types the fetcher accepts.
@@ -182,6 +226,7 @@ pub struct Fetcher {
     client: reqwest::Client,
     config: FetcherConfig,
     rate: RateLimit,
+    robots: tokio::sync::Mutex<std::collections::HashMap<String, (tokio::time::Instant, Robots)>>,
     allow: Allow,
 }
 
@@ -218,16 +263,74 @@ impl Fetcher {
             .map_err(|e| FetchError::Network(e.to_string()))?;
         Ok(Self {
             rate: RateLimit::new(config.per_host_interval, config.per_host_concurrent),
+            robots: tokio::sync::Mutex::default(),
             client,
             config,
             allow,
         })
     }
 
-    /// Fetches `url` and returns its text.
+    /// Fetches `url` and returns its text, if the site's robots.txt allows it.
     pub async fn fetch(&self, url: &str) -> Result<Fetched, FetchError> {
         let parsed = Url::parse(url).map_err(|_| FetchError::InvalidUrl(url.to_owned()))?;
         check_url(&parsed, &self.allow)?;
+        if !self.robots_allow(&parsed).await? {
+            return Err(FetchError::Robots);
+        }
+        self.get(url, &parsed, TEXT_TYPES, self.config.max_bytes)
+            .await
+    }
+
+    /// Fetches `url` and returns its text, then extracts its main text as markdown.
+    pub async fn read(&self, url: &str) -> Result<crate::extract::Page, FetchError> {
+        let page = self.fetch(url).await?;
+        crate::extract::extract(&page).map_err(|e| FetchError::Unreadable(e.to_string()))
+    }
+
+    /// Whether the site's robots.txt lets Demios fetch `url` (RFC 9309). Kept for
+    /// [`ROBOTS_TTL`] per site. A missing robots.txt (4xx) allows everything; one the site
+    /// can't serve (5xx, unreachable, too slow) allows nothing until it can be read.
+    async fn robots_allow(&self, url: &Url) -> Result<bool, FetchError> {
+        let site = url.origin().ascii_serialization();
+        if let Some(rules) = self
+            .robots
+            .lock()
+            .await
+            .get(&site)
+            .and_then(|(at, r)| (at.elapsed() < ROBOTS_TTL).then(|| r.clone()))
+        {
+            return Ok(rules.allows(url));
+        }
+        let robots_url = format!("{site}/robots.txt");
+        let parsed =
+            Url::parse(&robots_url).map_err(|_| FetchError::InvalidUrl(robots_url.clone()))?;
+        let rules = match self
+            .get(&robots_url, &parsed, ROBOTS_TYPES, ROBOTS_MAX_BYTES)
+            .await
+        {
+            Ok(page) => Robots::parse(&page.text),
+            Err(FetchError::Status(code)) if (400..500).contains(&code) => Robots::AllowAll,
+            // Another type than text: no rules for crawlers in it.
+            Err(FetchError::UnsupportedType(_)) => Robots::AllowAll,
+            Err(FetchError::Blocked(b)) => return Err(FetchError::Blocked(b)),
+            Err(_) => Robots::DisallowAll,
+        };
+        let allowed = rules.allows(url);
+        self.robots
+            .lock()
+            .await
+            .insert(site, (tokio::time::Instant::now(), rules));
+        Ok(allowed)
+    }
+
+    /// One GET of `url` (already checked), for `types`, at most `max` bytes.
+    async fn get(
+        &self,
+        url: &str,
+        parsed: &Url,
+        types: &[&str],
+        max: usize,
+    ) -> Result<Fetched, FetchError> {
         let host = parsed.host_str().unwrap_or_default().to_ascii_lowercase();
         let _turn = self.rate.turn(&host).await;
         let started = tokio::time::Instant::now();
@@ -255,14 +358,13 @@ impl Fetcher {
             return Err(FetchError::Status(status.as_u16()));
         }
         let (media, charset) = media_type(response.headers());
-        if !TEXT_TYPES.contains(&media.as_str()) {
+        if !types.contains(&media.as_str()) {
             return Err(FetchError::UnsupportedType(if media.is_empty() {
                 "of no stated type".into()
             } else {
                 media
             }));
         }
-        let max = self.config.max_bytes;
         if response.content_length().is_some_and(|n| n > max as u64) {
             return Err(FetchError::TooLarge(max));
         }
@@ -590,13 +692,27 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         tokio::spawn(async move {
-            let (mut sock, _) = listener.accept().await.unwrap();
-            let mut buf = [0u8; 1024];
-            let _ = sock.read(&mut buf).await;
-            let _ = sock
-                .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 100\r\n\r\nslow")
-                .await;
-            tokio::time::sleep(Duration::from_secs(30)).await;
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else {
+                    return;
+                };
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 1024];
+                    let n = sock.read(&mut buf).await.unwrap_or(0);
+                    if String::from_utf8_lossy(&buf[..n]).contains("/robots.txt") {
+                        let _ = sock
+                            .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n")
+                            .await;
+                        return;
+                    }
+                    let _ = sock
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 100\r\n\r\nslow",
+                        )
+                        .await;
+                    tokio::time::sleep(Duration::from_secs(30)).await;
+                });
+            }
         });
         let f = test_fetcher(
             port,
@@ -610,6 +726,75 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(e, FetchError::Timeout(_)), "{e}");
+    }
+
+    #[tokio::test]
+    async fn robots_txt_is_honoured_and_kept() {
+        let port = server(vec![
+            (
+                "/robots.txt",
+                ok(
+                    "text/plain",
+                    "User-agent: *\nDisallow: /private\n\nUser-agent: Demios\nDisallow: /no-demios\n",
+                ),
+            ),
+            ("/ok", ok("text/plain", "fine")),
+            ("/no-demios/x", ok("text/plain", "secret")),
+            ("/private/x", ok("text/plain", "everyone else")),
+        ])
+        .await;
+        let f = test_fetcher(port, quick());
+        let base = format!("http://127.0.0.1:{port}");
+        assert_eq!(f.fetch(&format!("{base}/ok")).await.unwrap().text, "fine");
+        let e = f.fetch(&format!("{base}/no-demios/x")).await.unwrap_err();
+        assert!(matches!(e, FetchError::Robots), "{e}");
+        // The Demios group applies, not `*`.
+        assert_eq!(
+            f.fetch(&format!("{base}/private/x")).await.unwrap().text,
+            "everyone else"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_missing_robots_txt_allows_and_a_broken_one_disallows() {
+        let missing = server(vec![("/x", ok("text/plain", "hi"))]).await;
+        let f = test_fetcher(missing, quick());
+        assert!(
+            f.fetch(&format!("http://127.0.0.1:{missing}/x"))
+                .await
+                .is_ok()
+        );
+
+        let broken = server(vec![
+            (
+                "/robots.txt",
+                "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n".into(),
+            ),
+            ("/x", ok("text/plain", "hi")),
+        ])
+        .await;
+        let f = test_fetcher(broken, quick());
+        let e = f
+            .fetch(&format!("http://127.0.0.1:{broken}/x"))
+            .await
+            .unwrap_err();
+        assert!(matches!(e, FetchError::Robots), "{e}");
+    }
+
+    #[tokio::test]
+    async fn read_returns_the_main_text_as_markdown() {
+        let html = "<html><head><title>T</title></head><body><article><p>A long enough \
+                    paragraph about tides and moorings, with enough words in it that the \
+                    readability pass keeps it as the article's text and not as boilerplate.</p>\
+                    </article></body></html>";
+        let port = server(vec![("/a", ok("text/html", html))]).await;
+        let f = test_fetcher(port, quick());
+        let page = f.read(&format!("http://127.0.0.1:{port}/a")).await.unwrap();
+        assert!(
+            page.markdown.contains("tides and moorings"),
+            "{}",
+            page.markdown
+        );
     }
 
     #[test]

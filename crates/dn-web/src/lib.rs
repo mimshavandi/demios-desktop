@@ -9,11 +9,17 @@
 //! - [`fetch`]: the [`Fetcher`]: an honest user agent, redirects re-checked
 //!   hop by hop, time and size caps, allowed content types, and a per-host rate limit.
 //!
-//! Extraction to markdown and robots.txt come with their dependencies (#369); search
-//! providers next.
+//! - [`extract`]: a page's main text as markdown (Readability, through `dom_smoothie`).
+//!
+//! - [`robots`]: robots.txt as RFC 9309 says, honoured per site by the fetcher.
+//!
+//! Search providers come next.
 
+pub mod extract;
 pub mod fetch;
 pub mod guard;
 mod rate;
+pub mod robots;
 
+pub use extract::Page;
 pub use fetch::{FetchError, Fetched, Fetcher, FetcherConfig};
