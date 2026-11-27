@@ -1,6 +1,6 @@
 # ADR-0020: One agent runtime: harness, context and memory for every surface
 
-**Status:** Proposed · **Date:** 2026-11-27 · **Deciders:** project owner, lead · **Extends:** [ADR-0001](0001-workspace-layout.md), [ADR-0009](0009-security-baseline.md), [ADR-0013](0013-plugin-api.md) (§5, §9), [ADR-0014](0014-demios-node.md) · **Issue:** to be filed on acceptance
+**Status:** Proposed · **Date:** 2026-11-27 · **Deciders:** project owner, lead · **Extends:** [ADR-0001](0001-repo-and-crate-layout.md), [ADR-0009](0009-security-baseline.md), [ADR-0013](0013-plugin-api.md) (§5, §9), [ADR-0014](0014-demios-node.md) · **Issue:** to be filed on acceptance
 
 ## Context
 
