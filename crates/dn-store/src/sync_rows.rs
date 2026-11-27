@@ -374,12 +374,12 @@ pub fn message(conn: &Connection, id: &str) -> Result<Option<MessageRow>> {
         .optional()?)
 }
 
-/// Writes a finished message from another device. Its chat must exist; a message already
-/// here is left as it is (messages never change once finished).
-pub fn insert_message(conn: &Connection, row: &MessageRow) -> Result<bool> {
+/// Checks a message from another device: canonical ids, and every field what this app
+/// writes, so the chat still reads afterwards. A streaming message is refused. Returns its
+/// chat's id.
+pub fn check_message(row: &MessageRow) -> Result<Id> {
     canonical_id(&row.id)?;
     let chat = canonical_id(&row.conversation_id)?;
-    // Every field must be what this app writes, so the chat still reads afterwards.
     let typed = |v: &str| serde_json::Value::String(v.to_owned());
     serde_json::from_value::<dn_core::chat::Role>(typed(&row.role))?;
     serde_json::from_value::<crate::chat::MessageStatus>(typed(&row.status))?;
@@ -393,6 +393,13 @@ pub fn insert_message(conn: &Connection, row: &MessageRow) -> Result<bool> {
             "a streaming message isn't synced".into(),
         ));
     }
+    Ok(chat)
+}
+
+/// Writes a finished message from another device. Its chat must exist; a message already
+/// here is left as it is (messages never change once finished).
+pub fn insert_message(conn: &Connection, row: &MessageRow) -> Result<bool> {
+    let chat = check_message(row)?;
     // Its chat must be here, live or in the trash.
     let here: Option<i64> = conn
         .query_row(
