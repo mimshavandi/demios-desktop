@@ -93,13 +93,13 @@ Two kinds time what prompt reuse is for:
 - `next_turn`: a chat's second turn after a 2k, 8k or 16k-token first message;
 - `switch_back`: going back to a chat after another one.
 
-Whether those are cold or warm is the model's setting, not the case's. Run the suite twice to
-compare:
+Whether those are cold or warm is the model's setting, not the case's. Prompt reuse is on by
+default, so run the suite twice to compare:
 
 ```bash
+dn eval speed <model> --no-prompt-cache
 dn eval speed <model>
-dn eval speed <model> --prompt-cache
-dn eval speed <model> --prompt-cache --draft <smaller model of the same family>
+dn eval speed <model> --draft <smaller model of the same family>
 ```
 
 With `--draft`, each run's result also counts the drafted and accepted tokens.

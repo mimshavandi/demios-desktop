@@ -48,9 +48,8 @@ A `demios://models/add?…` link names a Hugging Face model, and can name one ve
 
 ## Faster answers (preview)
 
-Both are off unless you ask for them, until the speed tests show the gain on each kind of computer:
-
-- **`--prompt-cache`:** the model keeps the last request's tokens, and recent other ones in memory (2 GB by default, `--prompt-cache-mib` to change it). A request that starts like an earlier one, such as the next turn of a chat, only processes what's new. Models with recurrent layers can't do this; `dn run -v` says so.
+- **Prompt reuse (on by default):** the model keeps the last request's tokens, and recent other ones in memory. A request that starts like an earlier one, such as the next turn of a chat, only processes what's new. Other requests get the smaller of 2 GB and a tenth of your RAM (about 800 MB on an 8 GB laptop); `--prompt-cache-mib` changes it, and `--no-prompt-cache` turns reuse off. Models with recurrent layers can't do this; `dn run -v` says so. The Demios app uses the same default.
+- The draft model below is off unless you ask for it:
 - **`--draft <file>`:** a smaller model of the same family suggests the next few tokens and the model checks them all at once, so it writes faster. The answer is the same as without it. The two must share a vocabulary (for example Qwen3 32B with Qwen3 8B); if they don't, the model doesn't load and the message says what differs. The draft model needs memory of its own, which the automatic settings don't count yet.
 
 ## Demios Node (early preview)

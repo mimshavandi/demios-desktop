@@ -143,7 +143,7 @@ pub struct LoadOptions {
     pub n_batch: u32,
     /// Memory-map the weights (lets the OS page them; default on).
     pub mmap: bool,
-    /// Reuse prompt prefixes between calls (llama.cpp only).
+    /// Reuse prompt prefixes between calls (llama.cpp only). See [`PromptCache`].
     #[serde(default)]
     pub prompt_cache: PromptCache,
     /// Speculative decoding with a smaller model of the same family (llama.cpp only).
@@ -171,34 +171,47 @@ impl DraftModel {
     }
 }
 
-/// Prompt reuse between calls on a loaded model (ADR-0020 §6). Off by default until the speed
-/// suite shows the gain on each hardware tier.
+/// Prompt reuse between calls on a loaded model (ADR-0020 §6). On by default: on an M3 Ultra
+/// it cut the wait for a chat's next reply from 18.4 s to 0.4 s (Qwen3-8B) and from 75.6 s
+/// to 1.3 s (Qwen3-32B) at 16k tokens, with the same answers (#345).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PromptCache {
     /// Keep the last call's tokens in the context and reuse the shared prefix.
     pub enabled: bool,
-    /// RAM for sequences other than the live one, in bytes. When it's full, the least
-    /// recently used goes first.
+    /// RAM for sequences other than the live one (other chats), in bytes. When it's full,
+    /// the least recently used goes first.
     pub ram_bytes: u64,
 }
 
 impl PromptCache {
-    /// RAM for saved sequences unless set: 2 GiB.
-    pub const DEFAULT_RAM_BYTES: u64 = 2 << 30;
+    /// The most RAM other chats get by default: 2 GiB.
+    pub const MAX_DEFAULT_RAM_BYTES: u64 = 2 << 30;
 
-    pub fn on() -> Self {
+    /// The default on a machine with `total_ram` bytes: on, with the smaller of 2 GiB and a
+    /// tenth of the RAM for other chats (about 800 MB on an 8 GB laptop).
+    pub fn for_ram(total_ram: u64) -> Self {
         Self {
             enabled: true,
-            ..Self::default()
+            ram_bytes: Self::MAX_DEFAULT_RAM_BYTES.min(total_ram / 10),
+        }
+    }
+
+    /// No reuse: every call reads its whole prompt.
+    pub fn off() -> Self {
+        Self {
+            enabled: false,
+            ram_bytes: 0,
         }
     }
 }
 
+/// On, keeping only the live sequence (no RAM for other chats). Callers that know the
+/// machine use [`PromptCache::for_ram`].
 impl Default for PromptCache {
     fn default() -> Self {
         Self {
-            enabled: false,
-            ram_bytes: Self::DEFAULT_RAM_BYTES,
+            enabled: true,
+            ram_bytes: 0,
         }
     }
 }
@@ -258,5 +271,20 @@ mod tests {
             ModelSpec::gguf("/m/qwen2.5-0.5b-q4_k_m.gguf").model_id,
             "qwen2.5-0.5b-q4_k_m"
         );
+    }
+}
+
+#[cfg(test)]
+mod prompt_cache_tests {
+    use super::PromptCache;
+
+    #[test]
+    fn other_chats_get_a_tenth_of_the_ram_at_most_2_gib() {
+        let gib = 1u64 << 30;
+        assert_eq!(PromptCache::for_ram(8 * gib).ram_bytes, 8 * gib / 10);
+        assert_eq!(PromptCache::for_ram(16 * gib).ram_bytes, 16 * gib / 10);
+        assert_eq!(PromptCache::for_ram(64 * gib).ram_bytes, 2 * gib);
+        assert!(PromptCache::for_ram(8 * gib).enabled);
+        assert!(!PromptCache::off().enabled);
     }
 }

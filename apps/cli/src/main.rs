@@ -157,12 +157,14 @@ pub struct LoadArgs {
     /// Load even when the fit estimator says the model won't fit.
     #[arg(long)]
     force: bool,
-    /// Reuse prompt prefixes between requests: the context keeps the last request's tokens,
-    /// and recent other ones wait in RAM (ADR-0020 §6).
+    /// Don't reuse prompt prefixes between requests. By default the model keeps the last
+    /// request's tokens, and recent other ones in RAM, so a request that starts like an
+    /// earlier one only reads what's new (ADR-0020 §6).
     #[arg(long)]
-    prompt_cache: bool,
-    /// RAM for the prompt cache's saved sequences, in MiB (default 2048).
-    #[arg(long, requires = "prompt_cache")]
+    no_prompt_cache: bool,
+    /// RAM for other requests' saved prompts, in MiB (default: the smaller of 2048 and a
+    /// tenth of this machine's RAM).
+    #[arg(long, conflicts_with = "no_prompt_cache")]
     prompt_cache_mib: Option<u64>,
     /// Speculative decoding: a smaller GGUF of the same family that drafts tokens for the
     /// model to check (ADR-0020 §6). It must share the model's vocabulary.
@@ -198,13 +200,13 @@ impl LoadArgs {
                 Some(KvArg::Q4_0) => KvCacheQuant::Q4_0,
             },
             threads: self.threads,
-            prompt_cache: PromptCache {
-                enabled: self.prompt_cache,
-                ram_bytes: self
-                    .prompt_cache_mib
-                    .map_or(PromptCache::DEFAULT_RAM_BYTES, |m| {
-                        m.saturating_mul(1 << 20)
-                    }),
+            prompt_cache: match (self.no_prompt_cache, self.prompt_cache_mib) {
+                (true, _) => PromptCache::off(),
+                (false, Some(mib)) => PromptCache {
+                    enabled: true,
+                    ram_bytes: mib.saturating_mul(1 << 20),
+                },
+                (false, None) => PromptCache::for_ram(dn_models::total_ram()),
             },
             draft: self.draft.as_ref().map(|p| DraftModel {
                 path: p.clone(),
@@ -1339,7 +1341,14 @@ mod tests {
             .auto_options(std::path::Path::new("/nonexistent.gguf"))
             .unwrap();
         assert!(est.is_none());
-        assert_eq!(o, LoadOptions::default());
+        // Prompt reuse isn't a llama.cpp setting: it keeps this machine's default.
+        assert_eq!(
+            o,
+            LoadOptions {
+                prompt_cache: PromptCache::for_ram(dn_models::total_ram()),
+                ..LoadOptions::default()
+            }
+        );
     }
 
     #[test]

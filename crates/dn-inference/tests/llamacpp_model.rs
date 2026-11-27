@@ -166,9 +166,9 @@ async fn model_with(prompt_cache: bool) -> LoadedModel<LlamaCppBackend> {
     let opts = LoadOptions {
         n_ctx: Some(4096),
         prompt_cache: if prompt_cache {
-            dn_inference::PromptCache::on()
+            dn_inference::PromptCache::for_ram(8 << 30)
         } else {
-            Default::default()
+            dn_inference::PromptCache::off()
         },
         ..Default::default()
     };
@@ -258,6 +258,7 @@ async fn model_with_draft(
     let opts = LoadOptions {
         n_ctx: Some(4096),
         draft: Some(dn_inference::DraftModel::new(draft)),
+        prompt_cache: dn_inference::PromptCache::off(),
         ..Default::default()
     };
     LoadedModel::load(
