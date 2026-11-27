@@ -34,13 +34,16 @@ pub struct Parts {
     /// skill, in order. Written by Demios or the person, so not quoted.
     pub system: Vec<String>,
     pub tools: Vec<ToolSpec>,
-    /// The skills index.
+    /// The skills index. Not quoted, so only skills the person installed or Demios ships;
+    /// an add-on's skill text goes in as an [`Item`].
     pub skills: Option<String>,
-    /// The core profile (memory).
+    /// The core profile (memory). Not quoted, so only items the person stated or
+    /// confirmed (ADR-0020 §4.1); anything from third-party content goes in as an [`Item`].
     pub profile: Option<String>,
     /// Project or add-on knowledge, in priority order (dropped from the end).
     pub knowledge: Vec<Item>,
-    /// The running summary of earlier turns.
+    /// The running summary of earlier turns. A model wrote it from a conversation that may
+    /// hold tool and retrieved output, so it's quoted as untrusted data.
     pub summary: Option<String>,
     /// The stored conversation, oldest first, without the new input.
     pub turns: Vec<ChatMessage>,
@@ -135,9 +138,13 @@ fn render(parts: &Parts, template: &ChatRequest) -> (ChatRequest, usize) {
         messages.push(ChatMessage::text(Role::System, system.join("\n\n")));
     }
     if let Some(s) = parts.summary.as_ref().filter(|s| !s.trim().is_empty()) {
+        let block = untrusted::block(&SourceRef::new("summary").attr("of", "earlier messages"), s);
         messages.push(ChatMessage::text(
             Role::System,
-            format!("Summary of the earlier part of this conversation:\n\n{s}"),
+            format!(
+                "Summary of the earlier part of this conversation.\n{}\n\n{block}",
+                untrusted::NOTICE
+            ),
         ));
     }
     messages.extend(parts.turns.iter().cloned());
