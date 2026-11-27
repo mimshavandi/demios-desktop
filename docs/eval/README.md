@@ -18,7 +18,8 @@ dn eval parity --set evals/golden --holdout <private dir> --out <outside the rep
 ```
 
 A set is a folder: `prompts/<category>.yaml` (a list of cases per category), `files/` (small
-sample files the cases attach) and `tools.yaml` (mock tools with canned results).
+sample files the cases attach), `tools.yaml` (mock tools with canned results) and, optionally,
+`set.yaml` with the set's `today` (an ISO date the model is told in every case).
 [apps/cli/eval/parity-example](../../apps/cli/eval/parity-example) shows the format. Each case
 has an `id`, a `category` (chat, writing, summarise, project, tools, multistep, memory,
 research), a `lang` (en or de), the `turns` of this session (the last one the user's) and what
@@ -34,6 +35,8 @@ What each case gets for now:
   files;
 - its mock tools: read tools answer from `tools.yaml`, and write tools only when the case
   approves them; any other write call is answered "The user declined this action.";
+  a read tool named `calculator` with no canned results is answered by the runner, which does
+  the arithmetic (`+ - * /`, parentheses, decimals, `%`);
 - no earlier sessions: memory arrives in R3, so memory cases are reported `memory: none` and
   measure the baseline without it.
 
