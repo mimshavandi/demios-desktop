@@ -1408,6 +1408,7 @@ mod tests {
             policy: ApprovalPolicy::AskOncePerConversation,
             arguments: serde_json::json!({ "path": "notes/todo.md" }),
             requester: Default::default(),
+            approval_required: false,
         }
     }
 

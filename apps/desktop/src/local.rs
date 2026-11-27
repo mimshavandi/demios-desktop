@@ -193,12 +193,31 @@ impl<B: InferenceBackend> Resident<B> {
     }
 }
 
-impl<B: InferenceBackend> ChatModel for Resident<B> {
-    fn chat(&self, req: dn_core::chat::ChatRequest) -> dn_core::chat::EventStream {
+impl<B: InferenceBackend> Resident<B> {
+    fn loaded(&self) -> &LoadedModel<B> {
         self.model
             .as_ref()
             .expect("a Resident holds its model until dropped")
-            .chat(req)
+    }
+}
+
+impl<B: InferenceBackend> ChatModel for Resident<B> {
+    fn chat(&self, req: dn_core::chat::ChatRequest) -> dn_core::chat::EventStream {
+        self.loaded().chat(req)
+    }
+
+    fn limits<'a>(
+        &'a self,
+        model: &'a dn_core::model::ModelRef,
+    ) -> dn_core::chat::BoxFuture<'a, dn_core::chat::ModelLimits> {
+        self.loaded().limits(model)
+    }
+
+    fn count_tokens(
+        &self,
+        req: &dn_core::chat::ChatRequest,
+    ) -> Option<Result<u32, dn_core::CoreError>> {
+        self.loaded().count_tokens(req)
     }
 }
 

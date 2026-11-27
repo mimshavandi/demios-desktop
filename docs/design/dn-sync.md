@@ -243,6 +243,12 @@ An incoming envelope is checked (§7.2) and stored in `sync_inbox` before it's a
 ### 9.4 Snapshots
 - A new device, or one past the 90-day line, starts from a **snapshot**: the current state of every synced record, the tombstones, the membership chain and the sender's vector.
 - It's sent only over the paired channel (ADR-0014 §2), never through a Relay, because it's large and it's the whole data set.
+- **How it's built and installed (#294):**
+  - The Node applies every change it keeps, so it holds the records too, sealed at rest (§9.5). Every snapshot is of its applied state, with the write behind each field, the open text conflicts, the tombstones, its vector and its clock.
+  - It is sealed with the group key under its own label, so it can never be opened as an envelope.
+  - A device first records and pushes all its own changes, and the Node applies them, so the snapshot covers everything the device has. Installing it is then a replace, in one transaction.
+  - If the snapshot doesn't cover the device (a local edit since the push, or a change the Node hasn't applied yet), it is refused before anything is written, and the next round tries again.
+- **Where the log starts:** each round says what the device has applied. The Node drops envelopes that every current member has applied, and so has the Node, then tells the device where its log now starts. A device missing a change below that point gets the snapshot.
 - A snapshot is signed by the device that sends it, usually the Node. Records in it are accepted on that device's signature. That's the one place a device vouches for others' data. It's limited to devices that are already members, at pairing or on their return.
 
 ### 9.5 The Node's records at rest

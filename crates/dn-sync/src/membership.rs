@@ -411,6 +411,14 @@ impl Chain {
         self.members.get(&id)
     }
 
+    /// The devices that are members now (not removed), the Node included.
+    pub fn current_members(&self) -> impl Iterator<Item = (DeviceId, &Member)> {
+        self.members
+            .iter()
+            .filter(|(_, m)| m.removed.is_none())
+            .map(|(d, m)| (*d, m))
+    }
+
     /// The key of an author for checking a signature: any device ever added (a removed
     /// one's earlier changes still verify; [`Chain::accepts`] decides the rest).
     pub fn author_key(&self, author: DeviceId) -> Result<PublicIdentity> {

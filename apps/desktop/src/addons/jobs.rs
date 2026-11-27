@@ -353,7 +353,7 @@ impl Jobs {
             return Ok(());
         }
         let call = held::take_approved(&lock(&db), id).map_err(err)?;
-        let result = run_approved(state, &call).await;
+        let result = run_approved(state, call).await;
         held::finish(&lock(&db), id, result.clone()).map_err(err)?;
         self.changed();
         result
@@ -378,11 +378,14 @@ fn owned_job(state: &AppState, key: &JobKey) -> Result<(), String> {
 }
 
 /// Runs a held call the person allowed: through the executor, with this answer as its only
-/// approval for this one call.
-async fn run_approved(state: &Arc<AppState>, call: &HeldApproval) -> Result<(), String> {
+/// approval for this one call. A tool that always needs a fresh approval (ADR-0013 §9.4)
+/// runs with the one-time approval made from this answer; "run without asking" never
+/// counts for it.
+async fn run_approved(state: &Arc<AppState>, approved: held::Approved) -> Result<(), String> {
+    let call: &HeldApproval = &approved;
     // What was turned off since the call was held takes effect now too: the add-on must
     // still be running and on, and still hold `tools.call` for a tool that isn't its own.
-    let plugin = &call.job.plugin;
+    let plugin = &call.job.plugin.clone();
     let (manifest, _, _) = state
         .addons
         .loaded()
@@ -412,8 +415,10 @@ async fn run_approved(state: &Arc<AppState>, call: &HeldApproval) -> Result<(), 
         .addons
         .with_entry(&call.job.plugin, |e| e.manifest.name.clone())
         .ok_or_else(|| "The add-on is gone.".to_owned())?;
-    let arguments: serde_json::Value =
-        serde_json::from_str(&call.arguments).map_err(|e| e.to_string())?;
+    let run = call.run;
+    let (call, tc, token) = exec
+        .approval_for_held(approved)
+        .map_err(|e| e.to_string())?;
     let ctx = dn_tools::CallContext::for_plugin(
         call.run,
         dn_tools::PluginCall {
@@ -440,16 +445,16 @@ async fn run_approved(state: &Arc<AppState>, call: &HeldApproval) -> Result<(), 
             }),
         },
         Vec::new(),
-    );
-    let tc = dn_core::chat::ToolCall {
-        id: call.id.to_string(),
-        name: call.tool.clone(),
-        arguments,
-    };
-    exec.execute(&ctx, &tc)
+    )
+    .with_approval(token);
+    let result = exec
+        .execute(&ctx, &tc)
         .await
         .map(|_| ())
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string());
+    // Unused (a tool outside the class runs on its "run without asking" choice): gone.
+    exec.revoke_held_approval(run, call.id);
+    result
 }
 
 /// Holds a job's tool call for the person (the app's part of `HostBackend::call_tool`).
@@ -482,6 +487,94 @@ pub(crate) fn hold_tool(
     .map_err(|e| PluginError::failed(e.to_string()))?;
     state.addons.jobs.changed();
     Ok(())
+}
+
+/// A held call as the add-on sees it (ADR-0013 §9.2).
+fn held_call(h: HeldApproval) -> Result<dn_plugin_api::HeldCall, PluginError> {
+    let arguments =
+        serde_json::from_str(&h.arguments).map_err(|e| PluginError::failed(e.to_string()))?;
+    Ok(dn_plugin_api::HeldCall::new(
+        h.id,
+        h.tool,
+        arguments,
+        h.summary,
+        h.created_at,
+        h.replaces,
+    ))
+}
+
+/// What an add-on is told when the queue refuses a withdrawal or a replacement.
+fn held_error(e: dn_jobs::JobsError) -> PluginError {
+    use dn_jobs::JobsError as E;
+    match e {
+        E::UnknownApproval => PluginError::not_allowed("There is no held call with that id"),
+        E::NotHeld | E::Expired | E::Withdrawn { .. } => {
+            PluginError::not_allowed(format!("That call isn't waiting any more: {e}"))
+        }
+        other => PluginError::failed(other.to_string()),
+    }
+}
+
+/// The add-on's own calls waiting for the person's answer.
+pub(crate) fn held_of_addon(
+    state: &AppState,
+    plugin: &PluginId,
+) -> Result<Vec<dn_plugin_api::HeldCall>, PluginError> {
+    let db = jobs_db(state).map_err(PluginError::unavailable)?;
+    let now = now();
+    held::waiting_for(&lock(&db), plugin, now)
+        .map_err(held_error)?
+        .into_iter()
+        .map(held_call)
+        .collect()
+}
+
+/// The add-on takes back its own held call.
+pub(crate) fn withdraw_held(
+    state: &AppState,
+    plugin: &PluginId,
+    id: dn_core::Id,
+) -> Result<(), PluginError> {
+    let db = jobs_db(state).map_err(PluginError::unavailable)?;
+    let now = now();
+    held::withdraw(&lock(&db), plugin, id, now).map_err(held_error)?;
+    state.addons.jobs.changed();
+    Ok(())
+}
+
+/// The add-on replaces its own held call with new arguments. The handler must be allowed
+/// to call the tool itself (ADR-0013 §9.1): replacing is asking for the call again.
+pub(crate) fn replace_held(
+    state: &AppState,
+    caller: &Caller,
+    id: dn_core::Id,
+    arguments: serde_json::Value,
+) -> Result<dn_plugin_api::HeldCall, PluginError> {
+    let db = jobs_db(state).map_err(PluginError::unavailable)?;
+    let now = now();
+    let conn = lock(&db);
+    let current = held::get(&conn, id).map_err(held_error)?;
+    if current.job.plugin != caller.plugin_id {
+        return Err(held_error(dn_jobs::JobsError::UnknownApproval));
+    }
+    let tier = state
+        .executor
+        .as_ref()
+        .and_then(|e| e.call_tier(&current.tool))
+        .ok_or_else(|| PluginError::not_allowed(format!("No tool `{}`", current.tool)))?;
+    if tier > caller.max_tool_tier {
+        return Err(PluginError::new(
+            dn_plugin_api::ErrorKind::TierLimit,
+            format!(
+                "{} can't ask for this call from here: it changes more than this part may",
+                caller.plugin_name
+            ),
+        ));
+    }
+    let new = held::replace(&conn, &caller.plugin_id, id, &arguments, now).map_err(held_error)?;
+    drop(conn);
+    state.addons.jobs.changed();
+    held_call(new)
 }
 
 /// Held calls and "Run it now?" questions, per add-on.

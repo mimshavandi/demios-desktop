@@ -301,3 +301,36 @@ async fn a_draft_with_another_vocabulary_is_refused() {
     let msg = e.to_string();
     assert!(msg.contains("draft model"), "{msg}");
 }
+
+/// ADR-0020 §2.1: the count before a call is what the model then reports it read, with and
+/// without tools; the context is the one it was loaded with.
+#[tokio::test]
+#[ignore = "needs DN_TEST_GGUF"]
+async fn counted_tokens_match_what_the_model_reads() {
+    use dn_core::chat::{LimitSource, ModelLimits};
+    let m = model().await;
+    let model_ref = "local:test".parse().unwrap();
+    assert_eq!(
+        m.limits(&model_ref).await,
+        ModelLimits::known(4096, LimitSource::Loaded)
+    );
+    for tools in [
+        vec![],
+        vec![ToolSpec {
+            name: "get_current_time".into(),
+            description: "The current time.".into(),
+            input_schema: serde_json::json!({"type": "object", "properties": {}}),
+        }],
+    ] {
+        let r = req("Say hello in five words.", tools);
+        let counted = m.count_tokens(&r).expect("llama.cpp counts").unwrap();
+        let mut s = m.chat(r);
+        let mut read = None;
+        while let Some(ev) = next_event(&mut s).await {
+            if let StreamEvent::Done { usage, .. } = ev.unwrap() {
+                read = Some(usage.input_tokens);
+            }
+        }
+        assert_eq!(Some(counted), read);
+    }
+}

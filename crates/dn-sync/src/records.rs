@@ -371,14 +371,19 @@ fn value_hash(v: &Value) -> Vec<u8> {
     change_hash(&serde_json::to_vec(v).unwrap_or_default()).to_vec()
 }
 
-struct FieldWrite {
-    hash: Vec<u8>,
-    author: DeviceId,
-    seq: u64,
-    hlc: Hlc,
+pub(crate) struct FieldWrite {
+    pub(crate) hash: Vec<u8>,
+    pub(crate) author: DeviceId,
+    pub(crate) seq: u64,
+    pub(crate) hlc: Hlc,
 }
 
-fn field_write(conn: &Connection, col: &str, id: &str, field: &str) -> Result<Option<FieldWrite>> {
+pub(crate) fn field_write(
+    conn: &Connection,
+    col: &str,
+    id: &str,
+    field: &str,
+) -> Result<Option<FieldWrite>> {
     let row = conn
         .query_row(
             "SELECT hash, author, seq, hlc FROM sync_fields
@@ -406,7 +411,7 @@ fn field_write(conn: &Connection, col: &str, id: &str, field: &str) -> Result<Op
 }
 
 #[allow(clippy::too_many_arguments)]
-fn record_field(
+pub(crate) fn record_field(
     conn: &Connection,
     col: &dyn Collection,
     id: &str,
@@ -434,7 +439,7 @@ fn record_field(
     Ok(())
 }
 
-fn is_purged(conn: &Connection, col: &str, id: &str) -> Result<bool> {
+pub(crate) fn is_purged(conn: &Connection, col: &str, id: &str) -> Result<bool> {
     Ok(conn
         .query_row(
             "SELECT 1 FROM sync_purged WHERE collection = ?1 AND id = ?2",
@@ -445,7 +450,7 @@ fn is_purged(conn: &Connection, col: &str, id: &str) -> Result<bool> {
         .is_some())
 }
 
-fn record_purge(
+pub(crate) fn record_purge(
     conn: &Connection,
     col: &str,
     id: &str,
@@ -497,7 +502,10 @@ fn settle_conflicts(
     Ok(())
 }
 
-fn collection<'a>(cols: &'a [&'a dyn Collection], name: &str) -> Result<&'a dyn Collection> {
+pub(crate) fn collection<'a>(
+    cols: &'a [&'a dyn Collection],
+    name: &str,
+) -> Result<&'a dyn Collection> {
     cols.iter()
         .copied()
         .find(|c| c.name() == name)

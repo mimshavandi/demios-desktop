@@ -32,7 +32,13 @@ use std::fmt;
 /// Schema migrations for this crate (tables `jobs_*` and `held_*`), in order; new ones
 /// are only appended. `dn-store` runs them.
 pub fn migrations() -> &'static [&'static str] {
-    &[store::MIGRATION, held::MIGRATION, budget::MIGRATION]
+    // Appended in order: a migration that already ran is never changed or moved.
+    &[
+        store::MIGRATION,
+        held::MIGRATION,
+        budget::MIGRATION,
+        held::MIGRATION_WITHDRAW,
+    ]
 }
 
 /// One add-on job: the add-on's id and the job's id within it.
@@ -67,6 +73,13 @@ pub enum JobsError {
     UnknownApproval,
     #[error("this approval was already answered, dismissed or expired")]
     NotHeld,
+    /// The add-on withdrew the call, or replaced it with a newer version (`replaced_by`).
+    /// An answer to it is refused.
+    #[error("{}", match .replaced_by {
+        Some(_) => "this was replaced by a newer version",
+        None => "this was withdrawn by its add-on",
+    })]
+    Withdrawn { replaced_by: Option<dn_core::Id> },
     #[error("this approval expired and wasn't run")]
     Expired,
     #[error("the answer is for different arguments than the held call")]

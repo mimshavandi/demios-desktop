@@ -62,9 +62,14 @@ impl GroupKey {
     }
 
     fn message_key(&self, salt: &[u8; SALT_LEN]) -> Result<(LessSafeKey, [u8; NONCE_LEN])> {
+        self.derive(salt, HKDF_INFO)
+    }
+
+    fn derive(&self, salt: &[u8; SALT_LEN], info: &[u8]) -> Result<(LessSafeKey, [u8; NONCE_LEN])> {
         let prk = hkdf::Salt::new(hkdf::HKDF_SHA256, salt).extract(self.key.as_ref());
+        let info = [info];
         let okm = prk
-            .expand(&[HKDF_INFO], Len44)
+            .expand(&info, Len44)
             .map_err(|_| SyncError::Crypto("hkdf"))?;
         let mut out = Zeroizing::new([0u8; 44]);
         okm.fill(out.as_mut())
@@ -142,6 +147,76 @@ pub fn seal(change: &Change, author: &DeviceKeys, key: &GroupKey) -> Result<Vec<
     out.extend_from_slice(&salt);
     out.extend_from_slice(&sealed);
     Ok(out)
+}
+
+/// Signs `body` with `signer` and seals `signature ‖ body` with `key`, like an envelope but
+/// with its own HKDF label and associated data (`label`), so a sealed blob of one kind can
+/// never be opened as another (used for snapshots).
+pub(crate) fn seal_blob(
+    label: &[u8],
+    group: &GroupId,
+    body: &[u8],
+    signer: &DeviceKeys,
+    key: &GroupKey,
+) -> Result<Vec<u8>> {
+    let mut plain = Zeroizing::new(Vec::with_capacity(SIG_LEN + body.len()));
+    plain.extend_from_slice(&signer.sign(body));
+    plain.extend_from_slice(body);
+    let mut salt = [0u8; SALT_LEN];
+    aws_lc_rs::rand::fill(&mut salt).map_err(|_| SyncError::Crypto("random"))?;
+    let (aead, nonce) = key.derive(&salt, label)?;
+    let mut sealed = plain.to_vec();
+    aead.seal_in_place_append_tag(
+        Nonce::assume_unique_for_key(nonce),
+        Aad::from(blob_aad(label, group, key.epoch)),
+        &mut sealed,
+    )
+    .map_err(|_| SyncError::Crypto("seal"))?;
+    let mut out = Vec::with_capacity(HEADER_LEN + sealed.len());
+    out.push(CHANGE_VERSION as u8);
+    out.extend_from_slice(&group.0);
+    out.extend_from_slice(&key.epoch.to_be_bytes());
+    out.extend_from_slice(&salt);
+    out.extend_from_slice(&sealed);
+    Ok(out)
+}
+
+fn blob_aad(label: &[u8], group: &GroupId, epoch: u32) -> Vec<u8> {
+    let mut a = label.to_vec();
+    a.extend_from_slice(&group.0);
+    a.extend_from_slice(&epoch.to_be_bytes());
+    a
+}
+
+/// Opens a blob sealed with [`seal_blob`] and the same `label`, and checks its signature
+/// against `signer`. Returns the body.
+pub(crate) fn open_blob(
+    label: &[u8],
+    sealed: &[u8],
+    key: &GroupKey,
+    signer: &PublicIdentity,
+) -> Result<Vec<u8>> {
+    let head = header(sealed)?;
+    if head.epoch != key.epoch {
+        return Err(SyncError::Protocol("sealed with another epoch's key"));
+    }
+    let mut salt = [0u8; SALT_LEN];
+    salt.copy_from_slice(&sealed[21..HEADER_LEN]);
+    let (aead, nonce) = key.derive(&salt, label)?;
+    let mut buf = Zeroizing::new(sealed[HEADER_LEN..].to_vec());
+    let plain = aead
+        .open_in_place(
+            Nonce::assume_unique_for_key(nonce),
+            Aad::from(blob_aad(label, &head.group, head.epoch)),
+            &mut buf,
+        )
+        .map_err(|_| SyncError::Protocol("it doesn't open with the group key"))?;
+    if plain.len() < SIG_LEN {
+        return Err(SyncError::Protocol("too short"));
+    }
+    let (signature, body) = plain.split_at(SIG_LEN);
+    signer.verify(body, signature)?;
+    Ok(body.to_vec())
 }
 
 /// An opened envelope.

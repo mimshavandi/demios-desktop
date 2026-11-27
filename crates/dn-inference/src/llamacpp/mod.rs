@@ -781,6 +781,23 @@ impl InferenceBackend for LlamaCppBackend {
         Ok(Box::pin(ChannelStream::new(rx)))
     }
 
+    fn context_tokens(&self, h: &ModelHandle) -> Option<u32> {
+        self.get(h).ok().map(|l| l.n_ctx)
+    }
+
+    /// Renders and tokenizes the prompt exactly as [`generate`] does, without generating.
+    fn count_tokens(&self, h: &ModelHandle, req: &ChatRequest) -> Option<Result<u32>> {
+        let l = match self.get(h) {
+            Ok(l) => l,
+            Err(e) => return Some(Err(e)),
+        };
+        let thinking = self.reasoning.thinking(req);
+        Some(
+            prompt_tokens(&l, &prompt::turns(req), thinking)
+                .map(|(tokens, _)| u32::try_from(tokens.len()).unwrap_or(u32::MAX)),
+        )
+    }
+
     async fn embed(&self, h: &ModelHandle, input: &[String]) -> Result<Vec<Vec<f32>>> {
         let l = self.get(h)?;
         let _permit = acquire(&l.gate, GATE_WAIT).await?;
