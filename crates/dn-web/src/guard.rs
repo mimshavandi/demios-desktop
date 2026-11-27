@@ -9,8 +9,8 @@
 //!   loopback 127/8, link-local 169.254/16 (cloud metadata), IETF assignments 192.0.0/24,
 //!   the documentation and benchmarking ranges, the 6to4 relay 192.88.99/24, multicast
 //!   224/4 and reserved 240/4 (with broadcast) are refused.
-//! - **IPv6:** unspecified and loopback, IPv4-mapped and IPv4-compatible addresses (checked
-//!   as the IPv4 address inside), NAT64 64:ff9b::/96 (checked on the IPv4 inside) and the
+//! - **IPv6:** unspecified and loopback, IPv4-mapped, IPv4-translated and IPv4-compatible
+//!   addresses (checked as the IPv4 address inside), NAT64 64:ff9b::/96 (checked on the IPv4 inside) and the
 //!   local-use 64:ff9b:1::/48, discard 100::/64, the special-purpose 2001::/23 (Teredo and
 //!   others), documentation 2001:db8::/32, 6to4 2002::/16 (checked on the IPv4 inside),
 //!   unique-local fc00::/7, link-local fe80::/10, site-local fec0::/10 and multicast
@@ -96,7 +96,10 @@ pub fn check_v6(ip: Ipv6Addr) -> Result<(), Blocked> {
         return Err(Blocked("this computer (loopback)"));
     }
     // Addresses that carry an IPv4 address: checked as that address.
-    if v6_in(ip, net("::ffff:0:0"), 96) || v6_in(ip, net("::"), 96) {
+    if v6_in(ip, net("::ffff:0:0"), 96)
+        || v6_in(ip, net("::ffff:0:0:0"), 96)
+        || v6_in(ip, net("::"), 96)
+    {
         return check_v4(low_v4(ip));
     }
     if v6_in(ip, net("64:ff9b::"), 96) {
@@ -265,6 +268,7 @@ mod tests {
             "::ffff:169.254.169.254",
             "::ffff:10.0.0.1",
             "::127.0.0.1",
+            "::ffff:0:7f00:1",
             "64:ff9b::a9fe:a9fe",
             "64:ff9b:1::1",
             "100::1",

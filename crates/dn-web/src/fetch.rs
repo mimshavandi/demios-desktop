@@ -455,6 +455,16 @@ mod tests {
             ("http://localhost/", "loopback"),
             ("http://api.localhost./", "loopback"),
             ("http://100.100.100.200/", "carrier-grade"),
+            // Other spellings of 127.0.0.1 and 169.254.169.254; the URL parser
+            // normalises them to dotted form before the check.
+            ("http://2130706433/", "loopback"),
+            ("http://0x7f.1/", "loopback"),
+            ("http://0177.0.0.1/", "loopback"),
+            ("http://127.1/", "loopback"),
+            ("http://0xa9fea9fe/", "cloud metadata"),
+            ("http://[0:0:0:0:0:ffff:7f00:1]/", "loopback"),
+            ("http://[fd00:ec2::254]/", "unique-local"),
+            ("http://0.0.0.0/", "this network"),
             ("ftp://example.com/", "only http and https"),
             ("file:///etc/passwd", "only http and https"),
             ("http://user:pw@example.com/", "user name or password"),
