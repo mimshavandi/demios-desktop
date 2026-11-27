@@ -5,7 +5,9 @@
 //! 1. One system message: the system parts, the skills index, the core profile and
 //!    project knowledge (untrusted blocks with the notice), in that order.
 //! 2. The running summary, if any, as a second system message.
-//! 3. The stored conversation, as given.
+//! 3. The stored conversation. Tool results are wrapped as untrusted blocks named after
+//!    their tool (`tool:<name>`, with the call id) at render time, so the store keeps them as
+//!    the tool returned them.
 //! 4. The new input as the last user message, preceded by retrieved items (untrusted
 //!    blocks with the notice) and followed by the recap. Those two are for this turn only:
 //!    the store keeps just what the person wrote.
@@ -147,7 +149,7 @@ fn render(parts: &Parts, template: &ChatRequest) -> (ChatRequest, usize) {
             ),
         ));
     }
-    messages.extend(parts.turns.iter().cloned());
+    messages.extend(quote_tool_results(&parts.turns));
     let stable_through = messages.len();
     if let Some(input) = &parts.input {
         let mut m = input.clone();
@@ -172,6 +174,39 @@ fn render(parts: &Parts, template: &ChatRequest) -> (ChatRequest, usize) {
         ..template.clone()
     };
     (req, stable_through)
+}
+
+/// The turns with each tool result's text in an untrusted block. Tool output (MCP servers,
+/// the web, files) is someone else's text (ADR-0020 §2.4).
+fn quote_tool_results(turns: &[ChatMessage]) -> Vec<ChatMessage> {
+    let names: std::collections::HashMap<&str, &str> = turns
+        .iter()
+        .flat_map(|m| m.tool_calls.iter())
+        .map(|c| (c.id.as_str(), c.name.as_str()))
+        .collect();
+    turns
+        .iter()
+        .map(|m| {
+            if m.role != Role::Tool {
+                return m.clone();
+            }
+            let id = m.tool_call_id.clone().unwrap_or_default();
+            let name = names.get(id.as_str()).copied().unwrap_or("unknown");
+            let source = SourceRef::new(format!("tool:{name}")).attr("call", id.clone());
+            let mut q = m.clone();
+            q.content = m
+                .content
+                .iter()
+                .map(|p| match p {
+                    ContentPart::Text { text } => ContentPart::Text {
+                        text: untrusted::block(&source, text),
+                    },
+                    other => other.clone(),
+                })
+                .collect();
+            q
+        })
+        .collect()
 }
 
 /// The id a dropped item is recorded under.

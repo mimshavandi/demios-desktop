@@ -1458,6 +1458,7 @@ dependencies = [
 name = "dn-knowledge"
 version = "0.1.0"
 dependencies = [
+ "dn-core",
  "rusqlite",
  "serde",
  "serde_json",
