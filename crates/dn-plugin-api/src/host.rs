@@ -21,8 +21,8 @@
 //! target tool's tier, the chats in scope, and holding a background job's calls for the user.
 
 use crate::data::{
-    ChatMessage, ConversationSummary, HttpMethod, HttpRequest, HttpResponse, KnowledgeHit,
-    MemoryItem, ModelPrompt, ModelSlot, NewMemory, Row, SqlValue, ToolResult,
+    ChatMessage, ConversationSummary, HeldCall, HttpMethod, HttpRequest, HttpResponse,
+    KnowledgeHit, MemoryItem, ModelPrompt, ModelSlot, NewMemory, Row, SqlValue, ToolResult,
 };
 use crate::error::{ErrorKind, PluginError};
 use crate::id::{PluginId, check_name};
@@ -517,6 +517,39 @@ pub trait HostBackend: Send + Sync {
         request: HttpRequest,
     ) -> BoxFuture<'a, Result<(), PluginError>>;
 
+    /// The calls of `caller`'s add-on still waiting in the held queue (ADR-0013 §9.2), and
+    /// only those: the queue records which add-on put each call there. A host without a
+    /// held queue keeps this default.
+    fn held_list<'a>(
+        &'a self,
+        _caller: &'a Caller,
+    ) -> BoxFuture<'a, Result<Vec<HeldCall>, PluginError>> {
+        Box::pin(async { Err(no_held_queue()) })
+    }
+
+    /// Withdraws the add-on's held call `id`: it never runs, and its history says it was
+    /// withdrawn by the add-on. Refused for another add-on's call, and for a call that is
+    /// no longer held (approved, running or finished).
+    fn held_withdraw<'a>(
+        &'a self,
+        _caller: &'a Caller,
+        _id: Id,
+    ) -> BoxFuture<'a, Result<(), PluginError>> {
+        Box::pin(async { Err(no_held_queue()) })
+    }
+
+    /// Replaces the add-on's held call `id` with the same call and new `arguments`, in one
+    /// step: the old one is withdrawn and the new one held, linked to it. The host refuses
+    /// it when the tool is above what `caller` may call. Returns the new call.
+    fn held_replace<'a>(
+        &'a self,
+        _caller: &'a Caller,
+        _id: Id,
+        _arguments: serde_json::Value,
+    ) -> BoxFuture<'a, Result<HeldCall, PluginError>> {
+        Box::pin(async { Err(no_held_queue()) })
+    }
+
     /// Reads a file in the add-on's area. `path` is checked ([`check_path`]).
     fn file_read<'a>(
         &'a self,
@@ -659,6 +692,12 @@ impl Host {
 
     fn scope<T>(&self, f: impl FnOnce(&Grants) -> T) -> Result<T, PluginError> {
         self.grants.with(|s| f(&s.grants))
+    }
+
+    /// The add-on's own calls waiting for the user's answer (ADR-0013 §9.2). Like its own
+    /// data, it needs no permission: it only ever covers calls this add-on made.
+    pub fn held(&self) -> Held<'_> {
+        Held(self)
     }
 
     /// Conversations and messages (`chats.read`).
@@ -949,6 +988,45 @@ impl Secrets<'_> {
         check_name("secret name", name)?;
         h.gate(None, Op::DeleteOwn)?;
         h.backend.secret_delete(&h.caller, name.to_owned()).await
+    }
+}
+
+fn no_held_queue() -> PluginError {
+    PluginError::unavailable("Held calls aren't available in this version of Demios")
+}
+
+/// See [`Host::held`].
+pub struct Held<'h>(&'h Host);
+
+impl Held<'_> {
+    /// The add-on's calls still waiting for the user's answer, oldest first. Only calls this
+    /// add-on put in the queue.
+    pub async fn list(&self) -> Result<Vec<HeldCall>, PluginError> {
+        let h = self.0;
+        h.gate(None, Op::ReadOwn)?;
+        h.backend.held_list(&h.caller).await
+    }
+
+    /// Takes back the held call `id`, for example when the draft it would send was
+    /// discarded. It never runs. Only while it is held: once the user answered, this fails.
+    pub async fn withdraw(&self, id: Id) -> Result<(), PluginError> {
+        let h = self.0;
+        h.gate(None, Op::WriteOwn)?;
+        h.backend.held_withdraw(&h.caller, id).await
+    }
+
+    /// Replaces the held call `id` with the same call and new `arguments`, for example
+    /// after the draft it would send was edited. Every device then shows only the new
+    /// version, with what changed. Only while it is held, and only for a tool this handler
+    /// may call itself.
+    pub async fn replace(
+        &self,
+        id: Id,
+        arguments: serde_json::Value,
+    ) -> Result<HeldCall, PluginError> {
+        let h = self.0;
+        h.gate(None, Op::WriteOwn)?;
+        h.backend.held_replace(&h.caller, id, arguments).await
     }
 }
 

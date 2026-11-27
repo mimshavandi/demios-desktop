@@ -378,6 +378,39 @@ impl HostBackend for AppBackend {
         ready(Err(not_offered(caller, "the internet")))
     }
 
+    fn held_list<'a>(
+        &'a self,
+        caller: &'a Caller,
+    ) -> BoxFuture<'a, Result<Vec<dn_plugin_api::HeldCall>, PluginError>> {
+        let r = self
+            .app()
+            .and_then(|app| super::jobs::held_of_addon(&app, &caller.plugin_id));
+        ready(r)
+    }
+
+    fn held_withdraw<'a>(
+        &'a self,
+        caller: &'a Caller,
+        id: Id,
+    ) -> BoxFuture<'a, Result<(), PluginError>> {
+        let r = self
+            .app()
+            .and_then(|app| super::jobs::withdraw_held(&app, &caller.plugin_id, id));
+        ready(r)
+    }
+
+    fn held_replace<'a>(
+        &'a self,
+        caller: &'a Caller,
+        id: Id,
+        arguments: serde_json::Value,
+    ) -> BoxFuture<'a, Result<dn_plugin_api::HeldCall, PluginError>> {
+        let r = self
+            .app()
+            .and_then(|app| super::jobs::replace_held(&app, caller, id, arguments));
+        ready(r)
+    }
+
     fn file_read<'a>(
         &'a self,
         caller: &'a Caller,
