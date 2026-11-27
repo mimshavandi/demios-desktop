@@ -360,7 +360,20 @@ async fn run_approved(state: &Arc<AppState>, call: &HeldApproval) -> Result<(), 
         dn_tools::PluginCall {
             plugin_id: call.job.plugin.to_string(),
             name,
-            max_tier: dn_core::capability::RiskTier::Sensitive,
+            // The job's own tier (ADR-0013 §9.1); declared without one: today's access.
+            max_tier: state
+                .addons
+                .loaded()
+                .into_iter()
+                .find(|(m, _, _)| &m.id == plugin)
+                .and_then(|(_, _, r)| {
+                    r.jobs
+                        .iter()
+                        .find(|j| j.decl.id == call.job.job)
+                        .map(|j| j.decl.tier)
+                })
+                .ok_or_else(|| "The job is gone, so the call wasn't run.".to_owned())?
+                .unwrap_or(dn_core::capability::RiskTier::Sensitive),
             job: Some(dn_tools::JobCall {
                 id: call.job.job.clone(),
                 name: call.job.job.clone(),

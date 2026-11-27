@@ -209,8 +209,22 @@ impl HostBackend for AppBackend {
                 _ => None,
             };
             // A job's call needs a person, unless the person set that tool to run without
-            // asking for this add-on (not offered yet, so every call is held).
+            // asking for this add-on (not offered yet, so every call is held). A call above
+            // the job's tier is refused, never held (ADR-0013 §9.1).
             if let Some(job_id) = &job {
+                let tier = exec.call_tier(&capability_id).ok_or_else(|| {
+                    PluginError::not_allowed(format!("No tool `{capability_id}`"))
+                })?;
+                if tier > caller.max_tool_tier {
+                    return Err(PluginError::new(
+                        ErrorKind::TierLimit,
+                        format!(
+                            "{} can't use this tool from this job: it changes more than the \
+                             job may",
+                            caller.plugin_name
+                        ),
+                    ));
+                }
                 super::jobs::hold_tool(&app, caller, job_id, &capability_id, &arguments)?;
                 return Err(PluginError::new(
                     ErrorKind::Held,
