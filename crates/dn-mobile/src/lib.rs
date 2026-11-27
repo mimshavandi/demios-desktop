@@ -182,7 +182,8 @@ pub struct NodeInfo {
     pub protected_at_rest: bool,
     pub devices: u32,
     /// The person chose to accept connections from outside the Node's network (#308).
-    pub reachable_from_outside: bool,
+    /// `None` from an older Node that doesn't say: the app doesn't show it.
+    pub reachable_from_outside: Option<bool>,
 }
 
 /// A held call, with everything the review shows (ADR-0019 §4).
@@ -214,6 +215,13 @@ pub struct LinkPreview {
 
 fn now_secs() -> u64 {
     (dn_store::now_ms() / 1000) as u64
+}
+
+/// The words the app shows for `error`. Swift's own description of the enum is for
+/// debugging; this is the same text as on the desktop.
+#[uniffi::export]
+pub fn error_message(error: MobileError) -> String {
+    error.to_string()
 }
 
 /// Reads a pairing link (from the camera or pasted) without connecting.

@@ -89,7 +89,7 @@ async fn fake_node(confirm: bool) -> String {
                         secret_store_label: "Encrypted file".into(),
                         protected_at_rest: true,
                         devices: 2,
-                        reachable_from_outside: false,
+                        reachable_from_outside: Some(false),
                     }),
                     Message::HeldRequest => Message::Held {
                         items: vec![held()],
@@ -202,4 +202,13 @@ async fn a_relay_only_link_is_refused_with_a_reason() {
         Err(MobileError::RelayOnly)
     ));
     assert!(read_link(link).unwrap().through_relay);
+}
+
+#[test]
+fn the_app_shows_the_cores_words_for_an_error() {
+    assert_eq!(
+        error_message(MobileError::NotPaired),
+        "This phone isn't paired with a Node."
+    );
+    assert!(error_message(MobileError::RelayOnly).starts_with("This Node can be reached only"));
 }
