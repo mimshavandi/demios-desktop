@@ -14,7 +14,7 @@ type AddonApi = Pick<
   | "addonConsent"
   | "addonSetPermission"
   | "addonSetEnabled"
-  | "addonsSetUtcOffset"
+  | "addonsStartJobs"
   | "addonsPaused"
   | "addonsSetPaused"
   | "addonSetJobEnabled"
@@ -125,7 +125,7 @@ export function mockAddons(): AddonApi {
       enabled = on;
       return null;
     },
-    addonsSetUtcOffset: async () => null,
+    addonsStartJobs: async () => null,
     addonsPaused: async () => paused,
     addonsSetPaused: async (p) => {
       paused = p;

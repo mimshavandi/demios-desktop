@@ -510,3 +510,138 @@ fn raising_a_tools_tier_makes_it_ask_more_but_never_widens_its_handlers_access()
         assert!(e.to_string().contains("can only read"), "{e}");
     });
 }
+
+/// Jobs at a time of day follow this computer's time zone (#299): the same daylight-saving
+/// cases as the Node's (`dn_jobs::zone`), through the app's clock.
+mod time_zone {
+    use super::*;
+    use dn_jobs::scheduler::Clock;
+    use dn_jobs::zone::Zone;
+    use dn_plugin_api::LocalTime;
+    use jobs::{AppClock, ZoneSource};
+    use std::sync::Mutex as StdMutex;
+
+    /// Unix seconds of a UTC date and time (days from the civil calendar).
+    fn utc(y: i64, mo: i64, d: i64, h: i64, mi: i64) -> i64 {
+        let y = if mo <= 2 { y - 1 } else { y };
+        let era = y.div_euclid(400);
+        let yoe = y - era * 400;
+        let doy = (153 * (mo + if mo > 2 { -3 } else { 9 }) + 2) / 5 + d - 1;
+        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+        let days = era * 146_097 + doe - 719_468;
+        days * 86_400 + h * 3600 + mi * 60
+    }
+
+    fn clock(name: &'static str) -> AppClock {
+        AppClock::new(Box::new(move || Zone::named(name))).unwrap()
+    }
+
+    /// The run times of a daily job between two instants, asked minute by minute.
+    fn runs(zone: &dyn LocalTime, hour: u8, minute: u8, from: i64, to: i64) -> Vec<i64> {
+        let s = Schedule::DailyAt { hour, minute };
+        let (mut since, mut now, mut out) = (from, from, Vec::new());
+        while now <= to {
+            if let Some(due) = s.due_between(since, now, zone) {
+                assert_eq!(due.count, 1);
+                out.push(due.latest);
+                since = now;
+            }
+            now += 60;
+        }
+        out
+    }
+
+    #[test]
+    fn a_time_skipped_in_spring_runs_once_after_the_gap() {
+        let berlin = clock("Europe/Berlin");
+        let r = runs(
+            &berlin,
+            2,
+            30,
+            utc(2027, 3, 27, 12, 0),
+            utc(2027, 3, 29, 12, 0),
+        );
+        assert_eq!(r, [utc(2027, 3, 28, 1, 30), utc(2027, 3, 29, 0, 30)]);
+        let ny = clock("America/New_York");
+        let r = runs(&ny, 2, 30, utc(2027, 3, 13, 12, 0), utc(2027, 3, 15, 12, 0));
+        assert_eq!(r, [utc(2027, 3, 14, 7, 30), utc(2027, 3, 15, 6, 30)]);
+    }
+
+    #[test]
+    fn a_time_repeated_in_autumn_runs_once_the_first_time() {
+        let berlin = clock("Europe/Berlin");
+        let r = runs(
+            &berlin,
+            2,
+            30,
+            utc(2027, 10, 30, 12, 0),
+            utc(2027, 11, 1, 12, 0),
+        );
+        assert_eq!(r, [utc(2027, 10, 31, 0, 30), utc(2027, 11, 1, 1, 30)]);
+        let ny = clock("America/New_York");
+        let r = runs(&ny, 1, 30, utc(2027, 11, 6, 12, 0), utc(2027, 11, 8, 12, 0));
+        assert_eq!(r, [utc(2027, 11, 7, 5, 30), utc(2027, 11, 8, 6, 30)]);
+    }
+
+    #[test]
+    fn a_7am_job_stays_at_7am_local_across_the_change() {
+        let berlin = clock("Europe/Berlin");
+        let r = runs(
+            &berlin,
+            7,
+            0,
+            utc(2027, 3, 27, 12, 0),
+            utc(2027, 3, 29, 12, 0),
+        );
+        assert_eq!(r, [utc(2027, 3, 28, 5, 0), utc(2027, 3, 29, 5, 0)]);
+    }
+
+    /// A zone source a test can change, or make fail.
+    fn switchable(first: &'static str) -> (Box<ZoneSource>, Arc<StdMutex<Option<&'static str>>>) {
+        let current = Arc::new(StdMutex::new(Some(first)));
+        let c = current.clone();
+        let source: Box<ZoneSource> = Box::new(move || match *c.lock().unwrap() {
+            Some(name) => Zone::named(name),
+            None => Err("no time zone".into()),
+        });
+        (source, current)
+    }
+
+    #[test]
+    fn a_new_zone_is_picked_up_at_the_next_tick_and_a_failure_keeps_the_last() {
+        let (source, current) = switchable("Europe/Berlin");
+        let c = AppClock::new(source).unwrap();
+        let noon = utc(2027, 1, 15, 12, 0);
+        assert_eq!(c.to_local(noon) - noon, 3600);
+        *current.lock().unwrap() = Some("Asia/Tokyo");
+        let _ = c.now();
+        assert_eq!(c.to_local(noon) - noon, 9 * 3600);
+        *current.lock().unwrap() = None;
+        let _ = c.now();
+        assert_eq!(
+            c.to_local(noon) - noon,
+            9 * 3600,
+            "the zone read last stays"
+        );
+    }
+
+    #[test]
+    fn no_jobs_start_when_the_zone_cant_be_read() {
+        with_state(async |st| {
+            let (source, current) = switchable("Europe/Berlin");
+            *current.lock().unwrap() = None;
+            let e = st.addons.jobs.start_with(&st, source).unwrap_err();
+            assert!(e.contains("no time zone"), "{e}");
+            // A later start that can read it works.
+            *current.lock().unwrap() = Some("Europe/Berlin");
+            let (source, _) = switchable("Europe/Berlin");
+            st.addons.jobs.start_with(&st, source).unwrap();
+            st.addons.jobs.start(&st).unwrap();
+        });
+    }
+
+    #[test]
+    fn the_system_zone_is_readable_here() {
+        assert!(Zone::system().is_ok());
+    }
+}
