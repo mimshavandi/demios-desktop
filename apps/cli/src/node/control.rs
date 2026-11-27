@@ -17,6 +17,10 @@
 //! `dn node remove-device <id>` removes one, with the same rules as a removal from a paired
 //! device: its key is refused for good, and the group key rotates.
 //!
+//! **Rotating the records key** (`dn node rotate-records-key`, #335): the Node makes a new
+//! key for its synced records, re-seals them in batches, reporting how many are left, then
+//! deletes the old key and vacuums its database ([`dn_sync::at_rest`]).
+//!
 //! One pairing at a time. Messages are JSON, one per line, at most [`MAX_LINE`] bytes.
 
 use dn_sync::devices::DeviceKind;
@@ -40,6 +44,8 @@ pub enum Request {
     Devices,
     /// Remove a paired device (`dn node remove-device`).
     RemoveDevice { id: String },
+    /// Rotate the key the synced records are sealed with.
+    RotateRecordsKey,
 }
 
 /// One paired device, as `dn node devices` shows it.
@@ -85,10 +91,30 @@ pub enum Reply {
     Removed {
         name: String,
     },
+    /// A rotation's progress: records and conflicts still under the old key.
+    Resealing {
+        key: u32,
+        left: u64,
+    },
+    /// The rotation is done: everything is sealed with `key`, and the old keys are gone.
+    Rotated {
+        key: u32,
+    },
     Error {
         message: String,
     },
 }
+
+/// What a rotation needs from the running Node.
+#[derive(Clone)]
+pub struct Records {
+    pub db: Arc<std::sync::Mutex<dn_store::Connection>>,
+    pub records: Arc<dn_sync::at_rest::NodeRecords>,
+    pub secrets: Arc<dyn dn_secrets::SecretStore>,
+}
+
+/// Records and conflicts re-sealed per transaction, so devices aren't kept waiting long.
+pub const RESEAL_BATCH: usize = 500;
 
 /// A device that proved it has the code, waiting for the person's answer.
 pub struct Joining {
@@ -128,7 +154,7 @@ pub fn kind_name(kind: DeviceKind) -> &'static str {
 }
 
 #[cfg(unix)]
-pub use unix::{bind, client_pair, client_request, serve};
+pub use unix::{bind, client_pair, client_request, client_rotate, serve};
 
 #[cfg(unix)]
 mod unix {
@@ -207,6 +233,7 @@ mod unix {
         node: PublicIdentity,
         pairing: PairingState,
         ops: std::sync::Arc<dyn NodeOps>,
+        records: Records,
     ) {
         let Ok(owner) = owner_uid(&data_dir) else {
             eprintln!("dn node: control channel off: can't read the data folder's owner");
@@ -223,9 +250,10 @@ mod unix {
                     continue;
                 }
             }
-            let (node, pairing, ops) = (node, pairing.clone(), ops.clone());
+            let (node, pairing, ops, records) =
+                (node, pairing.clone(), ops.clone(), records.clone());
             tokio::spawn(async move {
-                if let Err(e) = session(stream, node, pairing, &*ops).await {
+                if let Err(e) = session(stream, node, pairing, &*ops, records).await {
                     eprintln!("dn node: control: {e}");
                 }
             });
@@ -237,6 +265,7 @@ mod unix {
         node: PublicIdentity,
         pairing: PairingState,
         ops: &dyn NodeOps,
+        records: Records,
     ) -> Result<(), String> {
         let (read, mut write) = stream.into_split();
         let mut reader = BufReader::new(read);
@@ -252,6 +281,13 @@ mod unix {
             Some(Request::RemoveDevice { id }) => {
                 let reply = match ops.remove(&id) {
                     Ok(name) => Reply::Removed { name },
+                    Err(message) => Reply::Error { message },
+                };
+                return write_line(&mut write, &reply).await;
+            }
+            Some(Request::RotateRecordsKey) => {
+                let reply = match rotate(&records, &mut write).await {
+                    Ok(key) => Reply::Rotated { key },
                     Err(message) => Reply::Error { message },
                 };
                 return write_line(&mut write, &reply).await;
@@ -308,6 +344,45 @@ mod unix {
         // However it ended, the code is gone.
         *pairing.lock().await = None;
         result
+    }
+
+    /// Rotates the records key, a batch at a time, reporting progress. The database is let
+    /// go between batches, so devices keep syncing.
+    async fn rotate(
+        r: &Records,
+        write: &mut tokio::net::unix::OwnedWriteHalf,
+    ) -> Result<u32, String> {
+        let lock = || r.db.lock().unwrap_or_else(|p| p.into_inner());
+        let keys = r.records.keys();
+        let started = keys
+            .rotate(&lock(), &*r.secrets)
+            .map_err(|e| format!("couldn't start the rotation: {e}"))?;
+        let mut left = started.left;
+        loop {
+            write_line(
+                write,
+                &Reply::Resealing {
+                    key: started.current,
+                    left,
+                },
+            )
+            .await?;
+            if left == 0 {
+                break;
+            }
+            left = keys
+                .reseal_batch(&lock(), RESEAL_BATCH)
+                .map_err(|e| format!("re-sealing stopped: {e}. Run it again to go on"))?;
+            tokio::task::yield_now().await;
+        }
+        // Another rotation may have left something under the old key in between.
+        if !keys
+            .finish(&lock(), &*r.secrets)
+            .map_err(|e| format!("couldn't remove the old key: {e}. Run it again to go on"))?
+        {
+            return Err("something is still sealed with the old key; run it again".into());
+        }
+        Ok(keys.current())
     }
 
     async fn pair_once(
@@ -372,6 +447,34 @@ mod unix {
         }
     }
 
+    /// `dn node rotate-records-key`: asks the running Node to rotate, showing progress.
+    /// Returns the new key's number.
+    pub async fn client_rotate(data_dir: &Path, mut show: impl FnMut(&str)) -> Result<u32, String> {
+        let path = data_dir.join(SOCKET_FILE);
+        let stream = UnixStream::connect(&path).await.map_err(|e| {
+            format!(
+                "couldn't reach the running Node at {}: {e}. Is `dn node run` running?",
+                path.display()
+            )
+        })?;
+        let (read, mut write) = stream.into_split();
+        let mut reader = BufReader::new(read);
+        write_line(&mut write, &Request::RotateRecordsKey).await?;
+        loop {
+            match read_line::<Reply>(&mut reader)
+                .await?
+                .ok_or("the Node closed the connection before the rotation finished; run it again to go on")?
+            {
+                Reply::Resealing { key, left } => {
+                    show(&format!("Re-sealing with key {key}: {left} left"));
+                }
+                Reply::Rotated { key } => return Ok(key),
+                Reply::Error { message } => return Err(message),
+                _ => return Err("the Node sent an unexpected reply".into()),
+            }
+        }
+    }
+
     /// `dn node pair`: asks the running Node for a code, shows it, and asks the person to
     /// compare the numbers.
     pub async fn client_pair(
@@ -415,8 +518,11 @@ mod unix {
                     return Err("Pairing stopped. Nothing was added.".into());
                 }
                 Reply::Error { message } => return Err(message),
-                Reply::Devices { .. } | Reply::Removed { .. } => {
-                    return Err("the Node answered something else".into());
+                Reply::Devices { .. }
+                | Reply::Removed { .. }
+                | Reply::Resealing { .. }
+                | Reply::Rotated { .. } => {
+                    return Err("the Node sent an unexpected reply".into());
                 }
             }
         }

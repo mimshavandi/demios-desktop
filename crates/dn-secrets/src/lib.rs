@@ -203,6 +203,23 @@ pub(crate) fn check(id: &SecretId, value: Option<&Secret>) -> Result<(), SecretE
     Ok(())
 }
 
+/// Set in CI's Rust test job (and by anyone who wants the same check locally): the OS
+/// keychain may then only be opened under a test service name, one ending in `.test`, so
+/// no test can read, overwrite or delete the app's real keys. `cargo test` of this crate
+/// checks the same without it. Tests use [`MemoryStore`].
+pub const TEST_KEYCHAIN_ONLY_ENV: &str = "DEMIOS_TEST_KEYCHAIN_ONLY";
+
+/// Panics when a test opens the real keychain (see [`TEST_KEYCHAIN_ONLY_ENV`]). A panic,
+/// not an error: callers may treat a keychain error as "no key", which would hide it.
+fn refuse_real_keychain_in_tests(service: &str) {
+    let guarded = cfg!(test) || std::env::var_os(TEST_KEYCHAIN_ONLY_ENV).is_some();
+    assert!(
+        !guarded || service.ends_with(".test"),
+        "a test opened the real OS keychain (service `{service}`): use MemoryStore, or a \
+         keychain test under a service name ending in `.test`"
+    );
+}
+
 /// OS keychain: macOS Keychain, Windows Credential Manager, Linux Secret Service.
 #[derive(Clone, Debug)]
 pub struct KeyringStore {
@@ -217,9 +234,9 @@ impl Default for KeyringStore {
 
 impl KeyringStore {
     pub fn new(service: impl Into<String>) -> Self {
-        Self {
-            service: service.into(),
-        }
+        let service = service.into();
+        refuse_real_keychain_in_tests(&service);
+        Self { service }
     }
 
     fn entry(&self, id: &SecretId) -> Result<keyring::Entry, SecretError> {
@@ -445,6 +462,12 @@ mod tests {
             Err(SecretError::EmptyValue(_))
         ));
         assert_eq!(SecretId::mcp("github").to_string(), "mcp/github");
+    }
+
+    #[test]
+    #[should_panic(expected = "a test opened the real OS keychain")]
+    fn a_test_cant_open_the_apps_real_keychain() {
+        let _ = KeyringStore::default();
     }
 
     /// Touches the real OS keychain; run with `cargo test -p dn-secrets -- --ignored`.

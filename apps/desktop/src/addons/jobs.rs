@@ -484,6 +484,94 @@ pub(crate) fn hold_tool(
     Ok(())
 }
 
+/// A held call as the add-on sees it (ADR-0013 §9.2).
+fn held_call(h: HeldApproval) -> Result<dn_plugin_api::HeldCall, PluginError> {
+    let arguments =
+        serde_json::from_str(&h.arguments).map_err(|e| PluginError::failed(e.to_string()))?;
+    Ok(dn_plugin_api::HeldCall::new(
+        h.id,
+        h.tool,
+        arguments,
+        h.summary,
+        h.created_at,
+        h.replaces,
+    ))
+}
+
+/// What an add-on is told when the queue refuses a withdrawal or a replacement.
+fn held_error(e: dn_jobs::JobsError) -> PluginError {
+    use dn_jobs::JobsError as E;
+    match e {
+        E::UnknownApproval => PluginError::not_allowed("There is no held call with that id"),
+        E::NotHeld | E::Expired | E::Withdrawn { .. } => {
+            PluginError::not_allowed(format!("That call isn't waiting any more: {e}"))
+        }
+        other => PluginError::failed(other.to_string()),
+    }
+}
+
+/// The add-on's own calls waiting for the person's answer.
+pub(crate) fn held_of_addon(
+    state: &AppState,
+    plugin: &PluginId,
+) -> Result<Vec<dn_plugin_api::HeldCall>, PluginError> {
+    let db = jobs_db(state).map_err(PluginError::unavailable)?;
+    let now = now();
+    held::waiting_for(&lock(&db), plugin, now)
+        .map_err(held_error)?
+        .into_iter()
+        .map(held_call)
+        .collect()
+}
+
+/// The add-on takes back its own held call.
+pub(crate) fn withdraw_held(
+    state: &AppState,
+    plugin: &PluginId,
+    id: dn_core::Id,
+) -> Result<(), PluginError> {
+    let db = jobs_db(state).map_err(PluginError::unavailable)?;
+    let now = now();
+    held::withdraw(&lock(&db), plugin, id, now).map_err(held_error)?;
+    state.addons.jobs.changed();
+    Ok(())
+}
+
+/// The add-on replaces its own held call with new arguments. The handler must be allowed
+/// to call the tool itself (ADR-0013 §9.1): replacing is asking for the call again.
+pub(crate) fn replace_held(
+    state: &AppState,
+    caller: &Caller,
+    id: dn_core::Id,
+    arguments: serde_json::Value,
+) -> Result<dn_plugin_api::HeldCall, PluginError> {
+    let db = jobs_db(state).map_err(PluginError::unavailable)?;
+    let now = now();
+    let conn = lock(&db);
+    let current = held::get(&conn, id).map_err(held_error)?;
+    if current.job.plugin != caller.plugin_id {
+        return Err(held_error(dn_jobs::JobsError::UnknownApproval));
+    }
+    let tier = state
+        .executor
+        .as_ref()
+        .and_then(|e| e.call_tier(&current.tool))
+        .ok_or_else(|| PluginError::not_allowed(format!("No tool `{}`", current.tool)))?;
+    if tier > caller.max_tool_tier {
+        return Err(PluginError::new(
+            dn_plugin_api::ErrorKind::TierLimit,
+            format!(
+                "{} can't ask for this call from here: it changes more than this part may",
+                caller.plugin_name
+            ),
+        ));
+    }
+    let new = held::replace(&conn, &caller.plugin_id, id, &arguments, now).map_err(held_error)?;
+    drop(conn);
+    state.addons.jobs.changed();
+    held_call(new)
+}
+
 /// Held calls and "Run it now?" questions, per add-on.
 pub fn waiting_counts(state: &AppState) -> HashMap<String, usize> {
     let mut out = HashMap::new();

@@ -35,6 +35,8 @@ const CONNECT_SECS: u64 = 10;
 pub struct PendingJoin {
     join: JoinPending<TcpStream>,
     link: PairingLink,
+    /// The Node's direct address from the link.
+    address: String,
 }
 
 #[derive(Default)]
@@ -102,6 +104,18 @@ fn device_name() -> String {
         .map(|n| n.trim().trim_end_matches(".local").to_owned())
         .filter(|n| !n.is_empty() && n.chars().count() <= 64)
         .unwrap_or_else(|| "This computer".to_owned())
+}
+
+/// The Node's direct address. A link that pairs only through the Relay (a Node on a rented
+/// server, ADR-0014 §4a) needs the Relay client, which this version doesn't have yet (#315).
+fn direct_address(link: &PairingLink) -> IpcResult<String> {
+    link.address.clone().ok_or_else(|| {
+        IpcError::new(
+            "node_relay_link",
+            "This Node can be reached only through a Relay, and this version of Demios can't \
+             pair through a Relay yet.",
+        )
+    })
 }
 
 fn link_problem(e: &SyncError) -> IpcError {
@@ -280,6 +294,7 @@ pub async fn join_begin(
 ) -> IpcResult<JoinStarted> {
     let now = (dn_store::now_ms() / 1000) as u64;
     let link = PairingLink::parse(link_text, now).map_err(|e| link_problem(&e))?;
+    let address = direct_address(&link)?;
     let st = state.clone();
     let keys = tauri::async_runtime::spawn_blocking(move || -> IpcResult<DeviceKeys> {
         if link::get(&*st.db()?)
@@ -299,21 +314,25 @@ pub async fn join_begin(
     if let Some(old) = pending.take() {
         let _ = old.join.cancel().await;
     }
-    let stream = open(&link.address)
+    let stream = open(&address)
         .await
-        .map_err(|e| connect_problem(&link.address, &e))?;
+        .map_err(|e| connect_problem(&address, &e))?;
     let join = tokio::time::timeout(
         Duration::from_secs(CONNECT_SECS),
         transport::join(stream, &keys, &link, &device_name(), DeviceKind::Desktop),
     )
     .await
     .unwrap_or(Err(SyncError::Io(std::io::ErrorKind::TimedOut.into())))
-    .map_err(|e| connect_problem(&link.address, &e))?;
+    .map_err(|e| connect_problem(&address, &e))?;
     let started = JoinStarted {
         numbers: join.numbers.groups(),
-        address: link.address.clone(),
+        address: address.clone(),
     };
-    *pending = Some(PendingJoin { join, link });
+    *pending = Some(PendingJoin {
+        join,
+        link,
+        address,
+    });
     Ok(started)
 }
 
@@ -323,13 +342,18 @@ pub async fn join_wait(
     state: &std::sync::Arc<AppState>,
     node: &NodeState,
 ) -> IpcResult<NodeOverview> {
-    let Some(PendingJoin { join, link }) = node.pending.lock().await.take() else {
+    let Some(PendingJoin {
+        join,
+        link,
+        address,
+    }) = node.pending.lock().await.take()
+    else {
         return Err(IpcError::new("node_no_join", "No pairing is waiting."));
     };
     let ch = join
         .answer()
         .await
-        .map_err(|e| connect_problem(&link.address, &e))?;
+        .map_err(|e| connect_problem(&address, &e))?;
     let _ = ch.close().await;
     let st = state.clone();
     tauri::async_runtime::spawn_blocking(move || -> IpcResult<()> {
@@ -337,7 +361,7 @@ pub async fn join_wait(
             &*st.db()?,
             &link.node,
             "Your Node",
-            &link.address,
+            &address,
             dn_store::now_ms(),
         )
         .map(|_| ())
@@ -560,6 +584,26 @@ mod tests {
             .await
             .unwrap_err();
         assert!(e.message.contains("dn node pair"), "{}", e.message);
+    }
+
+    /// A Node on a rented server, reachable only through the Relay: refused clearly until
+    /// the Relay client exists (#315), never tried at some other address.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_relay_only_link_is_refused_with_a_reason() {
+        let st = state();
+        let keys = DeviceKeys::generate().unwrap();
+        let b64 = dn_sync::b64::encode;
+        let expires = dn_store::now_ms() / 1000 + 600;
+        let link = format!(
+            "demios://pair?v=2&r=https://relay.example.net&m={}&n={}&s={}&e={expires}",
+            b64(&[3; 32]),
+            b64(&keys.public().to_bytes()),
+            b64(&[1; 16]),
+        );
+        let e = join_begin(&st, &st.node, &link).await.unwrap_err();
+        assert_eq!(e.code, "node_relay_link");
+        assert!(e.message.contains("Relay"), "{}", e.message);
+        assert!(overview(&st).await.unwrap().paired.is_none());
     }
 
     #[tokio::test(flavor = "multi_thread")]

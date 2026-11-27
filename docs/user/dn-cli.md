@@ -50,6 +50,8 @@ A `demios://models/add?…` link names a Hugging Face model, and can name one ve
 
 A Node is the Demios engine running as a service on a machine you own, such as a home PC, a Mac mini or a server, so background work can go on while the app is closed. It keeps your data on that machine, unencrypted while it works on it, so only run one on hardware you control.
 
+For pairing, what syncs, removing devices and the current limits, see [Your Demios Node](node.md).
+
 ```sh
 dn node init --data-dir /var/lib/demios --name "Home server" --secrets systemd-credential:demios-node --time-zone Europe/Berlin
 dn node run --data-dir /var/lib/demios
@@ -68,12 +70,15 @@ dn node run --data-dir /var/lib/demios
 - The Node refuses to start if API keys or tokens are set in environment variables (for example `OPENAI_API_KEY`), and refuses a secret store it can't open. It never falls back to another one.
 - **Pairing a device:** while `dn node run` is running, run `dn node pair --data-dir /var/lib/demios --address 192.168.1.20:7443` on the Node, as the same user. It shows a link that works once, for 10 minutes; open it on the device. When the device connects, `dn node pair` shows check numbers. Compare them with the device's screen, and type `yes` only if they match. Anything else, or closing `dn node pair`, adds nothing. On Windows this isn't available yet.
 - **In the app:** open **Settings → Node**, choose **Pair a Node**, and paste the link. The app shows the same check numbers; confirm on the Node with `yes`.
+- **Synced records at rest:** the projects, chats and messages the Node keeps are encrypted in its database, with a key kept in the Node's secret store. Someone who copies the database or a backup of it, without that key, can't read them. What stays readable: record ids, which messages belong to which chat, sizes, when each device changed something, and the device list. With `insecure-plaintext`, the key is in a plain file next to the database, so this protects nothing.
+- **Rotating that key:** while `dn node run` is running, run `dn node rotate-records-key --data-dir /var/lib/demios` as the same user. It makes a new key, re-seals the records with it in batches while devices keep syncing, then deletes the old key. If it stops partway, run it again to go on. A backup of the database made before still opens with the old key, if you kept a copy of the secret store from then. On Windows this isn't available yet.
+- If the secret store no longer has the records key (for example, the Node was moved without its keychain), the Node refuses to start and says which key is missing. It never makes a new key in its place.
 - **Devices:** while the Node runs, `dn node devices --data-dir /var/lib/demios` lists the paired devices with their ids. `dn node remove-device --data-dir /var/lib/demios <id>` removes one: it can't connect or sync again, and the other devices get new keys when they next sync. Its own copy of your data stays on it, so if you still have it, use **Delete all local data** there first. Use this for a device that's lost, or one that forgot the Node. The same removal is in **Settings → Node** on any paired device.
 - **Deleting the Node:** stop the Node, then run `dn node delete-all --data-dir /var/lib/demios`. It lists what it deletes and asks you to type the Node's name (or pass `--confirm "<name>"`). It deletes the Node's keys from its secret store, its database (chats, memory, jobs) and `node.json`, then the data folder if nothing else is in it. Files it didn't make are kept and named. Paired devices keep their own copies; in **Settings → Node** on each, choose **Forget this Node**. Uninstalling the Node doesn't delete its data folder; this command does. On Windows, `devices`, `remove-device` and `delete-all` aren't available yet (#261).
 - Not there yet:
   - a QR code in the terminal (the link holds the same thing);
   - a passphrase-protected store (`dn node unlock`);
-  - encrypting the Node's database file. Until then, use full-disk encryption on the Node.
+  - swap and crash dumps can hold decrypted data. Full-disk encryption on the Node still helps.
 
 ## Examples
 
