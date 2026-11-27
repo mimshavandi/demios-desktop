@@ -14,8 +14,8 @@
 //!   only for the new permissions.
 //! - **Tools** go to the executor through [`backend::ToolBridge`], so they take the same
 //!   path as tool-server tools. A handler that panics turns its add-on off until restart.
-//! - **Jobs** run through `dn-jobs`' scheduler ([`jobs`]), which starts once the window has
-//!   told the app its local time offset.
+//! - **Jobs** run through `dn-jobs`' scheduler ([`jobs`]), in this computer's time zone
+//!   with daylight saving (#299).
 
 pub mod backend;
 pub mod commands;

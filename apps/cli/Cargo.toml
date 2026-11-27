@@ -25,7 +25,6 @@ serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util", "net", "signal"] }
 sysinfo.workspace = true
-jiff.workspace = true
 
 [lints]
 workspace = true
