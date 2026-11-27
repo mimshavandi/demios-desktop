@@ -15,6 +15,7 @@
 //! - [`records`]: synced records, conflicts and tombstones (step 3).
 //! - [`session`]: a sync round between a device and its Node on the direct route (step 4).
 
+pub mod at_rest;
 pub mod b64;
 pub mod change;
 pub mod devices;
@@ -43,6 +44,7 @@ pub fn migrations() -> &'static [&'static str] {
         membership::MIGRATION,
         records::MIGRATION,
         session::MIGRATION,
+        at_rest::MIGRATION,
     ]
 }
 

@@ -139,6 +139,30 @@ pub trait Collection: Sync {
     fn children(&self, _conn: &Connection, _id: &str) -> Result<Vec<(&'static str, String)>> {
         Ok(Vec::new())
     }
+    /// The hash kept in `sync_fields` for a field's value. A device compares it with the
+    /// value it has, to find local edits. The Node never scans, and keys it so the hash
+    /// can't confirm a guess ([`crate::at_rest`]).
+    fn field_hash(&self, _id: &str, _field: &str, value: &Value) -> Result<Vec<u8>> {
+        Ok(value_hash(value))
+    }
+    /// A conflict's version not shown (JSON), as `sync_conflicts` keeps it. The Node seals
+    /// it ([`crate::at_rest`]).
+    fn seal_conflict(&self, _at: &ConflictAt<'_>, json: String) -> Result<String> {
+        Ok(json)
+    }
+    /// The JSON back from what [`Collection::seal_conflict`] kept.
+    fn open_conflict(&self, _at: &ConflictAt<'_>, kept: String) -> Result<String> {
+        Ok(kept)
+    }
+}
+
+/// Where a kept conflict version belongs: its record, field and the change that wrote it.
+#[derive(Clone, Copy, Debug)]
+pub struct ConflictAt<'a> {
+    pub id: &'a str,
+    pub field: &'a str,
+    pub author: DeviceId,
+    pub seq: u64,
 }
 
 fn store(e: dn_store::StoreError) -> SyncError {
@@ -346,7 +370,7 @@ fn field_write(conn: &Connection, col: &str, id: &str, field: &str) -> Result<Op
 #[allow(clippy::too_many_arguments)]
 fn record_field(
     conn: &Connection,
-    col: &str,
+    col: &dyn Collection,
     id: &str,
     field: &str,
     value: &Value,
@@ -360,10 +384,10 @@ fn record_field(
          ON CONFLICT (collection, id, field) DO UPDATE SET
             hash = excluded.hash, author = excluded.author, seq = excluded.seq, hlc = excluded.hlc",
         params![
-            col,
+            col.name(),
             id,
             field,
-            value_hash(value),
+            col.field_hash(id, field, value)?,
             author.to_hex(),
             seq as i64,
             hlc.0 as i64
@@ -543,8 +567,10 @@ fn emit(
             let mut changed = BTreeMap::new();
             for (field, _) in spec {
                 let v = now.get(*field).cloned().unwrap_or(Value::Null);
-                let same =
-                    field_write(tx, name, id, field)?.is_some_and(|w| w.hash == value_hash(&v));
+                let same = match field_write(tx, name, id, field)? {
+                    Some(w) => w.hash == col.field_hash(id, field, &v)?,
+                    None => false,
+                };
                 if !same {
                     changed.insert((*field).to_owned(), v.clone());
                     b.fields.push((name, id.to_owned(), (*field).to_owned(), v));
@@ -625,7 +651,8 @@ pub fn scan(
             "INSERT INTO sync_envelopes (author, seq, envelope) VALUES (?1, ?2, ?3)",
             params![change.author.to_hex(), change.seq as i64, envelope],
         )?;
-        for (col, id, field, value) in &b.fields {
+        for (name, id, field, value) in &b.fields {
+            let col = collection(cols, name)?;
             record_field(
                 &tx,
                 col,
@@ -638,7 +665,7 @@ pub fn scan(
             )?;
             if !field.is_empty() {
                 // An edit made after seeing the other versions settles them.
-                settle_conflicts(&tx, col, id, field, &change)?;
+                settle_conflicts(&tx, name, id, field, &change)?;
             }
         }
         for (col, id) in &b.purges {
@@ -741,7 +768,7 @@ pub fn apply(
                 col.write(&tx, id, fields)?;
                 record_field(
                     &tx,
-                    col.name(),
+                    col,
                     id,
                     "",
                     &Value::Null,
@@ -799,6 +826,15 @@ pub fn apply(
                                 } else {
                                     (value.clone(), change.author, change.seq, change.hlc)
                                 };
+                                let kept = col.seal_conflict(
+                                    &ConflictAt {
+                                        id,
+                                        field,
+                                        author: keep_author,
+                                        seq: keep_seq,
+                                    },
+                                    keep_value.to_string(),
+                                )?;
                                 tx.execute(
                                     "INSERT OR IGNORE INTO sync_conflicts
                                         (collection, id, field, value, author, seq, hlc)
@@ -807,7 +843,7 @@ pub fn apply(
                                         col.name(),
                                         id,
                                         field,
-                                        keep_value.to_string(),
+                                        kept,
                                         keep_author.to_hex(),
                                         keep_seq as i64,
                                         keep_hlc.0 as i64
@@ -825,7 +861,7 @@ pub fn apply(
                     for (field, value) in &winners {
                         record_field(
                             &tx,
-                            col.name(),
+                            col,
                             id,
                             field,
                             value,

@@ -67,10 +67,13 @@ dn node run --data-dir /var/lib/demios
 - The Node refuses to start if API keys or tokens are set in environment variables (for example `OPENAI_API_KEY`), and refuses a secret store it can't open. It never falls back to another one.
 - **Pairing a device:** while `dn node run` is running, run `dn node pair --data-dir /var/lib/demios --address 192.168.1.20:7443` on the Node, as the same user. It shows a link that works once, for 10 minutes; open it on the device. When the device connects, `dn node pair` shows check numbers. Compare them with the device's screen, and type `yes` only if they match. Anything else, or closing `dn node pair`, adds nothing. On Windows this isn't available yet.
 - **In the app:** open **Settings → Node**, choose **Pair a Node**, and paste the link. The app shows the same check numbers; confirm on the Node with `yes`.
+- **Synced records at rest:** the projects, chats and messages the Node keeps are encrypted in its database, with a key kept in the Node's secret store. Someone who copies the database or a backup of it, without that key, can't read them. What stays readable: record ids, which messages belong to which chat, sizes, when each device changed something, and the device list. With `insecure-plaintext`, the key is in a plain file next to the database, so this protects nothing.
+- **Rotating that key:** while `dn node run` is running, run `dn node rotate-records-key --data-dir /var/lib/demios` as the same user. It makes a new key, re-seals the records with it in batches while devices keep syncing, then deletes the old key. If it stops partway, run it again to go on. A backup of the database made before still opens with the old key, if you kept a copy of the secret store from then. On Windows this isn't available yet.
+- If the secret store no longer has the records key (for example, the Node was moved without its keychain), the Node refuses to start and says which key is missing. It never makes a new key in its place.
 - Not there yet:
   - a QR code in the terminal (the link holds the same thing);
   - a passphrase-protected store (`dn node unlock`);
-  - encrypting the Node's database file. Until then, use full-disk encryption on the Node.
+  - swap and crash dumps can hold decrypted data. Full-disk encryption on the Node still helps.
 
 ## Examples
 
