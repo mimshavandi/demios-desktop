@@ -88,6 +88,22 @@ prompt each time, so nothing can be reused) and warm (the same prompt after a pr
 so a backend that reuses prefixes can; `cached_input_tokens` shows whether it did). Cases are
 data (`dn.speed.v1`), so new ones are added to a file.
 
+Two kinds time what prompt reuse is for:
+
+- `next_turn`: a chat's second turn after a 2k, 8k or 16k-token first message;
+- `switch_back`: going back to a chat after another one.
+
+Whether those are cold or warm is the model's setting, not the case's. Run the suite twice to
+compare:
+
+```bash
+dn eval speed <model>
+dn eval speed <model> --prompt-cache
+dn eval speed <model> --prompt-cache --draft <smaller model of the same family>
+```
+
+With `--draft`, each run's result also counts the drafted and accepted tokens.
+
 ## Not yet
 
 These are tracked as issues:
@@ -97,5 +113,4 @@ These are tracked as issues:
 - earlier sessions in memory cases (with memory, R3);
 - embeddings in LongMemEval's retrieval mode (keyword search only for now);
 - the app's own system prompt in `dn eval parity` (it moves into the shared runtime in R1);
-- speed cases for long prefixes, switching chats, restarts with restored slots and draft
-  models (with R2).
+- a speed case for a restart with restored slots (with the Node's saved slots, R2).

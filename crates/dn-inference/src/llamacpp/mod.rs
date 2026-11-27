@@ -1,13 +1,19 @@
 //! In-process llama.cpp backend (`llama-cpp-2` bindings). Metal on macOS, CPU elsewhere;
 //! CUDA / Vulkan behind the `cuda` / `vulkan` cargo features.
 //!
-//! Each `chat` call runs on its own OS thread with a fresh context (KV cache) over the shared,
-//! mmapped weights, and streams through a bounded channel. One call runs per loaded model at
-//! a time (a semaphore; a context pool can come later), so memory stays what the fit
-//! estimator planned; a call that can't get the slot within 2 s fails with
-//! [`InferenceError::Busy`] (`ModelUnavailable`) rather than waiting forever. Dropping the stream closes the channel; the thread notices between
-//! prompt batches or on its next token and stops. A panic in generation becomes an `Err`
-//! item, never a silently ended stream.
+//! Each loaded model has one thread ([`worker`]) that owns its chat context (KV cache) over
+//! the shared, mmapped weights while the model is loaded, and streams through a bounded
+//! channel. One call runs per loaded model at a time (a semaphore), so memory stays what the
+//! fit estimator planned; a call that can't get the slot within 2 s fails with
+//! [`InferenceError::Busy`] (`ModelUnavailable`) rather than waiting forever. Dropping the
+//! stream closes the channel; the thread notices between prompt batches or on its next token
+//! and stops. A panic in generation becomes an `Err` item, never a silently ended stream.
+//!
+//! Prompt reuse ([`LoadOptions::prompt_cache`], ADR-0020 §6): the context keeps the last
+//! call's tokens, and recent other sequences wait in RAM, so a call decodes only what's new
+//! after the longest prefix it shares with one of them ([`slots`]). `Usage::cached_input_tokens`
+//! says how many it kept. Recurrent and hybrid models can't cut their cache partway; they
+//! always decode in full, and [`ModelInfo::prompt_reuse`] says why.
 //!
 //! Chat templates: every chat renders with the model's own Jinja template through minijinja,
 //! sandboxed ([`jinja`]). The template is the GGUF's `tokenizer.chat_template`, or, for a
@@ -28,18 +34,23 @@
 //!
 //! No `unsafe` here: all FFI stays inside `llama-cpp-2`.
 
+mod draft;
 mod jinja;
+mod slots;
 mod utf8;
+mod worker;
+
+pub use worker::CacheStats;
 
 use crate::backend::{TokenStream, normalize};
 use crate::prompt::{self, Turn};
 use crate::stream::{ChannelStream, Item};
-use crate::tags::{self, TagParser};
+use crate::tags;
 use crate::{
     BackendCaps, InferenceBackend, InferenceError, KvCacheQuant, LoadOptions, ModelHandle,
     ModelLocation, ModelSpec, MoeOffload, Result,
 };
-use dn_core::chat::{ChatRequest, FinishReason, StreamEvent, Usage};
+use dn_core::chat::{ChatRequest, StreamEvent};
 use dn_providers::ReasoningPolicy;
 use llama_cpp_2::context::LlamaContext;
 use llama_cpp_2::context::params::{KvCacheType, LlamaContextParams, LlamaPoolingType};
@@ -55,9 +66,7 @@ use std::ffi::CString;
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Instant;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
-use utf8::Utf8Buf;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 
 /// llama.cpp can only be initialised once per process.
 fn global_backend() -> Result<&'static LlamaBackend> {
@@ -115,12 +124,30 @@ struct Loaded {
     n_ctx: u32,
     opts: LoadOptions,
     path: std::path::PathBuf,
+    /// Whether the KV cache can be cut after a prefix; the reason when it can't.
+    prefix_reuse: std::result::Result<(), String>,
+    /// Sliding-window attention: tokens per window, for models that have it.
+    swa_window: Option<u32>,
+    /// The draft model for speculative decoding, when one was asked for.
+    draft: Option<DraftLoaded>,
+}
+
+struct DraftLoaded {
+    model: LlamaModel,
+    path: std::path::PathBuf,
+    max_tokens: usize,
+}
+
+/// A loaded model and its worker thread's job queue. Dropping it ends the thread.
+struct Entry {
+    loaded: Arc<Loaded>,
+    jobs: std::sync::mpsc::Sender<worker::Job>,
 }
 
 /// The default local backend.
 #[derive(Default)]
 pub struct LlamaCppBackend {
-    models: Mutex<HashMap<u64, Arc<Loaded>>>,
+    models: Mutex<HashMap<u64, Entry>>,
     next_id: AtomicU64,
     reasoning: ReasoningPolicy,
 }
@@ -148,6 +175,10 @@ pub struct ModelInfo {
     pub n_ctx: u32,
     /// The model has a chat template that compiles.
     pub has_chat_template: bool,
+    /// Prompt reuse between calls: `on`, `off`, or `not supported: <reason>`.
+    pub prompt_reuse: String,
+    /// The draft model's path, when speculative decoding is on.
+    pub draft: Option<String>,
 }
 
 /// One `dn bench` measurement (llama-bench style: fixed token counts, EOS ignored).
@@ -217,12 +248,34 @@ impl LlamaCppBackend {
     }
 
     fn get(&self, h: &ModelHandle) -> Result<Arc<Loaded>> {
+        Ok(self.entry(h)?.0)
+    }
+
+    fn entry(
+        &self,
+        h: &ModelHandle,
+    ) -> Result<(Arc<Loaded>, std::sync::mpsc::Sender<worker::Job>)> {
         self.models
             .lock()
             .map_err(|_| InferenceError::Runtime("model table poisoned".into()))?
             .get(&h.id)
-            .cloned()
+            .map(|e| (e.loaded.clone(), e.jobs.clone()))
             .ok_or(InferenceError::UnknownHandle(h.id))
+    }
+
+    /// Sends `job` to the model's worker.
+    fn submit(jobs: &std::sync::mpsc::Sender<worker::Job>, job: worker::Job) -> Result<()> {
+        jobs.send(job)
+            .map_err(|_| InferenceError::Runtime("the model's worker has stopped".into()))
+    }
+
+    /// What the model's prompt cache holds now.
+    pub async fn cache_stats(&self, h: &ModelHandle) -> Result<CacheStats> {
+        let (_, jobs) = self.entry(h)?;
+        let (reply, rx) = oneshot::channel();
+        Self::submit(&jobs, worker::Job::Stats { reply })?;
+        rx.await
+            .map_err(|_| InferenceError::Runtime("the model's worker has stopped".into()))
     }
 
     pub fn model_info(&self, h: &ModelHandle) -> Result<ModelInfo> {
@@ -235,16 +288,31 @@ impl LlamaCppBackend {
             n_ctx_train: l.model.n_ctx_train(),
             n_ctx: l.n_ctx,
             has_chat_template: l.chat.is_ok(),
+            prompt_reuse: match (&l.prefix_reuse, l.opts.prompt_cache.enabled) {
+                (Err(why), _) => format!("not supported: {why}"),
+                (Ok(()), true) => "on".into(),
+                (Ok(()), false) => "off".into(),
+            },
+            draft: l.draft.as_ref().map(|d| d.path.display().to_string()),
         })
     }
 
     /// Prompt-processing and generation throughput with exactly `n_prompt` / `n_gen` tokens.
     pub async fn bench(&self, h: &ModelHandle, n_prompt: u32, n_gen: u32) -> Result<BenchRun> {
-        let l = self.get(h)?;
-        let _permit = acquire(&l.gate, GATE_WAIT).await?;
-        tokio::task::spawn_blocking(move || bench_blocking(&l, n_prompt, n_gen))
-            .await
-            .map_err(|e| InferenceError::Runtime(e.to_string()))?
+        let (l, jobs) = self.entry(h)?;
+        let permit = acquire(&l.gate, GATE_WAIT).await?;
+        let (reply, rx) = oneshot::channel();
+        Self::submit(
+            &jobs,
+            worker::Job::Bench {
+                n_prompt,
+                n_gen,
+                reply,
+                permit,
+            },
+        )?;
+        rx.await
+            .map_err(|_| InferenceError::Runtime("the model's worker has stopped".into()))?
     }
 }
 
@@ -281,7 +349,14 @@ async fn acquire(gate: &Arc<Semaphore>, wait: std::time::Duration) -> Result<Own
 /// pays for the failed attempt.
 fn context<'m>(l: &'m Loaded, embeddings: bool) -> Result<LlamaContext<'m>> {
     with_kv_fallback(l.opts.kv_cache, &l.kv_f16_only, |kv| {
-        context_with(l, embeddings, kv)
+        context_with(l, &l.model, embeddings, kv)
+    })
+}
+
+/// A context for the draft model, with the target's size and settings.
+fn draft_context<'m>(l: &'m Loaded, d: &'m DraftLoaded) -> Result<LlamaContext<'m>> {
+    with_kv_fallback(l.opts.kv_cache, &l.kv_f16_only, |kv| {
+        context_with(l, &d.model, false, kv)
     })
 }
 
@@ -303,7 +378,12 @@ fn with_kv_fallback<T>(
     }
 }
 
-fn context_with<'m>(l: &'m Loaded, embeddings: bool, kv: KvCacheQuant) -> Result<LlamaContext<'m>> {
+fn context_with<'m>(
+    l: &Loaded,
+    model: &'m LlamaModel,
+    embeddings: bool,
+    kv: KvCacheQuant,
+) -> Result<LlamaContext<'m>> {
     let t = threads(&l.opts);
     let mut p = LlamaContextParams::default()
         .with_n_ctx(NonZeroU32::new(l.n_ctx))
@@ -328,7 +408,7 @@ fn context_with<'m>(l: &'m Loaded, embeddings: bool, kv: KvCacheQuant) -> Result
             LlamaPoolingType::Mean
         });
     }
-    l.model
+    model
         .new_context(global_backend()?, p)
         .map_err(|e| InferenceError::Runtime(format!("context: {e}")))
 }
@@ -389,15 +469,81 @@ fn load_blocking(spec: &ModelSpec, opts: &LoadOptions) -> Result<Loaded> {
         Some(src) => jinja::ChatTemplate::new(src, &piece(vocab.bos()), &piece(vocab.eos()))
             .map_err(|e| InferenceError::ChatTemplate(e.to_string())),
     };
+    let prefix_reuse = if model.is_recurrent() {
+        Err("the model is recurrent, so its cache can't be cut after a prefix".to_string())
+    } else if model.is_hybrid() {
+        Err("the model has recurrent layers, so its cache can't be cut after a prefix".to_string())
+    } else {
+        Ok(())
+    };
+    let arch = model
+        .meta_val_str("general.architecture")
+        .unwrap_or_default();
+    let swa_window = model
+        .meta_val_str(&format!("{arch}.attention.sliding_window"))
+        .ok()
+        .and_then(|v| v.trim().parse::<u32>().ok())
+        .filter(|&w| w > 0);
+    let draft = match &opts.draft {
+        None => None,
+        Some(d) => Some(load_draft(
+            backend,
+            &model,
+            &prefix_reuse,
+            d,
+            gpu_layers,
+            opts.mmap,
+        )?),
+    };
     Ok(Loaded {
         model,
         chat,
         thinks,
+        prefix_reuse,
+        swa_window,
+        draft,
         kv_f16_only: std::sync::atomic::AtomicBool::new(false),
         gate: Arc::new(Semaphore::new(1)),
         n_ctx,
         opts: opts.clone(),
         path: path.clone(),
+    })
+}
+
+/// Loads `d` as the draft for `target`, or fails with why it can't draft for it.
+fn load_draft(
+    backend: &LlamaBackend,
+    target: &LlamaModel,
+    target_reuse: &std::result::Result<(), String>,
+    d: &crate::DraftModel,
+    gpu_layers: u32,
+    mmap: bool,
+) -> Result<DraftLoaded> {
+    let fail =
+        |why: String| InferenceError::Load(format!("draft model {}: {why}", d.path.display()));
+    if let Err(why) = target_reuse {
+        return Err(fail(format!(
+            "speculative decoding needs a cache that can be cut after a prefix, and {why}"
+        )));
+    }
+    if !d.path.is_file() {
+        return Err(InferenceError::NotFound(d.path.display().to_string()));
+    }
+    let params = LlamaModelParams::default()
+        .with_n_gpu_layers(gpu_layers)
+        .with_use_mmap(mmap);
+    let model =
+        LlamaModel::load_from_file(backend, &d.path, &params).map_err(|e| fail(e.to_string()))?;
+    if model.is_recurrent() || model.is_hybrid() {
+        return Err(fail(
+            "it has recurrent layers, so its cache can't be cut after a prefix".into(),
+        ));
+    }
+    draft::compatible(target, &model).map_err(fail)?;
+    Ok(DraftLoaded {
+        model,
+        path: d.path.clone(),
+        max_tokens: (d.max_tokens as usize).max(draft::MIN_K),
     })
 }
 
@@ -536,33 +682,6 @@ fn seed() -> u32 {
         .unwrap_or(42)
 }
 
-/// Decode `tokens` from position 0 in `n_batch` chunks; logits only for the last token.
-/// Returns `false` if `cancelled` turned true between batches.
-fn decode_prompt(
-    ctx: &mut LlamaContext<'_>,
-    tokens: &[LlamaToken],
-    n_batch: usize,
-    batch: &mut LlamaBatch<'_>,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<bool> {
-    let last = tokens.len().saturating_sub(1);
-    for (ci, chunk) in tokens.chunks(n_batch).enumerate() {
-        if cancelled() {
-            return Ok(false);
-        }
-        batch.clear();
-        for (j, &t) in chunk.iter().enumerate() {
-            let i = ci * n_batch + j;
-            batch
-                .add(t, i as i32, &[0], i == last)
-                .map_err(|e| InferenceError::Runtime(e.to_string()))?;
-        }
-        ctx.decode(batch)
-            .map_err(|e| InferenceError::Runtime(format!("decode: {e}")))?;
-    }
-    Ok(true)
-}
-
 fn send(tx: &mpsc::Sender<Item>, ev: StreamEvent) -> bool {
     tx.blocking_send(Ok(ev)).is_ok()
 }
@@ -578,84 +697,6 @@ fn piece(vocab: &llama_cpp_2::vocab::LlamaVocab<'_>, token: LlamaToken) -> Vec<u
         }
     }
     p
-}
-
-fn generate(l: &Loaded, req: &ChatRequest, thinking: bool, tx: &mpsc::Sender<Item>) -> Result<()> {
-    let (tokens, in_think) = prompt_tokens(l, &prompt::turns(req), thinking)?;
-    let vocab = l.model.vocab();
-    let n_prompt = tokens.len();
-    if n_prompt as u32 >= l.n_ctx {
-        return Err(InferenceError::ContextOverflow {
-            prompt: n_prompt,
-            n_ctx: l.n_ctx,
-        });
-    }
-    let room = l.n_ctx as usize - n_prompt;
-    let max_new = req.max_tokens.map_or(room, |m| (m as usize).min(room));
-
-    let mut ctx = context(l, false)?;
-    let n_batch = l.opts.n_batch.max(1) as usize;
-    let mut batch = LlamaBatch::new(n_batch, 1);
-    if !decode_prompt(&mut ctx, &tokens, n_batch, &mut batch, &|| tx.is_closed())? {
-        return Ok(());
-    }
-
-    let mut sampler = sampler(l, req)?;
-    let mut parser = TagParser::new()
-        .in_think(in_think)
-        .with_tools(!req.tools.is_empty());
-    let mut utf8 = Utf8Buf::default();
-    let mut pos = n_prompt as i32;
-    let mut generated = 0usize;
-    let mut finish = FinishReason::Length;
-    while generated < max_new {
-        if tx.is_closed() {
-            return Ok(());
-        }
-        let token = sampler.sample(&ctx, batch.n_tokens() - 1);
-        if vocab.is_eog(token) {
-            finish = FinishReason::Stop;
-            break;
-        }
-        generated += 1;
-        if let Some(s) = utf8.push(&piece(&vocab, token)) {
-            for ev in parser.push(&s) {
-                if !send(tx, ev) {
-                    return Ok(());
-                }
-            }
-        }
-        batch.clear();
-        batch
-            .add(token, pos, &[0], true)
-            .map_err(|e| InferenceError::Runtime(e.to_string()))?;
-        pos += 1;
-        ctx.decode(&mut batch)
-            .map_err(|e| InferenceError::Runtime(format!("decode: {e}")))?;
-    }
-    let tail = utf8.finish();
-    let mut evs = parser.push(&tail);
-    evs.extend(parser.finish());
-    for ev in evs {
-        if !send(tx, ev) {
-            return Ok(());
-        }
-    }
-    if parser.tool_calls() > 0 {
-        finish = FinishReason::ToolCalls;
-    }
-    send(
-        tx,
-        StreamEvent::Done {
-            finish_reason: finish,
-            usage: Usage {
-                input_tokens: n_prompt as u32,
-                output_tokens: generated as u32,
-                ..Default::default()
-            },
-        },
-    );
-    Ok(())
 }
 
 fn embed_blocking(l: &Loaded, input: &[String]) -> Result<Vec<Vec<f32>>> {
@@ -687,56 +728,6 @@ fn embed_blocking(l: &Loaded, input: &[String]) -> Result<Vec<Vec<f32>>> {
     Ok(out)
 }
 
-fn bench_blocking(l: &Loaded, n_prompt: u32, n_gen: u32) -> Result<BenchRun> {
-    if n_prompt + n_gen >= l.n_ctx {
-        return Err(InferenceError::ContextOverflow {
-            prompt: (n_prompt + n_gen) as usize,
-            n_ctx: l.n_ctx,
-        });
-    }
-    let vocab = l.model.vocab();
-    let seed_text = "The quick brown fox jumps over the lazy dog. ".repeat(64);
-    let base = vocab.tokenize(seed_text.as_bytes(), false, false);
-    let tokens: Vec<LlamaToken> = base
-        .iter()
-        .cycle()
-        .take(n_prompt as usize)
-        .copied()
-        .collect();
-    let mut ctx = context(l, false)?;
-    let n_batch = l.opts.n_batch.max(1) as usize;
-    let mut batch = LlamaBatch::new(n_batch, 1);
-
-    let t0 = Instant::now();
-    decode_prompt(&mut ctx, &tokens, n_batch, &mut batch, &|| false)?;
-    // decode() may return before the GPU finishes; wait so the timing is real.
-    ctx.synchronize();
-    let prompt_ms = t0.elapsed().as_secs_f64() * 1e3;
-
-    let mut sampler = LlamaSampler::greedy();
-    let t1 = Instant::now();
-    for pos in (n_prompt as i32..).take(n_gen as usize) {
-        let token = sampler.sample(&ctx, batch.n_tokens() - 1);
-        batch.clear();
-        batch
-            .add(token, pos, &[0], true)
-            .map_err(|e| InferenceError::Runtime(e.to_string()))?;
-        ctx.decode(&mut batch)
-            .map_err(|e| InferenceError::Runtime(format!("decode: {e}")))?;
-    }
-    ctx.synchronize();
-    let gen_ms = t1.elapsed().as_secs_f64() * 1e3;
-    let rate = |n: u32, ms: f64| if ms > 0.0 { n as f64 * 1e3 / ms } else { 0.0 };
-    Ok(BenchRun {
-        n_prompt,
-        n_gen,
-        prompt_ms,
-        gen_ms,
-        prompt_tokens_per_s: rate(n_prompt, prompt_ms),
-        gen_tokens_per_s: rate(n_gen, gen_ms),
-    })
-}
-
 impl InferenceBackend for LlamaCppBackend {
     fn name(&self) -> &'static str {
         "llamacpp"
@@ -759,37 +750,29 @@ impl InferenceBackend for LlamaCppBackend {
             .await
             .map_err(|e| InferenceError::Load(e.to_string()))??;
         let id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
+        let loaded = Arc::new(loaded);
+        let jobs = worker::spawn(loaded.clone())?;
         self.models
             .lock()
             .map_err(|_| InferenceError::Runtime("model table poisoned".into()))?
-            .insert(id, Arc::new(loaded));
+            .insert(id, Entry { loaded, jobs });
         Ok(ModelHandle::new(id, model_id))
     }
 
     async fn chat(&self, h: &ModelHandle, req: ChatRequest) -> Result<TokenStream> {
-        let l = self.get(h)?;
+        let (l, jobs) = self.entry(h)?;
         let thinking = self.reasoning.thinking(&req);
         let permit = acquire(&l.gate, GATE_WAIT).await?;
         let (tx, rx) = mpsc::channel::<Item>(64);
-        std::thread::Builder::new()
-            .name("dn-llamacpp-chat".into())
-            .spawn(move || {
-                let _active = ActiveGuard::new();
-                let _permit = permit;
-                let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    generate(&l, &req, thinking, &tx)
-                }));
-                let err = match r {
-                    Ok(Ok(())) => return,
-                    Ok(Err(e)) => e,
-                    Err(p) => InferenceError::Runtime(format!(
-                        "generation panicked: {}",
-                        panic_message(p.as_ref())
-                    )),
-                };
-                let _ = tx.blocking_send(Err(err.into()));
-            })
-            .map_err(|e| InferenceError::Runtime(e.to_string()))?;
+        Self::submit(
+            &jobs,
+            worker::Job::Chat {
+                req: Box::new(req),
+                thinking,
+                tx,
+                permit,
+            },
+        )?;
         Ok(Box::pin(ChannelStream::new(rx)))
     }
 

@@ -143,6 +143,64 @@ pub struct LoadOptions {
     pub n_batch: u32,
     /// Memory-map the weights (lets the OS page them; default on).
     pub mmap: bool,
+    /// Reuse prompt prefixes between calls (llama.cpp only).
+    #[serde(default)]
+    pub prompt_cache: PromptCache,
+    /// Speculative decoding with a smaller model of the same family (llama.cpp only).
+    #[serde(default)]
+    pub draft: Option<DraftModel>,
+}
+
+/// A draft model for speculative decoding (ADR-0020 §6). It must share the target's
+/// vocabulary; a pair that doesn't fails to load with the reason.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DraftModel {
+    pub path: std::path::PathBuf,
+    /// The most tokens drafted per step (the backend adjusts the length as it goes).
+    pub max_tokens: u32,
+}
+
+impl DraftModel {
+    pub const DEFAULT_MAX_TOKENS: u32 = 8;
+
+    pub fn new(path: impl Into<std::path::PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            max_tokens: Self::DEFAULT_MAX_TOKENS,
+        }
+    }
+}
+
+/// Prompt reuse between calls on a loaded model (ADR-0020 §6). Off by default until the speed
+/// suite shows the gain on each hardware tier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromptCache {
+    /// Keep the last call's tokens in the context and reuse the shared prefix.
+    pub enabled: bool,
+    /// RAM for sequences other than the live one, in bytes. When it's full, the least
+    /// recently used goes first.
+    pub ram_bytes: u64,
+}
+
+impl PromptCache {
+    /// RAM for saved sequences unless set: 2 GiB.
+    pub const DEFAULT_RAM_BYTES: u64 = 2 << 30;
+
+    pub fn on() -> Self {
+        Self {
+            enabled: true,
+            ..Self::default()
+        }
+    }
+}
+
+impl Default for PromptCache {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            ram_bytes: Self::DEFAULT_RAM_BYTES,
+        }
+    }
 }
 
 impl Default for LoadOptions {
@@ -155,6 +213,8 @@ impl Default for LoadOptions {
             threads: None,
             n_batch: 512,
             mmap: true,
+            prompt_cache: PromptCache::default(),
+            draft: None,
         }
     }
 }

@@ -39,7 +39,8 @@ pub use backend::{InferenceBackend, LoadedModel, TokenStream};
 pub use error::{InferenceError, Result};
 pub use stream::next_event;
 pub use types::{
-    BackendCaps, KvCacheQuant, LoadOptions, ModelHandle, ModelLocation, ModelSpec, MoeOffload,
+    BackendCaps, DraftModel, KvCacheQuant, LoadOptions, ModelHandle, ModelLocation, ModelSpec,
+    MoeOffload, PromptCache,
 };
 
 #[cfg(feature = "llamacpp")]

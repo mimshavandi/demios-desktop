@@ -12,8 +12,8 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use dn_core::chat::{ChatMessage, ChatRequest, Role, StreamEvent};
 use dn_core::model::{FitStatus, ModelRef};
 use dn_inference::{
-    InferenceBackend, KvCacheQuant, LlamaCppBackend, LoadOptions, LoadedModel, ModelSpec,
-    MoeOffload, OpenAiCompatBackend, next_event,
+    DraftModel, InferenceBackend, KvCacheQuant, LlamaCppBackend, LoadOptions, LoadedModel,
+    ModelSpec, MoeOffload, OpenAiCompatBackend, PromptCache, next_event,
 };
 use dn_models::fit::{GIB, KvType, MemoryKind};
 use dn_models::hub::{
@@ -157,6 +157,20 @@ pub struct LoadArgs {
     /// Load even when the fit estimator says the model won't fit.
     #[arg(long)]
     force: bool,
+    /// Reuse prompt prefixes between requests: the context keeps the last request's tokens,
+    /// and recent other ones wait in RAM (ADR-0020 §6).
+    #[arg(long)]
+    prompt_cache: bool,
+    /// RAM for the prompt cache's saved sequences, in MiB (default 2048).
+    #[arg(long, requires = "prompt_cache")]
+    prompt_cache_mib: Option<u64>,
+    /// Speculative decoding: a smaller GGUF of the same family that drafts tokens for the
+    /// model to check (ADR-0020 §6). It must share the model's vocabulary.
+    #[arg(long)]
+    draft: Option<PathBuf>,
+    /// The most tokens the draft model proposes per step (default 8).
+    #[arg(long, requires = "draft")]
+    draft_max: Option<u32>,
 }
 
 impl LoadArgs {
@@ -184,6 +198,18 @@ impl LoadArgs {
                 Some(KvArg::Q4_0) => KvCacheQuant::Q4_0,
             },
             threads: self.threads,
+            prompt_cache: PromptCache {
+                enabled: self.prompt_cache,
+                ram_bytes: self
+                    .prompt_cache_mib
+                    .map_or(PromptCache::DEFAULT_RAM_BYTES, |m| {
+                        m.saturating_mul(1 << 20)
+                    }),
+            },
+            draft: self.draft.as_ref().map(|p| DraftModel {
+                path: p.clone(),
+                max_tokens: self.draft_max.unwrap_or(DraftModel::DEFAULT_MAX_TOKENS),
+            }),
             ..Default::default()
         })
     }
@@ -461,6 +487,11 @@ async fn run(a: RunArgs) -> Result<(), String> {
                 info.n_ctx,
                 t0.elapsed().as_secs_f64(),
                 LlamaCppBackend::supports_gpu()
+            );
+            eprintln!(
+                "[dn] prompt reuse: {}; draft model: {}",
+                info.prompt_reuse,
+                info.draft.as_deref().unwrap_or("none")
             );
         }
         let r = ModelRef::Local {

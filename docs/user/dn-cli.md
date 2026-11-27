@@ -46,6 +46,13 @@ A `demios://models/add?…` link names a Hugging Face model, and can name one ve
 
 `dn run` and `dn bench` pick the context size, cache type and GPU layers that fit your machine, using the same estimate as `dn fit`. For a mixture-of-experts model that doesn't fit on the GPU, they keep some or all of its experts in CPU memory (`dn fit` prints this as the `preset` line); `--moe-cpu all` or `--moe-cpu <layers>` sets it yourself. Any option you set yourself wins. A model that won't fit is refused; pass `--force` to try anyway. `--no-auto` turns the automatic choice off.
 
+## Faster answers (preview)
+
+Both are off unless you ask for them, until the speed tests show the gain on each kind of computer:
+
+- **`--prompt-cache`:** the model keeps the last request's tokens, and recent other ones in memory (2 GB by default, `--prompt-cache-mib` to change it). A request that starts like an earlier one, such as the next turn of a chat, only processes what's new. Models with recurrent layers can't do this; `dn run -v` says so.
+- **`--draft <file>`:** a smaller model of the same family suggests the next few tokens and the model checks them all at once, so it writes faster. The answer is the same as without it. The two must share a vocabulary (for example Qwen3 32B with Qwen3 8B); if they don't, the model doesn't load and the message says what differs. The draft model needs memory of its own, which the automatic settings don't count yet.
+
 ## Demios Node (early preview)
 
 A Node is the Demios engine running as a service on a machine you own, such as a home PC, a Mac mini or a server, so background work can go on while the app is closed. It keeps your data on that machine, unencrypted while it works on it, so only run one on hardware you control.
