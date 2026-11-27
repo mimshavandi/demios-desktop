@@ -83,7 +83,7 @@ pub fn vector(conn: &Connection) -> Result<Vector> {
     Ok(v)
 }
 
-fn set_vector(conn: &Connection, author: DeviceId, seq: u64) -> Result<()> {
+pub(crate) fn set_vector(conn: &Connection, author: DeviceId, seq: u64) -> Result<()> {
     conn.execute(
         "INSERT INTO sync_vector (author, seq) VALUES (?1, ?2)
          ON CONFLICT (author) DO UPDATE SET seq = excluded.seq",
@@ -92,7 +92,7 @@ fn set_vector(conn: &Connection, author: DeviceId, seq: u64) -> Result<()> {
     Ok(())
 }
 
-fn clock(conn: &Connection) -> Result<HlcClock> {
+pub(crate) fn clock(conn: &Connection) -> Result<HlcClock> {
     let last: Option<i64> = conn
         .query_row("SELECT hlc FROM sync_clock WHERE id = 1", [], |r| r.get(0))
         .optional()?;
@@ -101,7 +101,7 @@ fn clock(conn: &Connection) -> Result<HlcClock> {
     })
 }
 
-fn save_clock(conn: &Connection, c: HlcClock) -> Result<()> {
+pub(crate) fn save_clock(conn: &Connection, c: HlcClock) -> Result<()> {
     conn.execute(
         "INSERT INTO sync_clock (id, hlc) VALUES (1, ?1)
          ON CONFLICT (id) DO UPDATE SET hlc = excluded.hlc",
@@ -172,27 +172,10 @@ pub enum Received {
 
 /// Keeps an opened envelope in the inbox. See the module notes.
 pub fn receive(conn: &Connection, opened: &Opened, now_ms: u64) -> Result<Received> {
-    keep_and_queue(conn, opened, now_ms, true)
+    keep_and_queue(conn, opened, now_ms)
 }
 
-/// Like [`receive_from_group`], for the Node: checks and keeps the envelope to pass on,
-/// without queueing it to apply (the Node holds no records).
-pub fn keep_from_group(
-    conn: &Connection,
-    chain: &crate::membership::Chain,
-    opened: &Opened,
-    now_ms: u64,
-) -> Result<Received> {
-    chain.accepts(&opened.change)?;
-    keep_and_queue(conn, opened, now_ms, false)
-}
-
-fn keep_and_queue(
-    conn: &Connection,
-    opened: &Opened,
-    now_ms: u64,
-    queue: bool,
-) -> Result<Received> {
+fn keep_and_queue(conn: &Connection, opened: &Opened, now_ms: u64) -> Result<Received> {
     let envelope = opened.envelope.as_slice();
     let c = &opened.change;
     let tx = conn.unchecked_transaction()?;
@@ -220,6 +203,20 @@ fn keep_and_queue(
         // Applied long ago and no longer listed (or it's our own change coming back).
         return Ok(Received::Duplicate);
     }
+    tx.execute(
+        "INSERT INTO sync_seen (author, seq, hash) VALUES (?1, ?2, ?3)",
+        params![hex(c.author), c.seq as i64, opened.hash.as_slice()],
+    )?;
+    tx.execute(
+        "INSERT OR IGNORE INTO sync_envelopes (author, seq, envelope) VALUES (?1, ?2, ?3)",
+        params![hex(c.author), c.seq as i64, envelope],
+    )?;
+    queue_in(&tx, c, envelope, now_ms)?;
+    tx.commit()?;
+    Ok(Received::Stored)
+}
+
+fn queue_in(tx: &Connection, c: &Change, envelope: &[u8], now_ms: u64) -> Result<()> {
     let deps = serde_json::to_string(
         &c.deps
             .0
@@ -229,19 +226,7 @@ fn keep_and_queue(
     )
     .map_err(|_| SyncError::Protocol("encode dependencies"))?;
     tx.execute(
-        "INSERT INTO sync_seen (author, seq, hash) VALUES (?1, ?2, ?3)",
-        params![hex(c.author), c.seq as i64, opened.hash.as_slice()],
-    )?;
-    tx.execute(
-        "INSERT OR IGNORE INTO sync_envelopes (author, seq, envelope) VALUES (?1, ?2, ?3)",
-        params![hex(c.author), c.seq as i64, envelope],
-    )?;
-    if !queue {
-        tx.commit()?;
-        return Ok(Received::Stored);
-    }
-    tx.execute(
-        "INSERT INTO sync_inbox (author, seq, deps, hlc, envelope, received_at)
+        "INSERT OR IGNORE INTO sync_inbox (author, seq, deps, hlc, envelope, received_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         params![
             hex(c.author),
@@ -252,8 +237,45 @@ fn keep_and_queue(
             now_ms as i64
         ],
     )?;
+    Ok(())
+}
+
+/// Queues for applying every kept envelope (`sync_envelopes`) that isn't applied or queued:
+/// what a Node kept before it applied changes itself (#294). `open` opens and checks each
+/// one. Returns how many were queued.
+pub fn queue_kept(
+    conn: &Connection,
+    open: impl Fn(&[u8]) -> Result<Opened>,
+    now_ms: u64,
+) -> Result<usize> {
+    let tx = conn.unchecked_transaction()?;
+    let v = vector(&tx)?;
+    let rows: Vec<(String, i64, Vec<u8>)> = tx
+        .prepare(
+            "SELECT e.author, e.seq, e.envelope FROM sync_envelopes e
+             WHERE NOT EXISTS (SELECT 1 FROM sync_inbox i WHERE i.author = e.author AND i.seq = e.seq)
+             ORDER BY e.author, e.seq",
+        )?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    let mut n = 0;
+    for (a, s, env) in rows {
+        let author = parse_device(&a)?;
+        let seq = u64::try_from(s).unwrap_or(0);
+        if v.includes(author, seq) {
+            continue;
+        }
+        let opened = open(&env)?;
+        if opened.change.author != author || opened.change.seq != seq {
+            return Err(SyncError::Protocol(
+                "a kept envelope isn't the change it was stored as",
+            ));
+        }
+        queue_in(&tx, &opened.change, &env, now_ms)?;
+        n += 1;
+    }
     tx.commit()?;
-    Ok(Received::Stored)
+    Ok(n)
 }
 
 /// [`receive`] for changes from the group: refuses an author that isn't a member, and a

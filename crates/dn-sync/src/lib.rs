@@ -14,6 +14,8 @@
 //! - [`membership`], [`group`]: the Node-signed membership chain and the group key (step 2).
 //! - [`records`]: synced records, conflicts and tombstones (step 3).
 //! - [`session`]: a sync round between a device and its Node on the direct route (step 4).
+//! - [`snapshot`]: snapshots and compaction, so a new device doesn't replay the whole
+//!   history (#294).
 
 pub mod at_rest;
 pub mod b64;
@@ -30,6 +32,7 @@ pub mod pairing;
 pub mod records;
 pub mod relay_pair;
 pub mod session;
+pub mod snapshot;
 pub mod transport;
 
 pub use devices::{Device, DeviceKind, DeviceList};
@@ -46,6 +49,7 @@ pub fn migrations() -> &'static [&'static str] {
         records::MIGRATION,
         session::MIGRATION,
         at_rest::MIGRATION,
+        snapshot::MIGRATION,
     ]
 }
 
@@ -98,6 +102,8 @@ pub enum SyncError {
     Refused(String),
     #[error("the local store refused a synced record: {0}")]
     Store(String),
+    #[error("not yet: {0}; the next sync tries again")]
+    NotYet(&'static str),
     #[error("database: {0}")]
     Db(#[from] rusqlite::Error),
 }
