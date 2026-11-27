@@ -46,6 +46,8 @@ pub enum Request {
     RemoveDevice { id: String },
     /// Rotate the key the synced records are sealed with.
     RotateRecordsKey,
+    /// Check and keep a licence file (`dn node licence add`, #377).
+    AddLicence { text: String },
 }
 
 /// One paired device, as `dn node devices` shows it.
@@ -64,6 +66,10 @@ pub trait NodeOps: Send + Sync {
     fn devices(&self) -> Result<Vec<DeviceRow>, String>;
     /// Removes the device with this id (hex); returns its name.
     fn remove(&self, id: &str) -> Result<String, String>;
+    /// Checks and keeps a licence file; returns what to tell the person.
+    fn add_licence(&self, text: &str) -> Result<String, String>;
+    /// Why pairing is refused right now (the licence), if it is.
+    fn pairing_refused(&self) -> Option<String>;
 }
 
 /// From the Node to `dn node pair`.
@@ -99,6 +105,10 @@ pub enum Reply {
     /// The rotation is done: everything is sealed with `key`, and the old keys are gone.
     Rotated {
         key: u32,
+    },
+    /// A licence was checked and kept.
+    LicenceAdded {
+        message: String,
     },
     Error {
         message: String,
@@ -270,7 +280,29 @@ mod unix {
         let (read, mut write) = stream.into_split();
         let mut reader = BufReader::new(read);
         let address = match read_line::<Request>(&mut reader).await? {
-            Some(Request::Pair { address }) => address,
+            Some(Request::Pair { address }) => {
+                if let Some(why) = ops.pairing_refused() {
+                    return write_line(
+                        &mut write,
+                        &Reply::Error {
+                            message: format!(
+                                "This Node can't pair devices: {why}. Add a licence with \
+                                 `dn node licence add --data-dir <dir> <file>`. {}.",
+                                crate::node::licence::GET_ONE
+                            ),
+                        },
+                    )
+                    .await;
+                }
+                address
+            }
+            Some(Request::AddLicence { text }) => {
+                let reply = match ops.add_licence(&text) {
+                    Ok(message) => Reply::LicenceAdded { message },
+                    Err(message) => Reply::Error { message },
+                };
+                return write_line(&mut write, &reply).await;
+            }
             Some(Request::Devices) => {
                 let reply = match ops.devices() {
                     Ok(devices) => Reply::Devices { devices },
@@ -521,7 +553,8 @@ mod unix {
                 Reply::Devices { .. }
                 | Reply::Removed { .. }
                 | Reply::Resealing { .. }
-                | Reply::Rotated { .. } => {
+                | Reply::Rotated { .. }
+                | Reply::LicenceAdded { .. } => {
                     return Err("the Node sent an unexpected reply".into());
                 }
             }

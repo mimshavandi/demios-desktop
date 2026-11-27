@@ -22,6 +22,7 @@ pub mod config;
 pub mod control;
 #[cfg(unix)]
 pub mod delete;
+pub mod licence;
 pub mod zone;
 
 use clap::Subcommand;
@@ -131,6 +132,23 @@ pub enum NodeCmd {
         #[arg(long)]
         data_dir: PathBuf,
     },
+    /// The Node's Pro or trial licence (checked offline; nothing is sent anywhere).
+    Licence {
+        #[command(subcommand)]
+        cmd: LicenceCmd,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum LicenceCmd {
+    /// Check a licence file and keep it in the Node's secret store. A running Node uses it
+    /// at once.
+    Add {
+        #[arg(long)]
+        data_dir: PathBuf,
+        /// The licence file you got.
+        file: PathBuf,
+    },
 }
 
 pub async fn command(cmd: NodeCmd) -> Result<(), String> {
@@ -184,6 +202,9 @@ pub async fn command(cmd: NodeCmd) -> Result<(), String> {
         NodeCmd::Devices { data_dir } => devices_command(&data_dir).await,
         NodeCmd::RemoveDevice { data_dir, id } => remove_command(&data_dir, &id).await,
         NodeCmd::DeleteAll { data_dir, confirm } => delete_all_command(&data_dir, confirm).await,
+        NodeCmd::Licence {
+            cmd: LicenceCmd::Add { data_dir, file },
+        } => licence_add_command(&data_dir, &file).await,
         #[cfg(unix)]
         NodeCmd::RotateRecordsKey { data_dir } => {
             let key = control::client_rotate(&data_dir, |text| eprintln!("{text}")).await?;
@@ -370,6 +391,31 @@ async fn shutdown_signal() {
     }
 }
 
+/// `dn node licence add`: through the running Node when there is one, so it uses the
+/// licence at once; otherwise straight into the secret store.
+async fn licence_add_command(data_dir: &Path, file: &Path) -> Result<(), String> {
+    let text = std::fs::read_to_string(file)
+        .map_err(|e| format!("couldn't read {}: {e}", file.display()))?;
+    #[cfg(unix)]
+    if data_dir.join(control::SOCKET_FILE).exists() {
+        let request = control::Request::AddLicence { text };
+        return match control::client_request(data_dir, &request).await? {
+            control::Reply::LicenceAdded { message } => {
+                eprintln!("{message} The running Node uses it now.");
+                Ok(())
+            }
+            _ => Err("the Node answered something else".into()),
+        };
+    }
+    config::check_private_dir(data_dir)?;
+    let config = NodeConfig::load(data_dir)?;
+    let store = server::open(&config.secrets.choice(), data_dir, &|k| std::env::var_os(k))
+        .map_err(|e| format!("couldn't open the secret store: {e}"))?;
+    let message = licence::add(&*store, licence::trusted(), &text, now_secs())?;
+    eprintln!("{message}");
+    Ok(())
+}
+
 fn now_secs() -> i64 {
     dn_store::now_ms() / 1000
 }
@@ -431,6 +477,10 @@ pub struct Node {
     listener: TcpListener,
     reach: Reach,
     scheduler: Arc<Scheduler>,
+    /// The licence's state, checked at start and while running (#377).
+    licence: Arc<licence::Gate>,
+    /// Asks the licence loop to check again now (after `dn node licence add`).
+    recheck: Arc<Notify>,
 }
 
 fn lock(db: &Mutex<Connection>) -> std::sync::MutexGuard<'_, Connection> {
@@ -474,6 +524,14 @@ impl Node {
             );
         }
         let store_ref: &dyn SecretStore = &*store;
+        // Before anything is created or changed (ADR-0014 §9a).
+        let licence_status = licence::check(store_ref, licence::trusted(), now_secs());
+        if let Some(why) = licence::refusal_to_start(&licence_status, &report.label) {
+            return Err(why);
+        }
+        if let Some(notice) = licence::ended_notice(&licence_status) {
+            eprintln!("{notice}");
+        }
         let keys = DeviceKeys::load_or_create(store_ref)
             .map_err(|e| format!("couldn't load this Node's keys: {e}"))?;
         let conn = dn_store::open(
@@ -566,6 +624,8 @@ impl Node {
             listener,
             reach: config.reach,
             scheduler,
+            licence: Arc::new(licence::Gate::new(licence_status)),
+            recheck: Arc::new(Notify::new()),
         })
     }
 
@@ -581,17 +641,20 @@ impl Node {
 
     /// Serves until `stop` is notified.
     pub async fn serve(self, stop: Arc<Notify>) -> Result<(), String> {
-        let scheduler = self.scheduler.clone();
-        let jobs_stop = Arc::new(Notify::new());
-        let jobs = {
-            let jobs_stop = jobs_stop.clone();
-            tokio::spawn(async move { scheduler.run(&jobs_stop).await })
-        };
+        let licence_stop = Arc::new(Notify::new());
+        let licence_loop = tokio::spawn(licence_loop(
+            self.licence.clone(),
+            self.secrets.clone(),
+            self.scheduler.clone(),
+            self.recheck.clone(),
+            licence_stop.clone(),
+        ));
         let slots = Arc::new(Semaphore::new(MAX_CONNECTIONS));
         let base = Arc::new(StatusBase {
             name: self.name,
             store: self.store,
             reach: self.reach,
+            licence: self.licence.clone(),
         });
         #[cfg(unix)]
         let control = {
@@ -603,6 +666,7 @@ impl Node {
                 secrets: self.secrets.clone(),
                 group: self.group.clone(),
                 records: self.records.clone(),
+                recheck: self.recheck.clone(),
             });
             tokio::spawn(control::serve(
                 self.control,
@@ -655,6 +719,7 @@ impl Node {
                 secrets: self.secrets.clone(),
                 group: self.group.clone(),
                 records: self.records.clone(),
+                recheck: self.recheck.clone(),
             };
             tokio::spawn(async move {
                 handle(stream, peer, &shared).await;
@@ -663,13 +728,71 @@ impl Node {
         }
         #[cfg(unix)]
         control.abort();
-        jobs_stop.notify_waiters();
-        self.scheduler.cancel_current();
-        match jobs.await {
+        licence_stop.notify_one();
+        licence_loop
+            .await
+            .map_err(|e| format!("the licence check failed: {e}"))?
+    }
+}
+
+/// Runs jobs only while the licence allows it: checks the licence at least once a day, at
+/// the moment it ends and when asked, and starts or stops the scheduler to match. Devices'
+/// sync and pairing read the same [`licence::Gate`].
+async fn licence_loop(
+    gate: Arc<licence::Gate>,
+    secrets: Arc<dyn SecretStore>,
+    scheduler: Arc<Scheduler>,
+    recheck: Arc<Notify>,
+    stop: Arc<Notify>,
+) -> Result<(), String> {
+    type Jobs = (Arc<Notify>, tokio::task::JoinHandle<dn_jobs::Result<()>>);
+    async fn stop_jobs(jobs: Jobs, scheduler: &Scheduler) -> Result<(), String> {
+        jobs.0.notify_waiters();
+        scheduler.cancel_current();
+        match jobs.1.await {
             Ok(Ok(())) => Ok(()),
             Ok(Err(e)) => Err(format!("the job scheduler stopped: {e}")),
             Err(e) => Err(format!("the job scheduler failed: {e}")),
         }
+    }
+    let mut jobs: Option<Jobs> = None;
+    let mut first = true;
+    loop {
+        let status = if first {
+            gate.get()
+        } else {
+            licence::check(&*secrets, licence::trusted(), now_secs())
+        };
+        if !first && status != gate.get() {
+            match licence::refusal(&status) {
+                None => eprintln!("dn node: the licence allows sync and jobs again"),
+                Some(why) => eprintln!("dn node: sync, jobs and pairing stopped: {why}"),
+            }
+        }
+        first = false;
+        gate.set(status.clone());
+        match (status.allows_use(), jobs.take()) {
+            (true, None) => {
+                let jobs_stop = Arc::new(Notify::new());
+                let run = {
+                    let (scheduler, jobs_stop) = (scheduler.clone(), jobs_stop.clone());
+                    tokio::spawn(async move { scheduler.run(&jobs_stop).await })
+                };
+                jobs = Some((jobs_stop, run));
+            }
+            (false, Some(running)) => stop_jobs(running, &scheduler).await?,
+            (_, kept) => jobs = kept,
+        }
+        let wait = licence::next_check_in(&status, now_secs());
+        tokio::select! {
+            () = stop.notified() => break,
+            () = recheck.notified() => {}
+            () = tokio::time::sleep(Duration::from_secs(wait.max(1) as u64)) => {}
+        }
+    }
+    match jobs {
+        Some(running) => stop_jobs(running, &scheduler).await,
+        None => Ok(()),
     }
 }
 
@@ -683,6 +806,7 @@ struct Shared {
     secrets: Arc<dyn SecretStore>,
     group: Arc<Mutex<NodeGroup>>,
     records: Arc<NodeRecords>,
+    recheck: Arc<Notify>,
 }
 
 /// Loads the group (creating it on first start), and brings it in line with the device
@@ -729,6 +853,7 @@ struct StatusBase {
     name: String,
     store: StoreReport,
     reach: Reach,
+    licence: Arc<licence::Gate>,
 }
 
 fn status(base: &StatusBase, db: &Mutex<Connection>) -> Result<NodeStatus, SyncError> {
@@ -741,6 +866,7 @@ fn status(base: &StatusBase, db: &Mutex<Connection>) -> Result<NodeStatus, SyncE
         protected_at_rest: base.store.protected_at_rest,
         devices: u32::try_from(devices).unwrap_or(u32::MAX),
         reachable_from_outside: Some(base.reach == Reach::Outside),
+        licence: Some(base.licence.get()),
     })
 }
 
@@ -831,6 +957,17 @@ fn remove_member(
 /// Node's own user reaches it (control.rs).
 #[cfg(unix)]
 impl control::NodeOps for Shared {
+    fn add_licence(&self, text: &str) -> Result<String, String> {
+        let message = licence::add(&*self.secrets, licence::trusted(), text, now_secs())?;
+        eprintln!("dn node: {message}");
+        self.recheck.notify_one();
+        Ok(message)
+    }
+
+    fn pairing_refused(&self) -> Option<String> {
+        self.base.licence.refusal()
+    }
+
     fn devices(&self) -> Result<Vec<control::DeviceRow>, String> {
         let members = DeviceList::members(&lock(&self.db))
             .map_err(|e| format!("couldn't read the device list: {e}"))?;
@@ -914,6 +1051,11 @@ async fn handle(stream: TcpStream, peer: SocketAddr, shared: &Shared) {
         }
     };
     let Some(device) = device else {
+        if let Some(why) = base.licence.refusal() {
+            eprintln!("dn node: refused pairing from {peer}: {why}");
+            let _ = channel.close().await;
+            return;
+        }
         #[cfg(unix)]
         pair_device(channel, peer, shared).await;
         #[cfg(not(unix))]
@@ -955,6 +1097,9 @@ async fn handle(stream: TcpStream, peer: SocketAddr, shared: &Shared) {
         }
         let reply = match message {
             Message::Done => break,
+            m if NodeSync::handles(&m) && base.licence.refusal().is_some() => Message::Refused {
+                reason: base.licence.refusal().unwrap_or_default(),
+            },
             m if NodeSync::handles(&m) => {
                 match sync.answer(device.id, m, dn_store::now_ms() as u64) {
                     Ok(reply) => reply,
@@ -1133,6 +1278,12 @@ mod tests {
     }
 
     fn init(dir: &Path, secrets: SecretsConfig) {
+        init_unlicensed(dir, secrets.clone());
+        add_licence(dir, &secrets, &licence::test_key::pro());
+    }
+
+    /// A Node folder with no licence yet.
+    fn init_unlicensed(dir: &Path, secrets: SecretsConfig) {
         NodeConfig::new(
             "Home server".into(),
             "127.0.0.1:0".parse().unwrap(),
@@ -1142,6 +1293,17 @@ mod tests {
         .unwrap()
         .create(dir)
         .unwrap();
+    }
+
+    /// Puts a licence file in the Node's secret store, as `dn node licence add` does.
+    fn add_licence(dir: &Path, secrets: &SecretsConfig, text: &str) {
+        let store = server::open(&secrets.choice(), dir, &no_env).unwrap();
+        store
+            .set(
+                &licence::licence_id(),
+                &dn_secrets::Secret::new(text.to_owned()),
+            )
+            .unwrap();
     }
 
     async fn started(dir: &Path) -> Node {
@@ -1219,6 +1381,88 @@ mod tests {
             out.push(ch.recv().await?);
         }
         Ok(out)
+    }
+
+    /// An alpha licence that ended yesterday.
+    fn ended_licence() -> String {
+        let now = now_secs();
+        licence::test_key::file(
+            dn_licence::Kind::Alpha,
+            &[dn_licence::NODE],
+            now - 10 * 86_400,
+            Some(now - 86_400),
+        )
+    }
+
+    fn sync_start() -> Message {
+        Message::SyncStart {
+            chain_len: 0,
+            vector: Default::default(),
+            applied: Default::default(),
+        }
+    }
+
+    /// #377: no licence, no Node, and nothing is made on the way.
+    #[tokio::test]
+    async fn without_a_licence_the_node_doesnt_start_and_nothing_is_made() {
+        let dir = TempDir::new("nolicence");
+        init_unlicensed(&dir.0, SecretsConfig::InsecurePlaintext);
+        let Err(e) = Node::start(&dir.0, Vec::new(), &no_env).await else {
+            panic!("expected a refusal");
+        };
+        assert!(e.starts_with("The Node is part of Demios Pro"), "{e}");
+        assert!(e.contains("dn node licence add"), "{e}");
+        let store =
+            server::open(&SecretsConfig::InsecurePlaintext.choice(), &dir.0, &no_env).unwrap();
+        assert!(
+            store
+                .get(&dn_sync::identity::secret_id())
+                .unwrap()
+                .is_none(),
+            "no keys were made"
+        );
+    }
+
+    /// #377: a licence that ended keeps the Node answering status, so devices can say why,
+    /// but it doesn't sync. Nothing is deleted.
+    #[tokio::test]
+    async fn an_ended_licence_answers_status_but_refuses_sync() {
+        let dir = TempDir::new("ended");
+        init(&dir.0, SecretsConfig::InsecurePlaintext);
+        let node_key = {
+            let node = started(&dir.0).await;
+            let conn = lock(&node.db);
+            DeviceList::members(&conn).unwrap()[0].keys.ed25519
+        };
+        let laptop = DeviceKeys::generate().unwrap();
+        add_device(&dir.0, &laptop.public(), "MacBook Pro");
+        add_licence(&dir.0, &SecretsConfig::InsecurePlaintext, &ended_licence());
+
+        let node = started(&dir.0).await;
+        let addr = node.local_addr().unwrap();
+        let stop = Arc::new(Notify::new());
+        let serving = tokio::spawn(node.serve(stop.clone()));
+
+        let Message::Status(s) = ask_status(addr, &laptop, &node_key).await.unwrap() else {
+            panic!("expected the status");
+        };
+        assert!(
+            matches!(s.licence, Some(dn_licence::Status::Ended { .. })),
+            "{:?}",
+            s.licence
+        );
+        assert_eq!(s.devices, 2, "nothing was removed");
+        let replies = request(addr, &laptop, &node_key, &[sync_start()])
+            .await
+            .unwrap();
+        assert_eq!(
+            replies,
+            vec![Message::Refused {
+                reason: "the Node's licence ended".into()
+            }]
+        );
+        stop.notify_waiters();
+        serving.await.unwrap().unwrap();
     }
 
     #[tokio::test]
@@ -1356,7 +1600,7 @@ mod tests {
     #[tokio::test]
     async fn a_passphrase_store_is_refused_until_unlock_exists() {
         let dir = TempDir::new("locked");
-        init(&dir.0, SecretsConfig::Passphrase);
+        init_unlicensed(&dir.0, SecretsConfig::Passphrase);
         let Err(e) = Node::start(&dir.0, Vec::new(), &no_env).await else {
             panic!("expected a refusal");
         };
@@ -1366,7 +1610,7 @@ mod tests {
     #[tokio::test]
     async fn a_store_that_cannot_open_stops_the_node_with_the_reason() {
         let dir = TempDir::new("nostore");
-        init(
+        init_unlicensed(
             &dir.0,
             SecretsConfig::SystemdCredential {
                 name: "demios".into(),
@@ -1466,6 +1710,62 @@ mod tests {
                 self.stop.notify_waiters();
                 self.serving.await.unwrap().unwrap();
             }
+        }
+
+        /// #377: while the licence has ended, `dn node pair` is refused. A new licence added
+        /// to the running Node with `dn node licence add` lets it sync again at once.
+        #[tokio::test]
+        async fn a_new_licence_on_a_running_node_ends_the_refusal() {
+            let dir = TempDir::new("relicence");
+            init(&dir.0, SecretsConfig::InsecurePlaintext);
+            let node_key = {
+                let node = started(&dir.0).await;
+                let conn = lock(&node.db);
+                DeviceList::members(&conn).unwrap()[0].keys.ed25519
+            };
+            let laptop = DeviceKeys::generate().unwrap();
+            add_device(&dir.0, &laptop.public(), "MacBook Pro");
+            add_licence(&dir.0, &SecretsConfig::InsecurePlaintext, &ended_licence());
+            let node = started(&dir.0).await;
+            let addr = node.local_addr().unwrap();
+            let stop = Arc::new(Notify::new());
+            let serving = tokio::spawn(node.serve(stop.clone()));
+
+            let refused = control::client_pair(
+                &dir.0,
+                addr.to_string(),
+                |_, _, _| panic!("no pairing should start"),
+                |_| {},
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                refused.contains("can't pair devices: the Node's licence ended"),
+                "{refused}"
+            );
+
+            let junk = dir.0.join("junk.json");
+            std::fs::write(&junk, "not a licence").unwrap();
+            let err = licence_add_command(&dir.0, &junk).await.unwrap_err();
+            assert!(err.contains("Nothing was changed"), "{err}");
+
+            let file = dir.0.join("pro.json");
+            std::fs::write(&file, licence::test_key::pro()).unwrap();
+            licence_add_command(&dir.0, &file).await.unwrap();
+            let mut synced = false;
+            for _ in 0..50 {
+                let replies = request(addr, &laptop, &node_key, &[sync_start()])
+                    .await
+                    .unwrap();
+                if !matches!(replies[0], Message::Refused { .. }) {
+                    synced = true;
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            assert!(synced, "sync is allowed again once the licence is added");
+            stop.notify_waiters();
+            serving.await.unwrap().unwrap();
         }
 
         /// #309: `dn node devices` lists the device, `dn node remove-device` removes it for

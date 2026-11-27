@@ -21,6 +21,7 @@ Two repos, one Cargo workspace each:
      dn-knowledge   local index (FTS + vectors), ingestion, embedding
      dn-store       SQLite schema + migrations
      dn-secrets     keychain access
+     dn-licence     the signed, offline licence file and its check (ADR-0013 §6, ADR-0014 §9a; added with the owner's approval, 2026-11-27)
      dn-sync        sync client (feature-gated)
      dn-plugin-api  stable trait surface that add-ons plug into
      dn-jobs        background-job scheduler, missed-run evaluation (dn-plugin-api's rules), held-approvals queue, run history; used by the app and the Node

@@ -1,10 +1,25 @@
-import { CircleCheck, CircleOff, Globe, Laptop, MoreHorizontal, Server, Smartphone, Trash2, Unlink } from "lucide-react";
+import {
+  BadgeAlert,
+  CircleCheck,
+  CircleOff,
+  Clock,
+  ExternalLink,
+  Globe,
+  Laptop,
+  MoreHorizontal,
+  Server,
+  Smartphone,
+  Trash2,
+  Unlink,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Api } from "../ipc/commands";
 import {
   errorMessage,
   type JoinStarted,
   type NodeDevice,
+  type LicenceKind,
+  type NodeLicence,
   type NodeOverview,
   type SyncStatus,
 } from "../ipc/types";
@@ -56,6 +71,89 @@ function stoppedText(error: string | null): string {
 
 const KIND_ICON = { desktop: Laptop, node: Server, phone: Smartphone } as const;
 
+/** Where to get Pro; opened in the browser only when the person asks. */
+export const PRO_URL = "https://demios.io/pro";
+
+const DAY_MS = 86_400_000;
+
+/** "31 Dec 2027". */
+export function dateText(unixSeconds: number): string {
+  return new Date(unixSeconds * 1000).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+}
+
+/** Whole days left, rounded up: "9 days left" on the ninth-to-last day. */
+export function daysLeft(unixSeconds: number, now = Date.now()): number {
+  return Math.max(0, Math.ceil((unixSeconds * 1000 - now) / DAY_MS));
+}
+
+function kindName(kind: LicenceKind): string {
+  return kind === "pro" ? "Pro" : kind === "founding" ? "Founding" : kind === "alpha" ? "Alpha" : "Trial";
+}
+
+/** True when the licence stops sync, jobs and pairing on the Node. */
+export function licenceBlocks(licence: NodeLicence | undefined): boolean {
+  return licence !== undefined && licence.state !== "valid";
+}
+
+/** Why the Node stopped, for the error under its facts. */
+function licenceStoppedText(licence: NodeLicence): string {
+  switch (licence.state) {
+    case "ended":
+      return `Your Node's ${kindName(licence.kind)} licence ended on ${dateText(licence.ended_at)}. Sync and jobs on the Node have stopped. Everything stays on the Node and on your devices, and nothing was deleted.`;
+    case "unusable":
+      return `Your Node's licence can't be used: ${licence.reason}. Sync and jobs on the Node have stopped. Nothing was deleted.`;
+    case "missing":
+      return "Your Node has no licence. Sync and jobs on the Node have stopped. Nothing was deleted.";
+    case "valid":
+      return "";
+  }
+}
+
+/** Settings › Node › Licence (#377; design: NodeSettings › Licence). */
+function LicenceFact({ licence, onSeePro }: { licence: NodeLicence; onSeePro: () => void }) {
+  const seePro = (
+    <Button variant="ghost" size="sm" icon={<ExternalLink {...ICON} aria-hidden="true" />} onClick={onSeePro}>
+      See Pro
+    </Button>
+  );
+  if (licence.state === "valid" && licence.kind === "trial" && licence.expires_at !== null) {
+    const left = daysLeft(licence.expires_at);
+    const help = `Ends ${dateText(licence.expires_at).replace(/ \d{4}$/, "")}. Get Pro to keep the Node running after that.`;
+    return (
+      <dd>
+        {left <= 3 ? (
+          <Badge tone="warning" icon={<Clock size={12} strokeWidth={1.5} aria-hidden="true" />}>
+            {left <= 1 ? "Trial ends today" : `Trial ends in ${left} days`}
+          </Badge>
+        ) : (
+          `Trial, ${left} days left`
+        )}
+        <div className="dn-help">{help}</div>
+        {seePro}
+      </dd>
+    );
+  }
+  if (licence.state === "valid") {
+    return (
+      <dd>
+        {licence.expires_at === null
+          ? kindName(licence.kind)
+          : `${kindName(licence.kind)} until ${dateText(licence.expires_at)}`}
+        <div className="dn-help">Licensed to {licence.licensee}</div>
+      </dd>
+    );
+  }
+  if (licence.state === "ended") {
+    return (
+      <dd>
+        {kindName(licence.kind)}, ended {dateText(licence.ended_at)}
+        <div className="dn-help">Licensed to {licence.licensee}</div>
+      </dd>
+    );
+  }
+  return <dd>{licence.state === "missing" ? "None" : "Can't be used"}</dd>;
+}
+
 type Load = { kind: "loading" } | { kind: "error"; message: string } | { kind: "ready"; view: NodeOverview };
 
 /**
@@ -70,6 +168,14 @@ type Load = { kind: "loading" } | { kind: "error"; message: string } | { kind: "
 export function NodeSettings({ api }: { api: Api }) {
   const toast = useToast();
   const [load, setLoad] = useState<Load>({ kind: "loading" });
+  // Through the same native "Open link?" confirm as other links; nothing is sent by Demios.
+  const openPro = async () => {
+    try {
+      await api.openLink(PRO_URL);
+    } catch (e) {
+      toast({ tone: "error", title: `Couldn't open the page. ${errorMessage(e)}` });
+    }
+  };
   const [joining, setJoining] = useState(false);
   const [removing, setRemoving] = useState<NodeDevice | null>(null);
   const [forgetting, setForgetting] = useState(false);
@@ -189,12 +295,18 @@ export function NodeSettings({ api }: { api: Api }) {
 
   const paired = view.paired;
   const status = view.status;
+  const licence = status?.licence;
+  const blocked = view.online && licenceBlocks(licence);
   return (
     <>
       <section className="card node-card" aria-labelledby="node-h">
         <h2 id="node-h">
           {paired.name}{" "}
-          {view.online ? (
+          {blocked ? (
+            <Badge tone="warning" icon={<BadgeAlert size={12} strokeWidth={1.5} aria-hidden="true" />}>
+              {licence?.state === "ended" ? "Licence ended" : "Licence can't be used"}
+            </Badge>
+          ) : view.online ? (
             <Badge tone="success" icon={<CircleCheck size={12} strokeWidth={1.5} aria-hidden="true" />}>
               Online
             </Badge>
@@ -217,10 +329,25 @@ export function NodeSettings({ api }: { api: Api }) {
             Changes made here are kept and sync when it's back.
           </InlineMessage>
         )}
-        {view.sync.state === "retrying" && view.sync.error !== null && (
+        {blocked && licence !== undefined && (
+          <InlineMessage
+            tone="error"
+            action={
+              <Button size="sm" onClick={() => void openPro()}>
+                See Pro
+              </Button>
+            }
+          >
+            {licenceStoppedText(licence)}
+            <div className="dn-help">
+              To add a new licence, run <code>dn node licence add &lt;file&gt;</code> on the Node.
+            </div>
+          </InlineMessage>
+        )}
+        {!blocked && view.sync.state === "retrying" && view.sync.error !== null && (
           <InlineMessage tone="warning">{view.sync.error} Trying again soon.</InlineMessage>
         )}
-        {view.sync.state === "stopped" && (
+        {!blocked && view.sync.state === "stopped" && (
           <InlineMessage
             tone="error"
             action={
@@ -237,6 +364,12 @@ export function NodeSettings({ api }: { api: Api }) {
             <>
               <dt>Version</dt>
               <dd>{status.version}</dd>
+            </>
+          )}
+          {licence !== undefined && (
+            <>
+              <dt>Licence</dt>
+              <LicenceFact licence={licence} onSeePro={() => void openPro()} />
             </>
           )}
           <dt>Reached through</dt>

@@ -1,0 +1,19 @@
+[package]
+name = "dn-licence"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The signed, offline licence file and its check (ADR-0013 §6, ADR-0014 §9a)"
+
+# Public on purpose: the check is in the open engine (ADR-0014 §9a). No network code.
+[dependencies]
+aws-lc-rs.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
