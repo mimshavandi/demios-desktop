@@ -28,8 +28,7 @@ These are prompt blocks the runtime adds on its own, not skills the user picks. 
 
 | Prompt | Used for |
 |---|---|
-| `answer.rules` | Every answer that has sources (project files, search, tool results). How to lead with the answer, cite with labels such as `[S1]`, and handle missing or conflicting sources. |
-| `answer.rules.local` | The same rules, shorter, for models that run on this computer. |
+| `answer.rules` | Every turn on a surface that can have sources (chats, research). It covers leading with the answer, citing with block ids such as `[S1]`, and handling missing or conflicting sources. Kept under about 150 tokens, because every chat turn pays for it. |
 
 ## Chat skills (`library/`)
 

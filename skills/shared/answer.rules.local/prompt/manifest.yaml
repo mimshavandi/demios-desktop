@@ -1,8 +1,0 @@
-id: answer.rules.local
-description: >-
-  The same rules as answer.rules, shortened for models that run on this computer. Keep the two in step:
-  a rule changes in both, or `answer.rules/prompt/CHANGELOG.md` says why not.
-active_version: v1
-versions:
-  - version: v1
-    file: v1.md
