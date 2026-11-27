@@ -1091,21 +1091,26 @@ dependencies = [
 name = "demios-desktop"
 version = "0.1.0"
 dependencies = [
+ "aws-lc-rs",
  "dn-agent",
  "dn-artifacts",
  "dn-core",
  "dn-inference",
+ "dn-jobs",
  "dn-knowledge",
  "dn-models",
+ "dn-plugin-api",
  "dn-providers",
  "dn-secrets",
  "dn-store",
+ "dn-sync",
  "dn-tools",
  "futures-core",
  "rusqlite",
  "serde",
  "serde_json",
  "sha2 0.11.1",
+ "sysinfo",
  "tauri",
  "tauri-build",
  "tauri-plugin-deep-link",
@@ -1253,8 +1258,13 @@ dependencies = [
  "clap",
  "dn-core",
  "dn-inference",
+ "dn-jobs",
  "dn-models",
+ "dn-plugin-api",
  "dn-secrets",
+ "dn-store",
+ "dn-sync",
+ "jiff 1.0.2",
  "serde",
  "serde_json",
  "sysinfo",
@@ -1315,6 +1325,22 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
+]
+
+[[package]]
+name = "dn-jobs"
+version = "0.1.0"
+dependencies = [
+ "dn-core",
+ "dn-plugin-api",
+ "dn-store",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "thiserror 2.0.21",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]

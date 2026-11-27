@@ -47,6 +47,10 @@ jobs:
       tag: ${{ steps.m.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
+      # Connect (ADR-0018): refuse a release whose catalogue isn't signed with the owner's
+      # current key (catalogue.json.sig against catalogue.pub; no secret involved). With no
+      # key yet it passes, and the release shows Connect as not available.
+      - run: node scripts/connect/check-signature.mjs
       - id: m
         run: |
           version="$(node -p "require('./apps/desktop/tauri.conf.json').version")"

@@ -1,6 +1,6 @@
 # ADR-0001: Repo and crate layout
 
-**Status:** Proposed · **Date:** 2026-11-24 · **Deciders:** project owner
+**Status:** Proposed · **Date:** 2026-11-24 (amended 2026-11-26: `dn-jobs`) · **Deciders:** project owner
 
 ## Context
 The open-source app and any proprietary add-ons share one base. The app and every shared crate are public; proprietary add-ons live in a separate private repository. Demios suffered from copied helpers across 11 services with no shared package; we want one source of truth per concern from day one.
@@ -23,6 +23,7 @@ Two repos, one Cargo workspace each:
      dn-secrets     keychain access
      dn-sync        sync client (feature-gated)
      dn-plugin-api  stable trait surface that add-ons plug into
+     dn-jobs        background-job scheduler, missed-run evaluation (dn-plugin-api's rules), held-approvals queue, run history; used by the app and the Node
    apps/
      desktop        Tauri 2 app (Rust backend + web UI in apps/desktop/ui)
      cli            `dn` CLI: run models, run skills, benchmark (useful for tests and CI)

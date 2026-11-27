@@ -18,5 +18,5 @@ jobs:
           fetch-depth: 2
       - name: Released CHANGELOG sections unchanged
         env:
-          CHANGELOG_EDIT_RELEASED: ${{ contains(github.event.pull_request.labels.*.name, 'changelog: edit released') && '1' || '0' }}
+          CHANGELOG_EDIT_RELEASED: "${{ contains(github.event.pull_request.labels.*.name, 'changelog: edit released') && '1' || '0' }}"
         run: python3 scripts/changelog-guard.py HEAD^1 HEAD

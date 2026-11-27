@@ -229,7 +229,7 @@ An incoming envelope is checked (§7.2) and stored in `sync_inbox` before it's a
 
 ### 9.2 Acknowledging and compacting the log
 - Each device publishes its **vector** as a small scalar record (`sync_vector`, one per device), so every device knows what the others have applied.
-- An envelope can leave the log once **every current member** has applied it. The log then keeps only `(author, seq, SHA-256 of the envelope)`, so later duplicates are still recognised.
+- An envelope can leave the log once **every current member** has applied it. The log then keeps only `(author, seq, SHA-256 of the signed change)`, so later duplicates are still recognised, however they were sealed.
 - **A device that hasn't been seen for 90 days** stops holding the log back. The device list says "*Old laptop* hasn't synced for 90 days. It will need a full copy when it's back." When it comes back:
   1. it gets a **snapshot** (§9.4);
   2. it sends its own changes that nobody has yet;
@@ -238,7 +238,7 @@ An incoming envelope is checked (§7.2) and stored in `sync_inbox` before it's a
 ### 9.3 Replays and duplicates
 - A change is identified by **(author, seq)**. If it was already applied, a second copy is ignored. That makes every route safe to repeat, and an old envelope sent again does nothing.
 - The signed bytes include the group, the epoch and the change number, so an envelope can't be replayed into another group or under another number.
-- **Two different envelopes with the same (author, seq)** mean the author's key was used to sign two histories (equivocation). A device that already applied one copy keeps it. The other copy is refused everywhere, and the conflicting pair is passed on to the other devices as evidence. Which copy wins is decided by the Node: it names the copy in its vector, and devices that applied the other one undo it from the snapshot (§9.4). That device is marked "sent conflicting changes" in the device list, its later changes are held, and the user is offered **Remove device**.
+- **Two different signed changes with the same (author, seq)** mean the author's key was used to sign two histories (equivocation). Changes are compared by the SHA-256 of their signed bytes, never by the envelope: a member that re-seals another device's change can't make it look like a conflict. A device that already applied one copy keeps it. The other copy is refused everywhere, and the conflicting pair is passed on to the other devices as evidence. Which copy wins is decided by the Node: it names the copy in its vector, and devices that applied the other one undo it from the snapshot (§9.4). That device is marked "sent conflicting changes" in the device list, its later changes are held, and the user is offered **Remove device**.
 
 ### 9.4 Snapshots
 - A new device, or one past the 90-day line, starts from a **snapshot**: the current state of every synced record, the tombstones, the membership chain and the sender's vector.

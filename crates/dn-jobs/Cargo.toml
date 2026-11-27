@@ -1,0 +1,27 @@
+[package]
+name = "dn-jobs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Background jobs for the app and the Demios Node: scheduler, missed runs, held approvals, run history (ADR-0013, ADR-0014)"
+
+[dependencies]
+dn-core.workspace = true
+dn-plugin-api.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync", "time", "macros"] }
+uuid.workspace = true
+
+[dev-dependencies]
+dn-store.workspace = true
+tokio = { workspace = true, features = ["sync", "time", "macros", "rt", "test-util"] }
+
+[lints]
+workspace = true

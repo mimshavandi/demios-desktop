@@ -12,6 +12,8 @@ repository = "https://github.com/mimshavandi/demios-desktop"
 rust-version = "1.89"
 
 [workspace.dependencies]
+# The Node's time zone with daylight saving (#257). Already in the tree; lead approved.
+jiff = "1.0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
@@ -36,6 +38,9 @@ rusqlite = { version = "0.43", features = ["bundled"] }
 ts-rs = { version = "12", default-features = false, features = ["serde-compat", "no-serde-warnings"] }
 dn-core = { path = "crates/dn-core", version = "0.1.0" }
 dn-store = { path = "crates/dn-store", version = "0.1.0" }
+dn-plugin-api = { path = "crates/dn-plugin-api", version = "0.1.0" }
+dn-sync = { path = "crates/dn-sync", version = "0.1.0" }
+dn-jobs = { path = "crates/dn-jobs", version = "0.1.0" }
 dn-agent = { path = "crates/dn-agent", version = "0.1.0" }
 dn-secrets = { path = "crates/dn-secrets", version = "0.1.0" }
 process-wrap = { version = "10", default-features = false, features = ["tokio1", "process-group", "job-object"] }

@@ -8,7 +8,7 @@ use crate::identity::{DeviceId, PublicIdentity};
 use crate::{Result, SyncError};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
-pub(crate) const MIGRATIONS: &[&str] = &["
+pub(crate) const MIGRATION_DEVICES: &str = "
 CREATE TABLE sync_devices (
     id             TEXT    PRIMARY KEY NOT NULL,
     ed25519        BLOB    NOT NULL CHECK (length(ed25519) = 32),
@@ -23,7 +23,19 @@ CREATE TABLE sync_devices (
 -- One row per signing key, removed rows included, so a removed device can't come back
 -- with the same signing key and a new agreement key.
 CREATE UNIQUE INDEX sync_devices_ed25519 ON sync_devices (ed25519);
-"];
+";
+
+/// On a client: the paired Node (`crate::link`).
+pub(crate) const MIGRATION_NODE_LINK: &str = "
+-- On a client: the Node this device is paired with (at most one), and how to reach it.
+CREATE TABLE sync_node_link (
+    id              INTEGER PRIMARY KEY CHECK (id = 1),
+    node_id         TEXT    NOT NULL,
+    address         TEXT    NOT NULL,
+    paired_at       INTEGER NOT NULL,
+    last_reached_at INTEGER
+);
+";
 
 /// Longest device name, in characters.
 pub const NAME_MAX: usize = 64;
@@ -74,7 +86,7 @@ impl Device {
     }
 }
 
-fn clean_name(name: &str) -> Result<String> {
+pub(crate) fn clean_name(name: &str) -> Result<String> {
     let name = name.trim();
     let len = name.chars().count();
     if len == 0 || len > NAME_MAX || name.chars().any(char::is_control) {

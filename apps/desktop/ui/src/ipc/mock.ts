@@ -3,7 +3,11 @@
 // when `import.meta.env.DEV` and no Tauri runtime is present.
 
 import type { Api } from "./commands";
+import { mockAddons } from "./mockAddons";
 import type {
+  NodeOverview,
+  ConnectEntryView,
+  ConnectView,
   DownloadState,
   KnowledgeStatus,
   ApprovalDecision,
@@ -40,6 +44,32 @@ const REPLY = (q: string, turn: number) =>
   "```rust\nfn main() {\n    let answer = 6 * 7;\n    println!(\"the answer is {answer}\");\n}\n```\n\n" +
   "- Pick a real model in **Models** once local inference or a provider key is available.\n" +
   "- *Stop* and *Retry* work on this reply too.";
+
+function noNode(): NodeOverview {
+  return { paired: null, online: false, status: null, devices: [], problem: null };
+}
+
+function mockPairedNode(): NodeOverview {
+  const now = Date.now();
+  return {
+    paired: { name: "Home server", address: "192.168.1.20:7443", paired_at: now, last_reached_at: now },
+    online: true,
+    status: {
+      name: "Home server",
+      version: "1.4.0",
+      secret_store: "systemd_credential",
+      secret_store_label: "Encrypted file, key from a systemd credential",
+      protected_at_rest: true,
+      devices: 3,
+    },
+    devices: [
+      { id: "a1", name: "Home server", kind: "node", last_synced_at: now - 120_000, this_device: false },
+      { id: "b2", name: "MacBook Pro", kind: "desktop", last_synced_at: now, this_device: true },
+      { id: "c3", name: "Work phone", kind: "phone", last_synced_at: now - 3_600_000, this_device: false },
+    ],
+    problem: null,
+  };
+}
 
 export function createMockApi(): Api {
   const convs: Conversation[] = [];
@@ -229,6 +259,31 @@ export function createMockApi(): Api {
     connected: mcpStatus.get(id)?.state === "connected",
     tools: id === "files" && mcpStatus.get(id)?.state === "connected" ? mcpTools.map(toolApproval) : [],
   });
+  // Connect (ADR-0018): made-up services, like the design reference.
+  const connectEntries: ConnectEntryView[] = [
+    ["northwind", "Northwind Issues", "Northwind", "Read and create issues, projects and comments", "https://mcp.northwind.example/mcp"],
+    ["paperlane", "Paperlane Docs", "Paperlane", "Search and read pages; create and edit pages", "https://mcp.paperlane.example/mcp"],
+    ["signalbox", "Signalbox Monitoring", "Signalbox", "Read errors, issues and releases", "https://mcp.signalbox.example/mcp"],
+  ].map(([id, service, vendor, summary, url]) => ({
+    id: id!,
+    service: service!,
+    vendor: vendor!,
+    summary: summary!,
+    url: url!,
+    scopes: [],
+    terms_url: `https://${id}.example/terms`,
+    data: `Goes between ${vendor} and this app; Demios's servers never see it.`,
+    review_date: "2026-11-26",
+    review_source: `https://${id}.example/docs/mcp`,
+    reviewed: true,
+    server_id: null,
+  }));
+  const connectView = (): ConnectView => ({
+    entries: connectEntries.map((e) => ({
+      ...e,
+      server_id: mcpServers.find((s) => s.transport.type === "streamable_http" && s.transport.url === e.url)?.id ?? null,
+    })),
+  });
   const mcpView = (): McpServersView => ({
     servers: mcpServers.map((s) => ({ ...s, status: mcpStatus.get(s.id) ?? null })),
     local_servers_allowed: true,
@@ -264,6 +319,7 @@ export function createMockApi(): Api {
   const removedMcp = new Map<string, { server: McpServerView; at: number }>();
   const removals = new Map<string, { slots: [string, string][]; timer: number }>();
   let settings: Settings = { slots: {}, telemetry_enabled: false };
+  let nodeView: NodeOverview = noNode();
   const timers = new Map<string, number>();
   const id = () => crypto.randomUUID();
   const now = () => Date.now();
@@ -744,6 +800,31 @@ export function createMockApi(): Api {
     },
     listModels: async () => catalog(),
     checkKeys: async () => catalog(),
+    nodeOverview: async () => nodeView,
+    nodeJoinBegin: async (link) => {
+      await new Promise((r) => setTimeout(r, 300));
+      if (!link.startsWith("demios://pair?"))
+        throw { code: "node_link", message: "That isn't a Demios pairing link: it doesn't start with demios://pair." };
+      return { numbers: ["4821", "0937", "5512"], address: "192.168.1.20:7443" };
+    },
+    nodeJoinWait: async () => {
+      await new Promise((r) => setTimeout(r, 2500));
+      nodeView = mockPairedNode();
+      return nodeView;
+    },
+    nodeJoinCancel: async () => null,
+    nodeRemoveDevice: async (id) => {
+      nodeView = { ...nodeView, devices: nodeView.devices.filter((d) => d.id !== id) };
+      return nodeView;
+    },
+    nodeUnpair: async () => {
+      nodeView = noNode();
+      return nodeView;
+    },
+    nodeForget: async () => {
+      nodeView = noNode();
+      return nodeView;
+    },
     setProviderKey: async (p) => {
       keys.add(p);
       return catalog();
@@ -883,6 +964,21 @@ export function createMockApi(): Api {
     setHfToken: async () => (hfToken = true),
     deleteHfToken: async () => (hfToken = false),
     listMcpServers: async () => mcpView(),
+    connectCatalogue: async () => connectView(),
+    connectService: async (entryId) => {
+      const e = connectEntries.find((x) => x.id === entryId);
+      if (e === undefined) throw { code: "not_found", message: "That service isn't in the list any more." };
+      if (mcpServers.some((s) => s.id === e.id)) throw { code: "invalid_input", message: `${e.service} is already one of your tool servers.` };
+      const server: McpServerView = {
+        id: e.id,
+        name: e.service,
+        status: null,
+        transport: { type: "streamable_http", url: e.url, headers: [], oauth: { scopes: [], client_id: null, signed_in: false } },
+      };
+      mcpServers = [...mcpServers, server];
+      mcpSet(server, "needs_auth");
+      return connectView();
+    },
     saveMcpServer: async (input, editing) => {
       if (editing === null && mcpServers.some((s) => s.id === input.id)) {
         throw { code: "invalid_input", message: `A server with the id ${input.id} already exists. Choose another id.` };
@@ -1072,6 +1168,7 @@ export function createMockApi(): Api {
       emitRow(r);
       return null;
     },
+    ...mockAddons(),
     checkModelTools: async (id) => {
       await new Promise((r) => setTimeout(r, 800));
       const r = localRows.find((x) => x.id === id);
