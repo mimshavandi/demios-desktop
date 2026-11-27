@@ -911,3 +911,164 @@
     - Nennt den Preis 9,50 € korrekt, falls ein Preis genannt wird
     must_not:
     - Erfindet Bio-Siegel oder Gesundheitsversprechen
+- id: writing-049
+  category: writing
+  lang: en
+  tags:
+  - skill
+  - email
+  - attach
+  - real-details
+  skill: write-email
+  attach:
+  - email/invoice-hp-2026-118.md
+  turns:
+  - role: user
+    content: invoice attached went to Quillstone 2 weeks ago, it's now overdue. write a polite reminder
+      to Dana. I'm Mia Harrow.
+  expect:
+    must:
+    - Is addressed to Dana
+    - Names invoice HP-2026-118, the total €782.17 and the due date 16 November 2026
+    - Asks for payment by bank transfer quoting HP-2026-118, or for a date when it will be paid
+    - Signs as Mia Harrow (Harrow & Pike Bakery is fine)
+    must_not:
+    - Uses a bracket placeholder such as [date], [Name] or [Your name]
+    - Says "as shown in the attachment" instead of giving the amount and date
+    - Gives a different amount, date or invoice number
+    - Threatens fees or legal steps the user did not mention
+- id: writing-050
+  category: writing
+  lang: en
+  tags:
+  - skill
+  - email
+  - not-in-source
+  skill: write-email
+  turns:
+  - role: user
+    content: Email the choir to say rehearsal next week is moved because the hall is booked. We don't
+      have the new date yet.
+  expect:
+    must:
+    - Says next week's rehearsal is moved because the hall is booked
+    - Says the new date will follow, or is not fixed yet
+    - Starts with a "Subject:" line
+    must_not:
+    - Uses a bracket placeholder such as [date], [Name] or [Your name]
+    - Invents a new date, time or venue
+    - Signs with a made-up name
+- id: writing-051
+  category: writing
+  lang: en
+  tags:
+  - skill
+  - email
+  - reply
+  - multi-part
+  skill: write-email
+  turns:
+  - role: user
+    content: |-
+      Reply to this for me, I'm Tom:
+
+      "Hi Tom, three quick things before Friday's workshop: 1) can we start at 9:30 instead of 10? 2) how many people are coming? 3) do we need to bring our own laptops? Thanks, Ines"
+
+      answers: 9:30 is fine, 14 people, yes bring laptops with the editor installed
+  expect:
+    must:
+    - 'Answers all three questions in order: 9:30 is fine, 14 people, bring laptops with the editor installed'
+    - Is addressed to Ines and signed Tom
+    - Has no "Subject:" line, since it is a reply
+    must_not:
+    - Uses a bracket placeholder such as [date], [Name] or [Your name]
+    - Adds facts not given, such as a room, a parking note or an agenda
+- id: writing-052
+  category: writing
+  lang: en
+  tags:
+  - skill
+  - email
+  - recipient
+  skill: write-email
+  turns:
+  - role: user
+    content: Send the plumber an email asking if he can come Thursday morning to fix the dripping kitchen
+      tap.
+  expect:
+    must:
+    - Writes a short email asking whether the plumber can come on Thursday morning for the dripping kitchen
+      tap
+    - Asks the user who it should go to (or for the plumber's address), without inventing one
+    must_not:
+    - Makes up an email address or a name for the plumber
+    - Uses a bracket placeholder such as [date], [Name] or [Your name]
+- id: writing-053
+  category: writing
+  lang: en
+  tags:
+  - skill
+  - email
+  - attach
+  - compare
+  skill: write-email
+  attach:
+  - email/quote-varga-print.md
+  turns:
+  - role: user
+    content: Accept this quote but only the business cards, not the flyers. Email Ilona.
+  expect:
+    must:
+    - Is addressed to Ilona
+    - Accepts quote Q-5521 for the 500 business cards (€96.00) only and says the flyers are not needed
+    - 'Mentions next steps from the quote: the proof check, or delivery 5 working days after proof approval'
+    must_not:
+    - Accepts the flyers or the €160.50 total
+    - Gives a price for the cards other than €96.00
+    - Uses a bracket placeholder such as [date], [Name] or [Your name]
+- id: writing-054
+  category: writing
+  lang: en
+  tags:
+  - skill
+  - email
+  - tone
+  - missing
+  skill: write-email
+  turns:
+  - role: user
+    content: write to my landlord that the heating has been broken since Monday and I need it fixed this
+      week. firm but polite.
+  expect:
+    must:
+    - Says the heating has been broken since Monday and asks for it to be fixed this week
+    - Is firm and polite
+    - If it needs the address or flat number, lists it after the draft as missing rather than inventing
+      it
+    must_not:
+    - Uses a bracket placeholder such as [date], [Name] or [Your name]
+    - Invents a flat number, address, landlord name or tenancy law
+- id: writing-055
+  category: writing
+  lang: de
+  tags:
+  - skill
+  - email
+  - reply
+  skill: write-email
+  turns:
+  - role: user
+    content: |-
+      Antworte bitte auf diese Mail, ich heiße Jana:
+
+      „Hallo Jana, passt dir der Termin am Dienstag um 15 Uhr für die Übergabe der Schlüssel? Viele Grüße, Herr Brandt“
+
+      Dienstag geht nicht, Mittwoch ab 16 Uhr ginge.
+  expect:
+    must:
+    - Antwortet auf Deutsch, an Herrn Brandt
+    - Sagt, dass Dienstag nicht passt, und schlägt Mittwoch ab 16 Uhr vor
+    - Unterschreibt mit Jana
+    must_not:
+    - Verwendet Platzhalter in eckigen Klammern
+    - Erfindet einen Ort oder eine Uhrzeit, die Jana nicht genannt hat

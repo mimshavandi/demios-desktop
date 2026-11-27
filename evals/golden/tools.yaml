@@ -1537,3 +1537,22 @@
   effect: write
   results:
   - default: Message posted (id m-4410).
+- name: contrast_check
+  description: WCAG 2.x contrast ratio of a foreground and background colour (hex, rgb() or a CSS colour
+    name), with pass or fail for AA normal text, AA large text, non-text UI and AAA. Give the text size
+    in px and whether it is bold to judge large text.
+  input_schema:
+    type: object
+    properties:
+      foreground:
+        type: string
+      background:
+        type: string
+      font_size_px:
+        type: number
+      bold:
+        type: boolean
+    required:
+    - foreground
+    - background
+  effect: read
