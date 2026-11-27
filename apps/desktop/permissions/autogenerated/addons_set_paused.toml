@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-addons-set-paused"
+description = "Enables the addons_set_paused command without any pre-configured scope."
+commands.allow = ["addons_set_paused"]
+
+[[permission]]
+identifier = "deny-addons-set-paused"
+description = "Denies the addons_set_paused command without any pre-configured scope."
+commands.deny = ["addons_set_paused"]

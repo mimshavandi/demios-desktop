@@ -94,6 +94,9 @@ pub fn migration_sets() -> Vec<MigrationSet> {
         MigrationSet::new("tool_ledger", dn_tools::migrations()),
         MigrationSet::new("artifact", dn_artifacts::migrations()),
         MigrationSet::new("knowledge", dn_knowledge::migrations()),
+        MigrationSet::new("sync", dn_sync::migrations()),
+        MigrationSet::new("app_addons", crate::addons::store::migrations()),
+        MigrationSet::new("jobs", dn_jobs::migrations()),
     ]
 }
 
@@ -212,6 +215,8 @@ pub struct AppState {
     pub local_servers: bool,
     /// Running Hugging Face downloads (add-model screen).
     pub hub_pulls: Arc<crate::hub::HubPulls>,
+    /// Settings › Node: a join waiting for the person to confirm on the Node.
+    pub node: crate::node::NodeState,
     /// `demios://models/add` links waiting for or shown on the confirmation screen.
     pub add_links: crate::deeplink::AddLinks,
     /// Asks before a local MCP server starts (native dialog in the app; tests set a fake).
@@ -221,6 +226,11 @@ pub struct AppState {
     /// Local copies of project files (`<data dir>/project-files`). `None` in tests that
     /// don't use them.
     pub project_files: Option<std::path::PathBuf>,
+    /// The add-ons of this build (none in the regular build) (ADR-0013).
+    pub addons: crate::addons::Addons,
+    /// dn-jobs' own connection to the app database (its scheduler and held calls). `None`
+    /// in tests that don't use jobs.
+    pub jobs_db: Option<Arc<Mutex<Connection>>>,
 }
 
 /// [`AppState::keychain_entries`]: what was found, and why the list may be incomplete.
@@ -263,6 +273,38 @@ pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// Removes what the app keeps for a chat outside dn-store's tables: its artifacts, its
+/// skill, its knowledge citations, its tool history (unknown writes stay until resolved)
+/// and its "allow for this chat" grants. Keeps going after a failure and returns the parts
+/// it could not remove, in the user's words. Idempotent.
+fn forget_chat_data(
+    conn: &Connection,
+    executor: Option<&dn_tools::Executor>,
+    id: Id,
+) -> Vec<&'static str> {
+    let mut failed = Vec::new();
+    if let Err(e) = dn_artifacts::ArtifactStore::new(conn).delete_conversation(id) {
+        eprintln!("could not delete the artifacts of a deleted chat: {e}");
+        failed.push("its artifacts");
+    }
+    if let Err(e) = crate::skills::forget_chat(conn, id) {
+        eprintln!("could not forget the skill of a deleted chat: {e}");
+        failed.push("its skill");
+    }
+    if let Err(e) = dn_knowledge::remove_conversation_sources(conn, &id.to_string()) {
+        eprintln!("could not delete the sources of a deleted chat: {e}");
+        failed.push("its sources");
+    }
+    if let Some(exec) = executor {
+        if let Err(e) = exec.forget_conversation(&id.to_string()) {
+            eprintln!("could not clear the tool ledger of a deleted chat: {e}");
+            failed.push("its tool history");
+        }
+        exec.gate().clear_conversation(&format!("conv:{id}"));
+    }
+    failed
+}
+
 impl AppState {
     pub fn new(conn: Connection, models: ModelRegistry, keys: Keys) -> Self {
         // The registry serves the OpenAI-compatible servers saved in settings.
@@ -291,10 +333,13 @@ impl AppState {
             mcp_epoch: AtomicU64::new(0),
             local_servers: crate::mcp::local_servers_allowed(),
             hub_pulls: Default::default(),
+            node: Default::default(),
             add_links: Default::default(),
             launch_approver: std::sync::OnceLock::new(),
             tools_settling: Default::default(),
             project_files: None,
+            addons: Default::default(),
+            jobs_db: None,
         }
     }
 
@@ -316,6 +361,22 @@ impl AppState {
         skills: Option<&std::path::Path>,
         launch_approver: Option<Arc<dyn crate::mcp::LaunchApprover>>,
     ) -> dn_store::Result<Arc<Self>> {
+        Self::open_with_keys(path, skills, launch_approver, Keys::os_keychain())
+    }
+
+    /// [`Self::open`] with the in-memory secret store, for tests that need the on-disk state
+    /// (executor, jobs database) but must never reach the OS keychain (CI runners have none).
+    #[cfg(test)]
+    pub fn open_for_tests(path: &std::path::Path) -> dn_store::Result<Arc<Self>> {
+        Self::open_with_keys(path, None, None, Keys::memory())
+    }
+
+    fn open_with_keys(
+        path: &std::path::Path,
+        skills: Option<&std::path::Path>,
+        launch_approver: Option<Arc<dyn crate::mcp::LaunchApprover>>,
+        keys: Keys,
+    ) -> dn_store::Result<Arc<Self>> {
         let conn = dn_store::open(path, &migration_sets())?;
         let n = store::recover_interrupted(&conn)?;
         if n > 0 {
@@ -329,16 +390,6 @@ impl AppState {
         }
         // Every purged chat, including ones purged by older builds that kept ledger rows.
         let tombstones = store::list_tombstones(&conn)?;
-        // A purged chat keeps no artifacts either (idempotent: runs on every start).
-        let artifacts = dn_artifacts::ArtifactStore::new(&conn);
-        for (id, _) in &tombstones {
-            if let Err(e) = artifacts.delete_conversation(*id) {
-                eprintln!("could not delete the artifacts of a deleted chat: {e}");
-            }
-            if let Err(e) = crate::skills::forget_chat(&conn, *id) {
-                eprintln!("could not forget the skill of a deleted chat: {e}");
-            }
-        }
 
         let ledger = dn_store::open_connection(path)?;
         match dn_tools::ledger::mark_interrupted(&ledger) {
@@ -351,13 +402,10 @@ impl AppState {
             Arc::new(gate),
             Arc::new(Mutex::new(ledger)),
         ));
-        // A purged chat keeps no tool history either (unknown writes stay until resolved).
+        // A purged chat keeps none of the app's data either (idempotent: runs on every start).
         for (id, _) in &tombstones {
-            if let Err(e) = executor.forget_conversation(&id.to_string()) {
-                eprintln!("could not clear the tool ledger of a deleted chat: {e}");
-            }
+            forget_chat_data(&conn, Some(&executor), *id);
         }
-        let keys = Keys::os_keychain();
         let agent = Agent::load(skills);
         let settling: Arc<crate::tool_review::Settling> = Default::default();
         let tools = Arc::new(crate::agent::ManifestTools {
@@ -376,6 +424,7 @@ impl AppState {
         state.executor = Some(Arc::clone(&executor));
         state.tools_settling = settling;
         state.project_files = project_files;
+        state.jobs_db = Some(Arc::new(Mutex::new(dn_store::open_connection(path)?)));
         if let Some(a) = launch_approver {
             let _ = state.launch_approver.set(a);
         }
@@ -589,9 +638,17 @@ impl AppState {
     /// a failure and returns the parts it could not delete, in the user's words.
     pub async fn delete_all_local_data(self: &Arc<Self>) -> Vec<&'static str> {
         let mut failed = Vec::new();
+        // A join waiting for confirmation on a Node must not record it afterwards.
+        crate::node::join_cancel(&self.node).await;
         if !self.stop_all_and_wait(REPLY_STOP_TIMEOUT).await {
             eprintln!("some replies did not stop in time; deleting anyway");
             failed.push("an answer that was still being written (it may have been saved again)");
+        }
+        // Add-ons next (ADR-0013 §5): their jobs stop and every Host is revoked before
+        // anything is deleted, then each add-on deletes its own data, then the host the rest.
+        for what in self.addons.delete_all(self).await {
+            eprintln!("could not delete add-on data: {what}");
+            failed.push("part of an add-on's data");
         }
         self.mcp_epoch.fetch_add(1, Ordering::SeqCst);
         if let Some(exec) = &self.executor {
@@ -731,6 +788,11 @@ impl AppState {
                 keys_ok = false;
             }
         }
+        // This computer's device keys (Settings › Node): a new identity after Delete all.
+        if let Err(e) = self.keys.store.delete(&dn_sync::identity::secret_id()) {
+            eprintln!("could not delete this computer's device keys: {e}");
+            keys_ok = false;
+        }
         lock(&self.removed_keys).clear();
         lock(&self.removed_servers).clear();
         lock(&self.removed_mcp).clear();
@@ -758,6 +820,10 @@ impl AppState {
                 }
                 if r.is_ok() {
                     self.models.set_remote_servers(&[]);
+                }
+                if let Err(e) = dn_sync::link::forget(&db) {
+                    eprintln!("could not forget the paired Node: {e}");
+                    failed.push("the paired Node");
                 }
                 if let Err(e) = dn_knowledge::delete_all(&db) {
                     eprintln!("could not delete the knowledge index: {e}");
@@ -787,8 +853,23 @@ impl AppState {
             }
             Err(_) => failed.push("chats and settings"),
         }
+        // The host's own add-on data again, so nothing is left even when this runs alone.
+        if !crate::addons::wipe(self).is_empty() {
+            failed.push("part of an add-on's data");
+        }
         lock(&self.live).clear();
         failed
+    }
+
+    /// A chat was purged while the app runs (by sync, from another device): stop its reply
+    /// if one is being written, and remove what the app keeps for it outside dn-store, as
+    /// start-up does for every tombstone. Blocking. Returns the parts it could not remove.
+    pub fn forget_purged_chat(&self, conversation_id: Id) -> Vec<&'static str> {
+        self.stop(conversation_id);
+        match self.db() {
+            Ok(db) => forget_chat_data(&db, self.executor.as_deref(), conversation_id),
+            Err(_) => vec!["its artifacts, skill, sources and tool history"],
+        }
     }
 
     pub fn is_generating(&self, conversation_id: Id) -> bool {
@@ -1467,6 +1548,49 @@ mod tests {
                     .unwrap()
                     .is_empty()
             );
+        });
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_chat_purged_while_the_app_runs_loses_the_apps_data_for_it_too() {
+        let dir = std::env::temp_dir().join(format!("dn-app-forget-{}", Id::new()));
+        let path = dir.join("db.sqlite3");
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let st = AppState::open(&path, None).unwrap();
+            let (gone, kept) = {
+                let c = st.db().unwrap();
+                let gone = store::create_conversation(&c, "gone").unwrap();
+                let kept = store::create_conversation(&c, "kept").unwrap();
+                let arts = dn_artifacts::ArtifactStore::new(&c);
+                let ctx = dn_artifacts::OpContext::model(None);
+                for conv in [gone.id, kept.id] {
+                    arts.create(
+                        conv,
+                        &dn_core::artifact::ArtifactType::Html,
+                        "Page",
+                        "<p>x</p>",
+                        &ctx,
+                    )
+                    .unwrap();
+                    crate::skills::set_chat_skill(&c, conv, Some("summarize")).unwrap();
+                }
+                (gone.id, kept.id)
+            };
+            {
+                // Sync purged it: dn-store's rows are gone, a tombstone stays.
+                let c = st.db().unwrap();
+                store::delete_conversation(&c, gone).unwrap();
+                store::purge_deleted(&c, i64::MAX).unwrap();
+            }
+            assert!(st.forget_purged_chat(gone).is_empty());
+            let c = st.db().unwrap();
+            let arts = dn_artifacts::ArtifactStore::new(&c);
+            assert!(arts.list(gone).unwrap().is_empty());
+            assert_eq!(arts.list(kept).unwrap().len(), 1);
+            assert_eq!(crate::skills::chat_skill(&c, gone).unwrap(), None);
+            assert!(crate::skills::chat_skill(&c, kept).unwrap().is_some());
         });
         let _ = std::fs::remove_dir_all(dir);
     }

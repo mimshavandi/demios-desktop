@@ -80,6 +80,8 @@ jobs:
       - run: cargo test -p demios-desktop --features updater
       # The Flatpak build (packaging/flatpak): remote MCP servers only.
       - run: cargo test -p demios-desktop --features flatpak
+      # Connect (ADR-0018): debug builds that trust the test key read the signed catalogue.
+      - run: cargo test -p demios-desktop --features connect-test-key
   design-tokens:
     runs-on: ubuntu-latest
     steps:
@@ -94,6 +96,8 @@ jobs:
       - run: node ui/design-tokens/scripts/lint-ui.mjs
       # Release scripts (T-REL-02): signing checks and the updater manifest.
       - run: node --test "scripts/release/*.test.mjs"
+      # Connect catalogue scripts (ADR-0018): the release signature check, key and signing.
+      - run: node --test "scripts/connect/*.test.mjs"
   ui:
     runs-on: ubuntu-latest
     defaults:

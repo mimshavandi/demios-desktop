@@ -23,6 +23,26 @@ import { App } from "./App";
 import { KEYCHAIN_SLOW_MS, KeychainNotice } from "./SettingsView";
 import { ToastProvider } from "./toast";
 
+/** The regular build: no add-ons, so no Add-ons page and no consent dialog. */
+const noAddons = {
+  addonsList: async () => [],
+  addonsWatch: async () => null,
+  addonDetail: async () => {
+    throw { code: "invalid", message: "no add-ons" };
+  },
+  addonsPendingConsent: async () => [],
+  addonConsent: async () => null,
+  addonSetPermission: async () => null,
+  addonSetEnabled: async () => null,
+  addonsSetUtcOffset: async () => null,
+  addonsPaused: async () => false,
+  addonsSetPaused: async () => null,
+  addonSetJobEnabled: async () => null,
+  addonSetMissedRule: async () => null,
+  addonAnswerQuestion: async () => null,
+  addonAnswerHeld: async () => null,
+} satisfies Partial<Api>;
+
 afterEach(() => {
   cleanup();
   localStorage.clear();
@@ -208,6 +228,8 @@ function fakeApi() {
     listMcpServers: async () => ({ servers: [], local_servers_allowed: true }),
     saveMcpServer: async () => ({ servers: [], local_servers_allowed: true }),
     removeMcpServer: async () => ({ servers: [], local_servers_allowed: true }),
+    connectCatalogue: async () => ({ entries: [] }),
+    connectService: async () => ({ entries: [] }),
     restoreMcpServer: async () => ({ servers: [], local_servers_allowed: true }),
     reconnectMcpServer: async () => null,
     signInMcpServer: async () => null,
@@ -375,6 +397,13 @@ function fakeApi() {
     },
     listModels: async () => catalog(),
     checkKeys: async () => catalog(),
+    nodeOverview: async () => ({ paired: null, online: false, status: null, devices: [], problem: null }),
+    nodeJoinBegin: async () => ({ numbers: ["0000", "0000", "0000"], address: "nas:7443" }),
+    nodeJoinWait: async () => ({ paired: null, online: false, status: null, devices: [], problem: null }),
+    nodeJoinCancel: async () => null,
+    nodeRemoveDevice: async () => ({ paired: null, online: false, status: null, devices: [], problem: null }),
+    nodeUnpair: async () => ({ paired: null, online: false, status: null, devices: [], problem: null }),
+    nodeForget: async () => ({ paired: null, online: false, status: null, devices: [], problem: null }),
     setProviderKey: async () => catalog(),
     addRemoteServer: async () => catalog(),
     refreshRemoteServer: async () => catalog(),
@@ -400,6 +429,7 @@ function fakeApi() {
     undoRemoveLocalModel: async () => null,
     cancelDownload: async () => null,
     checkModelTools: async () => ({ kind: "chat", tool_support: "supported", source: "checked", label: "Chat · Tools" }),
+    ...noAddons,
     watchTools: async (onEvent) => {
       approvalSink = onEvent;
       return { approvals: [], servers: [] };
@@ -1763,18 +1793,47 @@ describe("Settings sections (#174)", () => {
     await openSettings("General");
     const nav = screen.getByRole("navigation", { name: "Settings sections" });
     const items = within(nav).getAllByRole("button");
-    expect(items.map((b) => b.textContent)).toEqual(["General", "Models", "Tools", "Skills"]);
+    expect(items.map((b) => b.textContent)).toEqual(["General", "Models", "Tools", "Skills", "Node"]);
     expect(items[0]!.getAttribute("aria-current")).toBe("page");
     // Roving focus: only the open section is in the Tab order.
-    expect(items.map((b) => b.tabIndex)).toEqual([0, -1, -1, -1]);
+    expect(items.map((b) => b.tabIndex)).toEqual([0, -1, -1, -1, -1]);
     items[0]!.focus();
     fireEvent.keyDown(items[0]!, { key: "ArrowDown" });
     expect(await screen.findByRole("heading", { level: 1, name: "Models" })).toBeTruthy();
     await waitFor(() => expect(document.activeElement?.textContent).toBe("Models"));
     fireEvent.keyDown(document.activeElement!, { key: "End" });
-    expect(await screen.findByRole("heading", { level: 1, name: "Skills" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { level: 1, name: "Node" })).toBeTruthy();
     fireEvent.keyDown(document.activeElement!, { key: "Home" });
     expect(await screen.findByRole("heading", { level: 1, name: "General" })).toBeTruthy();
+  });
+
+  it("shows Add-ons only in a build with add-ons", async () => {
+    const { api } = fakeApi();
+    api.addonsList = async () => [
+      {
+        id: "brief",
+        name: "Daily brief",
+        version: "1.0.0",
+        state: "running",
+        reason: null,
+        needs_consent: false,
+        waiting: 0,
+        has_jobs: false,
+      },
+    ];
+    render(<App api={api} />);
+    await openSettings("General");
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    await waitFor(() =>
+      expect(within(nav).getAllByRole("button").map((b) => b.textContent)).toEqual([
+        "General",
+        "Models",
+        "Tools",
+        "Skills",
+        "Node",
+        "Add-ons",
+      ]),
+    );
   });
 
   it("opens Tools and Skills on their own pages", async () => {

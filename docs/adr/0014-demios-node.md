@@ -1,6 +1,6 @@
 # ADR-0014: Demios Node: the engine run headless on the user's own machine or server, with paired clients
 
-**Status:** Accepted (owner, 2026-11-26) · **Date:** 2026-11-25 (amended 2026-11-26: offline notice) · **Deciders:** project owner, lead · **Extends:** [ADR-0001](0001-repo-and-crate-layout.md), [ADR-0006](0006-tools-mcp-capabilities.md), [ADR-0007](0007-local-storage-and-secrets.md), [ADR-0009](0009-security-baseline.md), [ADR-0013](0013-plugin-api.md), [ADR-0016](0016-demios-relay.md) · **Issue:** #203
+**Status:** Accepted (owner, 2026-11-26), amended (§4a, owner 2026-11-26) · **Date:** 2026-11-25 (amended 2026-11-26: offline notice; amended 2026-11-26: §4a remote access) · **Deciders:** project owner, lead · **Extends:** [ADR-0001](0001-repo-and-crate-layout.md), [ADR-0006](0006-tools-mcp-capabilities.md), [ADR-0007](0007-local-storage-and-secrets.md), [ADR-0009](0009-security-baseline.md), [ADR-0013](0013-plugin-api.md), [ADR-0016](0016-demios-relay.md) · **Issue:** #203
 
 ## Context
 Everything in Demios runs inside the desktop app today. When the app is closed or the computer sleeps, nothing runs:
@@ -60,11 +60,8 @@ This ADR decides the Node's shape: pairing, sync, models, approvals, secrets, op
   - The details (record format, clock, compaction) go into a `dn-sync` design note before implementation.
 
 ### 4. The Node never needs Demios servers
-- **Pairing, sync, models, tools and approvals all work with no Demios server.** Devices connect to the Node directly.
-- **How a client reaches the Node is the user's choice**, shown in the pairing screen:
-  - the same local network, found by mDNS or by entering an address;
-  - the user's own VPN or overlay network, such as WireGuard or Tailscale;
-  - a port the user forwards, or their own reverse proxy. TLS is still end to end with the pinned keys, so a proxy that terminates TLS breaks pairing on purpose.
+- **Pairing, sync, models, tools and approvals all work with no Demios server.** Devices connect to the Node directly or through a Relay the user runs (§4a).
+- **How a client reaches the Node** is set by §4a (amended 2026-11-26): on the same network directly, elsewhere through a Relay, and an opened path (a VPN or overlay, a forwarded port or a reverse proxy) only if the user chooses it. TLS is still end to end with the pinned keys, so a proxy that terminates TLS breaks pairing on purpose.
 - **The Demios Relay is optional** (ADR-0016). It's an encrypted store-and-forward mailbox service: when two devices aren't online at the same time, a device delivers its sealed changes, approvals or notifications to the other's mailbox there. It holds ciphertext only (§3), never decrypts and holds no keys. ADR-0016 states what it can still see: mailbox ids, timing and sizes.
   - **A Node can run its own Relay** (ADR-0016 §7), so even store-and-forward needs no Demios server.
   - **Without any Relay,** devices sync only when they reach the Node directly, and Settings › Node says so.
@@ -80,6 +77,77 @@ This ADR decides the Node's shape: pairing, sync, models, approvals, secrets, op
   - while it runs, the Node puts a small sealed "alive" record in the user's own Relay mailbox at a fixed interval (for example every 15 minutes);
   - a paired phone or desktop that sees no fresh record for a set time says "Your Node has been offline since 03:12" (a local notification on the device; the Relay never sends it and can't read the record);
   - **the cost is metadata:** the Relay sees when the Node is up. Settings › Node says so where it's turned on. Without a Relay the notice isn't available, and a device that reaches the Node directly sees its status anyway.
+
+### 4a. Amendment (accepted, owner 2026-11-26): how devices reach the Node by default
+> **Status of this section: accepted (owner, 2026-11-26).** It replaces §4's earlier "How a client reaches the Node is the user's choice" with the defaults below. Everything else in §4 stays.
+
+**Why:** the people who need a Node most are the least likely to set up port forwarding or a VPN. An always-on box with an open port is the most common way such boxes get attacked. So the default must reach the Node from anywhere without opening anything.
+
+#### The defaults
+1. **On the same network: direct.**
+   - The Node listens only on local-network addresses: private IPv4 ranges (RFC 1918), IPv6 unique-local (`fc00::/7`) and link-local addresses.
+   - Devices find it by mDNS, which can be turned off, or by its address. They connect over the paired TLS channel with pinned keys (§2).
+   - **The Node never asks the router to open a port.** There's no UPnP and no NAT-PMP.
+2. **Elsewhere: through the Relay.**
+   - Devices and the Node exchange sealed messages through their restricted mailboxes (ADR-0016 §4.2–4.3), holding a long-poll or WebSocket open while they're online (ADR-0016 §2), so delivery is close to live.
+   - This needs a Relay the user can use: the hosted one or their own (ADR-0016 §7).
+   - **Without a Relay,** devices away from the Node's network wait until they're back on it, and Settings › Node says so.
+3. **An opened path only if the user chooses it,** in Settings › Node.
+   - **Choices:** listen on another interface (a VPN or overlay such as WireGuard or Tailscale), a public interface, a forwarded port, or a reverse proxy that passes TLS through. A proxy that ends TLS still breaks pairing on purpose (§4).
+   - **Each choice names what it exposes,** for example "Anyone on the internet can reach this port. Only paired devices can connect, but the Node will see connection attempts". It can be undone in one step.
+
+**Which route a device uses:** it tries the direct route first (the address it knows, then mDNS), then the Relay. The device list and the status screen show each device's current route ("direct", "through the Relay", "not reachable").
+
+#### What works on each route
+
+| | Same network or opened path | Through the Relay |
+|---|---|---|
+| Sync of changes (dn-sync §10) | Yes | Yes (sealed envelopes, chunked to the Relay's 1 MiB message limit) |
+| Held approvals, answers and notifications (§6) | Yes | Yes (ADR-0016 §4.2) |
+| Add-on views (ADR-0013 §9.3, if approved) | Yes | Yes (a view document fits in one message) |
+| Offline notice (§4) | Status seen directly | Yes |
+| **Snapshot** for a new or long-absent device (dn-sync §9) | Yes | **No.** It's the whole data set and stays off the Relay (dn-sync §9) |
+| **The desktop's model used by the Node** (§5) | Yes | **No.** Streaming a model through store-and-forward mailboxes is too slow. The job fails clearly: "Your desktop isn't reachable directly, and this job uses its model" |
+| Pairing | Yes (§2) | Yes, for a Node with no shared network (below) |
+
+- **Consequence for full devices:**
+  - A desktop that has been away for longer than the Relay's TTL (ADR-0016 §6, 7 days by default) needs a snapshot, and waits for the direct route. The device list says "Needs to be on the Node's network once to catch up".
+  - Devices that sync only what they show, such as a phone app for approvals (its own ADR), don't need snapshots.
+- **Pairing through the Relay,** for a Node that shares no network with the device (a VPS):
+  - The pairing code (§2) also carries an **open, one-message pairing mailbox** on the Node's Relay, like an invitation (ADR-0016 §4.4).
+  - The new device seals its join request (its public keys and the proof of the one-time secret) to the Node's key and delivers it there.
+  - Both sides show the check phrase, and the user confirms as in §2.
+  - There's no TLS channel to bind the proof to, so the proof is bound to the Node's key, the mailbox id and the one-time secret. The mailbox takes one message and closes, so a proof can't be replayed.
+  - The pairing code expires after 10 minutes as before.
+
+#### Where the Node runs
+- **Home server, NAS, Mac mini or PC:** devices at home connect directly, and the Relay covers everything else. No port is opened.
+- **VPS:** it shares no network with the user's devices, so everything goes through the Relay unless the user opens a path (default 3). Pairing uses the Relay (above).
+- **Docker or Podman** (§9): the image and the example compose file publish **no port**. Direct access on the home network needs either host networking or publishing the port on a local address only, and the install docs show both.
+
+#### Checked against §4 and ADR-0016
+- **"The Node never needs Demios servers" stays true.**
+  - On the same network, nothing else is involved.
+  - Away from it, the user can run their own Relay (ADR-0016 §7).
+  - With the hosted Relay, a Demios server carries ciphertext only, and sees what ADR-0016 §3 lists.
+  - What changes: **the hosted or own Relay becomes the default away-from-home path.** The pairing screen and Settings › Node say so, and say what the Relay sees: mailbox ids, timing and sizes for all remote traffic.
+- **ADR-0016 needs no change.** Restricted mailboxes with delivery grants, the size limits, long-poll and WebSocket, and the open one-message mailbox are all there already. Pairing through the Relay is a new use of the invitation pattern (§4.4), and is listed here rather than there.
+- **Push (§4) is unchanged:** content-free and opt-in per device.
+
+#### Options considered
+| Option | Away from home | Exposure | Setup | Notes |
+|---|---|---|---|---|
+| A. Direct only; the user sets up a VPN or port (today's §4) | Only with the user's setup | Depends on the user | High | Most users never get past it |
+| **B. Same network direct, Relay elsewhere, a port only by choice (chosen)** | Yes, with a Relay | None by default | None beyond pairing | Snapshots and the desktop's model need the direct route |
+| C. Always through the Relay, even at home | Yes | None | None | Slower at home for no gain, and every message's metadata reaches the Relay |
+| D. Open a port automatically (UPnP or NAT-PMP), or build in an overlay network | Yes | A port, or a network stack in the app | Low | Rejected: an exposed port by default, or a large component to maintain |
+
+#### Action items (to be filed as issues)
+1. Node listener: local-network addresses only by default; the opt-in listeners with their warnings; no UPnP.
+2. Route selection on devices (direct first, then the Relay), and the route in the device list and status screen.
+3. Pairing through the Relay: the one-message pairing mailbox and a proof bound to the mailbox. That updates the pairing primitives (#234) and the design note (`docs/design/dn-sync.md`).
+4. Clear failures for the two direct-only features: snapshots, and the desktop's model.
+5. Install docs: Docker without published ports, and how to allow home-network access.
 
 ### 5. Models on the Node
 A Node has three kinds of model, and each chat, job or add-on slot names one **explicitly**:

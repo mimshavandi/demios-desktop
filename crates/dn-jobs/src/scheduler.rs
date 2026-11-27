@@ -12,6 +12,7 @@
 use crate::decide::{Decision, decide, in_quiet_hours};
 use crate::store::{self, Outcome};
 use crate::{JobKey, JobsError, Result};
+use dn_plugin_api::LocalTime;
 use dn_plugin_api::{BoxFuture, CancelToken, JobContext, JobDecl, PluginError};
 use rusqlite::Connection;
 use std::sync::{Arc, Mutex};
@@ -21,13 +22,11 @@ use tokio::sync::Notify;
 /// How often the loop looks for due jobs when nothing wakes it, in seconds.
 pub const TICK_SECS: u64 = 30;
 
-/// The time source. The host supplies the local UTC offset (the app from the OS; the Node
-/// from its configured time zone).
-pub trait Clock: Send + Sync {
+/// The time source and the local time zone (the app's from the OS; the Node's from
+/// `node.json`), with its daylight-saving rules.
+pub trait Clock: LocalTime + Send + Sync {
     /// Unix seconds.
     fn now(&self) -> i64;
-    /// The local offset from UTC at `at`, in seconds.
-    fn utc_offset_secs(&self, at: i64) -> i64;
 }
 
 /// What the scheduler tells the host, so its UI and notifications can follow.
@@ -123,19 +122,13 @@ impl Scheduler {
             return Ok(true);
         }
         let (start, end) = store::quiet_hours(conn)?;
-        Ok(in_quiet_hours(
-            now,
-            self.clock.utc_offset_secs(now),
-            start,
-            end,
-        ))
+        Ok(in_quiet_hours(now, &*self.clock, start, end))
     }
 
     /// Decides for every enabled job, records skips and questions, and returns the runs
     /// to start, on-time ones first.
     fn plan(&self) -> Result<Vec<(usize, Planned)>> {
         let now = self.clock.now();
-        let offset = self.clock.utc_offset_secs(now);
         let mut runs = Vec::new();
         let mut events = Vec::new();
         self.with_db(|conn| {
@@ -148,7 +141,7 @@ impl Scheduler {
                     continue;
                 };
                 let rule = state.missed_rule.unwrap_or(job.decl.missed_run);
-                match decide(&job.decl.schedule, &rule, since, now, offset) {
+                match decide(&job.decl.schedule, &rule, since, now, &*self.clock) {
                     Decision::Wait => {}
                     Decision::Run {
                         scheduled_for,
@@ -426,8 +419,13 @@ mod tests {
         fn now(&self) -> i64 {
             self.0.load(Ordering::SeqCst)
         }
-        fn utc_offset_secs(&self, _: i64) -> i64 {
-            0
+    }
+    impl LocalTime for FakeClock {
+        fn to_local(&self, utc: i64) -> i64 {
+            utc
+        }
+        fn to_utc(&self, local: i64) -> i64 {
+            local
         }
     }
 

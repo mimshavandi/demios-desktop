@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-addons-pending-consent"
+description = "Enables the addons_pending_consent command without any pre-configured scope."
+commands.allow = ["addons_pending_consent"]
+
+[[permission]]
+identifier = "deny-addons-pending-consent"
+description = "Denies the addons_pending_consent command without any pre-configured scope."
+commands.deny = ["addons_pending_consent"]

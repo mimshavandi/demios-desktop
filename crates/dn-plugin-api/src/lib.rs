@@ -62,7 +62,7 @@ pub use registrar::{
     CancelToken, JobContext, JobDecl, JobHandler, RegisteredJob, RegisteredTool, Registrar,
     Registrations, SkillDecl, ToolDecl, ToolHandler, ToolInput,
 };
-pub use schedule::{MissedRunRule, MissedRuns, Schedule, missed_runs};
+pub use schedule::{FixedOffset, LocalTime, MissedRunRule, MissedRuns, Schedule, missed_runs};
 pub use settings::{ChoiceOption, Field, FieldKind, SettingsPanel};
 pub use untrusted::{Quoted, Untrusted};
 

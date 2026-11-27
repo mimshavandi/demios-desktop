@@ -27,6 +27,11 @@ dev-fake-model = []
 # Flatpak builds (packaging/flatpak): only remote (HTTP) MCP servers, since the sandbox
 # can't run programs on the host. Also detected at run time from `FLATPAK_ID`.
 flatpak = []
+# Connect (ADR-0018): trust the throwaway TEST key (connect/test-key.pub) for the catalogue's
+# signature. Debug builds only: build.rs sets `cfg(connect_test_key)` when this feature is on
+# *and* debug assertions are enabled. Without it no key is trusted yet and the Connect list
+# says the catalogue couldn't be checked (the release key is the owner's decision).
+connect-test-key = []
 # Set by `tauri build`: embed the built UI instead of using the dev server.
 custom-protocol = ["tauri/custom-protocol"]
 # T-STORE-08: the signed self-updater. Only direct-download builds (macOS DMG, Windows
@@ -52,6 +57,13 @@ dn-artifacts = { path = "../../crates/dn-artifacts", version = "0.1.0" }
 dn-inference = { path = "../../crates/dn-inference", version = "0.1.0" }
 dn-knowledge = { path = "../../crates/dn-knowledge", version = "0.1.0" }
 dn-models = { path = "../../crates/dn-models", version = "0.1.0" }
+# Settings › Node: this computer's device keys, pairing and the paired channel (ADR-0014).
+dn-sync.workspace = true
+# This computer's name on the Node's device list.
+sysinfo.workspace = true
+# Add-ons (ADR-0013): the interface they build against, and the background-job scheduler.
+dn-plugin-api.workspace = true
+dn-jobs = { path = "../../crates/dn-jobs", version = "0.1.0" }
 futures-core.workspace = true
 rusqlite.workspace = true
 serde.workspace = true
@@ -75,7 +87,10 @@ tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 # No `zip` feature: it only unpacks the old v1 update archives (.zip, .AppImage.tar.gz), and
 # its `zip` 4 has open advisories. We publish v2 bundles (`createUpdaterArtifacts: true`).
 tauri-plugin-updater = { version = "2", optional = true, default-features = false, features = ["rustls-tls", "system-proxy"] }
-tokio = { workspace = true, features = ["sync", "macros", "time", "rt"] }
+tokio = { workspace = true, features = ["sync", "macros", "time", "rt", "net", "io-util"] }
+# Ed25519 check of the Connect catalogue's signature (ADR-0018); already built in as rustls's
+# crypto provider (same version), as for dn-sync.
+aws-lc-rs.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "net", "io-util"] }
