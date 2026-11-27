@@ -1,0 +1,18 @@
+# Format example for `dn eval parity` (not the golden set; that's evals/golden).
+- id: summarise-001
+  category: summarise
+  lang: en
+  tags: [project, list]
+  project:
+    instructions: "Answer in British English."
+    files: [garden-club/minutes-march.md]
+  turns:
+    - role: user
+      content: |
+        Summarise these minutes in three bullets for members who missed the meeting.
+  expect:
+    must:
+      - "Gives exactly three bullets"
+      - "Mentions the new watering rota starting 1 April"
+    must_not:
+      - "Invents decisions not in the minutes"

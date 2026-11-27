@@ -81,6 +81,7 @@ fn done(f: FinishReason, i: u32, o: u32) -> StreamEvent {
         usage: Usage {
             input_tokens: i,
             output_tokens: o,
+            ..Default::default()
         },
     }
 }
@@ -185,14 +186,15 @@ async fn runs_a_two_step_tool_chain() {
     .await
     .unwrap();
 
-    assert_eq!(out.stop, StopReason::Completed);
-    assert_eq!(out.steps, 3);
+    assert_eq!(out.result.stop, StopReason::Completed);
+    assert_eq!(out.result.steps, 3);
     assert_eq!(out.final_text, "You need eggs and milk.");
     assert_eq!(
-        out.usage,
+        out.result.usage,
         Usage {
             input_tokens: 380,
-            output_tokens: 30
+            output_tokens: 30,
+            ..Default::default()
         }
     );
 
@@ -206,7 +208,10 @@ async fn runs_a_two_step_tool_chain() {
         .collect();
     assert_eq!(ran, ["search", "read"]);
     // Every call in the run shares one run_id (the idempotency scope).
-    assert_eq!(*tools.run_ids.lock().unwrap(), [out.run_id, out.run_id]);
+    assert_eq!(
+        *tools.run_ids.lock().unwrap(),
+        [out.result.run_id, out.result.run_id]
+    );
 
     // Each model call saw the previous tool result.
     let reqs = model.requests();
@@ -280,7 +285,7 @@ async fn tool_errors_go_back_to_the_model() {
     )
     .await
     .unwrap();
-    assert_eq!(out.stop, StopReason::Completed);
+    assert_eq!(out.result.stop, StopReason::Completed);
     let tool_msg = &model.requests()[1].messages[3];
     assert_eq!(texts(tool_msg), "Error: no such file");
 }
@@ -306,10 +311,10 @@ async fn stops_at_the_step_limit_with_consistent_history() {
     )
     .await
     .unwrap();
-    assert_eq!(out.stop, StopReason::StepLimit);
-    assert_eq!(out.steps, 2);
+    assert_eq!(out.result.stop, StopReason::StepLimit);
+    assert_eq!(out.result.steps, 2);
     assert_eq!(model.requests().len(), 2);
-    assert_eq!(out.usage.output_tokens, 10);
+    assert_eq!(out.result.usage.output_tokens, 10);
     // Last tool call still has its result.
     assert_eq!(out.messages.last().unwrap().role, Role::Tool);
 }
@@ -337,7 +342,7 @@ async fn cancel_while_waiting_for_a_tool_closes_the_turn() {
         .await
         .unwrap();
     canceller.await.unwrap();
-    assert_eq!(out.stop, StopReason::Cancelled);
+    assert_eq!(out.result.stop, StopReason::Cancelled);
     // Both calls have a result, so the next turn is valid for every provider.
     let tool_ids: Vec<_> = out
         .messages
@@ -349,10 +354,11 @@ async fn cancel_while_waiting_for_a_tool_closes_the_turn() {
     assert_eq!(tools.calls.lock().unwrap().len(), 1, "c2 never ran");
     // Usage of the finished model call is kept on cancel.
     assert_eq!(
-        out.usage,
+        out.result.usage,
         Usage {
             input_tokens: 1,
-            output_tokens: 1
+            output_tokens: 1,
+            ..Default::default()
         }
     );
 }
@@ -383,7 +389,7 @@ async fn cancel_mid_stream_keeps_partial_text() {
     )
     .await
     .unwrap();
-    assert_eq!(out.stop, StopReason::Cancelled);
+    assert_eq!(out.result.stop, StopReason::Cancelled);
     assert_eq!(out.final_text, "Partial ans");
     assert_eq!(texts(&out.messages[0]), "Partial ans");
     assert_eq!(*seen.lock().unwrap(), 1);
@@ -455,7 +461,7 @@ async fn empty_and_duplicate_call_ids_are_made_unique_and_results_line_up() {
     )
     .await
     .unwrap();
-    assert_eq!(out.stop, StopReason::Completed);
+    assert_eq!(out.result.stop, StopReason::Completed);
     let executed: Vec<String> = tools
         .calls
         .lock()
@@ -520,11 +526,11 @@ async fn length_finish_never_runs_tool_calls() {
     )
     .await
     .unwrap();
-    assert_eq!(out.stop, StopReason::Length);
+    assert_eq!(out.result.stop, StopReason::Length);
     assert!(tools.calls.lock().unwrap().is_empty());
     assert_eq!(out.messages.len(), 1);
     assert!(out.messages[0].tool_calls.is_empty());
-    assert_eq!(out.usage.output_tokens, 64);
+    assert_eq!(out.result.usage.output_tokens, 64);
 }
 
 #[tokio::test]
@@ -595,4 +601,42 @@ async fn ids_already_in_history_are_never_reused() {
         all.len(),
         "duplicate ids in conversation: {all:?}"
     );
+}
+
+#[tokio::test]
+async fn the_run_result_names_the_run_and_a_failed_run_can_be_metered_from_its_events() {
+    let model = ScriptedModel::new(vec![
+        vec![
+            call("a", "search", json!({})),
+            done(FinishReason::ToolCalls, 100, 5),
+        ],
+        vec![text("done"), done(FinishReason::Stop, 140, 3)],
+    ]);
+    let mut meter = dn_agent::RunMeter::start(dn_core::Id::new(), "test", cfg().model);
+    let out = run_loop(
+        &model,
+        &NotesTools::default(),
+        &cfg(),
+        history(),
+        &CancelToken::new(),
+        &mut |e| dn_agent::observe_event(&mut meter, &e),
+    )
+    .await
+    .unwrap();
+    let r = &out.result;
+    assert_eq!(
+        (r.caller.as_str(), &r.model),
+        (cfg().caller.as_str(), &cfg().model)
+    );
+    assert_eq!((r.stop, r.steps), (StopReason::Completed, 2));
+    assert!(r.first_token_ms.is_some_and(|t| t <= r.wall_ms));
+    assert!(
+        r.dropped.is_empty(),
+        "nothing is dropped before the assembler (R1)"
+    );
+    // A surface metering the events sees the same steps and usage, so a run that ends in
+    // Err (no outcome) still gets a result.
+    let failed = meter.finish(StopReason::Failed);
+    assert_eq!((failed.steps, failed.usage), (r.steps, r.usage));
+    assert_eq!(failed.usage.input_tokens, 240);
 }

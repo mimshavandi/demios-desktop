@@ -510,7 +510,7 @@ impl AppState {
         let store = self.mcp_secret_store();
         for (sid, value) in &writes {
             store.set(sid, value).map_err(|e| {
-                eprintln!("could not store an MCP secret: {e}");
+                tracing::warn!("could not store an MCP secret: {e}");
                 IpcError::new(
                     "keychain",
                     "Couldn't save the secret to your system keychain.",

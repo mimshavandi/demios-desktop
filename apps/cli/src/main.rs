@@ -3,6 +3,7 @@
 
 mod bench;
 mod embed_eval;
+mod eval;
 mod node;
 mod quality;
 mod report;
@@ -49,6 +50,9 @@ enum Cmd {
     BenchReport(report::ReportArgs),
     /// Retrieval quality (English and German), speed and memory of an embedding model.
     BenchEmbed(embed_eval::EmbedArgs),
+    /// Measure what Demios does with a model through its own pipeline: golden prompts,
+    /// LongMemEval, speed. Writes one JSON report per run; sends nothing anywhere.
+    Eval(eval::EvalArgs),
     /// The curated model catalogue.
     Models {
         #[command(subcommand)]
@@ -1181,6 +1185,14 @@ async fn models_cmd(cmd: ModelsCmd) -> Result<(), String> {
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    // Warnings only by default, so `dn`'s own output stays as it was; `RUST_LOG=info` adds
+    // one line per model run (ADR-0020 §8). Written to stderr, never sent anywhere.
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"));
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .try_init();
     let cli = Cli::parse();
     let r = match cli.cmd {
         Cmd::Run(a) => run(a).await,
@@ -1188,6 +1200,7 @@ async fn main() -> ExitCode {
         Cmd::Bench(a) => bench::run(a).await,
         Cmd::BenchReport(a) => report::run(a),
         Cmd::BenchEmbed(a) => embed_eval::run(a).await,
+        Cmd::Eval(a) => eval::run(a).await,
         Cmd::Models { cmd } => models_cmd(cmd).await,
         Cmd::Node { cmd } => node::command(cmd).await,
     };

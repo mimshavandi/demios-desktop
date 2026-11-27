@@ -47,7 +47,7 @@ fn frame_csp() -> &'static FrameCsp {
     static CSP: OnceLock<FrameCsp> = OnceLock::new();
     CSP.get_or_init(|| {
         serde_json::from_str(FRAME_CSP_JSON).unwrap_or_else(|e| {
-            eprintln!("artifact frame CSP is unreadable ({e}); serving a deny-all policy");
+            tracing::warn!("artifact frame CSP is unreadable ({e}); serving a deny-all policy");
             FrameCsp {
                 strict: "default-src 'none'".into(),
                 network: "default-src 'none'".into(),
@@ -170,7 +170,7 @@ fn store_error(e: ArtifactError) -> IpcError {
             IpcError::new("not_found", e.to_string())
         }
         ArtifactError::Db(_) | ArtifactError::Corrupt(_) => {
-            eprintln!("artifact store error: {e}");
+            tracing::warn!("artifact store error: {e}");
             IpcError::new("storage", "Could not read or write local data.")
         }
         // The store's own text is written for the model; the user gets plain words.
@@ -367,7 +367,7 @@ impl ToolExecutor for RunTools {
             let result = match applied {
                 Ok(r) => r,
                 Err(e) => {
-                    eprintln!("artifact tool failed: {e}");
+                    tracing::warn!("artifact tool failed: {e}");
                     return Ok(ToolOutput::error(
                         "The artifact couldn't be saved. Try again.",
                     ));

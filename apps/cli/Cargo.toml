@@ -13,6 +13,9 @@ vulkan = ["dn-inference/vulkan"]
 
 [dependencies]
 dn-core.workspace = true
+dn-agent.workspace = true
+tracing-subscriber.workspace = true
+dn-knowledge = { path = "../../crates/dn-knowledge", version = "0.1.0" }
 dn-inference = { workspace = true, features = ["llamacpp"] }
 dn-models.workspace = true
 dn-secrets.workspace = true
@@ -23,8 +26,12 @@ dn-plugin-api.workspace = true
 clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_yaml_ng.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util", "net", "signal"] }
 sysinfo.workspace = true
+
+[dev-dependencies]
+futures-core.workspace = true
 
 [lints]
 workspace = true

@@ -200,14 +200,14 @@ pub fn remove_copies(root: &Path, purged: &project::Purged) {
         match std::fs::remove_file(&path) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => eprintln!("could not delete a project file copy: {e}"),
+            Err(e) => tracing::warn!("could not delete a project file copy: {e}"),
         }
     }
     for p in &purged.projects {
         match std::fs::remove_dir_all(project::project_dir(root, *p)) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => eprintln!("could not delete a project's files folder: {e}"),
+            Err(e) => tracing::warn!("could not delete a project's files folder: {e}"),
         }
     }
 }
@@ -237,7 +237,7 @@ pub fn sweep(conn: &Connection, root: &Path) -> dn_store::Result<()> {
                 std::fs::remove_file(&path)
             };
             if let Err(e) = r {
-                eprintln!("could not remove a stray project file: {e}");
+                tracing::warn!("could not remove a stray project file: {e}");
             }
             continue;
         };
@@ -255,7 +255,7 @@ pub fn sweep(conn: &Connection, root: &Path) -> dn_store::Result<()> {
                     std::fs::remove_file(&p)
                 };
                 if let Err(e) = r {
-                    eprintln!("could not remove a stray project file: {e}");
+                    tracing::warn!("could not remove a stray project file: {e}");
                 }
             }
         }
@@ -435,7 +435,7 @@ pub fn add_files(s: &AppState, project_id: Id, paths: &[PathBuf]) -> IpcResult<A
             }
             Err(e) => {
                 if let ImportError::Unreadable(io) = &e {
-                    eprintln!("could not add a project file: {io}");
+                    tracing::warn!("could not add a project file: {io}");
                 }
                 let reason = match e {
                     ImportError::Store(dn_store::StoreError::Invalid(w)) => w,
