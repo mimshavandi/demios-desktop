@@ -1555,6 +1555,7 @@ dependencies = [
  "dn-jobs",
  "dn-plugin-api",
  "dn-secrets",
+ "dn-tools",
  "process-wrap",
  "reqwest",
  "rmcp",

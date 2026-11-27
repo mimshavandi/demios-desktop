@@ -12,8 +12,8 @@
 //!   to make one, and no token type is in `dn-plugin-api`.
 //! - **Single use.** Presenting a token removes it, whether it matched or not.
 //! - **Expires.** A token not used within [`TOKEN_TTL`] is refused.
-//! - **Withdrawn with its call.** [`TokenBook::revoke_call`] refuses a token minted for a
-//!   call that was withdrawn since.
+//! - **Withdrawn with its call.** [`crate::Executor::revoke_held_approval`] refuses a token
+//!   minted for a call that was withdrawn since.
 //!
 //! The token is a check in the executor, not a sandbox: in-process add-ons are trusted code
 //! (ADR-0013 §1). What it guarantees is that no setting, schedule or add-on request makes
