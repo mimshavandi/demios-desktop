@@ -49,7 +49,8 @@ function noNode(): NodeOverview {
   return { paired: null, online: false, status: null, devices: [], problem: null, sync: { state: "off", last_synced_at: null, failures: 0, error: null, applied: 0 } };
 }
 
-function mockPairedNode(): NodeOverview {
+/** A link with "outside" in it pairs a Node reachable from outside its network. */
+function mockPairedNode(outside = false): NodeOverview {
   const now = Date.now();
   return {
     paired: { name: "Home server", address: "192.168.1.20:7443", paired_at: now, last_reached_at: now },
@@ -61,6 +62,7 @@ function mockPairedNode(): NodeOverview {
       secret_store_label: "Encrypted file, key from a systemd credential",
       protected_at_rest: true,
       devices: 3,
+      reachable_from_outside: outside,
     },
     devices: [
       { id: "a1", name: "Home server", kind: "node", last_synced_at: now - 120_000, this_device: false },
@@ -321,6 +323,7 @@ export function createMockApi(): Api {
   const removals = new Map<string, { slots: [string, string][]; timer: number }>();
   let settings: Settings = { slots: {}, telemetry_enabled: false };
   let nodeView: NodeOverview = noNode();
+  let joinLink = "";
   const timers = new Map<string, number>();
   const id = () => crypto.randomUUID();
   const now = () => Date.now();
@@ -806,11 +809,12 @@ export function createMockApi(): Api {
       await new Promise((r) => setTimeout(r, 300));
       if (!link.startsWith("demios://pair?"))
         throw { code: "node_link", message: "That isn't a Demios pairing link: it doesn't start with demios://pair." };
+      joinLink = link;
       return { numbers: ["4821", "0937", "5512"], address: "192.168.1.20:7443" };
     },
     nodeJoinWait: async () => {
       await new Promise((r) => setTimeout(r, 2500));
-      nodeView = mockPairedNode();
+      nodeView = mockPairedNode(joinLink.includes("outside"));
       return nodeView;
     },
     nodeJoinCancel: async () => null,

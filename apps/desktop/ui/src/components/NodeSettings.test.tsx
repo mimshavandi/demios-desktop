@@ -33,6 +33,7 @@ const paired: NodeOverview = {
     secret_store_label: "Encrypted file, key from a systemd credential",
     protected_at_rest: true,
     devices: 3,
+    reachable_from_outside: false,
   },
   devices: [
     { id: "n1", name: "Home server", kind: "node", last_synced_at: NOW, this_device: false },
@@ -164,6 +165,7 @@ describe("Settings › Node (ADR-0014)", () => {
     expect(screen.getByText("192.168.1.20:7443")).toBeTruthy();
     expect(screen.getByText("Encrypted file, key from a systemd credential")).toBeTruthy();
     expect(screen.queryByText("Unprotected")).toBeNull();
+    expect(screen.getByText("Devices on its network")).toBeTruthy();
     expect(screen.getByText("This device")).toBeTruthy();
     expect(screen.getByText("Last synced 5 min ago")).toBeTruthy();
     // The Node itself has no menu; the others do.
@@ -178,6 +180,20 @@ describe("Settings › Node (ADR-0014)", () => {
     };
     show(fake(plain).api);
     expect(await screen.findByText("Unprotected")).toBeTruthy();
+  });
+
+  it("a Node reachable from outside says so, with what that means", async () => {
+    show(fake({ ...paired, status: { ...paired.status!, reachable_from_outside: true } }).api);
+    expect(await screen.findByText("Reachable from outside your network")).toBeTruthy();
+    expect(screen.getByText(/Anyone who can reach its port can try to connect/)).toBeTruthy();
+    expect(screen.queryByText("Devices on its network")).toBeNull();
+  });
+
+  it("an older Node that doesn't report who can connect shows no row", async () => {
+    const { reachable_from_outside: _, ...older } = paired.status!;
+    show(fake({ ...paired, status: older }).api);
+    expect(await screen.findByText("Online")).toBeTruthy();
+    expect(screen.queryByText("Who can connect")).toBeNull();
   });
 
   it("offline: says since when and that local changes are kept, with Retry", async () => {

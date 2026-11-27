@@ -145,7 +145,7 @@ This ADR decides the Node's shape: pairing, sync, models, approvals, secrets, op
 #### Action items (to be filed as issues)
 1. Node listener: local-network addresses only by default; the opt-in listeners with their warnings; no UPnP.
 2. Route selection on devices (direct first, then the Relay), and the route in the device list and status screen.
-3. Pairing through the Relay: the one-message pairing mailbox and a proof bound to the mailbox. That updates the pairing primitives (#234) and the design note (`docs/design/dn-sync.md`).
+3. Pairing through the Relay: the one-message pairing mailbox and a proof bound to the mailbox. That updates the pairing primitives (#234) and the design note (`docs/design/dn-sync.md`). Done in #304 (design note §10.4); the Relay client wiring is #315.
 4. Clear failures for the two direct-only features: snapshots, and the desktop's model.
 5. Install docs: Docker without published ports, and how to allow home-network access.
 
