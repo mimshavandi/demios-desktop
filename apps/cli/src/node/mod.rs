@@ -19,6 +19,8 @@ pub mod config;
 // The control channel is a Unix socket; Windows has none yet (#261).
 #[cfg(unix)]
 pub mod control;
+#[cfg(unix)]
+pub mod delete;
 pub mod zone;
 
 use clap::Subcommand;
@@ -99,6 +101,28 @@ pub enum NodeCmd {
         #[arg(long)]
         address: Option<String>,
     },
+    /// List the devices paired with the running Node, with their ids.
+    Devices {
+        #[arg(long)]
+        data_dir: PathBuf,
+    },
+    /// Remove a paired device from the running Node. It can't connect or sync again, and
+    /// the other devices get new keys. Its own copy of your data stays on it.
+    RemoveDevice {
+        #[arg(long)]
+        data_dir: PathBuf,
+        /// The device's id, from `dn node devices`.
+        id: String,
+    },
+    /// Delete this Node and everything on it: its keys, database and settings. Stop the
+    /// Node first. Paired devices keep their own copies.
+    DeleteAll {
+        #[arg(long)]
+        data_dir: PathBuf,
+        /// The Node's name, to confirm without being asked.
+        #[arg(long)]
+        confirm: Option<String>,
+    },
 }
 
 pub async fn command(cmd: NodeCmd) -> Result<(), String> {
@@ -149,7 +173,117 @@ pub async fn command(cmd: NodeCmd) -> Result<(), String> {
             node.serve(stop).await
         }
         NodeCmd::Pair { data_dir, address } => pair_command(&data_dir, address).await,
+        NodeCmd::Devices { data_dir } => devices_command(&data_dir).await,
+        NodeCmd::RemoveDevice { data_dir, id } => remove_command(&data_dir, &id).await,
+        NodeCmd::DeleteAll { data_dir, confirm } => delete_all_command(&data_dir, confirm).await,
     }
+}
+
+#[cfg(unix)]
+async fn devices_command(data_dir: &Path) -> Result<(), String> {
+    match control::client_request(data_dir, &control::Request::Devices).await? {
+        control::Reply::Devices { devices } => {
+            for d in devices {
+                let synced = match d.last_synced_at {
+                    Some(ms) => format!("last synced {}", ago(dn_store::now_ms() - ms)),
+                    None if d.kind == "node" => "this Node".to_owned(),
+                    None => "never synced".to_owned(),
+                };
+                println!("{}  {} ({}), {synced}", d.id, d.name, d.kind);
+            }
+            Ok(())
+        }
+        _ => Err("the Node answered something else".into()),
+    }
+}
+
+/// "3 min ago", "2 h ago", "5 days ago".
+#[cfg(unix)]
+fn ago(ms: i64) -> String {
+    let min = ms.max(0) / 60_000;
+    match min {
+        0 => "just now".into(),
+        1..=59 => format!("{min} min ago"),
+        60..=2879 => format!("{} h ago", min / 60),
+        _ => format!("{} days ago", min / 1440),
+    }
+}
+
+#[cfg(unix)]
+async fn remove_command(data_dir: &Path, id: &str) -> Result<(), String> {
+    let request = control::Request::RemoveDevice { id: id.to_owned() };
+    match control::client_request(data_dir, &request).await? {
+        control::Reply::Removed { name } => {
+            eprintln!(
+                "Removed {name}. It can't connect or sync again, and your other devices get new \
+                 keys when they next sync. Its own copy of your data stays on it."
+            );
+            Ok(())
+        }
+        _ => Err("the Node answered something else".into()),
+    }
+}
+
+#[cfg(not(unix))]
+async fn devices_command(_data_dir: &Path) -> Result<(), String> {
+    Err("dn node devices isn't available on Windows yet (#261)".into())
+}
+
+#[cfg(not(unix))]
+async fn remove_command(_data_dir: &Path, _id: &str) -> Result<(), String> {
+    Err("dn node remove-device isn't available on Windows yet (#261)".into())
+}
+
+#[cfg(unix)]
+async fn delete_all_command(data_dir: &Path, confirm: Option<String>) -> Result<(), String> {
+    delete::ensure_stopped(data_dir).await?;
+    let plan = delete::plan(data_dir)?;
+    eprintln!(
+        "This deletes the Node {:?} and everything on it: its keys in {}, its database \
+         (chats, memory, jobs) and its settings in {}.\n\
+         {} paired device(s) keep their own copies but can't reach this Node again.\n\
+         This can't be undone.",
+        plan.name,
+        plan.store,
+        data_dir.display(),
+        plan.devices
+    );
+    let typed = match confirm {
+        Some(name) => name,
+        None => {
+            eprintln!("Type the Node's name to delete it: ");
+            let mut line = String::new();
+            std::io::stdin()
+                .read_line(&mut line)
+                .map_err(|e| e.to_string())?;
+            line.trim().to_owned()
+        }
+    };
+    if typed != plan.name {
+        return Err("That isn't the Node's name. Nothing was deleted.".into());
+    }
+    let report = delete::delete_all(data_dir, &|k| std::env::var_os(k))?;
+    eprintln!(
+        "Deleted {} key(s) and {} file(s).",
+        report.keys_deleted,
+        report.files_deleted.len()
+    );
+    if report.folder_removed {
+        eprintln!("Removed {}.", data_dir.display());
+    } else if !report.left.is_empty() {
+        eprintln!(
+            "{} still holds files dn node didn't make, so it was kept: {}",
+            data_dir.display(),
+            report.left.join(", ")
+        );
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+async fn delete_all_command(_data_dir: &Path, _confirm: Option<String>) -> Result<(), String> {
+    // Without a control channel (#261) there's no way to tell that the Node is stopped.
+    Err("dn node delete-all isn't available on Windows yet (#261)".into())
 }
 
 /// The address devices should use, from `--address` or a specific listen address.
@@ -1268,6 +1402,64 @@ mod tests {
                 self.stop.notify_waiters();
                 self.serving.await.unwrap().unwrap();
             }
+        }
+
+        /// #309: `dn node devices` lists the device, `dn node remove-device` removes it for
+        /// good (it can't connect again), and the Node itself can't be removed that way.
+        #[tokio::test]
+        async fn dn_node_remove_device_removes_it_for_good() {
+            let dir = TempDir::new("remove");
+            init(&dir.0, SecretsConfig::InsecurePlaintext);
+            let laptop = DeviceKeys::generate().unwrap();
+            let (cli, device, node) = pair_with(&dir.0, &laptop, true).await;
+            cli.unwrap();
+            device.unwrap();
+
+            let control::Reply::Devices { devices } =
+                control::client_request(&dir.0, &control::Request::Devices)
+                    .await
+                    .unwrap()
+            else {
+                panic!("expected the device list");
+            };
+            let row = devices.iter().find(|d| d.name == "MacBook Pro").unwrap();
+            let node_row = devices.iter().find(|d| d.kind == "node").unwrap();
+            assert!(
+                control::client_request(
+                    &dir.0,
+                    &control::Request::RemoveDevice {
+                        id: node_row.id.clone()
+                    }
+                )
+                .await
+                .unwrap_err()
+                .contains("delete-all")
+            );
+            let removed = control::client_request(
+                &dir.0,
+                &control::Request::RemoveDevice { id: row.id.clone() },
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                removed,
+                control::Reply::Removed {
+                    name: "MacBook Pro".into()
+                }
+            );
+            let members = DeviceList::members(&lock(&node.db)).unwrap();
+            assert!(!members.iter().any(|d| d.keys == laptop.public()));
+            // Removing it again names the list to check.
+            assert!(
+                control::client_request(
+                    &dir.0,
+                    &control::Request::RemoveDevice { id: row.id.clone() }
+                )
+                .await
+                .unwrap_err()
+                .contains("dn node devices")
+            );
+            node.stop().await;
         }
 
         #[tokio::test]
