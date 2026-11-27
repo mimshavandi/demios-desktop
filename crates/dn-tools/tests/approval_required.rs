@@ -235,12 +235,21 @@ fn jobs_db() -> rusqlite::Connection {
 
 /// Holds the job's call, lets the window allow it, and hands it out.
 fn hold_and_allow(conn: &rusqlite::Connection, run: Id, args: serde_json::Value) -> held::Approved {
+    hold_and_allow_as(conn, run, SEND, args)
+}
+
+fn hold_and_allow_as(
+    conn: &rusqlite::Connection,
+    run: Id,
+    tool: &str,
+    args: serde_json::Value,
+) -> held::Approved {
     let h = held::hold(
         conn,
         &HoldRequest {
             job: JobKey::new(PluginId::new("mail").unwrap(), "drafts"),
             run,
-            tool: SEND.into(),
+            tool: tool.into(),
             arguments: args,
             summary: "Send mail".into(),
         },
@@ -391,4 +400,21 @@ async fn the_users_mark_adds_to_an_unmarked_tool_and_cant_remove_the_add_ons() {
         CapabilityOverride::default(),
     )]));
     assert!(ex.resolve(SEND).unwrap().spec.approval_required);
+}
+
+#[tokio::test]
+async fn a_call_held_under_the_models_tool_name_runs_with_its_approval() {
+    let (ex, _rx) = executor();
+    let sent = Arc::new(Sent::default());
+    mail(&ex, sent.clone(), true);
+    let conn = jobs_db();
+    let run = Id::new();
+    let llm_name = ex.resolve(SEND).unwrap().llm_name;
+    assert_ne!(llm_name, SEND);
+    let approved = hold_and_allow_as(&conn, run, &llm_name, json!({"to": "a"}));
+    let (_, tc, token) = ex.approval_for_held(approved).unwrap();
+    ex.execute(&job_ctx(run, false).with_approval(token), &tc)
+        .await
+        .unwrap();
+    assert_eq!(sent.count(), 1);
 }

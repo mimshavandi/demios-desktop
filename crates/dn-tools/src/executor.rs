@@ -1443,10 +1443,16 @@ impl Executor {
             name: held.tool.clone(),
             arguments,
         };
+        // The executor binds to the capability id; the add-on may have held the call
+        // under the name the model sees.
+        let capability_id = self
+            .resolve(&held.tool)
+            .map(|c| c.spec.id)
+            .ok_or_else(|| Self::not_found(&held.tool))?;
         let token = self.tokens.mint(Binding::new(
             held.run,
             &call.id,
-            &held.tool,
+            &capability_id,
             &call.arguments,
         ));
         Ok((held, call, token))
