@@ -132,6 +132,13 @@ fn delete_keys(
     }
     let store: &dyn SecretStore = &*store;
     let mut deleted = 0;
+    if !data_dir.join(DATABASE_FILE).exists() && config.secrets == SecretsConfig::Keychain {
+        // Without the database the group's keys can't be listed, so they can't be found.
+        eprintln!(
+            "dn node: {DATABASE_FILE} is gone, so the group keys in the keychain can't be \
+             listed. Remove the keychain items named device/group.* by hand"
+        );
+    }
     if data_dir.join(DATABASE_FILE).exists() {
         let conn = open_db(data_dir)?;
         let node = DeviceList::members(&conn)
