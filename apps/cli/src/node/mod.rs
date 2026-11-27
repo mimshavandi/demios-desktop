@@ -8,7 +8,8 @@
 //!   2. It opens exactly the configured secret store. A passphrase store waits for
 //!      `dn node unlock` (#255).
 //!   3. It loads or creates the Node's device keys and lists itself as the group's Node.
-//!   4. It opens `node.db`, with the sync and jobs tables.
+//!   4. It opens `node.db`, with the sync and jobs tables, and loads the key its synced
+//!      records are sealed with, from the secret store (made on the first start, #335).
 //!   5. It runs the job scheduler (dn-jobs) and accepts paired devices over the paired
 //!      channel (dn-sync).
 //!
@@ -30,6 +31,7 @@ use dn_secrets::SecretStore;
 use dn_secrets::server::{self, ServerStore, StoreReport};
 use dn_store::{Connection, MigrationSet};
 use dn_sync::SyncError;
+use dn_sync::at_rest::{NodeRecords, RecordsKeys};
 use dn_sync::devices::{DeviceKind, DeviceList};
 use dn_sync::group::NodeGroup;
 use dn_sync::identity::DeviceKeys;
@@ -99,6 +101,12 @@ pub enum NodeCmd {
         #[arg(long)]
         address: Option<String>,
     },
+    /// Make a new key for the Node's synced records, re-seal them with it, then delete the
+    /// old key. The Node keeps running and syncing meanwhile.
+    RotateRecordsKey {
+        #[arg(long)]
+        data_dir: PathBuf,
+    },
 }
 
 pub async fn command(cmd: NodeCmd) -> Result<(), String> {
@@ -149,6 +157,22 @@ pub async fn command(cmd: NodeCmd) -> Result<(), String> {
             node.serve(stop).await
         }
         NodeCmd::Pair { data_dir, address } => pair_command(&data_dir, address).await,
+        #[cfg(unix)]
+        NodeCmd::RotateRecordsKey { data_dir } => {
+            let key = control::client_rotate(&data_dir, |text| eprintln!("{text}")).await?;
+            eprintln!(
+                "Done: the synced records are sealed with key {key}, and the old key is deleted. \
+                 A backup of the database from before still opens with the old key, if a copy of \
+                 the secret store from then was kept."
+            );
+            Ok(())
+        }
+        #[cfg(not(unix))]
+        NodeCmd::RotateRecordsKey { .. } => Err(
+            "rotating the records key needs the Node's control channel, which Windows \
+                 doesn't have yet (#261)"
+                .into(),
+        ),
     }
 }
 
@@ -264,6 +288,9 @@ pub struct Node {
     control: tokio::net::UnixListener,
     keys: Arc<DeviceKeys>,
     db: Arc<Mutex<Connection>>,
+    /// The synced records, sealed at rest (#335).
+    #[cfg_attr(not(unix), allow(dead_code))]
+    records: Arc<NodeRecords>,
     secrets: Arc<dyn SecretStore>,
     group: Arc<Mutex<NodeGroup>>,
     store: StoreReport,
@@ -340,6 +367,10 @@ impl Node {
             }
             Err(e) => return Err(format!("couldn't read the device list: {e}")),
         }
+        let records = Arc::new(NodeRecords::new(Arc::new(
+            RecordsKeys::load(&conn, store_ref)
+                .map_err(|e| format!("couldn't load the key for the synced records: {e}"))?,
+        )));
         let group = node_group(&conn, store_ref, &keys, &config.name)?;
         let listener = TcpListener::bind(config.listen)
             .await
@@ -354,7 +385,7 @@ impl Node {
             Arc::new(ZoneClock(zone::Zone::named(&config.time_zone)?)),
         ));
         eprintln!(
-            "dn node: {} ({}) on {}, {}, secrets: {}",
+            "dn node: {} ({}) on {}, {}, secrets: {}; synced records sealed with key {} from it",
             config.name,
             keys.id(),
             listener.local_addr().map_err(|e| e.to_string())?,
@@ -362,7 +393,8 @@ impl Node {
                 Reach::LocalNetwork => "local-network devices only",
                 Reach::Outside => "reachable from outside your network",
             },
-            report.label
+            report.label,
+            records.keys().current()
         );
         Ok(Self {
             #[cfg(unix)]
@@ -373,6 +405,7 @@ impl Node {
             control,
             keys: Arc::new(keys),
             db,
+            records,
             secrets: store.clone() as Arc<dyn SecretStore>,
             group: Arc::new(Mutex::new(group)),
             store: report,
@@ -407,6 +440,11 @@ impl Node {
             self.data_dir.clone(),
             self.keys.public(),
             self.pairing.clone(),
+            control::Records {
+                db: self.db.clone(),
+                records: self.records.clone(),
+                secrets: self.secrets.clone(),
+            },
         ));
         let slots = Arc::new(Semaphore::new(MAX_CONNECTIONS));
         let base = Arc::new(StatusBase {
@@ -1202,6 +1240,41 @@ mod tests {
                 self.stop.notify_waiters();
                 self.serving.await.unwrap().unwrap();
             }
+        }
+
+        #[tokio::test]
+        async fn dn_node_rotate_records_key_reseals_and_the_node_restarts_with_the_new_key() {
+            let dir = TempDir::new("rotate");
+            init(&dir.0, SecretsConfig::InsecurePlaintext);
+            let node = started(&dir.0).await;
+            assert_eq!(node.records.keys().current(), 1, "made on the first start");
+            let (db, secrets) = (node.db.clone(), node.secrets.clone());
+            let stop = Arc::new(Notify::new());
+            let serving = tokio::spawn(node.serve(stop.clone()));
+            let mut shown = Vec::new();
+            let key = control::client_rotate(&dir.0, |t| shown.push(t.to_owned()))
+                .await
+                .unwrap();
+            assert_eq!(key, 2);
+            assert_eq!(shown, ["Re-sealing with key 2: 0 left"]);
+            let records_key = |n: u32| dn_secrets::SecretId::device(format!("records.{n}"));
+            assert!(
+                secrets.get(&records_key(1)).unwrap().is_none(),
+                "old key deleted"
+            );
+            assert!(secrets.get(&records_key(2)).unwrap().is_some());
+            Node2 { db, stop, serving }.stop().await;
+            let again = started(&dir.0).await;
+            assert_eq!(again.records.keys().current(), 2);
+            drop(again);
+            // A secret store without the key is an error at start; no new key replaces it.
+            secrets.delete(&records_key(2)).unwrap();
+            let err = Node::start(&dir.0, Vec::new(), &no_env)
+                .await
+                .err()
+                .unwrap();
+            assert!(err.contains("records.2"), "{err}");
+            assert!(secrets.get(&records_key(2)).unwrap().is_none());
         }
 
         #[tokio::test]
