@@ -1559,6 +1559,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dn-web"
+version = "0.1.0"
+dependencies = [
+ "reqwest",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
 name = "dom_query"
 version = "0.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

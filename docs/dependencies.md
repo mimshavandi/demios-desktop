@@ -23,6 +23,7 @@ Every direct dependency is listed here with why and its licence (ADR-0009). Anyt
 | rmcp 3.11 (client, transport-async-rw, streamable-http-client-reqwest, auth) | dn-tools | MCP client over stdio + Streamable HTTP; OAuth (PKCE, discovery, DCR) via its `auth` feature (pulls `oauth2`, `url`). Dev: `server`, `transport-io`, `transport-streamable-http-server` for test servers | Apache-2.0 | T-CON-01 |
 | tokio | dn-tools | async runtime, child processes, timeouts, approval channels | MIT | T-CON-01 |
 | reqwest 0.13 (rustls) | dn-tools | HTTP client handed to rmcp (no redirects for MCP traffic) | MIT/Apache-2.0 | T-CON-01 |
+| reqwest 0.13 (rustls), tokio (`net`, `sync`, `time`) | dn-web | the page fetcher (#369): a custom DNS resolver that refuses non-public addresses, a redirect policy re-checking each hop, no system proxy, streamed body with a size cap; tokio for the system resolver, per-host rate limits and timeouts. No new crates | MIT/Apache-2.0, MIT | #369 |
 | axum 0.8 (dev only) | dn-tools tests | in-process Streamable HTTP + OAuth test servers | MIT | T-CON-01 |
 | process-wrap 10 (tokio1, process-group, job-object) | dn-tools | stdio MCP servers run in their own process group (Unix) / job object (Windows) so shutdown also stops grandchildren (e.g. npx → node); same major version rmcp already uses | Apache-2.0 OR MIT | T-CON-01 |
 | tokio | dn-inference, dn-models, dn | async runtime, channels, fs for downloads | MIT | T-INF-01 |
