@@ -744,6 +744,24 @@ fn status(base: &StatusBase, db: &Mutex<Connection>) -> Result<NodeStatus, SyncE
     })
 }
 
+/// The held calls waiting for a person, for a paired device's list (ADR-0019, read-only).
+fn held_items(db: &Mutex<Connection>) -> Result<Vec<transport::HeldItem>, dn_jobs::JobsError> {
+    Ok(dn_jobs::held::waiting(&lock(db), now_secs())?
+        .into_iter()
+        .map(|h| transport::HeldItem {
+            id: h.id.to_string(),
+            plugin: h.job.plugin.to_string(),
+            job: h.job.job,
+            tool: h.tool,
+            summary: h.summary,
+            arguments: h.arguments,
+            arguments_sha256: h.arguments_sha256,
+            created_at: h.created_at,
+            expires_at: h.expires_at,
+        })
+        .collect())
+}
+
 fn devices(
     db: &Mutex<Connection>,
     asking: &dn_sync::Device,
@@ -984,6 +1002,15 @@ async fn handle(stream: TcpStream, peer: SocketAddr, shared: &Shared) {
                 }
             },
             Message::RemoveDevice { id } => remove_device(shared, &device, &id),
+            Message::HeldRequest => match held_items(db) {
+                Ok(items) => Message::Held { items },
+                Err(e) => {
+                    eprintln!("dn node: reading held calls failed: {e}");
+                    Message::Refused {
+                        reason: "The Node couldn't read what's waiting. Try again.".into(),
+                    }
+                }
+            },
             _ => {
                 eprintln!(
                     "dn node: {} ({}) sent a message this Node doesn't expect",
@@ -1201,6 +1228,63 @@ mod tests {
         let stranger = DeviceKeys::generate().unwrap();
         assert!(ask_status(addr, &stranger, &node_key).await.is_err());
 
+        stop.notify_waiters();
+        serving.await.unwrap().unwrap();
+    }
+
+    /// ADR-0019 (read-only): a paired device reads the held calls, with their exact
+    /// arguments; a stranger can't.
+    #[tokio::test]
+    async fn a_paired_device_reads_what_is_waiting() {
+        let dir = TempDir::new("held");
+        init(&dir.0, SecretsConfig::InsecurePlaintext);
+        let node_key = {
+            let node = started(&dir.0).await;
+            let conn = lock(&node.db);
+            dn_jobs::held::hold(
+                &conn,
+                &dn_jobs::held::HoldRequest {
+                    job: dn_jobs::JobKey::new(
+                        dn_plugin_api::PluginId::new("brief").unwrap(),
+                        "morning",
+                    ),
+                    run: dn_core::Id::new(),
+                    tool: "plugin.brief.send_mail".into(),
+                    arguments: serde_json::json!({"to": ["ana@example.com"], "subject": "Today"}),
+                    summary: "Send an email to 1 person".into(),
+                },
+                None,
+                now_secs(),
+            )
+            .unwrap();
+            DeviceList::members(&conn).unwrap()[0].keys.ed25519
+        };
+        let phone = DeviceKeys::generate().unwrap();
+        add_device(&dir.0, &phone.public(), "Work phone");
+        let node = started(&dir.0).await;
+        let addr = node.local_addr().unwrap();
+        let stop = Arc::new(Notify::new());
+        let serving = tokio::spawn(node.serve(stop.clone()));
+
+        let replies = request(addr, &phone, &node_key, &[Message::HeldRequest])
+            .await
+            .unwrap();
+        let Message::Held { items } = &replies[0] else {
+            panic!("expected the held calls, got {replies:?}");
+        };
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].plugin, "brief");
+        assert_eq!(items[0].job, "morning");
+        assert_eq!(items[0].summary, "Send an email to 1 person");
+        assert!(items[0].arguments.contains("ana@example.com"));
+        assert_eq!(items[0].arguments_sha256.len(), 64);
+
+        let stranger = DeviceKeys::generate().unwrap();
+        assert!(
+            request(addr, &stranger, &node_key, &[Message::HeldRequest])
+                .await
+                .is_err()
+        );
         stop.notify_waiters();
         serving.await.unwrap().unwrap();
     }
