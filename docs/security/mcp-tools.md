@@ -57,6 +57,7 @@ the approval gate, the side-effect ledger and MCP OAuth. Decision record: ADR-00
 - **Web search and fetch (#369, `dn_tools::web`, `dn_web`).** Both are `read` tier and their output is untrusted (`dn_core::untrusted::block`).
   - **Fetch without asking:** a GET carries data out in its address, so `web.fetch` runs without asking only for an address the person typed or a `web.search` in the same chat returned (`web::Provenance`).
   - **Other addresses** ask once per chat and site (the grant is kept per host), whatever the stored choice. A job's such call is held.
+  - **Redirects:** the fetcher follows them within the same host only. A redirect to another host stops and names the address, so following it is a new `web.fetch` with its own check. Without this, a granted site with an open redirector could carry data anywhere.
   - **The fetcher** refuses non-public addresses at DNS time and on every redirect, uses no proxy, and has time and size caps.
   - **Residual:** search queries go to the backend the person chose, so a model steered by injected text can send chat content to that backend. The backend is one the person picked and holds a key for, not an attacker's server.
 

@@ -5,7 +5,8 @@
 //!   checked when they resolve, IP literals before the request. The system proxy is not
 //!   used, since a proxy would make the connection somewhere the guard never checked.
 //! - **Redirects:** at most [`FetcherConfig::max_redirects`], each hop checked like the
-//!   first address.
+//!   first address, and only within the same host: a redirect to another host stops with
+//!   [`FetchError::RedirectedElsewhere`], naming the address, for the caller to decide on.
 //! - **Caps:** a total time limit, and a size limit enforced while the body streams in (a
 //!   larger page is refused, never cut silently). Only text types the extractor reads are
 //!   accepted: HTML, XHTML, plain text and markdown.
@@ -98,6 +99,9 @@ pub enum FetchError {
     Network(String),
     #[error("the site's robots.txt doesn't allow fetching this page")]
     Robots,
+    /// The page redirects to another site; that address wasn't fetched.
+    #[error("the page moved to another site, {0}, which wasn't fetched")]
+    RedirectedElsewhere(String),
     #[error("{0}")]
     Unreadable(String),
 }
@@ -223,7 +227,13 @@ impl Allow {
 /// Fetches pages. One per process is enough: it holds the connection pool and the per-host
 /// rate limits.
 pub struct Fetcher {
+    /// For pages: follows redirects within the same host only. A redirect to another host
+    /// stops with [`FetchError::RedirectedElsewhere`], so the caller decides about that
+    /// address on its own (a page's address can carry data out; see `dn_tools::web`).
     client: reqwest::Client,
+    /// For robots.txt: follows redirects to other hosts too (RFC 9309 §2.3.1.2), still
+    /// through the guard. Its address carries nothing.
+    robots_client: reqwest::Client,
     config: FetcherConfig,
     rate: RateLimit,
     robots: tokio::sync::Mutex<std::collections::HashMap<String, (tokio::time::Instant, Robots)>>,
@@ -241,30 +251,39 @@ impl Fetcher {
         resolver: GuardResolver,
         allow: Allow,
     ) -> Result<Self, FetchError> {
-        let max = config.max_redirects;
-        let hop_allow = allow.clone();
-        let policy = reqwest::redirect::Policy::custom(move |attempt| {
-            if attempt.previous().len() > max {
-                return attempt.error(Redirect(FetchError::TooManyRedirects(max)));
-            }
-            match check_url(attempt.url(), &hop_allow) {
-                Ok(()) => attempt.follow(),
-                Err(e) => attempt.error(Redirect(e)),
-            }
-        });
-        let client = reqwest::Client::builder()
-            .user_agent(config.user_agent.clone())
-            .timeout(config.timeout)
-            .connect_timeout(config.connect_timeout)
-            .redirect(policy)
-            .dns_resolver(Arc::new(resolver))
-            .no_proxy()
-            .build()
-            .map_err(|e| FetchError::Network(e.to_string()))?;
+        let resolver = Arc::new(resolver);
+        let client = |same_site: bool| {
+            let max = config.max_redirects;
+            let hop_allow = allow.clone();
+            let policy = reqwest::redirect::Policy::custom(move |attempt| {
+                if attempt.previous().len() > max {
+                    return attempt.error(Redirect(FetchError::TooManyRedirects(max)));
+                }
+                if let Err(e) = check_url(attempt.url(), &hop_allow) {
+                    return attempt.error(Redirect(e));
+                }
+                let first = attempt.previous().first().and_then(|u| u.host_str());
+                if same_site && first != attempt.url().host_str() {
+                    // Stopped, not followed: `get` reports where it pointed.
+                    return attempt.stop();
+                }
+                attempt.follow()
+            });
+            reqwest::Client::builder()
+                .user_agent(config.user_agent.clone())
+                .timeout(config.timeout)
+                .connect_timeout(config.connect_timeout)
+                .redirect(policy)
+                .dns_resolver(resolver.clone())
+                .no_proxy()
+                .build()
+                .map_err(|e| FetchError::Network(e.to_string()))
+        };
         Ok(Self {
             rate: RateLimit::new(config.per_host_interval, config.per_host_concurrent),
             robots: tokio::sync::Mutex::default(),
-            client,
+            client: client(true)?,
+            robots_client: client(false)?,
             config,
             allow,
         })
@@ -277,8 +296,14 @@ impl Fetcher {
         if !self.robots_allow(&parsed).await? {
             return Err(FetchError::Robots);
         }
-        self.get(url, &parsed, TEXT_TYPES, self.config.max_bytes)
-            .await
+        self.get(
+            &self.client,
+            url,
+            &parsed,
+            TEXT_TYPES,
+            self.config.max_bytes,
+        )
+        .await
     }
 
     /// Fetches `url` and returns its text, then extracts its main text as markdown.
@@ -305,7 +330,13 @@ impl Fetcher {
         let parsed =
             Url::parse(&robots_url).map_err(|_| FetchError::InvalidUrl(robots_url.clone()))?;
         let rules = match self
-            .get(&robots_url, &parsed, ROBOTS_TYPES, ROBOTS_MAX_BYTES)
+            .get(
+                &self.robots_client,
+                &robots_url,
+                &parsed,
+                ROBOTS_TYPES,
+                ROBOTS_MAX_BYTES,
+            )
             .await
         {
             Ok(page) => Robots::parse(&page.text),
@@ -326,6 +357,7 @@ impl Fetcher {
     /// One GET of `url` (already checked), for `types`, at most `max` bytes.
     async fn get(
         &self,
+        client: &reqwest::Client,
         url: &str,
         parsed: &Url,
         types: &[&str],
@@ -334,24 +366,26 @@ impl Fetcher {
         let host = parsed.host_str().unwrap_or_default().to_ascii_lowercase();
         let _turn = self.rate.turn(&host).await;
         let started = tokio::time::Instant::now();
-        let mut response = self
-            .client
+        let mut response = client
             .get(parsed.clone())
             .send()
             .await
             .map_err(|e| self.error(e))?;
         let status = response.status();
         if status.is_redirection() {
-            // The client stops on a redirect it won't follow (another scheme): say where it
-            // pointed, checked like any address.
+            // The client stops on a redirect it won't follow (another host, another
+            // scheme): say where it pointed, checked like any address.
             let to = response
                 .headers()
                 .get(reqwest::header::LOCATION)
                 .and_then(|v| v.to_str().ok())
                 .and_then(|l| response.url().join(l).ok());
-            return Err(match to.map(|u| check_url(&u, &self.allow)) {
-                Some(Err(e)) => e,
-                _ => FetchError::Status(status.as_u16()),
+            return Err(match to {
+                Some(u) => match check_url(&u, &self.allow) {
+                    Err(e) => e,
+                    Ok(()) => FetchError::RedirectedElsewhere(u.to_string()),
+                },
+                None => FetchError::Status(status.as_u16()),
             });
         }
         if !status.is_success() {
@@ -618,6 +652,28 @@ mod tests {
         assert!(matches!(e, FetchError::Blocked(_)), "{e}");
         let e = f.fetch(&format!("{base}/to-file")).await.unwrap_err();
         assert!(e.to_string().contains("only http and https"), "{e}");
+    }
+
+    #[tokio::test]
+    async fn a_redirect_to_another_host_stops_and_names_the_address() {
+        // A granted site with an open redirector mustn't carry data to another site
+        // without that site's own check (security review of the web tools).
+        let port = server(vec![(
+            "/out",
+            redirect("https://attacker.example/?d=secret"),
+        )])
+        .await;
+        let f = test_fetcher(port, quick());
+        let e = f
+            .fetch(&format!("http://127.0.0.1:{port}/out"))
+            .await
+            .unwrap_err();
+        match e {
+            FetchError::RedirectedElsewhere(to) => {
+                assert_eq!(to, "https://attacker.example/?d=secret")
+            }
+            other => panic!("{other}"),
+        }
     }
 
     #[tokio::test]

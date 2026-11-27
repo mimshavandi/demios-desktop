@@ -13,6 +13,9 @@
 //! - a `web.search` in the same chat returned it.
 //!
 //! Any other address asks once per chat **and site** (the grant covers that host only).
+//! The fetcher follows redirects within the same host only: a redirect to another host
+//! stops and names the address, so following it is a new `web.fetch` with its own check
+//! (otherwise an open redirector on a granted site would carry data anywhere).
 //! Queries still go to the search backend the person chose; that's accepted, and written
 //! down in docs/security/mcp-tools.md.
 
