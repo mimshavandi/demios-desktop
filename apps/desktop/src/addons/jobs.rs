@@ -2,9 +2,10 @@
 //! connects the app to `dn-jobs`: the scheduler, missed runs, the held-approvals queue and
 //! run history are all there.
 //!
-//! - The scheduler starts only once the window has told the app its local UTC offset
-//!   ([`Jobs::set_utc_offset`]); until then no job runs, rather than running at the wrong
-//!   local time.
+//! - Jobs at a time of day follow this computer's time zone, daylight saving included
+//!   (#299, [`AppClock`]). The scheduler starts only once the zone is read
+//!   ([`Jobs::start`]); if it can't be read, no job runs and the window says so, rather
+//!   than running at the wrong local time.
 //! - Only jobs of add-ons that are loaded, turned on and hold `jobs` are scheduled. Each
 //!   job is still off until the person turns it on (dn-jobs' default).
 //! - The app has no Node here, so held calls and "Run it now?" questions are answered in
@@ -16,15 +17,16 @@ use dn_jobs::JobKey;
 use dn_jobs::held::{self, AnswerVerifier, HeldApproval, HoldRequest};
 use dn_jobs::scheduler::{Clock, Event, JobHost, ScheduledJob, Scheduler};
 use dn_jobs::store::{self, Outcome, RunRecord};
+use dn_jobs::zone::Zone;
 use dn_plugin_api::{
-    BoxFuture, Caller, FixedOffset, JobContext, LocalTime, MissedRunRule, Permission, PluginError,
-    PluginId, Registrations, Schedule,
+    BoxFuture, Caller, JobContext, LocalTime, MissedRunRule, Permission, PluginError, PluginId,
+    Registrations, Schedule,
 };
 use rusqlite::Connection;
 use serde::Serialize;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, RwLock, Weak};
 use tokio::sync::Notify;
 
 /// Who answers in the app's own window.
@@ -48,29 +50,75 @@ impl AnswerVerifier for WindowOnly {
     }
 }
 
-/// The time, and the local offset the window reported.
-#[derive(Default)]
+/// Unix seconds now.
+fn now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Where the clock reads the time zone from: the system's ([`Zone::system`]), or a test's.
+pub type ZoneSource = dyn Fn() -> Result<Zone, String> + Send + Sync;
+
+/// The time, and this computer's time zone with its daylight-saving rules.
+///
+/// The zone is read again at every scheduler tick (jiff re-reads the system's at most every
+/// 5 minutes), so a job at 07:00 stays at 07:00 local time after the clocks change or the
+/// person moves to another zone. If reading it fails later, the zone read last stays and
+/// the failure is logged once.
 pub struct AppClock {
-    offset: AtomicI64,
+    zone: RwLock<Zone>,
+    source: Box<ZoneSource>,
+    failed: Mutex<Option<String>>,
+}
+
+impl AppClock {
+    /// Reads the zone once; an error when it can't be read.
+    pub fn new(source: Box<ZoneSource>) -> Result<Self, String> {
+        let zone = source()?;
+        Ok(Self {
+            zone: RwLock::new(zone),
+            source,
+            failed: Mutex::new(None),
+        })
+    }
+
+    fn refresh(&self) {
+        match (self.source)() {
+            Ok(z) => {
+                *self.zone.write().unwrap_or_else(|p| p.into_inner()) = z;
+                *lock(&self.failed) = None;
+            }
+            Err(e) => {
+                let mut failed = lock(&self.failed);
+                if failed.as_deref() != Some(e.as_str()) {
+                    eprintln!("add-on jobs: {e}; keeping the time zone read last");
+                    *failed = Some(e);
+                }
+            }
+        }
+    }
+
+    fn zone(&self) -> std::sync::RwLockReadGuard<'_, Zone> {
+        self.zone.read().unwrap_or_else(|p| p.into_inner())
+    }
 }
 
 impl Clock for AppClock {
     fn now(&self) -> i64 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0)
+        self.refresh();
+        now()
     }
 }
 
-/// The offset now, as the window reported it (see the module docs), for every instant.
 impl LocalTime for AppClock {
     fn to_local(&self, utc: i64) -> i64 {
-        FixedOffset(self.offset.load(Ordering::SeqCst)).to_local(utc)
+        self.zone().to_local(utc)
     }
 
     fn to_utc(&self, local: i64) -> i64 {
-        FixedOffset(self.offset.load(Ordering::SeqCst)).to_utc(local)
+        self.zone().to_utc(local)
     }
 }
 
@@ -82,8 +130,8 @@ struct Running {
 /// The jobs side of the registry.
 #[derive(Default)]
 pub struct Jobs {
-    clock: Arc<AppClock>,
-    offset_known: AtomicBool,
+    /// Set once the time zone is read ([`Jobs::start`]).
+    clock: OnceLock<Arc<AppClock>>,
     /// Set by "Delete all local data": nothing is scheduled again until restart.
     deleted: AtomicBool,
     running: Mutex<Option<Running>>,
@@ -117,12 +165,25 @@ impl Jobs {
         }
     }
 
-    /// The window's local offset from UTC, in seconds. The first call starts the scheduler.
-    pub fn set_utc_offset(&self, state: &Arc<AppState>, secs: i64) {
-        self.clock.offset.store(secs, Ordering::SeqCst);
-        if !self.offset_known.swap(true, Ordering::SeqCst) {
+    /// Reads this computer's time zone and starts the scheduler. Later calls do nothing.
+    /// An error, and no jobs, when the zone can't be read.
+    pub fn start(&self, state: &Arc<AppState>) -> Result<(), String> {
+        self.start_with(state, Box::new(Zone::system))
+    }
+
+    pub(crate) fn start_with(
+        &self,
+        state: &Arc<AppState>,
+        source: Box<ZoneSource>,
+    ) -> Result<(), String> {
+        if self.clock.get().is_some() {
+            return Ok(());
+        }
+        let clock = Arc::new(AppClock::new(source)?);
+        if self.clock.set(clock).is_ok() {
             self.rebuild(state);
         }
+        Ok(())
     }
 
     fn scheduler(&self) -> Option<Arc<Scheduler>> {
@@ -138,7 +199,10 @@ impl Jobs {
             r.scheduler.cancel_current();
             r.stop.notify_one();
         }
-        if !self.offset_known.load(Ordering::SeqCst) || self.deleted.load(Ordering::SeqCst) {
+        let Some(clock) = self.clock.get().cloned() else {
+            return;
+        };
+        if self.deleted.load(Ordering::SeqCst) {
             return;
         }
         let Ok(db) = jobs_db(state) else {
@@ -168,12 +232,7 @@ impl Jobs {
         let host = Arc::new(AppJobHost {
             state: Arc::downgrade(state),
         });
-        let scheduler = Arc::new(Scheduler::new(
-            host,
-            scheduled,
-            db,
-            Arc::clone(&self.clock) as Arc<dyn Clock>,
-        ));
+        let scheduler = Arc::new(Scheduler::new(host, scheduled, db, clock as Arc<dyn Clock>));
         let stop = Arc::new(Notify::new());
         *lock(&self.running) = Some(Running {
             scheduler: Arc::clone(&scheduler),
@@ -221,7 +280,7 @@ impl Jobs {
             Some(s) => s.set_enabled(key, on).map_err(err)?,
             None => {
                 let db = jobs_db(state)?;
-                let now = self.clock.now();
+                let now = now();
                 store::set_enabled(&lock(&db), key, on, now).map_err(err)?;
             }
         }
@@ -275,7 +334,7 @@ impl Jobs {
         arguments_sha256: String,
     ) -> Result<(), String> {
         let db = jobs_db(state)?;
-        let now = self.clock.now();
+        let now = now();
         held::answer(
             &lock(&db),
             &WindowOnly,
@@ -410,7 +469,7 @@ pub(crate) fn hold_tool(
             summary,
         },
         None,
-        state.addons.jobs.clock.now(),
+        now(),
     )
     .map_err(|e| PluginError::failed(e.to_string()))?;
     state.addons.jobs.changed();
@@ -424,7 +483,7 @@ pub fn waiting_counts(state: &AppState) -> HashMap<String, usize> {
         return out;
     };
     let conn = lock(&db);
-    let now = state.addons.jobs.clock.now();
+    let now = now();
     for h in held::waiting(&conn, now).unwrap_or_default() {
         *out.entry(h.job.plugin.to_string()).or_default() += 1;
     }
@@ -518,7 +577,7 @@ pub fn held_for(state: &AppState, plugin: &PluginId) -> Result<Vec<HeldView>, St
     let Ok(db) = jobs_db(state) else {
         return Ok(Vec::new());
     };
-    let now = state.addons.jobs.clock.now();
+    let now = now();
     let all = held::waiting(&lock(&db), now).map_err(err)?;
     Ok(all
         .into_iter()

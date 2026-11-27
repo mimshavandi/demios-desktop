@@ -11,6 +11,7 @@ description = "Background jobs for the app and the Demios Node: scheduler, misse
 [dependencies]
 dn-core.workspace = true
 dn-plugin-api.workspace = true
+jiff.workspace = true
 rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
