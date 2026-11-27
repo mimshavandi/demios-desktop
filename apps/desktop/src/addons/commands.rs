@@ -71,16 +71,12 @@ pub async fn addon_set_enabled(state: AppStateRef<'_>, id: String, on: bool) -> 
     .await
 }
 
-/// The window's offset from UTC in minutes (JavaScript's `-getTimezoneOffset()`). Jobs
-/// start once it is known.
+/// Starts add-on background jobs in this computer's time zone (#299). An error when the
+/// zone can't be read; then no job runs.
 #[tauri::command]
-pub async fn addons_set_utc_offset(state: AppStateRef<'_>, minutes: i32) -> IpcResult<()> {
-    if !(-14 * 60..=14 * 60).contains(&minutes) {
-        return Err(bad(format!("{minutes} minutes isn't a time-zone offset")));
-    }
+pub async fn addons_start_jobs(state: AppStateRef<'_>) -> IpcResult<()> {
     let s = std::sync::Arc::clone(state.inner());
-    s.addons.jobs.set_utc_offset(&s, i64::from(minutes) * 60);
-    Ok(())
+    s.addons.jobs.start(&s).map_err(bad)
 }
 
 #[tauri::command]

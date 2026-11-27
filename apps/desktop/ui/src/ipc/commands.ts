@@ -63,7 +63,7 @@ interface Commands {
   addon_consent: { args: { id: string; asked: AddonPermission[]; answer: AddonConsentAnswer }; ret: null };
   addon_set_permission: { args: { id: string; permission: AddonPermission; on: boolean }; ret: null };
   addon_set_enabled: { args: { id: string; on: boolean }; ret: null };
-  addons_set_utc_offset: { args: { minutes: number }; ret: null };
+  addons_start_jobs: { args: Record<string, never>; ret: null };
   addons_paused: { args: Record<string, never>; ret: boolean };
   addons_set_paused: { args: { paused: boolean }; ret: null };
   addon_set_job_enabled: { args: { id: string; job: string; on: boolean }; ret: null };
@@ -401,7 +401,7 @@ export const api = {
     call("addon_set_permission", { id, permission, on }),
   addonSetEnabled: (id: string, on: boolean) => call("addon_set_enabled", { id, on }),
   /** The window's offset from UTC, in minutes; background jobs start once it is known. */
-  addonsSetUtcOffset: (minutes: number) => call("addons_set_utc_offset", { minutes }),
+  addonsStartJobs: () => call("addons_start_jobs", {}),
   addonsPaused: () => call("addons_paused", {}),
   addonsSetPaused: (paused: boolean) => call("addons_set_paused", { paused }),
   addonSetJobEnabled: (id: string, job: string, on: boolean) => call("addon_set_job_enabled", { id, job, on }),

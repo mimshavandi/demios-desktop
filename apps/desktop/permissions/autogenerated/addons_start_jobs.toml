@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-addons-start-jobs"
+description = "Enables the addons_start_jobs command without any pre-configured scope."
+commands.allow = ["addons_start_jobs"]
+
+[[permission]]
+identifier = "deny-addons-start-jobs"
+description = "Denies the addons_start_jobs command without any pre-configured scope."
+commands.deny = ["addons_start_jobs"]
