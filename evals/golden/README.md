@@ -11,6 +11,7 @@ A private holdout of about a fifth of the set is kept outside this repo, so resu
 | `prompts/<category>.yaml` | The cases of one category, as a list |
 | `files/<folder>/…` | Sample files that cases attach or put in a project |
 | `tools.yaml` | Mock tools, each with a schema and canned results |
+| `set.yaml` | Settings for the whole set: `today`, the date every case runs on (7 December 2026) |
 
 The categories are `chat`, `writing`, `summarise`, `project`, `tools`, `multistep`, `memory` and `research`.
 
@@ -54,6 +55,8 @@ Paths in `files` and `attach` are relative to `files/`.
       result: "Lindenfeld: 14°C, light rain."
     - default: No weather data for that place.
 ```
+
+`calculator` has no canned results: the runner works out the expression itself (`+ - * /`, `%`, parentheses and decimals).
 
 Read tools always run. A write tool runs only if the case lists it under `approve`; otherwise the model is told the user declined. A case approves a write tool only when the user's last turn plainly asks for that exact action, and lists write tools the answer must not call under `tool_calls.forbidden`. Tool calls are checked against `required` and `forbidden` from the run's record, not by the judge.
 

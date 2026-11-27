@@ -1366,7 +1366,7 @@
     result: 'Rate 7 Dec 2026: 1 CHF = 1.0526 EUR. Multiply the CHF amount by 1.0526.'
   - default: 'Unsupported currency pair. Supported: EUR, USD, GBP, CHF.'
 - name: calculator
-  description: Evaluate an arithmetic expression with + - * / and parentheses.
+  description: Evaluate an arithmetic expression with + - * /, %, parentheses and decimals.
   input_schema:
     type: object
     properties:
@@ -1375,59 +1375,6 @@
     required:
     - expression
   effect: read
-  results:
-  - match:
-      expression: '48.75'
-    result: '1755'
-  - match:
-      expression: 450-300*0.92
-    result: '174'
-  - match:
-      expression: 450 - 300 * 0.92
-    result: '174'
-  - match:
-      expression: 450-276
-    result: '174'
-  - match:
-      expression: 450 - 276
-    result: '174'
-  - match:
-      expression: '0.92'
-    result: '276'
-  - match:
-      expression: '1.19'
-    result: '1654.1'
-  - match:
-      expression: '0.19'
-    result: '264.1'
-  - match:
-      expression: '780'
-    result: '1390'
-  - match:
-      expression: '293'
-    result: '48.833333'
-  - match:
-      expression: '44.5'
-    result: '623'
-  - match:
-      expression: 14*39
-    result: '546'
-  - match:
-      expression: 14 * 39
-    result: '546'
-  - match:
-      expression: 39*14
-    result: '546'
-  - match:
-      expression: 39 * 14
-    result: '546'
-  - match:
-      expression: 36*15
-    result: '540'
-  - match:
-      expression: 36 * 15
-    result: '540'
-  - default: 'ERROR: expression not supported by this calculator.'
 - name: run_sql
   description: 'Read-only SQL on the studio webshop database. One table: shop_orders(id, customer, product,
     qty, unit_price_eur, status, ordered_on). This small read-only replica returns the full table for
