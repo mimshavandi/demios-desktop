@@ -6,9 +6,13 @@
 //! - **Time budget and cancel:** each run gets the job's budget. When the budget ends, or
 //!   pause-all or "Delete all" cancels the run, the host's future is dropped and the run
 //!   is recorded as `timed_out` or `cancelled`.
+//! - **Daily token budget:** checked just before a run starts, in the same step as the
+//!   other start checks. A run that doesn't fit is recorded as skipped with the reason and
+//!   never started ([`crate::budget`]).
 //! - **Pause-all and quiet hours:** nothing starts, not even a catch-up or a "Run now"
 //!   answer, while either is on.
 
+use crate::budget;
 use crate::decide::{Decision, decide, in_quiet_hours};
 use crate::store::{self, Outcome};
 use crate::{JobKey, JobsError, Result};
@@ -21,6 +25,9 @@ use tokio::sync::Notify;
 
 /// How often the loop looks for due jobs when nothing wakes it, in seconds.
 pub const TICK_SECS: u64 = 30;
+
+/// How many days of token usage are kept, for the usage view and each job's expected need.
+pub const USAGE_KEPT_DAYS: i64 = 30;
 
 /// The time source and the local time zone (the app's from the OS; the Node's from
 /// `node.json`), with its daylight-saving rules.
@@ -51,6 +58,19 @@ pub enum Event {
         job: JobKey,
         missed: u64,
     },
+    /// A run didn't start because it didn't fit in the daily token budget
+    /// ([`crate::budget`]). It's recorded as skipped, with the reason.
+    OverBudget {
+        job: JobKey,
+        used: u64,
+        budget: u64,
+    },
+}
+
+/// What the start check decided.
+enum Start {
+    Run(dn_core::Id, Option<i64>),
+    OverBudget { used: u64, budget: u64 },
 }
 
 /// The host boundary: the desktop app and `dn node run` each implement it.
@@ -209,6 +229,26 @@ impl Scheduler {
             if !state.enabled || settled {
                 return Ok(None);
             }
+            let day = budget::local_day(now, &*self.clock);
+            if let budget::Check::Over {
+                used,
+                budget: limit,
+                expected,
+            } = budget::check(conn, &job.key, day)?
+            {
+                store::record_budget_skip(
+                    conn,
+                    &job.key,
+                    planned.scheduled_for,
+                    planned.covers_runs,
+                    &budget::over_budget_message(used, limit, expected),
+                    now,
+                )?;
+                return Ok(Some(Start::OverBudget {
+                    used,
+                    budget: limit,
+                }));
+            }
             match store::start_run(
                 conn,
                 &job.key,
@@ -217,13 +257,22 @@ impl Scheduler {
                 planned.covers_runs,
                 now,
             ) {
-                Ok(run) => Ok(Some((run, state.last_success))),
+                Ok(run) => Ok(Some(Start::Run(run, state.last_success))),
                 Err(JobsError::JobOff) => Ok(None),
                 Err(e) => Err(e),
             }
         });
         let (run, last_success) = match started {
-            Ok(Some(started)) => started,
+            Ok(Some(Start::Run(run, last_success))) => (run, last_success),
+            Ok(Some(Start::OverBudget { used, budget })) => {
+                *self.current.lock().unwrap_or_else(|p| p.into_inner()) = None;
+                self.host.changed(Event::OverBudget {
+                    job: job.key.clone(),
+                    used,
+                    budget,
+                });
+                return Ok(Some(Outcome::Skipped));
+            }
             other => {
                 *self.current.lock().unwrap_or_else(|p| p.into_inner()) = None;
                 return other.map(|_| None);
@@ -273,8 +322,12 @@ impl Scheduler {
         Ok(Some(outcome))
     }
 
-    /// One pass: plan, then start the due runs one at a time. Returns how many ran.
+    /// One pass: plan, then start the due runs one at a time. Returns how many ran (a run
+    /// skipped for the budget doesn't count).
     pub async fn run_due(&self) -> Result<usize> {
+        let now = self.clock.now();
+        let today = budget::local_day(now, &*self.clock);
+        self.with_db(|conn| budget::forget_before(conn, today - USAGE_KEPT_DAYS).map(drop))?;
         let mut ran = 0;
         for (index, planned) in self.plan()? {
             // Pause-all or quiet hours may have started during an earlier run.
@@ -282,7 +335,11 @@ impl Scheduler {
             if self.with_db(|conn| self.quiet_or_paused(conn, now))? {
                 break;
             }
-            if self.run_planned(index, planned).await?.is_some() {
+            if self
+                .run_planned(index, planned)
+                .await?
+                .is_some_and(|o| o != Outcome::Skipped)
+            {
                 ran += 1;
             }
         }
@@ -717,6 +774,72 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[tokio::test]
+    async fn a_run_over_the_daily_budget_is_skipped_never_started() {
+        let (host, s, clock) = setup(FRESH, MON, MON + 7 * H);
+        let k = key("daily");
+        {
+            let conn = s.db.lock().unwrap();
+            budget::set_daily_budget(&conn, Some(1_000)).unwrap();
+        }
+        // The first run fits and uses 800 tokens (counted by the host's model calls).
+        assert_eq!(s.run_due().await.unwrap(), 1);
+        {
+            let conn = s.db.lock().unwrap();
+            let run = store::history(&conn, &k, 1).unwrap()[0].id;
+            budget::record_usage(&conn, run, budget::local_day(MON + 7 * H, &*clock), 800).unwrap();
+        }
+        // The user answers "Run it now?" for a missed run at 09:00: 200 tokens left, and the
+        // job needs about 800.
+        let runs_before = host.runs.load(Ordering::SeqCst);
+        clock.0.store(MON + 9 * H, Ordering::SeqCst);
+        store::ask(&s.db.lock().unwrap(), &k, MON + 7 * H, 1, MON + 9 * H).unwrap();
+        assert_eq!(
+            s.answer_question(&k, true).await.unwrap(),
+            Some(Outcome::Skipped)
+        );
+        assert_eq!(
+            host.runs.load(Ordering::SeqCst),
+            runs_before,
+            "never started"
+        );
+        let h = store::history(&s.db.lock().unwrap(), &k, 1).unwrap();
+        assert_eq!(h[0].outcome, Outcome::Skipped);
+        assert!(
+            h[0].error
+                .as_deref()
+                .unwrap()
+                .contains("200 of today's 1000"),
+            "{:?}",
+            h[0].error
+        );
+        assert!(host.events.lock().unwrap().contains(&Event::OverBudget {
+            job: k.clone(),
+            used: 800,
+            budget: 1_000
+        }));
+        // The next day's run fits again.
+        clock.0.store(MON + 31 * H, Ordering::SeqCst);
+        assert_eq!(s.run_due().await.unwrap(), 1);
+        assert_eq!(host.runs.load(Ordering::SeqCst), runs_before + 1);
+    }
+
+    #[tokio::test]
+    async fn a_scheduled_run_over_budget_is_settled_not_retried() {
+        let (host, s, clock) = setup(FRESH, MON, MON + 7 * H);
+        {
+            let conn = s.db.lock().unwrap();
+            budget::set_daily_budget(&conn, Some(0)).unwrap();
+        }
+        assert_eq!(s.run_due().await.unwrap(), 0);
+        clock.0.store(MON + 7 * H + 60, Ordering::SeqCst);
+        assert_eq!(s.run_due().await.unwrap(), 0);
+        assert_eq!(host.runs.load(Ordering::SeqCst), 0);
+        let h = store::history(&s.db.lock().unwrap(), &key("daily"), 5).unwrap();
+        assert_eq!(h.len(), 1, "one skip for the 07:00 run, not one per tick");
+        assert!(h[0].error.as_deref().unwrap().contains("used up (0 of 0"));
     }
 
     #[tokio::test]

@@ -163,13 +163,13 @@ function Shell({ api }: { api: Api }) {
     };
   }, [api, info?.updates]);
 
-  // Add-ons (ADR-0013): the local time offset starts their background jobs, and an add-on
+  // Add-ons (ADR-0013): their background jobs start in this computer's time zone, and an add-on
   // never answered (or a new version asking for more) opens its consent dialog. The
   // regular build has none, so neither does anything there.
   const [consents, setConsents] = useState<AddonConsentRequest[]>([]);
   useEffect(() => {
     let alive = true;
-    void api.addonsSetUtcOffset(-new Date().getTimezoneOffset()).catch((e: unknown) => {
+    void api.addonsStartJobs().catch((e: unknown) => {
       if (alive) toast({ tone: "error", title: `Background jobs couldn't start. ${errorMessage(e)}` });
     });
     void api

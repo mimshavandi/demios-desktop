@@ -1,4 +1,4 @@
-import { CircleCheck, CircleOff, Laptop, MoreHorizontal, Server, Smartphone, Trash2, Unlink } from "lucide-react";
+import { CircleCheck, CircleOff, Globe, Laptop, MoreHorizontal, Server, Smartphone, Trash2, Unlink } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Api } from "../ipc/commands";
 import {
@@ -64,6 +64,8 @@ type Load = { kind: "loading" } | { kind: "error"; message: string } | { kind: "
  * - The overview is asked of the Node when the page opens and on Retry. When the Node
  *   doesn't answer, the page says since when; it never shows a frozen "Online".
  * - Removing a device can't be undone (its key is dropped at once), so it asks first.
+ * - Who can connect (#308): the Node's own network by default, or a warning when it was set
+ *   up to be reachable from outside. An older Node doesn't say, and the row isn't shown.
  */
 export function NodeSettings({ api }: { api: Api }) {
   const toast = useToast();
@@ -239,6 +241,25 @@ export function NodeSettings({ api }: { api: Api }) {
           )}
           <dt>Reached through</dt>
           <dd>{paired.address}</dd>
+          {status?.reachable_from_outside !== undefined && (
+            <>
+              <dt>Who can connect</dt>
+              <dd>
+                {status.reachable_from_outside ? (
+                  <>
+                    <Badge tone="warning" icon={<Globe size={12} strokeWidth={1.5} aria-hidden="true" />}>
+                      Reachable from outside your network
+                    </Badge>
+                    <div className="dn-help">
+                      Anyone who can reach its port can try to connect. Only paired devices get in.
+                    </div>
+                  </>
+                ) : (
+                  "Devices on its network"
+                )}
+              </dd>
+            </>
+          )}
           {status !== null && (
             <>
               <dt>Secrets kept in</dt>
@@ -364,7 +385,8 @@ export function NodeSettings({ api }: { api: Api }) {
       >
         <p>
           This computer stops syncing with it. Your data stays here. The Node still lists this
-          computer until you remove it there, or from another device.
+          computer until you run <code>dn node remove-device</code> on the Node, or remove it from
+          another paired device.
         </p>
       </ConfirmDialog>
     </>

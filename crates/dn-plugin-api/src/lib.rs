@@ -71,7 +71,7 @@ pub use untrusted::{Quoted, Untrusted};
 pub const API_MAJOR: u32 = 1;
 
 /// The minor version: additions since this major began.
-pub const API_MINOR: u32 = 0;
+pub const API_MINOR: u32 = 1;
 
 /// A boxed future, the return type of every asynchronous call across the boundary.
 pub type BoxFuture<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
