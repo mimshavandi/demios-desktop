@@ -97,6 +97,7 @@ pub async fn run(model: &dyn ChatModel, model_ref: &ModelRef) -> Result<QualityR
             response_schema: None,
             reasoning: Reasoning::Off,
             caller: "bench.quality".into(),
+            native_web_search: None,
         });
         let mut answer = String::new();
         while let Some(ev) = next_event(&mut s).await {

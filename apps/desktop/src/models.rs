@@ -892,6 +892,7 @@ mod tests {
             response_schema: None,
             reasoning: Default::default(),
             caller: "chat.reply".into(),
+            native_web_search: None,
         });
         let mut text = String::new();
         let mut calls = vec![];

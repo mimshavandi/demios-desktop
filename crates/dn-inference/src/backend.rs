@@ -192,6 +192,7 @@ mod tests {
             response_schema: None,
             reasoning: Default::default(),
             caller: "test".into(),
+            native_web_search: None,
         }
     }
 

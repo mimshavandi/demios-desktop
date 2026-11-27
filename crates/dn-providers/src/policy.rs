@@ -108,6 +108,7 @@ mod tests {
             response_schema: schema.then(|| serde_json::json!({"type": "object"})),
             reasoning,
             caller: caller.into(),
+            native_web_search: None,
         }
     }
 

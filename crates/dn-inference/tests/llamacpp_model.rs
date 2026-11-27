@@ -41,6 +41,7 @@ fn req(prompt: &str, tools: Vec<ToolSpec>) -> ChatRequest {
         response_schema: None,
         reasoning: Default::default(),
         caller: "test".into(),
+        native_web_search: None,
     }
 }
 
@@ -60,7 +61,7 @@ async fn streams_tokens_then_done() {
                 assert!(usage.input_tokens > 0 && usage.output_tokens > 0);
                 done = Some(finish_reason);
             }
-            StreamEvent::ToolCall { .. } => {}
+            StreamEvent::ToolCall { .. } | StreamEvent::WebCitations { .. } => {}
         }
     }
     assert!(deltas > 1, "expected several deltas, got {deltas}");

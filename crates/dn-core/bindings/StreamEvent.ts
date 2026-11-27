@@ -2,8 +2,9 @@
 import type { FinishReason } from "./FinishReason";
 import type { ToolCall } from "./ToolCall";
 import type { Usage } from "./Usage";
+import type { WebCitation } from "./WebCitation";
 
 /**
  * One item of a streamed response.
  */
-export type StreamEvent = { "type": "text_delta", text: string, } | { "type": "reasoning_delta", text: string, } | { "type": "tool_call", call: ToolCall, } | { "type": "done", finish_reason: FinishReason, usage: Usage, };
+export type StreamEvent = { "type": "text_delta", text: string, } | { "type": "reasoning_delta", text: string, } | { "type": "tool_call", call: ToolCall, } | { "type": "web_citations", citations: Array<WebCitation>, } | { "type": "done", finish_reason: FinishReason, usage: Usage, };

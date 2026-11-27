@@ -33,6 +33,7 @@ fn request(model: &str, caller: &str) -> ChatRequest {
         response_schema: None,
         reasoning: Reasoning::Auto,
         caller: caller.into(),
+        native_web_search: None,
     }
 }
 
@@ -57,6 +58,7 @@ fn with_tool_history(mut req: ChatRequest, call_id: &str) -> ChatRequest {
             arguments: json!({"city": "Paris"}),
         }],
         tool_call_id: None,
+        web_citations: vec![],
     });
     req.messages.push(ChatMessage {
         role: Role::Tool,
@@ -65,6 +67,7 @@ fn with_tool_history(mut req: ChatRequest, call_id: &str) -> ChatRequest {
         }],
         tool_calls: vec![],
         tool_call_id: Some(call_id.into()),
+        web_citations: vec![],
     });
     req
 }

@@ -47,6 +47,10 @@ pub struct ChatMessage {
     /// Set when `role == Tool`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+    /// The web pages the model's own search cited for this answer (#369), on an assistant
+    /// message. Untrusted: see [`WebCitation`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub web_citations: Vec<WebCitation>,
 }
 
 impl ChatMessage {
@@ -56,8 +60,39 @@ impl ChatMessage {
             content: vec![ContentPart::Text { text: text.into() }],
             tool_calls: vec![],
             tool_call_id: None,
+            web_citations: vec![],
         }
     }
+}
+
+/// A web page a model's own search cited (ADR-0020 §6–7, #369): Anthropic's web search,
+/// OpenAI's search models, Gemini's grounding.
+///
+/// **Untrusted.** `title` and `cited_text` come from web pages, and the provider already
+/// put the search results into the model's context without passing Demios' untrusted-text
+/// format. When either is shown, or given to a model again, it goes through
+/// [`crate::untrusted::block`]; `url` is shown as text and opened only through the app's
+/// link confirmation.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct WebCitation {
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// The passage the answer relied on, when the provider gives it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cited_text: Option<String>,
+}
+
+/// Lets the model run the provider's own web search during this call (ADR-0020 §6–7,
+/// #369). Only set when the person chose "Use <provider>'s search" in Settings; a model or
+/// provider that can't search refuses the request with a clear error rather than answering
+/// without searching.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct NativeWebSearch {
+    /// The most searches the model may run in this call.
+    pub max_uses: u8,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -101,6 +136,9 @@ pub struct ChatRequest {
     pub reasoning: Reasoning,
     /// Dotted id of the code path making the call, e.g. `chat.reply`, `artifact.update`.
     pub caller: String,
+    /// The provider's own web search, when the person chose it (#369). `None`: off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_web_search: Option<NativeWebSearch>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -134,6 +172,11 @@ pub enum StreamEvent {
     },
     ToolCall {
         call: ToolCall,
+    },
+    /// Pages the provider's own search cited (#369); an adapter sends them when it has them
+    /// (with the text, or at the end). Collected onto the assistant message.
+    WebCitations {
+        citations: Vec<WebCitation>,
     },
     Done {
         finish_reason: FinishReason,
@@ -201,5 +244,45 @@ pub trait ChatModel: Send + Sync {
     /// runtime estimates and says so (ADR-0020 §2.1).
     fn count_tokens(&self, _req: &ChatRequest) -> Option<Result<u32, crate::CoreError>> {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Messages and requests stored or sent before #369 have no citations and no native
+    /// search: they read as none and off, and those fields aren't written when empty.
+    #[test]
+    fn web_search_fields_default_to_none_and_stay_out_of_old_shapes() {
+        let m: ChatMessage =
+            serde_json::from_value(serde_json::json!({"role": "assistant", "content": []}))
+                .unwrap();
+        assert!(m.web_citations.is_empty());
+        let v = serde_json::to_value(ChatMessage::text(Role::User, "hi")).unwrap();
+        assert!(v.get("web_citations").is_none());
+
+        let r: ChatRequest = serde_json::from_value(serde_json::json!({
+            "model": "local:x", "messages": [], "caller": "chat.reply"
+        }))
+        .unwrap();
+        assert_eq!(r.native_web_search, None);
+        assert!(
+            serde_json::to_value(&r)
+                .unwrap()
+                .get("native_web_search")
+                .is_none()
+        );
+
+        let e = StreamEvent::WebCitations {
+            citations: vec![WebCitation {
+                url: "https://example.org/".into(),
+                title: Some("Example".into()),
+                cited_text: None,
+            }],
+        };
+        let v = serde_json::to_value(&e).unwrap();
+        assert_eq!(v["type"], "web_citations");
+        assert_eq!(serde_json::from_value::<StreamEvent>(v).unwrap(), e);
     }
 }

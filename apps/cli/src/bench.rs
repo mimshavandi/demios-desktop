@@ -201,6 +201,7 @@ async fn chat_once(
         response_schema: None,
         reasoning: Reasoning::Off,
         caller: "bench".into(),
+        native_web_search: None,
     });
     let (mut first, mut usage) = (None, None);
     while let Some(ev) = next_event(&mut s).await {
@@ -209,7 +210,8 @@ async fn chat_once(
                 first.get_or_insert_with(Instant::now);
             }
             StreamEvent::Done { usage: u, .. } => usage = Some(u),
-            StreamEvent::ToolCall { .. } => {}
+            // The benchmark never asks for the provider's own search.
+            StreamEvent::ToolCall { .. } | StreamEvent::WebCitations { .. } => {}
         }
     }
     let end = Instant::now();
