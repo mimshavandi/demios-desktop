@@ -268,6 +268,13 @@ impl ChatModel for OpenAi {
         let inner = self.0.clone();
         event_stream(move |tx| run(inner, req, tx))
     }
+
+    fn limits<'a>(
+        &'a self,
+        model: &'a dn_core::model::ModelRef,
+    ) -> dn_core::chat::BoxFuture<'a, dn_core::chat::ModelLimits> {
+        Box::pin(crate::limits::resolve(&self.0, model))
+    }
 }
 
 impl ProviderAdapter for OpenAi {

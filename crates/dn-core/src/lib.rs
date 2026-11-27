@@ -2,7 +2,8 @@
 //! changes here are contract changes and need an ADR reference in the PR.
 //!
 //! Modules map to ADRs: [`model`] → ADR-0003/0005, [`chat`] → ADR-0003,
-//! [`artifact`] → ADR-0004, [`capability`] → ADR-0006, [`event`] → ADR-0008.
+//! [`artifact`] → ADR-0004, [`capability`] → ADR-0006, [`event`] → ADR-0008,
+//! [`untrusted`] and [`chat::ModelLimits`] → ADR-0020.
 
 pub mod artifact;
 pub mod capability;
@@ -11,6 +12,7 @@ pub mod error;
 pub mod event;
 pub mod id;
 pub mod model;
+pub mod untrusted;
 
 pub use error::{CoreError, RecoveryAction};
 

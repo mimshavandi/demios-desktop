@@ -390,7 +390,12 @@ pub fn build(cfg: ProviderConfig) -> Result<Arc<dyn ProviderAdapter>, CoreError>
         .build()
         .map_err(|e| unavailable("Couldn't start the HTTP client.", e.to_string(), vec![]))?;
     let base = cfg.base_url()?;
-    let inner = Arc::new(Inner { cfg, client, base });
+    let inner = Arc::new(Inner {
+        cfg,
+        client,
+        base,
+        limits: Default::default(),
+    });
     Ok(match inner.cfg.kind {
         ProviderKind::OpenAi | ProviderKind::OpenAiCompatible => Arc::new(openai::OpenAi(inner)),
         ProviderKind::Anthropic => Arc::new(anthropic::Anthropic(inner)),
@@ -404,6 +409,8 @@ pub(crate) struct Inner {
     pub cfg: ProviderConfig,
     pub client: reqwest::Client,
     pub base: String,
+    /// Context sizes found per model (`crate::limits`); only known ones are kept.
+    pub limits: std::sync::Mutex<std::collections::HashMap<String, dn_core::chat::ModelLimits>>,
 }
 
 impl Inner {
@@ -413,6 +420,21 @@ impl Inner {
 
     pub fn key(&self) -> Option<&str> {
         self.cfg.api_key.as_ref().map(Secret::expose)
+    }
+
+    pub fn cached_limit(&self, model_id: &str) -> Option<dn_core::chat::ModelLimits> {
+        self.limits
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(model_id)
+            .copied()
+    }
+
+    pub fn cache_limit(&self, model_id: &str, l: dn_core::chat::ModelLimits) {
+        self.limits
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(model_id.to_owned(), l);
     }
 
     /// The model id this request targets. A ref for another provider is an error, never a
