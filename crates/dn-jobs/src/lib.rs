@@ -11,6 +11,7 @@
 //!   Node: signed by a paired device), applies once, and expiry is a refusal.
 //! - [`scheduler`]: the loop that runs due jobs one at a time through a host-provided
 //!   [`scheduler::JobHost`], with a time budget and a cancel token per run.
+//! - [`zone`]: the time zone jobs at a time of day follow, daylight saving included.
 //!
 //! The host (`dn node run`, or the desktop app) owns the database connection and builds
 //! each add-on's `Host`. This crate never sees add-on internals.
@@ -19,6 +20,7 @@ pub mod decide;
 pub mod held;
 pub mod scheduler;
 pub mod store;
+pub mod zone;
 
 use dn_plugin_api::PluginId;
 use serde::{Deserialize, Serialize};
