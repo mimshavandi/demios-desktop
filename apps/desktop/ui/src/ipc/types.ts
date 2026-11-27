@@ -619,6 +619,8 @@ export interface NodeStatus {
   secret_store_label: string;
   protected_at_rest: boolean;
   devices: number;
+  /** Set up with `--reachable-from-outside` (#308). Missing from older Nodes: not shown. */
+  reachable_from_outside?: boolean;
 }
 
 export interface NodeDevice {

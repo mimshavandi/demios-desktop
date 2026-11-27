@@ -535,7 +535,7 @@ fn status(base: &StatusBase, db: &Mutex<Connection>) -> Result<NodeStatus, SyncE
         secret_store_label: base.store.label.clone(),
         protected_at_rest: base.store.protected_at_rest,
         devices: u32::try_from(devices).unwrap_or(u32::MAX),
-        reachable_from_outside: base.reach == Reach::Outside,
+        reachable_from_outside: Some(base.reach == Reach::Outside),
     })
 }
 
