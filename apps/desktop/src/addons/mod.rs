@@ -275,7 +275,7 @@ impl Addons {
                 })
                 .collect();
             if let Err(err) = exec.add_plugin(e.manifest.id.as_str(), tools) {
-                eprintln!("could not add the tools of {}: {err}", e.manifest.id);
+                tracing::warn!("could not add the tools of {}: {err}", e.manifest.id);
             }
         }
     }
@@ -565,18 +565,18 @@ impl Addons {
             match run {
                 Ok(Some(Ok(()))) => {}
                 Ok(None) => {
-                    eprintln!(
+                    tracing::warn!(
                         "{} stopped with an internal error while deleting",
                         manifest.id
                     );
                     failed.push(format!("part of {}'s data", manifest.name));
                 }
                 Ok(Some(Err(e))) => {
-                    eprintln!("{} couldn't delete its data: {e}", manifest.id);
+                    tracing::warn!("{} couldn't delete its data: {e}", manifest.id);
                     failed.push(format!("part of {}'s data", manifest.name));
                 }
                 Err(_) => {
-                    eprintln!("{} didn't finish deleting its data in time", manifest.id);
+                    tracing::warn!("{} didn't finish deleting its data in time", manifest.id);
                     failed.push(format!("part of {}'s data", manifest.name));
                 }
             }
@@ -607,18 +607,18 @@ pub fn wipe(state: &AppState) -> Vec<String> {
                 let name = key.rsplit('/').next().unwrap_or(&key);
                 let sid = dn_secrets::SecretId::addon(id.as_str(), name);
                 if let Err(e) = state.keys.store.delete(&sid) {
-                    eprintln!("could not delete an add-on secret: {e}");
+                    tracing::warn!("could not delete an add-on secret: {e}");
                     failed.push("add-on secrets in the system keychain".into());
                 }
             }
         }
     }
     if let Err(e) = store::delete_all(&db) {
-        eprintln!("could not delete add-on settings: {e}");
+        tracing::warn!("could not delete add-on settings: {e}");
         failed.push("add-on settings".into());
     }
     if let Err(e) = dn_jobs::store::delete_all(&db).and_then(|()| dn_jobs::held::delete_all(&db)) {
-        eprintln!("could not delete background jobs: {e}");
+        tracing::warn!("could not delete background jobs: {e}");
         failed.push("background jobs and waiting calls".into());
     }
     failed.dedup();

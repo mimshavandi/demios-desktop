@@ -69,6 +69,7 @@ rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
+tracing-subscriber.workspace = true
 thiserror.workspace = true
 # `unstable`: multiwebview (Window::add_child) for the Windows artifact webview (ADR-0012).
 tauri = { workspace = true, features = ["unstable"] }

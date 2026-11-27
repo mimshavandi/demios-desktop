@@ -33,7 +33,7 @@ impl From<dn_store::StoreError> for IpcError {
             dn_store::StoreError::NotFound(what) => Self::new("not_found", what),
             dn_store::StoreError::Invalid(what) => Self::invalid(what),
             other => {
-                eprintln!("store error: {other}");
+                tracing::warn!("store error: {other}");
                 Self::new("storage", "Could not read or write local data.")
             }
         }
@@ -60,7 +60,7 @@ impl From<crate::secrets::SecretError> for IpcError {
             ),
             E::TooLarge { .. } | E::EmptyValue(_) | E::InvalidId(_) => Self::invalid(e.to_string()),
             E::Backend { .. } => {
-                eprintln!("keychain error: {e}");
+                tracing::warn!("keychain error: {e}");
                 Self::new("key_store", "Couldn't use your system keychain. Try again.")
             }
         }

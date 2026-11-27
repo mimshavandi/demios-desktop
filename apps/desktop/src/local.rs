@@ -188,7 +188,7 @@ impl<B: InferenceBackend> Resident<B> {
         if let Some(m) = self.model.take()
             && let Err(e) = m.unload().await
         {
-            eprintln!("could not unload a local model: {e}");
+            tracing::warn!("could not unload a local model: {e}");
         }
     }
 }
@@ -207,7 +207,7 @@ impl<B: InferenceBackend> Drop for Resident<B> {
         if let Some(m) = self.model.take() {
             tauri::async_runtime::spawn(async move {
                 if let Err(e) = m.unload().await {
-                    eprintln!("could not unload a local model: {e}");
+                    tracing::warn!("could not unload a local model: {e}");
                 }
             });
         }
@@ -447,7 +447,7 @@ pub fn detect_compute() -> (Machine, dn_models::compute::Compute) {
         &gpus,
         LlamaCppBackend::GPU_BACKEND.is_some(),
     );
-    eprintln!("local models: {}", compute.describe());
+    tracing::info!("local models: {}", compute.describe());
     (machine, compute)
 }
 
@@ -1040,7 +1040,7 @@ impl<B: InferenceBackend> LocalModels<B> {
                     this.set(&e.id, DownloadState::Ready);
                 }
                 Err(err) if current => {
-                    eprintln!("download of `{}` failed: {err}", e.id);
+                    tracing::warn!("download of `{}` failed: {err}", e.id);
                     this.set(
                         &e.id,
                         DownloadState::Failed {
@@ -1221,7 +1221,7 @@ impl<B: InferenceBackend> LocalModels<B> {
                 match Arc::try_unwrap(m) {
                     Ok(idle) => {
                         if let Err(e) = idle.unload().await {
-                            eprintln!("could not unload the embedding model: {e}");
+                            tracing::warn!("could not unload the embedding model: {e}");
                         }
                     }
                     Err(in_use) => {
@@ -1347,7 +1347,7 @@ impl<B: InferenceBackend> LocalModels<B> {
         }
         lock(&self.traits).remove(id);
         if let Err(err) = lock(&self.probes).remove(id) {
-            eprintln!("tool-probes.json: {err}");
+            tracing::warn!("tool-probes.json: {err}");
         }
         if self.is_external(id) {
             // Empty Hub folders go too; refresh_externals sends the row's removal.
@@ -1400,7 +1400,7 @@ impl<B: InferenceBackend> LocalModels<B> {
         )
         .await?;
         if let Err(err) = lock(&self.probes).set(id, calls) {
-            eprintln!("tool-probes.json: {err}");
+            tracing::warn!("tool-probes.json: {err}");
         }
         self.emit(&e);
         Ok(t.checked(calls).into())
@@ -1547,7 +1547,7 @@ impl<B: InferenceBackend> LocalModels<B> {
             && let Ok(idle) = Arc::try_unwrap(m)
             && let Err(e) = idle.unload().await
         {
-            eprintln!("could not unload the embedding model: {e}");
+            tracing::warn!("could not unload the embedding model: {e}");
         }
         let ignore_missing = |r: std::io::Result<()>| match r {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
@@ -1568,7 +1568,7 @@ impl<B: InferenceBackend> LocalModels<B> {
         // Traits read from deleted files go; externals that remain are read again below.
         lock(&self.traits).clear();
         if let Err(err) = lock(&self.probes).clear() {
-            eprintln!("tool-probes.json: {err}");
+            tracing::warn!("tool-probes.json: {err}");
         }
         // Hub downloads went with the folder; cache models (not ours) stay listed.
         self.refresh_externals();
@@ -1712,7 +1712,7 @@ impl<B: InferenceBackend> LocalModels<B> {
             && let Ok(idle) = Arc::try_unwrap(old)
             && let Err(err) = idle.unload().await
         {
-            eprintln!("could not unload the embedding model: {err}");
+            tracing::warn!("could not unload the embedding model: {err}");
         }
         // At most the model's training context (512 tokens for nomic-embed-text v2 MoE, 2048
         // for v1.5): text past it is cut rather than embedded at positions the model never

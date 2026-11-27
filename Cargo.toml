@@ -30,6 +30,8 @@ zeroize = "1"
 tokio = { version = "1", default-features = false }
 # Structured spans for model and tool calls (ADR-0020 §8); kept local.
 tracing = { version = "0.1", default-features = false, features = ["std"] }
+# Writes those to stderr; initialised only by the binaries (apps/desktop, apps/cli).
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "std"] }
 # Maintained fork of the archived serde_yaml (the approved dependency set allows "serde_yaml or a maintained successor").
 serde_yaml_ng = "0.10"
 # No remote/file $ref resolution: schemas are bundled.

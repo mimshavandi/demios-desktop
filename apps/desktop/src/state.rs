@@ -285,24 +285,24 @@ fn forget_chat_data(
 ) -> Vec<&'static str> {
     let mut failed = Vec::new();
     if let Err(e) = dn_artifacts::ArtifactStore::new(conn).delete_conversation(id) {
-        eprintln!("could not delete the artifacts of a deleted chat: {e}");
+        tracing::warn!("could not delete the artifacts of a deleted chat: {e}");
         failed.push("its artifacts");
     }
     if let Err(e) = crate::skills::forget_chat(conn, id) {
-        eprintln!("could not forget the skill of a deleted chat: {e}");
+        tracing::warn!("could not forget the skill of a deleted chat: {e}");
         failed.push("its skill");
     }
     if let Err(e) = crate::runs::forget_chat(conn, id) {
-        eprintln!("could not delete the run records of a deleted chat: {e}");
+        tracing::warn!("could not delete the run records of a deleted chat: {e}");
         failed.push("its usage records");
     }
     if let Err(e) = dn_knowledge::remove_conversation_sources(conn, &id.to_string()) {
-        eprintln!("could not delete the sources of a deleted chat: {e}");
+        tracing::warn!("could not delete the sources of a deleted chat: {e}");
         failed.push("its sources");
     }
     if let Some(exec) = executor {
         if let Err(e) = exec.forget_conversation(&id.to_string()) {
-            eprintln!("could not clear the tool ledger of a deleted chat: {e}");
+            tracing::warn!("could not clear the tool ledger of a deleted chat: {e}");
             failed.push("its tool history");
         }
         exec.gate().clear_conversation(&format!("conv:{id}"));
@@ -385,7 +385,7 @@ impl AppState {
         let conn = dn_store::open(path, &migration_sets())?;
         let n = store::recover_interrupted(&conn)?;
         if n > 0 {
-            eprintln!("marked {n} interrupted answer(s) as cancelled");
+            tracing::info!("marked {n} interrupted answer(s) as cancelled");
         }
         store::purge_deleted(&conn, dn_store::now_ms())?;
         // Then projects and project files deleted earlier (their chats went just above).
@@ -399,8 +399,8 @@ impl AppState {
         let ledger = dn_store::open_connection(path)?;
         match dn_tools::ledger::mark_interrupted(&ledger) {
             Ok(0) => {}
-            Ok(n) => eprintln!("{n} tool call(s) were interrupted; their outcome is unknown"),
-            Err(e) => eprintln!("could not check the tool ledger: {e}"),
+            Ok(n) => tracing::info!("{n} tool call(s) were interrupted; their outcome is unknown"),
+            Err(e) => tracing::warn!("could not check the tool ledger: {e}"),
         }
         let (gate, approvals) = dn_tools::ApprovalGate::new(16);
         let executor = Arc::new(dn_tools::Executor::new(
@@ -445,7 +445,7 @@ impl AppState {
         let servers = match self.settings() {
             Ok(s) => s.mcp_servers,
             Err(e) => {
-                eprintln!("could not read MCP servers from settings: {}", e.message);
+                tracing::warn!("could not read MCP servers from settings: {}", e.message);
                 return;
             }
         };
@@ -653,20 +653,20 @@ impl AppState {
         // A sync round still running must end before its keys and tables are deleted.
         crate::node_sync::stop_and_wait(self).await;
         if !self.stop_all_and_wait(REPLY_STOP_TIMEOUT).await {
-            eprintln!("some replies did not stop in time; deleting anyway");
+            tracing::warn!("some replies did not stop in time; deleting anyway");
             failed.push("an answer that was still being written (it may have been saved again)");
         }
         // Add-ons next (ADR-0013 §5): their jobs stop and every Host is revoked before
         // anything is deleted, then each add-on deletes its own data, then the host the rest.
         for what in self.addons.delete_all(self).await {
-            eprintln!("could not delete add-on data: {what}");
+            tracing::warn!("could not delete add-on data: {what}");
             failed.push("part of an add-on's data");
         }
         self.mcp_epoch.fetch_add(1, Ordering::SeqCst);
         if let Some(exec) = &self.executor {
             let stuck = exec.remove_all_servers(Duration::from_secs(2)).await;
             if stuck > 0 {
-                eprintln!("{stuck} tool server(s) did not stop in time");
+                tracing::warn!("{stuck} tool server(s) did not stop in time");
             }
             exec.gate().clear_all();
         }
@@ -674,14 +674,14 @@ impl AppState {
         if let Some(local) = self.models.local.clone()
             && let Err(e) = local.delete_all().await
         {
-            eprintln!("could not delete the models folder: {e}");
+            tracing::warn!("could not delete the models folder: {e}");
             failed.push("downloaded models");
         }
         let st = Arc::clone(self);
         match tokio::task::spawn_blocking(move || st.wipe_local_data()).await {
             Ok(more) => failed.extend(more),
             Err(e) => {
-                eprintln!("wipe task failed: {e}");
+                tracing::warn!("wipe task failed: {e}");
                 failed.push("chats, settings and keys");
             }
         }
@@ -762,7 +762,7 @@ impl AppState {
                     .collect::<Vec<_>>(),
             ),
             Err(e) => {
-                eprintln!("could not read settings: {}", e.message);
+                tracing::warn!("could not read settings: {}", e.message);
                 failed.push("tool-server sign-ins and server keys (settings unreadable)");
                 (Vec::new(), Vec::new())
             }
@@ -774,7 +774,7 @@ impl AppState {
         {
             Ok(ids) => mcp_ids.extend(ids),
             Err(e) => {
-                eprintln!("could not read the MCP secret list: {e}");
+                tracing::warn!("could not read the MCP secret list: {e}");
                 failed.push("tool-server sign-ins (list unreadable)");
             }
         }
@@ -789,25 +789,25 @@ impl AppState {
         provider_ids.extend(remote_key_ids.iter().map(String::as_str));
         for id in provider_ids {
             if let Err(e) = self.keys.delete(id) {
-                eprintln!("could not delete the `{id}` key: {e}");
+                tracing::warn!("could not delete the `{id}` key: {e}");
                 keys_ok = false;
             }
             self.models.invalidate(id);
         }
         for id in mcp_ids {
             if let Err(e) = self.keys.store.delete(&dn_secrets::SecretId::mcp(&id)) {
-                eprintln!("could not delete MCP secret `{id}`: {e}");
+                tracing::warn!("could not delete MCP secret `{id}`: {e}");
                 keys_ok = false;
             }
         }
         // Sync with the Node ends first: its group keys are found through the chain.
         if let Err(e) = crate::node_sync::leave(self) {
-            eprintln!("could not end sync with the Node: {e}");
+            tracing::warn!("could not end sync with the Node: {e}");
             failed.push("sync data");
         }
         // This computer's device keys (Settings › Node): a new identity after Delete all.
         if let Err(e) = self.keys.store.delete(&dn_sync::identity::secret_id()) {
-            eprintln!("could not delete this computer's device keys: {e}");
+            tracing::warn!("could not delete this computer's device keys: {e}");
             keys_ok = false;
         }
         lock(&self.removed_keys).clear();
@@ -821,7 +821,7 @@ impl AppState {
         if let Some(exec) = &self.executor {
             exec.gate().clear_all();
             if let Err(e) = exec.forget_all() {
-                eprintln!("could not clear the tool ledger: {e}");
+                tracing::warn!("could not clear the tool ledger: {e}");
                 failed.push("tool history");
             }
         }
@@ -833,18 +833,18 @@ impl AppState {
                     .and_then(|()| crate::runs::delete_all(&db));
                 let artifacts = dn_artifacts::ArtifactStore::new(&db).delete_all();
                 if let Err(e) = &artifacts {
-                    eprintln!("could not delete artifacts: {e}");
+                    tracing::warn!("could not delete artifacts: {e}");
                     failed.push("artifacts");
                 }
                 if r.is_ok() {
                     self.models.set_remote_servers(&[]);
                 }
                 if let Err(e) = dn_sync::link::forget(&db) {
-                    eprintln!("could not forget the paired Node: {e}");
+                    tracing::warn!("could not forget the paired Node: {e}");
                     failed.push("the paired Node");
                 }
                 if let Err(e) = dn_knowledge::delete_all(&db) {
-                    eprintln!("could not delete the knowledge index: {e}");
+                    tracing::warn!("could not delete the knowledge index: {e}");
                     failed.push("knowledge index");
                 }
                 if let Some(root) = &self.project_files {
@@ -852,20 +852,20 @@ impl AppState {
                         Ok(()) => {}
                         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                         Err(e) => {
-                            eprintln!("could not delete project files: {e}");
+                            tracing::warn!("could not delete project files: {e}");
                             failed.push("project files");
                         }
                     }
                 }
                 if let Err(e) = r {
-                    eprintln!("could not clear the database: {e}");
+                    tracing::warn!("could not clear the database: {e}");
                     failed.push("chats and settings");
                 } else if artifacts.is_ok()
                     // Rewrite the file so deleted rows don't linger in free pages or the WAL.
                     && let Err(e) = db.execute_batch("VACUUM; PRAGMA wal_checkpoint(TRUNCATE);")
                 {
                     // The rows are gone (secure_delete zeroed them); only compaction failed.
-                    eprintln!("could not compact the database: {e}");
+                    tracing::warn!("could not compact the database: {e}");
                     failed.push("compacting the database file");
                 }
             }
@@ -1110,7 +1110,9 @@ impl AppState {
         let caps = match executor.refresh(id).await {
             Ok(caps) => caps,
             Err(e) => {
-                eprintln!("MCP server `{id}` changed its tools, and listing them failed: {e:?}");
+                tracing::warn!(
+                    "MCP server `{id}` changed its tools, and listing them failed: {e:?}"
+                );
                 self.set_mcp_status(failed(
                     "It changed its tools, and they couldn't be read again. Use Reconnect.",
                 ));
@@ -1131,7 +1133,7 @@ impl AppState {
                 });
             }
             Err(e) => {
-                eprintln!("could not apply tool settings for `{id}`: {}", e.message);
+                tracing::warn!("could not apply tool settings for `{id}`: {}", e.message);
                 self.set_mcp_status(failed(
                     "It changed its tools, and its tool settings couldn't be applied. Use Reconnect.",
                 ));
@@ -1191,7 +1193,7 @@ impl AppState {
         let client = match dn_tools::McpClient::new(cfg, Arc::clone(&secrets)) {
             Ok(c) => c.with_auth(Arc::new(dn_tools::OAuthManager::new(secrets))),
             Err(e) => {
-                eprintln!("MCP server `{id}` is misconfigured: {e}");
+                tracing::warn!("MCP server `{id}` is misconfigured: {e}");
                 self.set_mcp_status(status(
                     "failed",
                     Some("Its settings are invalid. Edit the server to fix them.".into()),
@@ -1217,7 +1219,7 @@ impl AppState {
                     ..status("connected", None, caps.len())
                 }),
                 Err(e) => {
-                    eprintln!("could not apply tool settings for `{id}`: {}", e.message);
+                    tracing::warn!("could not apply tool settings for `{id}`: {}", e.message);
                     executor.remove_server(&id).await;
                     self.set_mcp_status(status(
                         "failed",
@@ -1237,7 +1239,7 @@ impl AppState {
                         0,
                     ));
                 } else {
-                    eprintln!("MCP server `{id}` could not be added: {e}");
+                    tracing::warn!("MCP server `{id}` could not be added: {e}");
                     let msg = crate::agent::model_error(e).message;
                     self.set_mcp_status(status("failed", Some(msg), 0));
                 }
@@ -1267,10 +1269,10 @@ impl AppState {
         match self.db() {
             Ok(db) => {
                 if let Err(e) = settings::record_mcp_launch(&db, id, &line) {
-                    eprintln!("could not remember a launch approval: {e}");
+                    tracing::warn!("could not remember a launch approval: {e}");
                 }
             }
-            Err(_) => eprintln!("could not remember a launch approval"),
+            Err(_) => tracing::warn!("could not remember a launch approval"),
         }
         true
     }

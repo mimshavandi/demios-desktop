@@ -93,7 +93,7 @@ impl AppClock {
             Err(e) => {
                 let mut failed = lock(&self.failed);
                 if failed.as_deref() != Some(e.as_str()) {
-                    eprintln!("add-on jobs: {e}; keeping the time zone read last");
+                    tracing::warn!("add-on jobs: {e}; keeping the time zone read last");
                     *failed = Some(e);
                 }
             }
@@ -240,7 +240,7 @@ impl Jobs {
         });
         tauri::async_runtime::spawn(async move {
             if let Err(e) = scheduler.run(&stop).await {
-                eprintln!("background jobs stopped: {e}");
+                tracing::warn!("background jobs stopped: {e}");
             }
         });
     }

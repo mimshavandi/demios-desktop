@@ -1185,6 +1185,14 @@ async fn models_cmd(cmd: ModelsCmd) -> Result<(), String> {
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    // Warnings only by default, so `dn`'s own output stays as it was; `RUST_LOG=info` adds
+    // one line per model run (ADR-0020 §8). Written to stderr, never sent anywhere.
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"));
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .try_init();
     let cli = Cli::parse();
     let r = match cli.cmd {
         Cmd::Run(a) => run(a).await,

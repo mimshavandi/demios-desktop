@@ -401,14 +401,14 @@ fn start(
         match write {
             Ok(Ok(ev)) => sink.send(ev),
             Ok(Err(e)) => {
-                eprintln!("could not store the answer {message_id}: {e}");
+                tracing::warn!("could not store the answer {message_id}: {e}");
                 sink.send(ChatEvent::Error {
                     message_id,
                     message: "The answer couldn't be saved.".into(),
                     recovery: vec![],
                 });
             }
-            Err(e) => eprintln!("could not store the answer {message_id}: {e}"),
+            Err(e) => tracing::warn!("could not store the answer {message_id}: {e}"),
         }
     });
 }
