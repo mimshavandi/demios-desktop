@@ -13,13 +13,15 @@
 //!
 //! - [`robots`]: robots.txt as RFC 9309 says, honoured per site by the fetcher.
 //!
-//! Search providers come next.
+//! - [`search`]: [`search::SearchProvider`] and its backends: Brave, Linkup, Exa and Tavily with
+//!   the user's key, and SearXNG at the user's URL.
 
 pub mod extract;
 pub mod fetch;
 pub mod guard;
 mod rate;
 pub mod robots;
+pub mod search;
 
 pub use extract::Page;
 pub use fetch::{FetchError, Fetched, Fetcher, FetcherConfig};

@@ -11,6 +11,7 @@ description = "Web search providers and the local page fetcher: private-network 
 [dependencies]
 dom_smoothie = "=0.17.0"
 reqwest.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["net", "sync", "time"] }
 
