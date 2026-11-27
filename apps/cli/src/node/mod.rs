@@ -335,6 +335,25 @@ impl Node {
             db.clone(),
             Arc::new(ZoneClock(zone::Zone::named(&config.time_zone)?)),
         ));
+        let keys = Arc::new(keys);
+        let group = Arc::new(Mutex::new(group));
+        // The Node applies what it keeps (#294); envelopes kept before it did are applied
+        // now, once.
+        {
+            let cols = dn_sync::records::store_collections();
+            let applied = NodeSync {
+                db: &db,
+                store: store_ref,
+                group: &group,
+                me: &keys,
+                collections: &cols,
+            }
+            .catch_up(dn_store::now_ms() as u64)
+            .map_err(|e| format!("couldn't apply the changes this Node keeps: {e}"))?;
+            if applied > 0 {
+                eprintln!("dn node: applied {applied} kept changes");
+            }
+        }
         eprintln!(
             "dn node: {} ({}) on {}, secrets: {}",
             config.name,
@@ -349,10 +368,10 @@ impl Node {
             pairing: Arc::new(tokio::sync::Mutex::new(None)),
             #[cfg(unix)]
             control,
-            keys: Arc::new(keys),
+            keys,
             db,
             secrets: store.clone() as Arc<dyn SecretStore>,
-            group: Arc::new(Mutex::new(group)),
+            group,
             store: report,
             name: config.name,
             listener,
@@ -632,10 +651,13 @@ async fn handle(stream: TcpStream, peer: SocketAddr, shared: &Shared) {
     };
     // A checked member may send sync-sized frames.
     channel.allow_sync_frames();
+    let cols = dn_sync::records::store_collections();
     let sync = NodeSync {
         db,
         store: &*shared.secrets,
         group: &shared.group,
+        me: &shared.keys,
+        collections: &cols,
     };
     loop {
         let message =
