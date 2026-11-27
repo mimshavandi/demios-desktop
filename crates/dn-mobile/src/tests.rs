@@ -89,6 +89,7 @@ async fn fake_node(confirm: bool) -> String {
                         secret_store_label: "Encrypted file".into(),
                         protected_at_rest: true,
                         devices: 2,
+                        reachable_from_outside: false,
                     }),
                     Message::HeldRequest => Message::Held {
                         items: vec![held()],
@@ -196,10 +197,9 @@ async fn a_relay_only_link_is_refused_with_a_reason() {
         now_secs() + 600
     );
     let phone = Phone::open(Arc::new(MemoryKeys::default()), temp_db("relay")).unwrap();
-    // On main (before #304) a v2 link is "newer"; after it, Relay-only. Either way: refused,
-    // and never tried at another address.
     assert!(matches!(
-        phone.start_pairing(link, "x".into()).await,
-        Err(MobileError::RelayOnly | MobileError::Link { .. })
+        phone.start_pairing(link.clone(), "x".into()).await,
+        Err(MobileError::RelayOnly)
     ));
+    assert!(read_link(link).unwrap().through_relay);
 }

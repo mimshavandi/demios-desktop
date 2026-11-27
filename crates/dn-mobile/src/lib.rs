@@ -181,6 +181,8 @@ pub struct NodeInfo {
     pub secret_store_label: String,
     pub protected_at_rest: bool,
     pub devices: u32,
+    /// The person chose to accept connections from outside the Node's network (#308).
+    pub reachable_from_outside: bool,
 }
 
 /// A held call, with everything the review shows (ADR-0019 §4).
@@ -430,6 +432,7 @@ impl Phone {
                 secret_store_label: s.secret_store_label,
                 protected_at_rest: s.protected_at_rest,
                 devices: s.devices,
+                reachable_from_outside: s.reachable_from_outside,
             }),
             _ => Err(MobileError::Refused {
                 reason: "the Node answered something else".into(),
