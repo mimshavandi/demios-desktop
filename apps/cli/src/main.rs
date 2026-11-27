@@ -3,6 +3,7 @@
 
 mod bench;
 mod embed_eval;
+mod eval;
 mod node;
 mod quality;
 mod report;
@@ -49,6 +50,9 @@ enum Cmd {
     BenchReport(report::ReportArgs),
     /// Retrieval quality (English and German), speed and memory of an embedding model.
     BenchEmbed(embed_eval::EmbedArgs),
+    /// Measure what Demios does with a model through its own pipeline: golden prompts,
+    /// LongMemEval, speed. Writes one JSON report per run; sends nothing anywhere.
+    Eval(eval::EvalArgs),
     /// The curated model catalogue.
     Models {
         #[command(subcommand)]
@@ -1188,6 +1192,7 @@ async fn main() -> ExitCode {
         Cmd::Bench(a) => bench::run(a).await,
         Cmd::BenchReport(a) => report::run(a),
         Cmd::BenchEmbed(a) => embed_eval::run(a).await,
+        Cmd::Eval(a) => eval::run(a).await,
         Cmd::Models { cmd } => models_cmd(cmd).await,
         Cmd::Node { cmd } => node::command(cmd).await,
     };

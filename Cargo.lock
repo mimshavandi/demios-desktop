@@ -1360,14 +1360,17 @@ name = "dn"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "dn-agent",
  "dn-core",
  "dn-inference",
  "dn-jobs",
+ "dn-knowledge",
  "dn-models",
  "dn-plugin-api",
  "dn-secrets",
  "dn-store",
  "dn-sync",
+ "futures-core",
  "serde",
  "serde_json",
  "sysinfo",

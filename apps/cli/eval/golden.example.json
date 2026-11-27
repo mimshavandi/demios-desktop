@@ -1,0 +1,33 @@
+{
+  "format": "dn.golden.v1",
+  "about": "Format example for `dn eval golden` (ADR-0020 §8). Not the golden set: that is kept with the docs, and the private holdout outside any repository. Reference answers are added per source (e.g. \"claude\", \"chatgpt\") for the judge.",
+  "system": "You are Demios, a helpful assistant. Answer clearly and briefly.",
+  "items": [
+    {
+      "id": "example-chat-1",
+      "category": "chat",
+      "turns": [
+        { "role": "user", "content": "I have 40 minutes and a bag of rice, two eggs and a leek. What can I cook?" }
+      ],
+      "references": {}
+    },
+    {
+      "id": "example-chat-2",
+      "category": "chat",
+      "turns": [
+        { "role": "user", "content": "Explain what a mortgage's fixed-rate period means." },
+        { "role": "assistant", "content": "During the fixed-rate period, the interest rate on the loan doesn't change, so the monthly payment stays the same." },
+        { "role": "user", "content": "And what happens when it ends?" }
+      ],
+      "references": {}
+    },
+    {
+      "id": "example-research-1",
+      "category": "research",
+      "turns": [
+        { "role": "user", "content": "Compare heat pumps and gas boilers for a small, well-insulated flat: running cost, upfront cost and upkeep. Say what you're unsure about." }
+      ],
+      "references": {}
+    }
+  ]
+}
