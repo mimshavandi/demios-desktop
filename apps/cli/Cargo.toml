@@ -18,6 +18,8 @@ dn-models.workspace = true
 dn-secrets.workspace = true
 dn-store.workspace = true
 dn-sync.workspace = true
+# The Node's licence check (ADR-0014 §9a, #377).
+dn-licence.workspace = true
 dn-jobs.workspace = true
 dn-plugin-api.workspace = true
 clap.workspace = true
@@ -25,6 +27,10 @@ serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util", "net", "signal"] }
 sysinfo.workspace = true
+
+[dev-dependencies]
+# Tests sign licence files with a key made for the run (never stored).
+aws-lc-rs.workspace = true
 
 [lints]
 workspace = true

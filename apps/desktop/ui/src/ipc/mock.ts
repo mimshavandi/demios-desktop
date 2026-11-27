@@ -5,6 +5,7 @@
 import type { Api } from "./commands";
 import { mockAddons } from "./mockAddons";
 import type {
+  NodeLicence,
   NodeOverview,
   ConnectEntryView,
   ConnectView,
@@ -53,6 +54,18 @@ function noNode(): NodeOverview {
  * A link with "outside" in it pairs a Node reachable from outside its network; one with
  * "offline" pairs a Node that then stops answering.
  */
+/**
+ * The licence a mock Node reports: "trial" in the link gives a trial with 9 days left,
+ * "trialend" one with 2 days left, "ended" a licence that ended (#377); otherwise Pro.
+ */
+function mockLicence(link: string): NodeLicence {
+  const secs = Math.floor(Date.now() / 1000);
+  if (link.includes("trialend")) return { state: "valid", kind: "trial", licensee: "Jo Rivera", expires_at: secs + 2 * 86_400 };
+  if (link.includes("trial")) return { state: "valid", kind: "trial", licensee: "Jo Rivera", expires_at: secs + 9 * 86_400 };
+  if (link.includes("ended")) return { state: "ended", kind: "pro", licensee: "Jo Rivera", ended_at: secs - 3 * 86_400 };
+  return { state: "valid", kind: "pro", licensee: "Jo Rivera", expires_at: null };
+}
+
 function mockPairedNode(link = ""): NodeOverview {
   const now = Date.now();
   const outside = link.includes("outside");
@@ -67,6 +80,7 @@ function mockPairedNode(link = ""): NodeOverview {
       protected_at_rest: true,
       devices: 3,
       reachable_from_outside: outside,
+      licence: mockLicence(link),
     },
     devices: [
       { id: "a1", name: "Home server", kind: "node", last_synced_at: now - 120_000, this_device: false },

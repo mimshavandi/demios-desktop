@@ -621,7 +621,18 @@ export interface NodeStatus {
   devices: number;
   /** Set up with `--reachable-from-outside` (#308). Missing from older Nodes: not shown. */
   reachable_from_outside?: boolean;
+  /** The Node's licence (#377). Missing from older Nodes: not shown. */
+  licence?: NodeLicence;
 }
+
+export type LicenceKind = "trial" | "founding" | "pro" | "alpha";
+
+/** As the Node checks it, offline (ADR-0014 §9a). Times are Unix seconds. */
+export type NodeLicence =
+  | { state: "valid"; kind: LicenceKind; licensee: string; expires_at: number | null }
+  | { state: "ended"; kind: LicenceKind; licensee: string; ended_at: number }
+  | { state: "missing" }
+  | { state: "unusable"; reason: string };
 
 export interface NodeDevice {
   id: string;

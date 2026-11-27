@@ -32,6 +32,23 @@ dn node run --data-dir /var/lib/demios
 - `--time-zone` sets the time zone for background jobs, such as `Europe/Berlin`. Without it, the Node uses the machine's time zone.
 - `dn node run` runs in the foreground, so a service manager such as systemd can start it. Ctrl+C stops it.
 
+## Your licence
+
+The Node is part of Demios Pro. The desktop app needs no licence, and neither does a Relay.
+
+- **Add your licence file** on the Node's machine, as the user that runs the Node:
+
+  ```sh
+  dn node licence add --data-dir /var/lib/demios ~/demios-licence.json
+  ```
+
+  It checks the file, then keeps it in the Node's secret store. It says what it added, for example "Licence added: Pro for Jo Rivera until 31 Dec 2027." If the Node is running, it uses the licence at once.
+- **The check is offline.** The Node checks the file's signature itself, when it starts and at least once a day. It never sends anything to Demios to check a licence.
+- **Without a licence,** or with a file that can't be used, `dn node run` doesn't start and `dn node pair` refuses. Each says what's missing and how to fix it. Nothing on the Node is changed.
+- **When a licence ends,** the Node stops syncing, running jobs and pairing, and still answers your devices, so **Settings → Node** shows **Licence ended** and says why. Your data stays on the Node and on every device, nothing is deleted, and `dn node delete-all` still works. Add a new licence to go on.
+- **Your computer's clock matters.** The Node remembers the latest time it has seen. If the clock goes back by more than a day, it asks you to check your computer's date and time instead of accepting the licence.
+- **Settings → Node** shows the licence: "Pro until …", or for a trial how many days are left.
+
 ## Where the Node keeps secrets
 
 `--secrets` chooses where the Node keeps its keys. It opens exactly that store, or refuses to start and says why. It never falls back to another one.

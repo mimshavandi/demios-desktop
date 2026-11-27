@@ -412,6 +412,10 @@ pub struct NodeStatus {
     /// it: clients then don't show it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reachable_from_outside: Option<bool>,
+    /// The Node's licence (ADR-0014 §9a). `None` from older Nodes, which don't check one:
+    /// clients then don't show it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub licence: Option<dn_licence::Status>,
 }
 
 /// An open, authenticated channel whose versions match.

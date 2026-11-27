@@ -9,6 +9,8 @@ rust-version.workspace = true
 
 [dependencies]
 aws-lc-rs.workspace = true
+# The licence state a Node reports in its status (ADR-0014 §9a, #377).
+dn-licence.workspace = true
 dn-secrets.workspace = true
 dn-store.workspace = true
 hpke.workspace = true

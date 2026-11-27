@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, describe, expect, it } from "vitest";
 import type { Api } from "../ipc/commands";
 import type { JoinStarted, NodeOverview } from "../ipc/types";
-import { lastSyncedText, NodeSettings, thisDeviceSyncText, whenText } from "./NodeSettings";
+import { daysLeft, lastSyncedText, NodeSettings, PRO_URL, thisDeviceSyncText, whenText } from "./NodeSettings";
 import { TooltipProvider } from "./primitives";
 import { ToastProvider } from "./toast";
 
@@ -194,6 +194,89 @@ describe("Settings › Node (ADR-0014)", () => {
     show(fake({ ...paired, status: older }).api);
     expect(await screen.findByText("Online")).toBeTruthy();
     expect(screen.queryByText("Who can connect")).toBeNull();
+  });
+
+  const SECS = Math.floor(NOW / 1000);
+
+  it("licence: Pro shows who it's for, with no reminder", async () => {
+    show(
+      fake({
+        ...paired,
+        status: { ...paired.status!, licence: { state: "valid", kind: "pro", licensee: "Jo Rivera", expires_at: null } },
+      }).api,
+    );
+    expect(await screen.findByText("Licence")).toBeTruthy();
+    expect(screen.getByText("Pro")).toBeTruthy();
+    expect(screen.getByText("Licensed to Jo Rivera")).toBeTruthy();
+    expect(screen.queryByText("See Pro")).toBeNull();
+    expect(screen.getByText("Online")).toBeTruthy();
+  });
+
+  it("licence: a trial says how long is left, and a warning only in the last 3 days", async () => {
+    const trial = (days: number): NodeOverview => ({
+      ...paired,
+      status: {
+        ...paired.status!,
+        licence: { state: "valid", kind: "trial", licensee: "Jo", expires_at: SECS + days * 86_400 - 60 },
+      },
+    });
+    show(fake(trial(9)).api);
+    expect(await screen.findByText("Trial, 9 days left")).toBeTruthy();
+    expect(screen.getByText(/Get Pro to keep the Node running after that/)).toBeTruthy();
+    cleanup();
+    const opened: string[] = [];
+    show(
+      fake(trial(2), {
+        openLink: async (url: string) => {
+          opened.push(url);
+          return true;
+        },
+      }).api,
+    );
+    expect(await screen.findByText("Trial ends in 2 days")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "See Pro" }));
+    await waitFor(() => expect(opened).toEqual([PRO_URL]));
+  });
+
+  it("licence ended: says sync and jobs stopped, nothing deleted, and how to add one", async () => {
+    show(
+      fake({
+        ...paired,
+        sync: { state: "stopped", last_synced_at: NOW, failures: 5, error: "The Node's licence ended", applied: 0 },
+        status: {
+          ...paired.status!,
+          licence: { state: "ended", kind: "pro", licensee: "Jo Rivera", ended_at: SECS - 3 * 86_400 },
+        },
+      }).api,
+    );
+    expect(await screen.findByText("Licence ended")).toBeTruthy();
+    expect(screen.queryByText("Online")).toBeNull();
+    expect(screen.getByText(/Sync and jobs on the Node have stopped/)).toBeTruthy();
+    expect(screen.getByText(/nothing was deleted/)).toBeTruthy();
+    expect(screen.getByText("dn node licence add <file>")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Sync now" })).toBeNull();
+  });
+
+  it("licence: a file that can't be used says why", async () => {
+    show(
+      fake({
+        ...paired,
+        status: { ...paired.status!, licence: { state: "unusable", reason: "its signature doesn't match" } },
+      }).api,
+    );
+    expect(await screen.findByText("Licence can't be used")).toBeTruthy();
+    expect(screen.getByText(/can't be used: its signature doesn't match/)).toBeTruthy();
+  });
+
+  it("an older Node that checks no licence shows no licence row", async () => {
+    show(fake(paired).api);
+    expect(await screen.findByText("Online")).toBeTruthy();
+    expect(screen.queryByText("Licence")).toBeNull();
+  });
+
+  it("days left round up to whole days", () => {
+    expect(daysLeft(SECS + 86_400 * 9 - 60, NOW)).toBe(9);
+    expect(daysLeft(SECS - 10, NOW)).toBe(0);
   });
 
   it("offline: says since when and that local changes are kept, with Retry", async () => {

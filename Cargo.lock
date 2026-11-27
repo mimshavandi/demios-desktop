@@ -1358,10 +1358,12 @@ dependencies = [
 name = "dn"
 version = "0.1.0"
 dependencies = [
+ "aws-lc-rs",
  "clap",
  "dn-core",
  "dn-inference",
  "dn-jobs",
+ "dn-licence",
  "dn-models",
  "dn-plugin-api",
  "dn-secrets",
@@ -1534,6 +1536,7 @@ version = "0.1.0"
 dependencies = [
  "aws-lc-rs",
  "dn-core",
+ "dn-licence",
  "dn-secrets",
  "dn-store",
  "hpke",
