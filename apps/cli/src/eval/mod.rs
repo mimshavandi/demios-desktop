@@ -2,8 +2,9 @@
 //! agent loop the app runs, so every case comes with its typed run result.
 //!
 //! Suites:
-//! - `golden`: a golden-prompt file (format `dn.golden.v1`); answers and run results are
-//!   recorded for judging. The prompt set and the private holdout aren't in this repository.
+//! - `parity`: a golden-prompt set (prompts/, files/, tools.yaml) answered with mock tools;
+//!   answers, tool calls and run results are recorded for the judge. A private holdout stays
+//!   outside any repository.
 //! - `longmemeval`: LongMemEval (MIT) questions over a long chat history, answered by
 //!   reading the history directly or through our own retrieval (dn-knowledge).
 //! - `speed`: time to first token, tokens per second, p50/p95, cold and warm, from a list of
@@ -12,8 +13,8 @@
 //! Every run writes one JSON report (schema `dn.eval.v1`), never anything else, and sends
 //! nothing anywhere: the model is a local GGUF or the endpoint you name.
 
-mod golden;
 mod longmemeval;
+mod parity;
 mod speed;
 
 use crate::LoadArgs;
@@ -36,8 +37,9 @@ pub struct EvalArgs {
 
 #[derive(Subcommand)]
 enum Suite {
-    /// Answer a golden-prompt file and record each answer with its run result.
-    Golden(golden::GoldenArgs),
+    /// Answer a golden-prompt set with mock tools; record answers, tool calls and run
+    /// results for the judge.
+    Parity(parity::ParityArgs),
     /// LongMemEval: questions over a long chat history (data via
     /// scripts/eval/fetch-longmemeval.sh; not in this repository).
     Longmemeval(longmemeval::LongMemEvalArgs),
@@ -47,7 +49,7 @@ enum Suite {
 
 pub async fn run(a: EvalArgs) -> Result<(), String> {
     match a.suite {
-        Suite::Golden(a) => golden::run(a).await,
+        Suite::Parity(a) => parity::run(a).await,
         Suite::Longmemeval(a) => longmemeval::run(a).await,
         Suite::Speed(a) => speed::run(a).await,
     }
@@ -183,15 +185,20 @@ pub fn eval_config(caller: &str, model: &ModelRef, max_tokens: Option<u32>) -> L
 
 /// Runs one case through the agent loop (the app's path), without tools.
 pub async fn turn(model: &dyn ChatModel, cfg: &LoopConfig, history: Vec<ChatMessage>) -> Turn {
+    turn_with(model, &NoTools, cfg, history).await
+}
+
+/// [`turn`] with tools.
+pub async fn turn_with(
+    model: &dyn ChatModel,
+    tools: &dyn dn_agent::ToolExecutor,
+    cfg: &LoopConfig,
+    history: Vec<ChatMessage>,
+) -> Turn {
     let mut meter = RunMeter::start(dn_core::Id::new(), cfg.caller.clone(), cfg.model.clone());
-    let r = run_loop(
-        model,
-        &NoTools,
-        cfg,
-        history,
-        &CancelToken::new(),
-        &mut |e| dn_agent::observe_event(&mut meter, &e),
-    )
+    let r = run_loop(model, tools, cfg, history, &CancelToken::new(), &mut |e| {
+        dn_agent::observe_event(&mut meter, &e)
+    })
     .await;
     match r {
         Ok(o) => Turn {

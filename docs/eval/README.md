@@ -10,20 +10,40 @@ local GGUF, or an OpenAI-compatible server you name with `--endpoint`.
 This is the first stage (R0). Judging answers, embeddings in the LongMemEval retrieval and
 more speed cases come later; see "Not yet" below.
 
-## Golden prompts
+## Parity: golden prompts
 
 ```bash
-dn eval golden prompts.json <model> [--limit N] [--max-tokens N] [--out report.json]
+dn eval parity --set evals/golden <model> [--only PREFIX] [--max-tokens N] [--out report.json]
+dn eval parity --set evals/golden --holdout <private dir> --out <outside the repo> <model>
 ```
 
-A golden-prompt file has the format `dn.golden.v1`; [apps/cli/eval/golden.example.json](../../apps/cli/eval/golden.example.json)
-shows it. Each item has an `id`, a `category` (`chat`, `projects`, `tools`, `research`), the
-`turns` so far (the last one the user's) and, for the judge, `references`: reference answers by
-source. The report keeps every answer with its run result.
+A set is a folder: `prompts/<category>.yaml` (a list of cases per category), `files/` (small
+sample files the cases attach) and `tools.yaml` (mock tools with canned results).
+[apps/cli/eval/parity-example](../../apps/cli/eval/parity-example) shows the format. Each case
+has an `id`, a `category` (chat, writing, summarise, project, tools, multistep, memory,
+research), a `lang` (en or de), the `turns` of this session (the last one the user's) and what
+a good answer has (`expect.must`, `expect.must_not`, `expect.tool_calls.required` and
+`forbidden`). Optionally: a project (instructions and files), attachments, mock tools, the
+write tools the user allows (`approve`), earlier sessions and `max_steps`.
 
-The golden set itself isn't in this file. A **private holdout** sets `"private": true`; `dn
-eval` refuses it when the file, or its report (`--out`, required), is inside a git work tree,
-so it can't be committed by accident.
+What each case gets for now:
+
+- a fixed stand-in system prompt (the app's prompt moves into the shared runtime in R1), plus
+  the project's instructions;
+- project files and attachments, quoted as untrusted excerpts, the way the app quotes project
+  files;
+- its mock tools: read tools answer from `tools.yaml`, and write tools only when the case
+  approves them; any other write call is answered "The user declined this action.";
+- no earlier sessions: memory arrives in R3, so memory cases are reported `memory: none` and
+  measure the baseline without it.
+
+The report keeps every answer, its tool calls and its run result. It checks
+`tool_calls.required` and `forbidden` itself; `must` and `must_not` are for the judge, which
+comes later.
+
+The golden set is written separately. A **private holdout** has the same shape, and its ids
+start with `h-`. `dn eval` refuses a holdout, or its report, inside a git work tree, so neither
+can be committed by accident.
 
 ## LongMemEval
 
@@ -69,9 +89,10 @@ data (`dn.speed.v1`), so new ones are added to a file.
 
 These are tracked as issues:
 
-- judging golden answers (pairwise against references, a fixed judge from another model
-  family) and LongMemEval answers;
+- judging parity answers (pairwise against reference answers, a fixed judge from another
+  model family) and LongMemEval answers;
+- earlier sessions in memory cases (with memory, R3);
 - embeddings in LongMemEval's retrieval mode (keyword search only for now);
-- the app's own system prompt in `dn eval` (it moves into the shared runtime in R1);
+- the app's own system prompt in `dn eval parity` (it moves into the shared runtime in R1);
 - speed cases for long prefixes, switching chats, restarts with restored slots and draft
   models (with R2).

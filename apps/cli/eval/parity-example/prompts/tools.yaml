@@ -1,0 +1,13 @@
+- id: tools-001
+  category: tools
+  lang: en
+  tools: [web_search, send_email]
+  turns:
+    - role: user
+      content: "Find out roughly what a heat pump costs to install, then tell me. Don't email anyone."
+  expect:
+    must:
+      - "Gives a cost range and says where it comes from"
+    tool_calls:
+      required: [web_search]
+      forbidden: [send_email]
