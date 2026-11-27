@@ -9,24 +9,36 @@
 //! - [`held`]: the held-approvals queue, in `held_*` tables. A held call is never
 //!   approved by itself. An answer must pass the host's [`held::AnswerVerifier`] (on a
 //!   Node: signed by a paired device), applies once, and expiry is a refusal.
+//! - [`budget`]: the daily token budget, counted per run, job and local day, and checked
+//!   before a run starts. A run that doesn't fit is skipped with the reason, never started.
 //! - [`scheduler`]: the loop that runs due jobs one at a time through a host-provided
 //!   [`scheduler::JobHost`], with a time budget and a cancel token per run.
+//! - [`zone`]: the time zone jobs at a time of day follow, daylight saving included.
 //!
 //! The host (`dn node run`, or the desktop app) owns the database connection and builds
 //! each add-on's `Host`. This crate never sees add-on internals.
 
+pub mod budget;
 pub mod decide;
 pub mod held;
 pub mod scheduler;
 pub mod store;
+pub mod zone;
 
 use dn_plugin_api::PluginId;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-/// Schema migrations for this crate (tables `jobs_*` and `held_*`). `dn-store` runs them.
+/// Schema migrations for this crate (tables `jobs_*` and `held_*`), in order; new ones
+/// are only appended. `dn-store` runs them.
 pub fn migrations() -> &'static [&'static str] {
-    &[store::MIGRATION, held::MIGRATION]
+    // Appended in order: a migration that already ran is never changed or moved.
+    &[
+        store::MIGRATION,
+        held::MIGRATION,
+        budget::MIGRATION,
+        held::MIGRATION_WITHDRAW,
+    ]
 }
 
 /// One add-on job: the add-on's id and the job's id within it.
@@ -61,6 +73,13 @@ pub enum JobsError {
     UnknownApproval,
     #[error("this approval was already answered, dismissed or expired")]
     NotHeld,
+    /// The add-on withdrew the call, or replaced it with a newer version (`replaced_by`).
+    /// An answer to it is refused.
+    #[error("{}", match .replaced_by {
+        Some(_) => "this was replaced by a newer version",
+        None => "this was withdrawn by its add-on",
+    })]
+    Withdrawn { replaced_by: Option<dn_core::Id> },
     #[error("this approval expired and wasn't run")]
     Expired,
     #[error("the answer is for different arguments than the held call")]

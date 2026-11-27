@@ -26,6 +26,8 @@ jobs:
           ./gitleaks git --redact --verbose --config .gitleaks.toml --log-opts="HEAD^1..HEAD^2" .
   rust:
     env:
+      # No test may open the real OS keychain (dn-secrets panics if one does, #298).
+      DEMIOS_TEST_KEYCHAIN_ONLY: "1"
       # ggml-org/stories15M_MOE (MIT): stories15M_MOE-Q8_0.gguf.
       MOE_MODEL_REV: b6dd737497465570b5f5e962dbc9d9454ed1e0eb
       MOE_MODEL_SHA256: c7aa6863f9a4b3cdf19716e2c95622dcbd3bd06989324bf1ac8e60486ef8e881

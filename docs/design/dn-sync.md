@@ -245,6 +245,16 @@ An incoming envelope is checked (§7.2) and stored in `sync_inbox` before it's a
 - It's sent only over the paired channel (ADR-0014 §2), never through a Relay, because it's large and it's the whole data set.
 - A snapshot is signed by the device that sends it, usually the Node. Records in it are accepted on that device's signature. That's the one place a device vouches for others' data. It's limited to devices that are already members, at pairing or on their return.
 
+### 9.5 The Node's records at rest
+The Node applies changes so it can send snapshots (§9.4), and it keeps what it applies **sealed** (`dn_sync::at_rest`), never in dn-store's readable tables:
+- **Records:** one row per record in `sync_node_records`. The fields are JSON, sealed with AES-256-GCM under the **records key**, with a random nonce. The associated data is `"dn-sync v1 at rest" ‖ key number ‖ "record" ‖ collection ‖ id ‖ the record's writes in `sync_fields` (field, author, change number, HLC)`. A row moved to another record doesn't open, and neither does an older copy of a row or a purged one put back, unless the bookkeeping is rolled back with it, which amounts to rolling back the whole database.
+- **Conflicts:** the version not shown (§6.2) is sealed the same way, bound to its record, field, author, change number and HLC.
+- **Field hashes** in `sync_fields` are HMAC-SHA256 under a key derived from the records key, so a hash can't confirm a guess. The Node never scans local edits, so it never compares them; devices keep plain hashes.
+- **The records key** is 32 random bytes in the Node's secret store (`device/records.<n>`). It's separate from the group keys, which a removed device still knows. A missing key is an error at start; a new one is never made in its place.
+- **Readable metadata:** ids, collections, a message's chat (`parent`, to purge children), sealed sizes, and the bookkeeping in the other `sync_*` tables.
+- **Rotation** (`dn node rotate-records-key`): key `n + 1` seals new writes at once; older rows are re-sealed in batches, one transaction each; when none is left, every older key is deleted from the store (so a run that stopped before deleting is completed by the next) and the database is vacuumed and its WAL truncated.
+- Devices keep their data in dn-store's tables as before; protecting a device's disk is the operating system's job.
+
 ## 10. Routes: direct, and Relay mailboxes
 
 ### 10.1 Direct
@@ -274,6 +284,31 @@ While they stay connected, new changes go straight away. The desktop app keeps i
 - Through a Relay, blobs go up to **64 MiB**. Bigger ones wait for a direct connection, and the file shows "Waiting to sync directly."
 - A blob no record uses any more is deleted, like the app's purge.
 
+### 10.4 Pairing through the Relay (ADR-0014 §4a, #304)
+For a Node that shares no network with the device, such as one on a rented server. Code: `dn-sync/src/relay_pair.rs`.
+
+- **The link** is version 2. Besides the Node's keys, the code and the expiry, it carries:
+  - the Relay's `https` URL (`r`);
+  - an **open, one-message pairing mailbox** (`m`), owned by a fresh key for this offer;
+  - the direct address (`a`) only if there is one.
+
+  An older app says "update this app".
+- **The request:**
+  - The device makes its own one-message **reply mailbox**, with a fresh key.
+  - It sends its keys, name, kind, the reply mailbox and the proof.
+  - The request is **signed** with its Ed25519 key, in place of TLS's proof that it holds the key.
+  - It's padded to 4 KiB, then **sealed** with HPKE to the Node's X25519 key from the link, with the pairing mailbox in `info` and as associated data.
+- **The proof** is the direct route's HMAC. The TLS channel binding is replaced by a hash of a Relay-only label, the Node's keys and the pairing mailbox. So a proof made for one route or mailbox never checks on another.
+- **The Node:**
+  - It opens the request and checks the signature, the device list (refusing already-paired and removed keys) and the proof.
+  - It shows the check numbers.
+  - The first message closes the mailbox and the offer, whether it checks or not.
+- **The answer:**
+  - The Node signs it, pads and seals it to the device, names the hash of the request, and delivers it to the reply mailbox.
+  - On yes, the device is added first.
+  - The device believes "accepted" only under the Node's key from the link.
+- **The Relay** is behind the `PairingRelay` trait. The HTTP client comes with the Relay client (#315).
+
 ## 11. Threat model notes
 This extends ADR-0014 action 10. A full Node threat model is its own document, `docs/security/node.md`.
 
@@ -290,6 +325,7 @@ This extends ADR-0014 action 10. A full Node threat model is its own document, `
 | A purge leaves content behind | Tombstones win; the log is compacted once all have applied; Relay TTL | Content gone from state and logs after acknowledgements |
 | Sync drops an edit without saying so | Text conflicts keep both versions; dropped writes to purged records show a notice | Concurrent text edit keeps both; notice on a dropped edit |
 | Forged or replayed approval answer | Signed answer, checked against members; arguments hash; applies once (§6.5) | Forged answer refused; second answer not applied |
+| Someone copies the Node's database or a backup of it | Records and conflict text sealed under the records key, kept in the secret store; keyed field hashes (§9.5) | No known plaintext in the database file or its WAL; a moved, older or purged row doesn't open; a missing key stops the start |
 | The Node's key is stolen | Out of scope, like root on the Node (ADR-0014 §7). A fork in the membership chain is detected | Forked chain stops sync |
 
 ## 12. Changes needed in other crates (each by its owner, with tests)

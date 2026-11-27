@@ -20,7 +20,14 @@ pub struct Keys {
 
 impl Keys {
     /// The OS keychain (macOS Keychain, Windows Credential Manager, Secret Service).
+    /// Never in tests: they use [`Self::memory`] (`AppState::open_for_tests`), so
+    /// `cargo test` can't touch the developer's real keys (#298).
     pub fn os_keychain() -> Self {
+        if cfg!(test) {
+            panic!(
+                "a test opened the real OS keychain: use Keys::memory() or AppState::open_for_tests"
+            );
+        }
         Self {
             store: Arc::new(dn_secrets::KeyringStore::default()),
             description: "your system keychain",
@@ -245,6 +252,19 @@ pub async fn answer(mut rx: Pending) -> Arc<KeyCheck> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    #[should_panic(expected = "a test opened the real OS keychain")]
+    fn a_test_cant_open_the_os_keychain() {
+        let _ = Keys::os_keychain();
+    }
+
+    #[test]
+    #[should_panic(expected = "a test opened the real OS keychain")]
+    fn a_test_cant_open_the_app_state_with_the_os_keychain() {
+        let dir = std::env::temp_dir().join(format!("dn-keys-{}", dn_core::Id::new()));
+        let _ = crate::state::AppState::open(&dir.join("db.sqlite3"), None);
+    }
 
     #[test]
     fn set_has_delete() {

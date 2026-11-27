@@ -209,8 +209,22 @@ impl HostBackend for AppBackend {
                 _ => None,
             };
             // A job's call needs a person, unless the person set that tool to run without
-            // asking for this add-on (not offered yet, so every call is held).
+            // asking for this add-on (not offered yet, so every call is held). A call above
+            // the job's tier is refused, never held (ADR-0013 §9.1).
             if let Some(job_id) = &job {
+                let tier = exec.call_tier(&capability_id).ok_or_else(|| {
+                    PluginError::not_allowed(format!("No tool `{capability_id}`"))
+                })?;
+                if tier > caller.max_tool_tier {
+                    return Err(PluginError::new(
+                        ErrorKind::TierLimit,
+                        format!(
+                            "{} can't use this tool from this job: it changes more than the \
+                             job may",
+                            caller.plugin_name
+                        ),
+                    ));
+                }
                 super::jobs::hold_tool(&app, caller, job_id, &capability_id, &arguments)?;
                 return Err(PluginError::new(
                     ErrorKind::Held,
@@ -362,6 +376,39 @@ impl HostBackend for AppBackend {
         _request: HttpRequest,
     ) -> BoxFuture<'a, Result<(), PluginError>> {
         ready(Err(not_offered(caller, "the internet")))
+    }
+
+    fn held_list<'a>(
+        &'a self,
+        caller: &'a Caller,
+    ) -> BoxFuture<'a, Result<Vec<dn_plugin_api::HeldCall>, PluginError>> {
+        let r = self
+            .app()
+            .and_then(|app| super::jobs::held_of_addon(&app, &caller.plugin_id));
+        ready(r)
+    }
+
+    fn held_withdraw<'a>(
+        &'a self,
+        caller: &'a Caller,
+        id: Id,
+    ) -> BoxFuture<'a, Result<(), PluginError>> {
+        let r = self
+            .app()
+            .and_then(|app| super::jobs::withdraw_held(&app, &caller.plugin_id, id));
+        ready(r)
+    }
+
+    fn held_replace<'a>(
+        &'a self,
+        caller: &'a Caller,
+        id: Id,
+        arguments: serde_json::Value,
+    ) -> BoxFuture<'a, Result<dn_plugin_api::HeldCall, PluginError>> {
+        let r = self
+            .app()
+            .and_then(|app| super::jobs::replace_held(&app, caller, id, arguments));
+        ready(r)
     }
 
     fn file_read<'a>(
@@ -538,18 +585,20 @@ impl Drop for CancelOnDrop {
 }
 
 impl Addons {
-    /// A `Host` for one run of `job` (used by [`super::jobs`]).
+    /// A `Host` for one run of `job` (used by [`super::jobs`]), limited to the tier the job
+    /// declared (`None`: declared without one, ADR-0013 §9.1, #300).
     pub(crate) fn job_host(
         state: &Arc<AppState>,
         manifest: &PluginManifest,
         grants: GrantsHandle,
         job_id: &str,
+        tier: Option<dn_core::capability::RiskTier>,
         run: Id,
     ) -> Host {
         Host::new(
             AppBackend::new(state),
             grants,
-            Caller::for_job(manifest, job_id, run),
+            Caller::for_job_at(manifest, job_id, run, tier),
         )
     }
 }

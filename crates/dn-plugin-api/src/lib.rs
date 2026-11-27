@@ -44,8 +44,8 @@ pub mod testing;
 pub mod untrusted;
 
 pub use data::{
-    ChatMessage, ConversationSummary, HttpMethod, HttpRequest, HttpResponse, KnowledgeHit,
-    MemoryItem, ModelPrompt, ModelSlot, NewMemory, Role, Row, SqlValue, ToolResult,
+    ChatMessage, ConversationSummary, HeldCall, HttpMethod, HttpRequest, HttpResponse,
+    KnowledgeHit, MemoryItem, ModelPrompt, ModelSlot, NewMemory, Role, Row, SqlValue, ToolResult,
 };
 /// Types from `dn-core` that cross the boundary, re-exported so add-ons don't depend on
 /// other app crates.
@@ -71,7 +71,7 @@ pub use untrusted::{Quoted, Untrusted};
 pub const API_MAJOR: u32 = 1;
 
 /// The minor version: additions since this major began.
-pub const API_MINOR: u32 = 0;
+pub const API_MINOR: u32 = 2;
 
 /// A boxed future, the return type of every asynchronous call across the boundary.
 pub type BoxFuture<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;

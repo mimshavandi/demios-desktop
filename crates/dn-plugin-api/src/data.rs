@@ -199,6 +199,47 @@ impl ModelPrompt {
     }
 }
 
+/// One of the add-on's own calls waiting in the held queue for the user's answer
+/// (ADR-0013 §9.2), as [`Host::held`](crate::Host::held) lists it.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HeldCall {
+    /// The held call's id, for [`Held::withdraw`](crate::host::Held::withdraw) and
+    /// [`Held::replace`](crate::host::Held::replace).
+    pub id: Id,
+    /// The tool's capability id.
+    pub tool: String,
+    /// The exact arguments it will run with if the user allows it.
+    pub arguments: serde_json::Value,
+    /// What the call does, in plain words.
+    pub summary: String,
+    /// When it was held (Unix seconds).
+    pub created_at: i64,
+    /// The call this one replaced, if any.
+    pub replaces: Option<Id>,
+}
+
+impl HeldCall {
+    /// A held call, as the host reports it.
+    pub fn new(
+        id: Id,
+        tool: impl Into<String>,
+        arguments: serde_json::Value,
+        summary: impl Into<String>,
+        created_at: i64,
+        replaces: Option<Id>,
+    ) -> Self {
+        Self {
+            id,
+            tool: tool.into(),
+            arguments,
+            summary: summary.into(),
+            created_at,
+            replaces,
+        }
+    }
+}
+
 /// What a tool returns.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

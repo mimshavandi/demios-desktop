@@ -1551,7 +1551,7 @@ mod tests {
         }
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            let st = AppState::open(&path, None).unwrap();
+            let st = AppState::open_for_tests(&path).unwrap();
             assert!(st.executor.is_some());
             assert!(
                 st.executor
@@ -1571,7 +1571,7 @@ mod tests {
         let path = dir.join("db.sqlite3");
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            let st = AppState::open(&path, None).unwrap();
+            let st = AppState::open_for_tests(&path).unwrap();
             let (gone, kept) = {
                 let c = st.db().unwrap();
                 let gone = store::create_conversation(&c, "gone").unwrap();
@@ -1644,7 +1644,7 @@ mod tests {
         };
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            let st = AppState::open(&path, None).unwrap();
+            let st = AppState::open_for_tests(&path).unwrap();
             let exec = st.executor.as_ref().unwrap();
             assert!(exec.ledger_entry("done").unwrap().is_none());
             assert!(
@@ -1697,7 +1697,7 @@ mod tests {
         };
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            let st = AppState::open(&path, None).unwrap();
+            let st = AppState::open_for_tests(&path).unwrap();
             assert_eq!(st.project_files_root(), Some(root.as_path()));
             let db = st.db().unwrap();
             assert!(store::is_purged(&db, &gone_chat.id.to_string()).unwrap());

@@ -102,7 +102,7 @@
     "allow-addon-consent",
     "allow-addon-set-permission",
     "allow-addon-set-enabled",
-    "allow-addons-set-utc-offset",
+    "allow-addons-start-jobs",
     "allow-addons-paused",
     "allow-addons-set-paused",
     "allow-addon-set-job-enabled",

@@ -6,10 +6,14 @@
 //! 2. the add-on still holds the permission the method needs (the user can turn any
 //!    permission off at any time, and the next call fails with a clear error, never with
 //!    empty data);
-//! 3. the call fits the handler's access: a `read`-tier handler gets a read-only `Host`
-//!    (HTTP GET only, no memory, settings, file or database writes, tools up to the `read`
-//!    tier), and the `Host` passed to `Plugin::delete_all` can only delete the add-on's own
-//!    data.
+//! 3. the call fits the handler's access, which follows the tier the handler (tool or job)
+//!    declared (ADR-0013 §9.1):
+//!    - `read`: reads its own data only, no `http()` (not even GET), tools up to `read`;
+//!    - `low_write`: reads and writes its own data, no `http()`, tools up to `low_write`;
+//!    - `external_write` and above: also `http()` to listed hosts (from a job, anything but
+//!      GET is held), tools up to the handler's tier;
+//!
+//!    and the `Host` passed to `Plugin::delete_all` can only delete the add-on's own data.
 //!
 //! Only then does it ask the [`HostBackend`], which the app (or a Demios Node) implements.
 //! Results that carry content come back as [`Untrusted`]. The backend gets the [`Caller`]
@@ -17,8 +21,8 @@
 //! target tool's tier, the chats in scope, and holding a background job's calls for the user.
 
 use crate::data::{
-    ChatMessage, ConversationSummary, HttpMethod, HttpRequest, HttpResponse, KnowledgeHit,
-    MemoryItem, ModelPrompt, ModelSlot, NewMemory, Row, SqlValue, ToolResult,
+    ChatMessage, ConversationSummary, HeldCall, HttpMethod, HttpRequest, HttpResponse,
+    KnowledgeHit, MemoryItem, ModelPrompt, ModelSlot, NewMemory, Row, SqlValue, ToolResult,
 };
 use crate::error::{ErrorKind, PluginError};
 use crate::id::{PluginId, check_name};
@@ -33,26 +37,37 @@ pub const MAX_PATH_LEN: usize = 255;
 /// The deepest path in an add-on's file area, in folders.
 pub const MAX_PATH_DEPTH: usize = 8;
 
-/// What a `Host` may do, set by the host from where the call comes from.
+/// What a `Host` may do, set by the host from the tier the handler declared (ADR-0013
+/// §9.1). It follows the declared tier, never the user's approval choice: a user who makes a
+/// `read` tool ask every time makes it ask more often, and its handler still can't write.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Access {
-    /// A `read`-tier tool handler: reads only, HTTP GET only, tools up to `read`.
+    /// A `read`-tier handler: reads its own data only, no `http()`, tools up to `read`.
     ReadOnly,
-    /// A tool handler above `read`, or a background job.
+    /// A `low_write`-tier handler: reads and writes its own data (memory, settings, files,
+    /// database), no `http()`, tools up to `low_write`.
+    LowWrite,
+    /// An `external_write`-tier handler or above, or a job declared without a tier: also
+    /// `http()` to the hosts the add-on listed, and tools up to its tier.
     ReadWrite,
     /// `Plugin::delete_all`: read and delete the add-on's own data, nothing else.
     DeleteOnly,
 }
 
 impl Access {
-    /// The access a tool handler of tier `t` gets.
+    /// The access a handler (tool or job) of tier `t` gets.
     pub fn for_tier(t: RiskTier) -> Self {
-        if t == RiskTier::Read {
-            Self::ReadOnly
-        } else {
-            Self::ReadWrite
+        match t {
+            RiskTier::Read => Self::ReadOnly,
+            RiskTier::LowWrite => Self::LowWrite,
+            _ => Self::ReadWrite,
         }
+    }
+
+    /// True when `http()` is allowed at all (`external_write` and above).
+    pub fn may_reach_network(self) -> bool {
+        self == Self::ReadWrite
     }
 }
 
@@ -121,8 +136,28 @@ impl Caller {
         }
     }
 
-    /// The caller for one run of a background job.
+    /// The caller for one run of a background job declared without a tier: today's access
+    /// (`ReadWrite`, tools up to `sensitive`). Kept for compatibility within API major 1
+    /// (ADR-0013 §9.1, #300); a host should use [`Caller::for_job_at`] with the job's
+    /// [`JobDecl::tier`](crate::JobDecl::tier).
     pub fn for_job(manifest: &PluginManifest, job_id: impl Into<String>, run: Id) -> Self {
+        Self::for_job_at(manifest, job_id, run, None)
+    }
+
+    /// The caller for one run of a background job of tier `tier` (from
+    /// [`JobDecl::tier`](crate::JobDecl::tier)). Its `Host` is limited like a tool handler's
+    /// of that tier. `None`, a job declared without a tier, keeps today's access: `ReadWrite`
+    /// with tools up to `sensitive` (until the next major version, #300).
+    pub fn for_job_at(
+        manifest: &PluginManifest,
+        job_id: impl Into<String>,
+        run: Id,
+        tier: Option<RiskTier>,
+    ) -> Self {
+        let (access, max_tool_tier) = match tier {
+            Some(t) => (Access::for_tier(t), t),
+            None => (Access::ReadWrite, RiskTier::Sensitive),
+        };
         Self {
             plugin_id: manifest.id.clone(),
             plugin_name: manifest.name.clone(),
@@ -130,8 +165,8 @@ impl Caller {
             origin: Origin::Job {
                 job_id: job_id.into(),
             },
-            access: Access::ReadWrite,
-            max_tool_tier: RiskTier::Sensitive,
+            access,
+            max_tool_tier,
             allowed_tools: Vec::new(),
         }
     }
@@ -482,6 +517,39 @@ pub trait HostBackend: Send + Sync {
         request: HttpRequest,
     ) -> BoxFuture<'a, Result<(), PluginError>>;
 
+    /// The calls of `caller`'s add-on still waiting in the held queue (ADR-0013 §9.2), and
+    /// only those: the queue records which add-on put each call there. A host without a
+    /// held queue keeps this default.
+    fn held_list<'a>(
+        &'a self,
+        _caller: &'a Caller,
+    ) -> BoxFuture<'a, Result<Vec<HeldCall>, PluginError>> {
+        Box::pin(async { Err(no_held_queue()) })
+    }
+
+    /// Withdraws the add-on's held call `id`: it never runs, and its history says it was
+    /// withdrawn by the add-on. Refused for another add-on's call, and for a call that is
+    /// no longer held (approved, running or finished).
+    fn held_withdraw<'a>(
+        &'a self,
+        _caller: &'a Caller,
+        _id: Id,
+    ) -> BoxFuture<'a, Result<(), PluginError>> {
+        Box::pin(async { Err(no_held_queue()) })
+    }
+
+    /// Replaces the add-on's held call `id` with the same call and new `arguments`, in one
+    /// step: the old one is withdrawn and the new one held, linked to it. The host refuses
+    /// it when the tool is above what `caller` may call. Returns the new call.
+    fn held_replace<'a>(
+        &'a self,
+        _caller: &'a Caller,
+        _id: Id,
+        _arguments: serde_json::Value,
+    ) -> BoxFuture<'a, Result<HeldCall, PluginError>> {
+        Box::pin(async { Err(no_held_queue()) })
+    }
+
     /// Reads a file in the add-on's area. `path` is checked ([`check_path`]).
     fn file_read<'a>(
         &'a self,
@@ -587,7 +655,7 @@ impl Host {
             (Access::ReadOnly, Op::WriteOwn | Op::DeleteOwn) => {
                 return Err(PluginError::new(
                     ErrorKind::TierLimit,
-                    format!("This tool of {name} can only read, so it can't change anything"),
+                    format!("This part of {name} can only read, so it can't change anything"),
                 ));
             }
             (Access::DeleteOnly, Op::WriteOwn | Op::Reach) => {
@@ -624,6 +692,12 @@ impl Host {
 
     fn scope<T>(&self, f: impl FnOnce(&Grants) -> T) -> Result<T, PluginError> {
         self.grants.with(|s| f(&s.grants))
+    }
+
+    /// The add-on's own calls waiting for the user's answer (ADR-0013 §9.2). Like its own
+    /// data, it needs no permission: it only ever covers calls this add-on made.
+    pub fn held(&self) -> Held<'_> {
+        Held(self)
     }
 
     /// Conversations and messages (`chats.read`).
@@ -917,16 +991,66 @@ impl Secrets<'_> {
     }
 }
 
+fn no_held_queue() -> PluginError {
+    PluginError::unavailable("Held calls aren't available in this version of Demios")
+}
+
+/// See [`Host::held`].
+pub struct Held<'h>(&'h Host);
+
+impl Held<'_> {
+    /// The add-on's calls still waiting for the user's answer, oldest first. Only calls this
+    /// add-on put in the queue.
+    pub async fn list(&self) -> Result<Vec<HeldCall>, PluginError> {
+        let h = self.0;
+        h.gate(None, Op::ReadOwn)?;
+        h.backend.held_list(&h.caller).await
+    }
+
+    /// Takes back the held call `id`, for example when the draft it would send was
+    /// discarded. It never runs. Only while it is held: once the user answered, this fails.
+    pub async fn withdraw(&self, id: Id) -> Result<(), PluginError> {
+        let h = self.0;
+        h.gate(None, Op::WriteOwn)?;
+        h.backend.held_withdraw(&h.caller, id).await
+    }
+
+    /// Replaces the held call `id` with the same call and new `arguments`, for example
+    /// after the draft it would send was edited. Every device then shows only the new
+    /// version, with what changed. Only while it is held, and only for a tool this handler
+    /// may call itself.
+    pub async fn replace(
+        &self,
+        id: Id,
+        arguments: serde_json::Value,
+    ) -> Result<HeldCall, PluginError> {
+        let h = self.0;
+        h.gate(None, Op::WriteOwn)?;
+        h.backend.held_replace(&h.caller, id, arguments).await
+    }
+}
+
 /// See [`Host::http`].
 pub struct Http<'h>(&'h Host);
 
 impl Http<'_> {
-    /// Sends `request` to a listed host. A `read`-tier handler may only send GET. From a
-    /// background job, anything but GET is held for the user and this returns
-    /// [`ErrorKind::Held`].
+    /// Sends `request` to a listed host. Only a handler of tier `external_write` or above
+    /// may: below that, even GET is refused, since a GET can carry data out in its address
+    /// (ADR-0013 §9.1). From a background job, anything but GET is held for the user and
+    /// this returns [`ErrorKind::Held`].
     pub async fn send(&self, request: HttpRequest) -> Result<Untrusted<HttpResponse>, PluginError> {
         let h = self.0;
         h.gate(Some(Permission::Network), Op::Reach)?;
+        if !h.caller.access.may_reach_network() {
+            return Err(PluginError::new(
+                ErrorKind::TierLimit,
+                format!(
+                    "This part of {} can't reach the network: only a tool or job of tier \
+                     external_write or above may",
+                    h.caller.plugin_name
+                ),
+            ));
+        }
         let host = url_host(&request.url)?;
         if !h.scope(|g| g.hosts.contains(&host))? {
             return Err(PluginError::not_allowed(format!(
@@ -934,22 +1058,12 @@ impl Http<'_> {
                 h.caller.plugin_name
             )));
         }
-        if request.method != HttpMethod::Get {
-            if h.caller.access == Access::ReadOnly {
-                return Err(PluginError::new(
-                    ErrorKind::TierLimit,
-                    "This tool can only read, so it can only send GET requests",
-                ));
-            }
-            if h.caller.is_job() {
-                h.backend.hold_http(&h.caller, request).await?;
-                return Err(PluginError::new(
-                    ErrorKind::Held,
-                    format!(
-                        "The request to {host} waits for your answer in Demios before it is sent"
-                    ),
-                ));
-            }
+        if request.method != HttpMethod::Get && h.caller.is_job() {
+            h.backend.hold_http(&h.caller, request).await?;
+            return Err(PluginError::new(
+                ErrorKind::Held,
+                format!("The request to {host} waits for your answer in Demios before it is sent"),
+            ));
         }
         h.backend.http(&h.caller, request).await.map(Untrusted::new)
     }

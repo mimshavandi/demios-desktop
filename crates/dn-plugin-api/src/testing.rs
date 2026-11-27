@@ -11,8 +11,8 @@
 //! recorded, and queries return the rows set with [`FakeBackend::set_query_rows`].
 
 use crate::data::{
-    ChatMessage, ConversationSummary, HttpRequest, HttpResponse, KnowledgeHit, MemoryItem,
-    ModelPrompt, ModelSlot, NewMemory, Row, SqlValue, ToolResult,
+    ChatMessage, ConversationSummary, HeldCall, HttpRequest, HttpResponse, KnowledgeHit,
+    MemoryItem, ModelPrompt, ModelSlot, NewMemory, Row, SqlValue, ToolResult,
 };
 use crate::error::{ErrorKind, PluginError};
 use crate::host::{Caller, ChatScope, Consent, Grants, GrantsHandle, Host, HostBackend};
@@ -92,6 +92,8 @@ struct State {
     files: BTreeMap<String, Vec<u8>>,
     query_rows: Vec<Row>,
     tool_results: BTreeMap<String, (RiskTier, ToolResult)>,
+    /// Held calls: the call, and whether it is still held (ADR-0013 §9.2).
+    held: Vec<(HeldCall, bool)>,
     log: Vec<Recorded>,
     clock: i64,
 }
@@ -125,6 +127,12 @@ impl FakeBackend {
         self.st()
             .tool_results
             .insert(capability_id.to_owned(), (tier, result));
+    }
+
+    /// Every call a job held, with whether it is still held (false once withdrawn or
+    /// replaced), oldest first.
+    pub fn held_calls(&self) -> Vec<(HeldCall, bool)> {
+        self.st().held.clone()
     }
 
     /// The rows every query returns.
@@ -322,7 +330,7 @@ impl HostBackend for FakeBackend {
         &'a self,
         caller: &'a Caller,
         capability_id: String,
-        _arguments: serde_json::Value,
+        arguments: serde_json::Value,
     ) -> BoxFuture<'a, Result<ToolResult, PluginError>> {
         let mut s = self.st();
         s.log.push(Recorded::Tool {
@@ -338,13 +346,94 @@ impl HostBackend for FakeBackend {
                 ErrorKind::TierLimit,
                 format!("`{capability_id}` is above what this run may call"),
             )),
-            Some((tier, _)) if caller.is_job() && *tier > RiskTier::Read => Err(PluginError::new(
-                ErrorKind::Held,
-                "Held for the user's answer",
-            )),
+            Some((tier, _)) if caller.is_job() && *tier > RiskTier::Read => {
+                let held = HeldCall::new(
+                    Id::new(),
+                    capability_id.clone(),
+                    arguments,
+                    capability_id.clone(),
+                    s.clock,
+                    None,
+                );
+                s.held.push((held, true));
+                Err(PluginError::new(
+                    ErrorKind::Held,
+                    "Held for the user's answer",
+                ))
+            }
             Some((_, r)) => Ok(r.clone()),
         };
         ready(r)
+    }
+
+    fn held_list<'a>(&'a self, _: &'a Caller) -> BoxFuture<'a, Result<Vec<HeldCall>, PluginError>> {
+        let s = self.st();
+        ready(Ok(s
+            .held
+            .iter()
+            .filter(|(_, waiting)| *waiting)
+            .map(|(h, _)| h.clone())
+            .collect()))
+    }
+
+    fn held_withdraw<'a>(
+        &'a self,
+        _: &'a Caller,
+        id: Id,
+    ) -> BoxFuture<'a, Result<(), PluginError>> {
+        let mut s = self.st();
+        let r = match s.held.iter_mut().find(|(h, _)| h.id == id) {
+            Some((_, waiting @ true)) => {
+                *waiting = false;
+                Ok(())
+            }
+            Some(_) => Err(PluginError::not_allowed("That call isn't waiting any more")),
+            None => Err(PluginError::not_allowed(
+                "There is no held call with that id",
+            )),
+        };
+        ready(r)
+    }
+
+    fn held_replace<'a>(
+        &'a self,
+        caller: &'a Caller,
+        id: Id,
+        arguments: serde_json::Value,
+    ) -> BoxFuture<'a, Result<HeldCall, PluginError>> {
+        let mut s = self.st();
+        let clock = s.clock;
+        let Some(i) = s.held.iter().position(|(h, _)| h.id == id) else {
+            return ready(Err(PluginError::not_allowed(
+                "There is no held call with that id",
+            )));
+        };
+        if !s.held[i].1 {
+            return ready(Err(PluginError::not_allowed(
+                "That call isn't waiting any more",
+            )));
+        }
+        let tool = s.held[i].0.tool.clone();
+        if s.tool_results
+            .get(&tool)
+            .is_some_and(|(t, _)| *t > caller.max_tool_tier)
+        {
+            return ready(Err(PluginError::new(
+                ErrorKind::TierLimit,
+                format!("`{tool}` is above what this run may call"),
+            )));
+        }
+        s.held[i].1 = false;
+        let new = HeldCall::new(
+            Id::new(),
+            tool,
+            arguments,
+            s.held[i].0.summary.clone(),
+            clock,
+            Some(id),
+        );
+        s.held.push((new.clone(), true));
+        ready(Ok(new))
     }
 
     fn notify<'a>(
@@ -538,13 +627,37 @@ impl<P: Plugin> Kit<P> {
         let grants = GrantsHandle::new(Grants::new(&m, consent)?);
         let mut r = Registrar::new(&m);
         plugin.register(&mut r)?;
-        Ok(Self {
+        let kit = Self {
             plugin: Arc::new(plugin),
             backend: Arc::new(FakeBackend::new()),
             grants,
             registrations: r.finish(),
             queued_purges: BTreeSet::new(),
-        })
+        };
+        // Shown in the add-on's own test and CI output.
+        for w in kit.warnings() {
+            eprintln!("warning: {w}");
+        }
+        Ok(kit)
+    }
+
+    /// What the add-on should fix before the next major version. Today: each job declared
+    /// without a tier ([`JobDecl::tier`](crate::JobDecl::tier)), which keeps the access jobs
+    /// had before tiers (ADR-0013 §9.1, #300).
+    pub fn warnings(&self) -> Vec<String> {
+        self.registrations
+            .jobs
+            .iter()
+            .filter(|j| j.decl.tier.is_none())
+            .map(|j| {
+                format!(
+                    "the job `{}` declares no tier, so it keeps full access (read and write, \
+                     the network, tools up to `sensitive`). Declare one with \
+                     `JobDecl::with_tier`; the next major version will require it.",
+                    j.decl.id
+                )
+            })
+            .collect()
     }
 
     /// What the add-on registered.
@@ -601,7 +714,12 @@ impl<P: Plugin> Kit<P> {
             .find(|j| j.decl.id == id)
             .ok_or_else(|| PluginError::invalid(format!("No job `{id}`")))?;
         let run = Id::new();
-        let host = self.host(Caller::for_job(self.plugin.manifest(), id, run));
+        let host = self.host(Caller::for_job_at(
+            self.plugin.manifest(),
+            id,
+            run,
+            j.decl.tier,
+        ));
         let budget = i64::try_from(j.decl.budget_secs).unwrap_or(i64::MAX);
         let ctx = JobContext::new(id, run, 0, None, false, 1, budget, CancelToken::new());
         j.handler.run(&host, &ctx).await
@@ -677,6 +795,7 @@ impl<P: Plugin> Kit<P> {
 mod tests {
     use super::*;
     use crate::data::{HttpMethod, Role};
+    use crate::host::Access;
     use crate::manifest::{PermissionRequest, PluginManifest};
     use crate::registrar::{JobDecl, JobHandler, ToolDecl, ToolHandler};
     use crate::schedule::Schedule;
@@ -851,9 +970,8 @@ mod tests {
 
     #[test]
     fn a_read_tier_handler_gets_a_read_only_host() {
-        // An add-on with `network` can't declare a read tool (its floor is external_write),
-        // so build the read-tier Host directly, with every permission granted: the limit
-        // comes from the tier, not from the grants.
+        // Every permission granted: the limit comes from the tier, not from the grants
+        // (ADR-0013 §9.1).
         let m = manifest(all_perms());
         let consent = Consent::new(Permission::ALL.into_iter().filter(|p| m.asks_for(*p)));
         let grants = GrantsHandle::new(Grants::new(&m, consent).unwrap());
@@ -874,39 +992,161 @@ mod tests {
             block_on(host.db().execute("x", vec![])).unwrap_err(),
             block_on(host.memory().add(NewMemory::new("x", vec![]))).unwrap_err(),
             block_on(host.http().send(post)).unwrap_err(),
+            // Not even GET: an address can carry data out.
+            block_on(
+                host.http()
+                    .send(HttpRequest::get("https://api.example.com/?q=secret")),
+            )
+            .unwrap_err(),
             block_on(host.tools().call("mcp.files.write", json!({}))).unwrap_err(),
         ] {
             assert_eq!(e.kind, ErrorKind::TierLimit, "{e}");
         }
-        // Reads still work.
-        assert!(
-            block_on(
-                host.http()
-                    .send(HttpRequest::get("https://api.example.com/"))
-            )
-            .is_ok()
-        );
+        // Reads of its own data still work.
         assert!(block_on(host.settings().get("tone")).is_ok());
         assert!(block_on(host.memory().list()).is_ok());
     }
 
+    /// A host with every permission granted, for a caller built by the test.
+    fn host_for(caller: impl FnOnce(&PluginManifest) -> Caller) -> (Host, Arc<FakeBackend>) {
+        let m = manifest(all_perms());
+        let consent = Consent::new(Permission::ALL.into_iter().filter(|p| m.asks_for(*p)));
+        let grants = GrantsHandle::new(Grants::new(&m, consent).unwrap());
+        let backend = Arc::new(FakeBackend::new());
+        backend.add_tool("mcp.files.write", RiskTier::LowWrite, ToolResult::text("w"));
+        backend.add_tool(
+            "mcp.files.send",
+            RiskTier::ExternalWrite,
+            ToolResult::text("s"),
+        );
+        (Host::new(backend.clone(), grants, caller(&m)), backend)
+    }
+
     #[test]
-    fn a_tier_below_the_floor_is_refused_and_there_is_no_auto_approve() {
-        let low = tool("t", RiskTier::LowWrite, |_, _| {
-            Box::pin(async { Ok(ToolResult::text("")) })
+    fn a_low_write_handler_writes_its_own_data_but_has_no_network() {
+        let (host, _) = host_for(|m| {
+            Caller::for_tool(
+                m,
+                "plugin.notes.save",
+                RiskTier::LowWrite,
+                Id::new(),
+                vec![],
+            )
         });
-        let e = Kit::new(
+        assert_eq!(host.caller().access, Access::LowWrite);
+        assert!(block_on(host.settings().set("tone", json!(1))).is_ok());
+        assert!(block_on(host.files().write("a", vec![1])).is_ok());
+        assert!(block_on(host.tools().call("mcp.files.write", json!({}))).is_ok());
+        for e in [
+            block_on(
+                host.http()
+                    .send(HttpRequest::get("https://api.example.com/")),
+            )
+            .unwrap_err(),
+            block_on(host.tools().call("mcp.files.send", json!({}))).unwrap_err(),
+        ] {
+            assert_eq!(e.kind, ErrorKind::TierLimit, "{e}");
+        }
+    }
+
+    #[test]
+    fn a_job_lists_withdraws_and_replaces_its_own_held_calls() {
+        let (host, backend) =
+            host_for(|m| Caller::for_job_at(m, "drafts", Id::new(), Some(RiskTier::ExternalWrite)));
+        let e = block_on(host.tools().call("mcp.files.send", json!({"body": "v1"}))).unwrap_err();
+        assert_eq!(e.kind, ErrorKind::Held);
+        let held = block_on(host.held().list()).unwrap();
+        assert_eq!(held.len(), 1);
+        assert_eq!(held[0].arguments, json!({"body": "v1"}));
+
+        // Edited draft: replace, linked to the old one; only the new one waits.
+        let new = block_on(host.held().replace(held[0].id, json!({"body": "v2"}))).unwrap();
+        assert_eq!(new.replaces, Some(held[0].id));
+        let waiting = block_on(host.held().list()).unwrap();
+        assert_eq!(waiting, std::slice::from_ref(&new));
+        // The old one is gone for good.
+        let e = block_on(host.held().withdraw(held[0].id)).unwrap_err();
+        assert_eq!(e.kind, ErrorKind::NotAllowed);
+
+        // Discarded draft: withdraw.
+        block_on(host.held().withdraw(new.id)).unwrap();
+        assert!(block_on(host.held().list()).unwrap().is_empty());
+        assert_eq!(backend.held_calls().len(), 2);
+        assert!(backend.held_calls().iter().all(|(_, waiting)| !waiting));
+    }
+
+    #[test]
+    fn a_read_handler_can_list_its_held_calls_but_not_change_them() {
+        let (host, _) =
+            host_for(|m| Caller::for_job_at(m, "scan", Id::new(), Some(RiskTier::Read)));
+        assert!(block_on(host.held().list()).is_ok());
+        for e in [
+            block_on(host.held().withdraw(Id::new())).unwrap_err(),
+            block_on(host.held().replace(Id::new(), json!({}))).unwrap_err(),
+        ] {
+            assert_eq!(e.kind, ErrorKind::TierLimit, "{e}");
+        }
+    }
+
+    #[test]
+    fn a_job_is_limited_by_its_declared_tier_and_one_without_keeps_todays_access() {
+        let (host, _) =
+            host_for(|m| Caller::for_job_at(m, "scan", Id::new(), Some(RiskTier::Read)));
+        assert_eq!(host.caller().access, Access::ReadOnly);
+        assert_eq!(host.caller().max_tool_tier, RiskTier::Read);
+        for e in [
+            block_on(host.settings().set("tone", json!(1))).unwrap_err(),
+            block_on(
+                host.http()
+                    .send(HttpRequest::get("https://api.example.com/")),
+            )
+            .unwrap_err(),
+            block_on(host.tools().call("mcp.files.write", json!({}))).unwrap_err(),
+        ] {
+            assert_eq!(e.kind, ErrorKind::TierLimit, "{e}");
+        }
+        let (host, _) =
+            host_for(|m| Caller::for_job_at(m, "draft", Id::new(), Some(RiskTier::LowWrite)));
+        assert_eq!(host.caller().access, Access::LowWrite);
+        assert!(block_on(host.settings().set("tone", json!(1))).is_ok());
+        // Declared without a tier (#300): today's access.
+        let (host, _) = host_for(|m| Caller::for_job(m, "old", Id::new()));
+        assert_eq!(host.caller().access, Access::ReadWrite);
+        assert_eq!(host.caller().max_tool_tier, RiskTier::Sensitive);
+        assert_eq!(
+            JobDecl::new("j", "J", Schedule::Every { secs: 60 }, 60, 60)
+                .with_tier(RiskTier::Read)
+                .tier,
+            Some(RiskTier::Read)
+        );
+    }
+
+    #[test]
+    fn any_tier_may_be_declared_and_there_is_no_auto_approve() {
+        // ADR-0013 §9.1: no add-on-wide floor. An add-on with `network` can declare a
+        // read tool; its handler just can't reach the network.
+        let peek = tool("t", RiskTier::Read, |h, _| {
+            Box::pin(async move {
+                let e = h
+                    .http()
+                    .send(HttpRequest::get("https://api.example.com/"))
+                    .await
+                    .unwrap_err();
+                Ok(ToolResult::text(format!("{:?}", e.kind)))
+            })
+        });
+        let kit = Kit::new(
             Notes {
                 m: manifest(vec![PermissionRequest::Network {
                     hosts: vec!["api.example.com".into()],
                 }]),
-                tools: vec![low],
+                tools: vec![peek],
             },
             Vec::new(),
         )
-        .err()
         .unwrap();
-        assert!(e.message.contains("external_write"), "{}", e.message);
+        let out = block_on(kit.call_tool("t", json!({}))).unwrap();
+        assert_eq!(out, ToolResult::text("TierLimit"));
         // A declaration carries a tier and, about approval, only a mark that makes it ask
         // more (ADR-0013 §9.4): the only way to skip asking is the user's own choice in
         // Settings.
