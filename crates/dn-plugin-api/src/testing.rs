@@ -1063,7 +1063,7 @@ mod tests {
         let new = block_on(host.held().replace(held[0].id, json!({"body": "v2"}))).unwrap();
         assert_eq!(new.replaces, Some(held[0].id));
         let waiting = block_on(host.held().list()).unwrap();
-        assert_eq!(waiting, [new.clone()]);
+        assert_eq!(waiting, std::slice::from_ref(&new));
         // The old one is gone for good.
         let e = block_on(host.held().withdraw(held[0].id)).unwrap_err();
         assert_eq!(e.kind, ErrorKind::NotAllowed);
