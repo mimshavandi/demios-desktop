@@ -11,3 +11,7 @@
   description: Send an email.
   input_schema: {type: object, properties: {to: {type: string}, body: {type: string}}, required: [to, body]}
   effect: write
+- name: calculator
+  description: Work out arithmetic (+ - * /, parentheses, %).
+  input_schema: {type: object, properties: {expression: {type: string}}, required: [expression]}
+  effect: read

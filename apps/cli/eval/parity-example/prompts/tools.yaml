@@ -11,3 +11,14 @@
     tool_calls:
       required: [web_search]
       forbidden: [send_email]
+
+- id: tools-002
+  category: tools
+  lang: en
+  tools: [calculator]
+  turns:
+    - role: user
+      content: "Seeds cost 120 euros a season and we get 15% off. What do we pay?"
+  expect:
+    must:
+      - "Says 102 euros"

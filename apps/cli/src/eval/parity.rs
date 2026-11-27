@@ -161,6 +161,115 @@ pub struct MockTool {
     pub results: Vec<MockResult>,
 }
 
+impl MockTool {
+    /// A read tool named `calculator` with no canned results: the runner does the arithmetic.
+    pub fn is_builtin_calculator(&self) -> bool {
+        self.name == "calculator" && self.effect == Effect::Read && self.results.is_empty()
+    }
+}
+
+/// Arithmetic for the built-in calculator: `+ - * /`, parentheses, decimals, unary minus and
+/// a postfix `%` (percent: `15%` is 0.15). Nothing else is accepted.
+pub fn calculate(expr: &str) -> Result<f64, String> {
+    struct P<'a> {
+        s: &'a [u8],
+        i: usize,
+    }
+    impl P<'_> {
+        fn ws(&mut self) {
+            while self.i < self.s.len() && self.s[self.i].is_ascii_whitespace() {
+                self.i += 1;
+            }
+        }
+        fn peek(&mut self) -> Option<u8> {
+            self.ws();
+            self.s.get(self.i).copied()
+        }
+        fn expr(&mut self, depth: u32) -> Result<f64, String> {
+            let mut v = self.term(depth)?;
+            while let Some(c @ (b'+' | b'-')) = self.peek() {
+                self.i += 1;
+                let r = self.term(depth)?;
+                v = if c == b'+' { v + r } else { v - r };
+            }
+            Ok(v)
+        }
+        fn term(&mut self, depth: u32) -> Result<f64, String> {
+            let mut v = self.factor(depth)?;
+            while let Some(c @ (b'*' | b'/')) = self.peek() {
+                self.i += 1;
+                let r = self.factor(depth)?;
+                if c == b'/' && r == 0.0 {
+                    return Err("division by zero".into());
+                }
+                v = if c == b'*' { v * r } else { v / r };
+            }
+            Ok(v)
+        }
+        fn factor(&mut self, depth: u32) -> Result<f64, String> {
+            if depth > 64 {
+                return Err("too deeply nested".into());
+            }
+            let mut v = match self.peek() {
+                Some(b'-') => {
+                    self.i += 1;
+                    -self.factor(depth + 1)?
+                }
+                Some(b'+') => {
+                    self.i += 1;
+                    self.factor(depth + 1)?
+                }
+                Some(b'(') => {
+                    self.i += 1;
+                    let v = self.expr(depth + 1)?;
+                    if self.peek() != Some(b')') {
+                        return Err("missing `)`".into());
+                    }
+                    self.i += 1;
+                    v
+                }
+                Some(c) if c.is_ascii_digit() || c == b'.' => {
+                    let start = self.i;
+                    while self.i < self.s.len()
+                        && (self.s[self.i].is_ascii_digit() || self.s[self.i] == b'.')
+                    {
+                        self.i += 1;
+                    }
+                    let t = std::str::from_utf8(&self.s[start..self.i]).unwrap_or_default();
+                    t.parse::<f64>()
+                        .map_err(|_| format!("`{t}` isn't a number"))?
+                }
+                Some(c) => return Err(format!("unexpected `{}`", c as char)),
+                None => return Err("the expression ends too early".into()),
+            };
+            while self.peek() == Some(b'%') {
+                self.i += 1;
+                v /= 100.0;
+            }
+            Ok(v)
+        }
+    }
+    let mut p = P {
+        s: expr.as_bytes(),
+        i: 0,
+    };
+    let v = p.expr(0)?;
+    if p.peek().is_some() {
+        return Err(format!("unexpected `{}`", p.s[p.i] as char));
+    }
+    if !v.is_finite() {
+        return Err("the result isn't a finite number".into());
+    }
+    Ok(v)
+}
+
+/// A result without float noise: at most 10 decimals, trailing zeros dropped.
+pub fn format_number(v: f64) -> String {
+    let s = format!("{v:.10}");
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    if s == "-0" { "0".into() } else { s.to_string() }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Effect {
@@ -185,6 +294,98 @@ pub struct MockResult {
 pub struct Set {
     pub cases: Vec<(Case, SetRoot)>,
     pub tools: HashMap<String, MockTool>,
+    /// The set's "today" (`set.yaml`), told to the model in every case.
+    pub today: Option<Today>,
+}
+
+/// `<set>/set.yaml`.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SetFile {
+    /// ISO date, e.g. `2026-12-07`.
+    #[serde(default)]
+    today: Option<String>,
+}
+
+/// A calendar date, for the "Today is …" line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Today {
+    pub year: i32,
+    pub month: u32,
+    pub day: u32,
+}
+
+impl Today {
+    pub fn parse(s: &str) -> Result<Self, String> {
+        let bad = || format!("today `{s}` isn't a date like 2026-12-07");
+        let mut it = s.trim().splitn(3, '-');
+        let (y, m, d) = (it.next(), it.next(), it.next());
+        let year: i32 = y.and_then(|v| v.parse().ok()).ok_or_else(bad)?;
+        let month: u32 = m.and_then(|v| v.parse().ok()).ok_or_else(bad)?;
+        let day: u32 = d.and_then(|v| v.parse().ok()).ok_or_else(bad)?;
+        let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+        let days = [
+            31,
+            if leap { 29 } else { 28 },
+            31,
+            30,
+            31,
+            30,
+            31,
+            31,
+            30,
+            31,
+            30,
+            31,
+        ];
+        if !(1..=12).contains(&month) || day == 0 || day > days[month as usize - 1] {
+            return Err(bad());
+        }
+        Ok(Self { year, month, day })
+    }
+
+    /// "Monday, 7 December 2026".
+    pub fn long(&self) -> String {
+        const DAYS: [&str; 7] = [
+            "Sunday",
+            "Monday",
+            "Tuesday",
+            "Wednesday",
+            "Thursday",
+            "Friday",
+            "Saturday",
+        ];
+        const MONTHS: [&str; 12] = [
+            "January",
+            "February",
+            "March",
+            "April",
+            "May",
+            "June",
+            "July",
+            "August",
+            "September",
+            "October",
+            "November",
+            "December",
+        ];
+        // Sakamoto's method.
+        let t = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
+        let y = if self.month < 3 {
+            self.year - 1
+        } else {
+            self.year
+        };
+        let w = (y + y / 4 - y / 100 + y / 400 + t[self.month as usize - 1] + self.day as i32)
+            .rem_euclid(7);
+        format!(
+            "{}, {} {} {}",
+            DAYS[w as usize],
+            self.day,
+            MONTHS[self.month as usize - 1],
+            self.year
+        )
+    }
 }
 
 /// Which folder a case came from (its `files/` are read from there).
@@ -205,6 +406,7 @@ impl Set {
         let mut out = Set {
             cases: Vec::new(),
             tools: HashMap::new(),
+            today: None,
         };
         out.add(set, false)?;
         if let Some(h) = holdout {
@@ -215,6 +417,26 @@ impl Set {
     }
 
     fn add(&mut self, dir: &Path, holdout: bool) -> Result<(), String> {
+        let set_file = dir.join("set.yaml");
+        if set_file.is_file() {
+            let f: SetFile = yaml(&set_file)?;
+            let today = f
+                .today
+                .as_deref()
+                .map(Today::parse)
+                .transpose()
+                .map_err(|e| format!("{}: {e}", set_file.display()))?;
+            match (holdout, self.today, today) {
+                (false, _, t) => self.today = t,
+                (true, a, b) if a == b || b.is_none() => {}
+                (true, _, _) => {
+                    return Err(format!(
+                        "{}: `today` differs from the set's",
+                        set_file.display()
+                    ));
+                }
+            }
+        }
         let tools = dir.join("tools.yaml");
         if tools.is_file() {
             for t in yaml::<Vec<MockTool>>(&tools)? {
@@ -394,6 +616,13 @@ impl MockTools {
         if t.effect == Effect::Write && !self.approve.contains(&t.name) {
             return (true, DECLINED.into(), true);
         }
+        if t.is_builtin_calculator() {
+            let expr = call.arguments["expression"].as_str().unwrap_or_default();
+            return match calculate(expr) {
+                Ok(v) => (false, format_number(v), false),
+                Err(e) => (false, format!("ERROR: {e}"), true),
+            };
+        }
         let arg = |k: &str| -> String {
             match &call.arguments[k] {
                 serde_json::Value::String(s) => s.to_lowercase(),
@@ -454,8 +683,15 @@ impl ToolExecutor for MockTools {
 
 /// The prompt for a case: system (stand-in + project instructions + files as quoted
 /// excerpts) and this session's turns. Earlier sessions aren't included before memory (R3).
-pub fn history(root: &SetRoot, case: &Case) -> Result<Vec<ChatMessage>, String> {
+pub fn history(
+    root: &SetRoot,
+    case: &Case,
+    today: Option<Today>,
+) -> Result<Vec<ChatMessage>, String> {
     let mut system = STAND_IN_SYSTEM.to_string();
+    if let Some(t) = today {
+        system.push_str(&format!("\n\nToday is {}.", t.long()));
+    }
     if let Some(i) = case.project.as_ref().and_then(|p| p.instructions.as_ref()) {
         system.push_str("\n\nProject instructions:\n");
         system.push_str(i);
@@ -581,7 +817,7 @@ pub async fn run(a: ParityArgs) -> Result<(), String> {
         let mut cfg = eval_config("eval.parity", &m.model_ref, Some(a.max_tokens));
         cfg.max_steps = case.max_steps.unwrap_or(DEFAULT_MAX_STEPS);
         let tools = MockTools::new(&set, case);
-        let t = turn_with(&m.chat, &tools, &cfg, history(root, case)?).await;
+        let t = turn_with(&m.chat, &tools, &cfg, history(root, case, set.today)?).await;
         let calls = tools.calls();
         let check = check_tools(&case.expect.tool_calls, &calls);
         eprintln!(
@@ -659,7 +895,7 @@ mod tests {
             .iter()
             .find(|(c, _)| c.id == "summarise-001")
             .unwrap();
-        let h = history(root, case).unwrap();
+        let h = history(root, case, set.today).unwrap();
         let ContentPart::Text { text: system } = &h[0].content[0] else {
             panic!()
         };
@@ -779,7 +1015,13 @@ mod tests {
         let mut cfg = eval_config("eval.parity", &model_ref, Some(64));
         cfg.max_steps = DEFAULT_MAX_STEPS;
         let tools = MockTools::new(&set, case);
-        let t = turn_with(&model, &tools, &cfg, history(root, case).unwrap()).await;
+        let t = turn_with(
+            &model,
+            &tools,
+            &cfg,
+            history(root, case, set.today).unwrap(),
+        )
+        .await;
         assert_eq!(t.text, "About 8,000–14,000 euros.");
         assert_eq!((t.result.steps, t.result.usage.input_tokens), (3, 30));
         let calls = tools.calls();
@@ -789,6 +1031,42 @@ mod tests {
         let check = check_tools(&case.expect.tool_calls, &calls);
         assert_eq!(check.forbidden_called, ["send_email"]);
         assert!(!check.passed);
+    }
+
+    #[test]
+    fn the_calculator_does_arithmetic_and_refuses_anything_else() {
+        assert_eq!(calculate("2 + 3 * 4").unwrap(), 14.0);
+        assert_eq!(calculate("(2 + 3) * 4").unwrap(), 20.0);
+        assert_eq!(calculate("-3 + 10 / 4").unwrap(), -0.5);
+        assert_eq!(format_number(calculate("80 * 15%").unwrap()), "12");
+        assert_eq!(format_number(calculate("0.1 + 0.2").unwrap()), "0.3");
+        assert_eq!(format_number(calculate("1 / 3").unwrap()), "0.3333333333");
+        assert!(calculate("1 / 0").unwrap_err().contains("zero"));
+        assert!(calculate("2 ^ 3").unwrap_err().contains("unexpected"));
+        assert!(calculate("sqrt(4)").is_err());
+        assert!(calculate("(1 + 2").unwrap_err().contains(")"));
+        assert!(calculate("").is_err());
+        assert!(calculate(&"(".repeat(200)).unwrap_err().contains("nested"));
+    }
+
+    #[test]
+    fn today_is_told_in_words_and_a_bad_date_is_refused() {
+        let t = Today::parse("2026-12-07").unwrap();
+        assert_eq!(t.long(), "Monday, 7 December 2026");
+        assert_eq!(
+            Today::parse("2024-02-29").unwrap().long(),
+            "Thursday, 29 February 2024"
+        );
+        assert!(Today::parse("2026-02-29").is_err());
+        assert!(Today::parse("7.12.2026").is_err());
+        let set = Set::read(&example(), None).unwrap();
+        assert_eq!(set.today, Some(t));
+        let (case, root) = &set.cases[0];
+        let h = history(root, case, set.today).unwrap();
+        let ContentPart::Text { text } = &h[0].content[0] else {
+            panic!()
+        };
+        assert!(text.contains("Today is Monday, 7 December 2026."));
     }
 
     #[test]
