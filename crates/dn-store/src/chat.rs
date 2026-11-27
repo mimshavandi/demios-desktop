@@ -56,6 +56,7 @@ DELETE FROM store_messages WHERE conversation_id IN
 DELETE FROM store_conversations WHERE purged_at IS NOT NULL;
 ",
     crate::project::MIGRATION,
+    crate::sync_rows::MIGRATION,
 ];
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -450,6 +451,8 @@ pub fn delete_all(conn: &Connection) -> Result<()> {
     tx.execute("DELETE FROM store_project_files", [])?;
     tx.execute("DELETE FROM store_projects", [])?;
     tx.execute("DELETE FROM store_tombstones", [])?;
+    // A local wipe is never sent to other devices as deletions.
+    tx.execute("DELETE FROM store_sync_log", [])?;
     tx.commit()?;
     crate::checkpoint(conn);
     Ok(())

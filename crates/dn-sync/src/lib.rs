@@ -22,6 +22,7 @@ pub mod inbox;
 pub mod link;
 pub mod membership;
 pub mod pairing;
+pub mod records;
 pub mod transport;
 
 pub use devices::{Device, DeviceKind, DeviceList};
@@ -35,6 +36,7 @@ pub fn migrations() -> &'static [&'static str] {
         inbox::MIGRATION,
         devices::MIGRATION_NODE_LINK,
         membership::MIGRATION,
+        records::MIGRATION,
     ]
 }
 
@@ -83,6 +85,8 @@ pub enum SyncError {
     ForkedChain,
     #[error("device {0} sent two different changes under one number")]
     Equivocation(DeviceId),
+    #[error("the local store refused a synced record: {0}")]
+    Store(String),
     #[error("database: {0}")]
     Db(#[from] rusqlite::Error),
 }

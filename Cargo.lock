@@ -1523,6 +1523,7 @@ name = "dn-sync"
 version = "0.1.0"
 dependencies = [
  "aws-lc-rs",
+ "dn-core",
  "dn-secrets",
  "dn-store",
  "hpke",
