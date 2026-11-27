@@ -3,4 +3,4 @@
 /**
  * What the context assembler did to an item to fit the budget (ADR-0020 §2).
  */
-export type DropAction = "dropped" | "summarised" | "truncated";
+export type DropAction = "dropped" | "summarised" | "truncated" | "placeholder";

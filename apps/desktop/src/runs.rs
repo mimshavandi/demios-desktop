@@ -130,6 +130,24 @@ fn de<T: serde::de::DeserializeOwned>(v: serde_json::Value, i: usize) -> SqlResu
     serde_json::from_value(v).map_err(|e| bad_column(i, e))
 }
 
+/// Tokens a run counts against the daily job budget: the whole prompt (cached part
+/// included) plus the output.
+pub fn budget_tokens(r: &RunResult) -> u64 {
+    u64::from(r.usage.input_tokens) + u64::from(r.usage.output_tokens)
+}
+
+/// Counts a job's model run against the daily budget (`dn_jobs::budget`, #313). The host's
+/// `run_model` calls this for a caller that is a job, with the job run's id and the local
+/// day; `run_model` isn't offered yet (ADR-0020 R6, #349), so nothing calls it until then.
+pub fn record_job_usage(
+    conn: &Connection,
+    job_run: Id,
+    day: i64,
+    r: &RunResult,
+) -> dn_jobs::Result<()> {
+    dn_jobs::budget::record_usage(conn, job_run, day, budget_tokens(r))
+}
+
 /// Forgets the runs of a purged chat. Idempotent.
 pub fn forget_chat(conn: &Connection, conversation_id: Id) -> Result<usize> {
     Ok(conn.execute(
@@ -175,12 +193,25 @@ mod tests {
         };
         r.first_token_ms = Some(120);
         r.dropped = vec![Dropped {
-            slot: "retrieved".into(),
+            slot: dn_core::run::Slot::Retrieved,
             source: "f1".into(),
             tokens: 80,
             action: DropAction::Dropped,
         }];
         r
+    }
+
+    #[test]
+    fn a_jobs_run_counts_its_whole_prompt_and_output_against_the_budget() {
+        let db = db();
+        let key = dn_jobs::JobKey::new(dn_plugin_api::PluginId::new("notes").unwrap(), "daily");
+        dn_jobs::store::set_enabled(&db, &key, true, 1).unwrap();
+        let job_run = dn_jobs::store::start_run(&db, &key, 5, false, 1, 6).unwrap();
+        let r = result(); // 900 in (600 of them cached), 40 out
+        record_job_usage(&db, job_run, 7, &r).unwrap();
+        record_job_usage(&db, job_run, 7, &r).unwrap();
+        assert_eq!(dn_jobs::budget::used(&db, 7).unwrap(), 2 * 940);
+        assert_eq!(dn_jobs::budget::used(&db, 8).unwrap(), 0);
     }
 
     #[test]

@@ -382,13 +382,13 @@ fn start(
         let live = state.live_text(message_id);
         // SQLite is blocking: keep it off the async workers.
         let write = tauri::async_runtime::spawn_blocking(move || {
+            record_run(&st, conversation_id, message_id, &run_result);
             persist(
                 &st,
                 conversation_id,
                 message_id,
                 &model_ref,
                 result,
-                &run_result,
                 live,
                 &failed_calls,
             )
@@ -539,6 +539,18 @@ fn finish_of(stop: StopReason) -> (FinishReason, MessageStatus, &'static str) {
     }
 }
 
+/// Stores the turn's run result with its answer. Usage is a record, not part of the answer:
+/// a failure to store it doesn't lose the answer, but it is reported. Blocking.
+fn record_run(state: &AppState, conversation_id: Id, message_id: Id, run: &RunResult) {
+    let r = state.db().map_err(|e| e.message).and_then(|db| {
+        crate::runs::record(&db, run, Some(conversation_id), Some(message_id))
+            .map_err(|e| e.to_string())
+    });
+    if let Err(e) = r {
+        tracing::warn!(run_id = %run.run_id, error = %e, "could not store the run's usage");
+    }
+}
+
 /// Stores the run: the first assistant turn goes into the placeholder, later turns and
 /// tool results follow as their own rows (every tool call keeps its result). Returns the
 /// final event for the UI. Blocking.
@@ -548,16 +560,10 @@ fn persist(
     placeholder: Id,
     model: &str,
     result: Result<RunOutcome, CoreError>,
-    run: &RunResult,
     live_text: String,
     failed_calls: &std::collections::HashSet<String>,
 ) -> IpcResult<ChatEvent> {
     let db = state.db()?;
-    // Usage is a record, not part of the answer: a failure to store it doesn't lose the
-    // answer, but it is reported.
-    if let Err(e) = crate::runs::record(&db, run, Some(conversation_id), Some(placeholder)) {
-        tracing::warn!(run_id = %run.run_id, error = %e, "could not store the run's usage");
-    }
     let outcome = match result {
         Ok(o) => o,
         Err(e) => {

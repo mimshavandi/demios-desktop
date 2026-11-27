@@ -39,6 +39,7 @@ fn export_all(dir: &Path) {
         FinishReason,
         Usage,
         StopReason,
+        Slot,
         DropAction,
         Dropped,
         RunResult,

@@ -190,6 +190,11 @@ pub(crate) async fn run(inner: Arc<Inner>, req: ChatRequest, tx: Emit) {
             if let Some(u) = v.get("usage").filter(|u| !u.is_null()) {
                 usage.input_tokens = u["prompt_tokens"].as_u64().unwrap_or(0) as u32;
                 usage.output_tokens = u["completion_tokens"].as_u64().unwrap_or(0) as u32;
+                // Part of `prompt_tokens` (OpenAI caches automatically; servers that don't
+                // report it leave 0).
+                usage.cached_input_tokens = u["prompt_tokens_details"]["cached_tokens"]
+                    .as_u64()
+                    .unwrap_or(0) as u32;
             }
             let Some(choice) = v["choices"].get(0) else {
                 continue;

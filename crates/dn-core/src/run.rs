@@ -28,6 +28,27 @@ pub enum StopReason {
     Failed,
 }
 
+/// The context assembler's slots, in their fixed order (ADR-0020 §2.2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
+pub enum Slot {
+    System,
+    Tools,
+    Skills,
+    /// The core profile (memory).
+    Profile,
+    /// Project or add-on knowledge.
+    Knowledge,
+    Retrieved,
+    /// Summary and recent turns.
+    Conversation,
+    /// The new input.
+    Input,
+    /// The one-line task recap.
+    Recap,
+}
+
 /// What the context assembler did to an item to fit the budget (ADR-0020 §2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -36,6 +57,8 @@ pub enum DropAction {
     Dropped,
     Summarised,
     Truncated,
+    /// An old tool result replaced by a placeholder (ADR-0020 §2.5).
+    Placeholder,
 }
 
 /// One item the context assembler changed or left out. Nothing fills these before the
@@ -43,8 +66,7 @@ pub enum DropAction {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Dropped {
-    /// The slot it belonged to, e.g. `retrieved`, `conversation`.
-    pub slot: String,
+    pub slot: Slot,
     /// What it was: a source id, a message id, a tool name.
     pub source: String,
     /// Tokens it would have taken (or that were saved, when summarised or truncated).
