@@ -76,6 +76,32 @@ pub struct Dropped {
     pub action: DropAction,
 }
 
+/// How a prompt's tokens were counted (ADR-0020 §2.1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
+pub enum TokenCount {
+    /// With the model's own tokenizer and template (a local model).
+    ModelTokenizer,
+    /// Estimated from the text, calibrated on what the provider reported before, with a
+    /// safety margin.
+    Estimate,
+}
+
+/// How the context assembler used the model's context on the run's last model call
+/// (ADR-0020 §2, §8).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct ContextUse {
+    /// The input budget: the model's effective context minus room for the answer.
+    pub budget_tokens: u32,
+    /// Input tokens the prompt took.
+    pub used_tokens: u32,
+    pub counted_by: TokenCount,
+    /// The conversation was summarised to fit (ADR-0020 §3).
+    pub compacted: bool,
+}
+
 /// The typed result of a run (ADR-0020 §8).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -97,6 +123,9 @@ pub struct RunResult {
     pub first_token_ms: Option<u64>,
     /// What the context assembler left out; empty until it exists.
     pub dropped: Vec<Dropped>,
+    /// How the context was used; `None` for a call that didn't go through the assembler.
+    #[serde(default)]
+    pub context: Option<ContextUse>,
 }
 
 /// Measures a run from its stream events.
@@ -159,6 +188,7 @@ impl RunMeter {
             wall_ms: ms(Instant::now()),
             first_token_ms: self.first_token.map(ms),
             dropped: Vec::new(),
+            context: None,
         }
     }
 }
