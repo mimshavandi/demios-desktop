@@ -216,6 +216,16 @@ struct Col<'a> {
     texts: Vec<Option<String>>,
 }
 
+/// An error cell, or a number that isn't finite (whatever produced it): counted apart,
+/// never computed with and never dropped silently.
+fn is_error(c: &Cell) -> bool {
+    match c {
+        Cell::Error(_) => true,
+        Cell::Number(v) => !v.is_finite(),
+        _ => false,
+    }
+}
+
 fn is_missing(c: &Cell) -> bool {
     match c {
         Cell::Empty => true,
@@ -232,13 +242,13 @@ fn column<'a>(table: &'a Table, i: usize, prefer_comma: bool) -> Col<'a> {
     let present: Vec<&Cell> = cells
         .iter()
         .copied()
-        .filter(|c| !is_missing(c) && !matches!(c, Cell::Error(_)))
+        .filter(|c| !is_missing(c) && !is_error(c))
         .collect();
     let missing = cells.iter().filter(|c| is_missing(c)).count() as u64;
-    let errors = cells.iter().filter(|c| matches!(c, Cell::Error(_))).count() as u64;
+    let errors = cells.iter().filter(|c| is_error(c)).count() as u64;
     let texts: Vec<Option<String>> = cells
         .iter()
-        .map(|c| (!is_missing(c) && !matches!(c, Cell::Error(_))).then(|| c.display()))
+        .map(|c| (!is_missing(c) && !is_error(c)).then(|| c.display()))
         .collect();
     let distinct = texts.iter().flatten().collect::<HashSet<_>>().len() as u64;
     let mut profile = ColumnProfile {
@@ -393,8 +403,9 @@ impl Facts {
 }
 
 /// A name or value from the file, quoted for a fact line: one line (every line or
-/// paragraph separator and control character becomes a space) and `"` escaped, so cell text
-/// can't end its quotes or start a line that looks like a fact.
+/// paragraph separator and control character becomes a space), with `"`, `\`, `[` and `]`
+/// escaped, so cell text can't end its quotes, start a line that looks like a fact or hold
+/// a fact id.
 fn q(name: &str) -> String {
     let flat: String = name
         .chars()
@@ -406,7 +417,13 @@ fn q(name: &str) -> String {
             }
         })
         .collect();
-    format!("\"{}\"", flat.replace('\\', "\\\\").replace('"', "\\\""))
+    // `[` and `]` too, so cell text can't hold something that reads as a fact id.
+    let escaped = flat
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('[', "\\[")
+        .replace(']', "\\]");
+    format!("\"{escaped}\"")
 }
 
 /// Linear-interpolation quantile of sorted values.

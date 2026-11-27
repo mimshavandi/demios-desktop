@@ -10,6 +10,9 @@ fn cell(d: &Data) -> Cell {
     match d {
         Data::Empty => Cell::Empty,
         Data::Int(i) => Cell::Number(*i as f64),
+        // Infinity or NaN (`1e400`, `nan`) isn't a value to compute with: it's the
+        // spreadsheet's number error, counted with the other error cells.
+        Data::Float(f) if !f.is_finite() => Cell::Error("#NUM!".into()),
         Data::Float(f) => Cell::Number(*f),
         Data::String(s) if s.trim().is_empty() => Cell::Empty,
         Data::String(s) => Cell::Text(s.clone()),

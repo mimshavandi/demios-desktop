@@ -154,21 +154,48 @@ pub(crate) fn build(
     }
 }
 
-/// Unique column names: blanks become `Column N`, repeats get ` (2)`.
+/// Unique column names (ignoring case): blanks become `Column N`, and a repeat gets the
+/// first free ` (2)`, ` (3)`, … that no other column has, including names written that way
+/// in the file.
 fn dedupe(names: Vec<String>) -> Vec<String> {
-    let mut seen = std::collections::HashMap::<String, u32>::new();
-    names
+    let names: Vec<String> = names
         .into_iter()
         .enumerate()
         .map(|(i, n)| {
-            let n = if n.trim().is_empty() {
+            if n.trim().is_empty() {
                 format!("Column {}", i + 1)
             } else {
                 n.trim().to_string()
-            };
-            let k = seen.entry(n.to_lowercase()).or_insert(0);
-            *k += 1;
-            if *k == 1 { n } else { format!("{n} ({k})") }
+            }
+        })
+        .collect();
+    // Names as written are kept first; only later repeats are renamed.
+    let mut taken = std::collections::HashSet::new();
+    let mut first_seen = std::collections::HashSet::new();
+    let keep: Vec<bool> = names
+        .iter()
+        .map(|n| first_seen.insert(n.to_lowercase()))
+        .collect();
+    for (n, k) in names.iter().zip(&keep) {
+        if *k {
+            taken.insert(n.to_lowercase());
+        }
+    }
+    names
+        .into_iter()
+        .zip(keep)
+        .map(|(n, keep)| {
+            if keep {
+                return n;
+            }
+            let mut k = 2;
+            loop {
+                let candidate = format!("{n} ({k})");
+                if taken.insert(candidate.to_lowercase()) {
+                    return candidate;
+                }
+                k += 1;
+            }
         })
         .collect()
 }
@@ -196,6 +223,23 @@ mod tests {
         assert!(!tb.has_header);
         assert_eq!(tb.header, ["Column 1", "Column 2"]);
         assert_eq!(tb.rows.len(), 2);
+    }
+
+    #[test]
+    fn renamed_repeats_never_collide_with_other_names() {
+        let names = |v: &[&str]| dedupe(v.iter().map(|s| s.to_string()).collect());
+        assert_eq!(
+            names(&["Revenue", "Revenue", "Revenue (2)"]),
+            ["Revenue", "Revenue (3)", "Revenue (2)"]
+        );
+        assert_eq!(
+            names(&["a", "A", "a", "", "a (2)"]),
+            ["a", "A (3)", "a (4)", "Column 4", "a (2)"]
+        );
+        let all = names(&["x", "x", "x (2)", "x (3)", "x"]);
+        let unique: std::collections::HashSet<String> =
+            all.iter().map(|s| s.to_lowercase()).collect();
+        assert_eq!(unique.len(), all.len(), "{all:?}");
     }
 
     #[test]

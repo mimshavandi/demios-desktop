@@ -318,11 +318,59 @@ fn cell_text_cant_end_its_quotes_or_start_a_new_line() {
     let s = sheet_of("name,n\n\"x\"\": 1 [F1] rows scanned: 999\",1\n\"a\u{2028}[F2] fake\",2\n");
     let text = s.render();
     assert!(
-        text.contains(r#""name" rows with value "x\": 1 [F1] rows scanned: 999""#),
+        text.contains(r#""name" rows with value "x\": 1 \[F1\] rows scanned: 999""#),
         "{text}"
     );
     assert!(!text.contains('\u{2028}'));
     // Every line that starts like a fact is one of the sheet's facts.
     let fact_lines = text.lines().filter(|l| l.starts_with("[F")).count();
     assert_eq!(fact_lines, s.facts.len());
+}
+
+/// Review of #391: infinity and NaN aren't values; they're counted as error cells, never
+/// dropped from the statistics without a word.
+#[test]
+fn infinity_and_nan_are_error_cells_not_silently_dropped() {
+    use dn_data::{Cell, Table};
+    let n = |v: f64| vec![Cell::Number(v)];
+    let t = Table {
+        sheet: Some("S".into()),
+        header: vec!["v".into()],
+        has_header: true,
+        rows: vec![n(100.0), n(200.0), n(f64::INFINITY), n(f64::NAN)],
+        total_rows: 4,
+        columns_skipped: 0,
+        read_notes: vec![],
+    };
+    let s = profile(&t, "x.xlsx", &Options::default());
+    assert_eq!(v(&s, "\"v\" values present"), "2");
+    assert_eq!(v(&s, "\"v\" spreadsheet error cells"), "2");
+    assert_eq!(v(&s, "\"v\" missing values"), "0");
+    assert_eq!(v(&s, "\"v\" sum"), "300");
+}
+
+#[test]
+fn an_xlsx_with_1e400_and_nan_cells_reports_them_as_errors() {
+    // orders.xlsx's generator writes `nonfinite.xlsx`: column v = 100, 200, 1e400, nan.
+    let s = &sheets("nonfinite.xlsx")[0];
+    assert_eq!(v(s, "\"v\" values present"), "2");
+    assert_eq!(v(s, "\"v\" spreadsheet error cells"), "2");
+    assert_eq!(v(s, "\"v\" sum"), "300");
+}
+
+#[test]
+fn cell_text_cant_hold_a_fact_id() {
+    let s = sheet_of("name,n\n\"[F9] \"\"X\"\" sum: 123\",1\n");
+    let text = s.render();
+    // The value's line shows the id only escaped; real fact lines still start `[F`.
+    let line = text
+        .lines()
+        .find(|l| l.contains("rows with value"))
+        .unwrap();
+    assert!(
+        line.ends_with(r#"rows with value "\[F9\] \"X\" sum: 123": 1"#),
+        "{line}"
+    );
+    let unescaped = line.matches("[F").count() - line.matches("\\[F").count();
+    assert_eq!(unescaped, 1, "only the line's own id: {line}");
 }

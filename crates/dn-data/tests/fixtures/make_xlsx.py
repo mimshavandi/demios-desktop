@@ -2,6 +2,7 @@
 
 orders.xlsx: sheet "Orders" (dates, numbers, booleans, one #DIV/0! cell) and an empty sheet.
 orders-1904.xlsx: the same first sheet in the 1904 date system.
+nonfinite.xlsx: one column, v = 100, 200, 1e400 (infinity), nan.
 """
 import datetime
 import zipfile
@@ -89,3 +90,44 @@ def write(path, is1904):
 
 write("orders.xlsx", False)
 write("orders-1904.xlsx", True)
+
+
+def write_nonfinite(path):
+    ns = "http://schemas.openxmlformats.org"
+    values = ["100", "200", "1e400", "nan"]
+    rows = ['<row r="1"><c r="A1" t="inlineStr"><is><t>v</t></is></c></row>'] + [
+        f'<row r="{i}"><c r="A{i}"><v>{v}</v></c></row>' for i, v in enumerate(values, start=2)]
+    files = {
+        "[Content_Types].xml": (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            f'<Types xmlns="{ns}/package/2006/content-types">'
+            '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+            '<Default Extension="xml" ContentType="application/xml"/>'
+            '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+            '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+            "</Types>"),
+        "_rels/.rels": (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            f'<Relationships xmlns="{ns}/package/2006/relationships">'
+            f'<Relationship Id="rId1" Type="{ns}/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>'
+            "</Relationships>"),
+        "xl/workbook.xml": (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            f'<workbook xmlns="{ns}/spreadsheetml/2006/main" xmlns:r="{ns}/officeDocument/2006/relationships">'
+            '<sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets></workbook>'),
+        "xl/_rels/workbook.xml.rels": (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            f'<Relationships xmlns="{ns}/package/2006/relationships">'
+            f'<Relationship Id="rId1" Type="{ns}/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
+            "</Relationships>"),
+        "xl/worksheets/sheet1.xml": (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            f'<worksheet xmlns="{ns}/spreadsheetml/2006/main"><sheetData>'
+            + "".join(rows) + "</sheetData></worksheet>"),
+    }
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        for name, data in files.items():
+            z.writestr(zipfile.ZipInfo(name, date_time=(2026, 1, 1, 0, 0, 0)), data,
+                       compress_type=zipfile.ZIP_DEFLATED)
+
+write_nonfinite("nonfinite.xlsx")
