@@ -602,6 +602,7 @@ impl Node {
                 pairing: self.pairing.clone(),
                 secrets: self.secrets.clone(),
                 group: self.group.clone(),
+                records: self.records.clone(),
             });
             tokio::spawn(control::serve(
                 self.control,
