@@ -382,9 +382,10 @@ pub struct NodeStatus {
     pub protected_at_rest: bool,
     pub devices: u32,
     /// `true` when the person chose to accept connections from outside the local network
-    /// (ADR-0014 §4a); every client says so. Absent from older Nodes: `false`.
-    #[serde(default)]
-    pub reachable_from_outside: bool,
+    /// (ADR-0014 §4a); every client says so. `None` from older Nodes, which don't report
+    /// it: clients then don't show it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reachable_from_outside: Option<bool>,
 }
 
 /// An open, authenticated channel whose versions match.

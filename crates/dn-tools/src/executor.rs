@@ -277,7 +277,11 @@ impl Executor {
     /// every narrowing layer must allow the tool, an add-on can't call above its tier, and
     /// a job's call runs only for a tool the user set to run without asking for that add-on
     /// (anything else is held for the user). Returns true for such a job call.
-    fn check_origin(ctx: &CallContext, cap: &McpCapability) -> Result<bool, ToolError> {
+    fn check_origin(
+        ctx: &CallContext,
+        cap: &McpCapability,
+        limit_tier: RiskTier,
+    ) -> Result<bool, ToolError> {
         let id = &cap.spec.id;
         if !ctx.narrowing_allows(id) {
             let msg = "This tool isn't available with the skill chosen for this chat.";
@@ -289,13 +293,13 @@ impl Executor {
         let CallOrigin::Plugin(p) = &ctx.origin else {
             return Ok(false);
         };
-        if cap.spec.risk > p.max_tier {
+        if limit_tier > p.max_tier {
             return Err(ToolError::new(
                 id,
                 ToolErrorKind::Blocked,
                 format!(
                     "{} may call tools up to {:?} here; this one is {:?}",
-                    p.name, p.max_tier, cap.spec.risk
+                    p.name, p.max_tier, limit_tier
                 ),
             )
             .with_model_message(format!(
@@ -573,6 +577,32 @@ impl Executor {
         let mut c = Self::plugin_capability(plugin_id, t, ov.get(&cap.spec.id));
         c.llm_name = cap.llm_name.clone();
         Some(c)
+    }
+
+    /// The tier an add-on's call to `cap` is checked against (ADR-0013 §9.1): the tool's
+    /// tier, and for an add-on tool also the tier it declared, whichever is higher. Its
+    /// handler's `Host` follows the declared tier, so a user who lowers the tool's tier
+    /// doesn't let a lower-tier handler reach that access through it.
+    fn limit_tier(&self, cap: &McpCapability) -> RiskTier {
+        let declared = cap
+            .server_id
+            .strip_prefix("plugin:")
+            .and_then(|plugin_id| {
+                self.rd(&self.plugins)?
+                    .get(plugin_id)?
+                    .iter()
+                    .find(|t| t.name == cap.tool_name)
+                    .map(|t| t.risk)
+            })
+            .unwrap_or(RiskTier::Read);
+        cap.spec.risk.max(declared)
+    }
+
+    /// The tier an add-on's call to the tool `name` is checked against: see
+    /// [`Self::limit_tier`]. The host checks it before it holds a job's call, so a job can't
+    /// queue a call above its own tier. `None` for an unknown tool.
+    pub fn call_tier(&self, name: &str) -> Option<RiskTier> {
+        self.resolve(name).map(|c| self.limit_tier(&c))
     }
 
     fn handler(&self, cap: &McpCapability) -> Option<Arc<dyn InProcessTool>> {
@@ -1031,7 +1061,7 @@ impl Executor {
         self.check_fresh(&cap.server_id, &cap.spec.id, seen)?;
         let id = cap.spec.id.clone();
         let scope = ctx.scope();
-        let job_auto = Self::check_origin(ctx, &cap)?;
+        let job_auto = Self::check_origin(ctx, &cap, self.limit_tier(&cap))?;
         let target = self.target(&cap)?;
 
         let approved_already = job_auto || self.gate.is_satisfied(&scope, &id, cap.approval);

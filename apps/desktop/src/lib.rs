@@ -240,7 +240,7 @@ pub fn run_with_addons(addons: Vec<std::sync::Arc<dyn dn_plugin_api::Plugin>>) {
             addons::commands::addon_consent,
             addons::commands::addon_set_permission,
             addons::commands::addon_set_enabled,
-            addons::commands::addons_set_utc_offset,
+            addons::commands::addons_start_jobs,
             addons::commands::addons_paused,
             addons::commands::addons_set_paused,
             addons::commands::addon_set_job_enabled,
