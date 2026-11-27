@@ -504,3 +504,55 @@ async fn overrides_and_registration_can_run_at_the_same_time() {
     }
     assert_eq!(ex.capabilities().len(), 10);
 }
+
+#[tokio::test]
+async fn a_user_lowering_a_tools_tier_doesnt_open_it_to_a_lower_tier_handler() {
+    // ADR-0013 §9.1: the handler's access follows the declared tier, so the limit for a
+    // nested call does too, whatever the user chose.
+    let (ex, _rx) = executor();
+    let h = Arc::new(Recorder::default());
+    ex.add_plugin(
+        "notes",
+        vec![tool(
+            "post",
+            RiskTier::ExternalWrite,
+            RiskTier::Read,
+            h.clone(),
+        )],
+    )
+    .unwrap();
+    let mut ov = HashMap::new();
+    ov.insert(
+        "plugin.notes.post".to_owned(),
+        CapabilityOverride {
+            risk: Some(RiskTier::Read),
+            ..Default::default()
+        },
+    );
+    ex.set_overrides(ov);
+    assert_eq!(
+        ex.resolve("plugin.notes.post").unwrap().spec.risk,
+        RiskTier::Read
+    );
+    assert_eq!(
+        ex.call_tier("plugin.notes.post"),
+        Some(RiskTier::ExternalWrite)
+    );
+    let e = ex
+        .execute(
+            &plugin_ctx(RiskTier::Read, None),
+            &call("c1", "plugin.notes.post", serde_json::json!({})),
+        )
+        .await
+        .unwrap_err();
+    match e {
+        dn_core::CoreError::Capability {
+            developer_message, ..
+        } => assert!(
+            developer_message.contains("may call tools up to Read here; this one is ExternalWrite"),
+            "{developer_message}"
+        ),
+        other => panic!("{other:?}"),
+    }
+    assert!(h.calls().is_empty());
+}

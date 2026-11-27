@@ -419,7 +419,20 @@ async fn run_approved(state: &Arc<AppState>, call: &HeldApproval) -> Result<(), 
         dn_tools::PluginCall {
             plugin_id: call.job.plugin.to_string(),
             name,
-            max_tier: dn_core::capability::RiskTier::Sensitive,
+            // The job's own tier (ADR-0013 §9.1); declared without one: today's access.
+            max_tier: state
+                .addons
+                .loaded()
+                .into_iter()
+                .find(|(m, _, _)| &m.id == plugin)
+                .and_then(|(_, _, r)| {
+                    r.jobs
+                        .iter()
+                        .find(|j| j.decl.id == call.job.job)
+                        .map(|j| j.decl.tier)
+                })
+                .ok_or_else(|| "The job is gone, so the call wasn't run.".to_owned())?
+                .unwrap_or(dn_core::capability::RiskTier::Sensitive),
             job: Some(dn_tools::JobCall {
                 id: call.job.job.clone(),
                 name: call.job.job.clone(),
@@ -614,12 +627,12 @@ impl JobHost for AppJobHost {
                     r.jobs
                         .iter()
                         .find(|j| j.decl.id == job.job)
-                        .map(|j| (m, g, Arc::clone(&j.handler)))
+                        .map(|j| (m, g, j.decl.tier, Arc::clone(&j.handler)))
                 });
-            let Some((manifest, grants, handler)) = found else {
+            let Some((manifest, grants, tier, handler)) = found else {
                 return Err(PluginError::unavailable("The add-on isn't running"));
             };
-            let host = Addons::job_host(&state, &manifest, grants, &job.job, ctx.run);
+            let host = Addons::job_host(&state, &manifest, grants, &job.job, tier, ctx.run);
             match backend::guarded(handler.run(&host, ctx)).await {
                 Some(r) => r,
                 None => {
