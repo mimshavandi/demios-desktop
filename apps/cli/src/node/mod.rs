@@ -22,7 +22,7 @@ pub mod control;
 pub mod zone;
 
 use clap::Subcommand;
-use config::{NodeConfig, SecretsConfig, secret_env_vars};
+use config::{NodeConfig, Reach, SecretsConfig, secret_env_vars};
 use dn_jobs::JobKey;
 use dn_jobs::scheduler::{Clock, Event, JobHost, Scheduler};
 use dn_plugin_api::{BoxFuture, JobContext, PluginError};
@@ -65,9 +65,16 @@ pub enum NodeCmd {
         /// The Node's name on your devices.
         #[arg(long)]
         name: String,
-        /// Address to accept devices on.
+        /// Address to accept devices on. Unless --reachable-from-outside is given, only
+        /// devices on the local network (private, link-local and loopback addresses) may
+        /// connect, whatever this address is.
         #[arg(long, default_value = "0.0.0.0:7443")]
         listen: SocketAddr,
+        /// Accept connections from any address, not only the local network: for a VPN or
+        /// overlay, a forwarded port or a proxy that passes TLS through. Anyone who can
+        /// reach the port can try to connect; only paired devices get in.
+        #[arg(long)]
+        reachable_from_outside: bool,
         /// Where secrets live: keychain, systemd-credential:<name>, container-secret:<name>,
         /// key-file:<path>, passphrase or insecure-plaintext (test setups only).
         #[arg(long)]
@@ -100,6 +107,7 @@ pub async fn command(cmd: NodeCmd) -> Result<(), String> {
             data_dir,
             name,
             listen,
+            reachable_from_outside,
             secrets,
             time_zone,
         } => {
@@ -107,7 +115,16 @@ pub async fn command(cmd: NodeCmd) -> Result<(), String> {
                 Some(z) => z,
                 None => zone::system_name(&|k| std::env::var_os(k), Path::new("/etc/localtime"))?,
             };
-            let config = NodeConfig::new(name, listen, SecretsConfig::parse(&secrets)?, time_zone)?;
+            let mut config =
+                NodeConfig::new(name, listen, SecretsConfig::parse(&secrets)?, time_zone)?;
+            if reachable_from_outside {
+                config.reach = Reach::Outside;
+                eprintln!(
+                    "dn node: this Node accepts connections from any address. Anyone who can \
+                     reach port {} can try to connect; only paired devices get in.",
+                    listen.port()
+                );
+            }
             config.create(&data_dir)?;
             eprintln!(
                 "Node set up in {}. Start it with `dn node run --data-dir {}`.",
@@ -252,6 +269,7 @@ pub struct Node {
     store: StoreReport,
     name: String,
     listener: TcpListener,
+    reach: Reach,
     scheduler: Arc<Scheduler>,
 }
 
@@ -336,10 +354,14 @@ impl Node {
             Arc::new(ZoneClock(zone::Zone::named(&config.time_zone)?)),
         ));
         eprintln!(
-            "dn node: {} ({}) on {}, secrets: {}",
+            "dn node: {} ({}) on {}, {}, secrets: {}",
             config.name,
             keys.id(),
             listener.local_addr().map_err(|e| e.to_string())?,
+            match config.reach {
+                Reach::LocalNetwork => "local-network devices only",
+                Reach::Outside => "reachable from outside your network",
+            },
             report.label
         );
         Ok(Self {
@@ -356,6 +378,7 @@ impl Node {
             store: report,
             name: config.name,
             listener,
+            reach: config.reach,
             scheduler,
         })
     }
@@ -389,6 +412,7 @@ impl Node {
         let base = Arc::new(StatusBase {
             name: self.name,
             store: self.store,
+            reach: self.reach,
         });
         loop {
             let accepted = tokio::select! {
@@ -402,6 +426,16 @@ impl Node {
                     continue;
                 }
             };
+            if !self.reach.allows(peer.ip()) {
+                // Before any handshake: closed at once (ADR-0014 §4a).
+                eprintln!(
+                    "dn node: refused {peer}: not on the local network. This Node accepts \
+                     local-network devices only; set it up with --reachable-from-outside to \
+                     allow other addresses"
+                );
+                drop(stream);
+                continue;
+            }
             let permit = tokio::select! {
                 () = stop.notified() => break,
                 permit = slots.clone().acquire_owned() => match permit {
@@ -489,6 +523,7 @@ fn lock_group(group: &Mutex<NodeGroup>) -> std::sync::MutexGuard<'_, NodeGroup> 
 struct StatusBase {
     name: String,
     store: StoreReport,
+    reach: Reach,
 }
 
 fn status(base: &StatusBase, db: &Mutex<Connection>) -> Result<NodeStatus, SyncError> {
@@ -500,6 +535,7 @@ fn status(base: &StatusBase, db: &Mutex<Connection>) -> Result<NodeStatus, SyncE
         secret_store_label: base.store.label.clone(),
         protected_at_rest: base.store.protected_at_rest,
         devices: u32::try_from(devices).unwrap_or(u32::MAX),
+        reachable_from_outside: base.reach == Reach::Outside,
     })
 }
 

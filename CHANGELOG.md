@@ -16,6 +16,7 @@ Only changes people using the app or the `dn` command-line tool can notice are l
 
 ### Changed
 
+- **Demios Node:** it now accepts devices from its own network only (private, link-local and loopback addresses), and refuses other addresses before any handshake. To accept connections from elsewhere, set it up with `dn node init --reachable-from-outside` ([#308](https://github.com/mimshavandi/demios-desktop/issues/308)).
 - **`dn node`:** jobs at a time of day follow the Node's time zone, daylight saving included, so a 07:00 job stays at 07:00 when the clocks change. `dn node init` takes `--time-zone` (an IANA name such as `Europe/Berlin`, by default the system's) instead of `--utc-offset`. A `node.json` that still sets `utc_offset_minutes` is refused with the line to put in its place ([#296](https://github.com/mimshavandi/demios-desktop/pull/296)).
 - Removing a tool server in **Settings → Tools** happens at once, without a confirmation, and **Undo** on the message puts it back for 10 seconds, with its secrets, sign-in, tool choices and chat approvals. Only **Delete all local data** still asks first ([#230](https://github.com/mimshavandi/demios-desktop/pull/230)).
 - Demios Desktop and `dn` are now licensed under the PolyForm Shield License 1.0.0 instead of Apache-2.0. You can still read, build, change and use the code for anything except a product that competes with Demios. Versions up to and including 0.1.0-preview.8cd482c stay under Apache-2.0 ([#217](https://github.com/mimshavandi/demios-desktop/pull/217)).

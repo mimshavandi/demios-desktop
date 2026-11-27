@@ -381,6 +381,10 @@ pub struct NodeStatus {
     /// `false` for a plaintext store: every client shows a warning.
     pub protected_at_rest: bool,
     pub devices: u32,
+    /// `true` when the person chose to accept connections from outside the local network
+    /// (ADR-0014 §4a); every client says so. Absent from older Nodes: `false`.
+    #[serde(default)]
+    pub reachable_from_outside: bool,
 }
 
 /// An open, authenticated channel whose versions match.
