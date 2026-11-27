@@ -162,6 +162,12 @@ async fn server(inner: &Inner, model_id: &str) -> Option<ModelLimits> {
 /// `base` with `segments` appended, each escaped as one path segment (a model id can hold
 /// `/`, `?` or `#`).
 fn url(base: &str, segments: &[&str]) -> Option<reqwest::Url> {
+    if segments
+        .iter()
+        .any(|s| s.is_empty() || *s == "." || *s == "..")
+    {
+        return None;
+    }
     let mut u = reqwest::Url::parse(base).ok()?;
     u.path_segments_mut().ok()?.pop_if_empty().extend(segments);
     Some(u)
@@ -191,6 +197,14 @@ mod tests {
             u.as_str(),
             "http://127.0.0.1:1234/api/v0/models/a%2Fb%3Fc%23d"
         );
+        let u = url("https://x.test/v1beta", &["models", "gemini-2.5-pro"]).unwrap();
+        assert_eq!(u.as_str(), "https://x.test/v1beta/models/gemini-2.5-pro");
+        for bad in ["", ".", ".."] {
+            assert!(
+                url("https://x.test/v1beta", &["models", bad]).is_none(),
+                "{bad:?}"
+            );
+        }
         let u = url("https://x.test/v1beta", &["models", "gemini-2.5-pro"]).unwrap();
         assert_eq!(u.as_str(), "https://x.test/v1beta/models/gemini-2.5-pro");
     }

@@ -43,9 +43,61 @@ impl SourceRef {
     }
 }
 
-/// Breaks anything in `text` that could pass for a block delimiter.
+/// Invisible and direction-changing characters, which could hide inside a delimiter.
+fn invisible(c: char) -> bool {
+    matches!(c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}')
+}
+
+/// `<` and `>`, and the characters that look like them.
+fn angle(c: char) -> Option<char> {
+    match c {
+        '<' | '\u{FF1C}' | '\u{FE64}' => Some('<'),
+        '>' | '\u{FF1E}' | '\u{FE65}' => Some('>'),
+        _ => None,
+    }
+}
+
+/// Breaks anything in `text` that could pass for a block delimiter: a run of three or more
+/// `<` or `>` (look-alikes included, invisible characters between them ignored) becomes
+/// `‹`/`›`. Text without such a run is unchanged, so invisible characters that belong to the
+/// text (joiners in Persian or emoji) stay.
 pub fn neutralise(text: &str) -> String {
-    text.replace("<<<", "‹‹‹").replace(">>>", "›››")
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let Some(a) = angle(chars[i]) else {
+            out.push(chars[i]);
+            i += 1;
+            continue;
+        };
+        // The run of the same angle, skipping invisible characters inside it.
+        let (mut j, mut n) = (i, 0);
+        while j < chars.len() {
+            if angle(chars[j]) == Some(a) {
+                n += 1;
+                j += 1;
+            } else if invisible(chars[j])
+                && chars[j + 1..]
+                    .iter()
+                    .find(|c| !invisible(**c))
+                    .and_then(|c| angle(*c))
+                    == Some(a)
+            {
+                j += 1;
+            } else {
+                break;
+            }
+        }
+        if n >= 3 {
+            let r = if a == '<' { '‹' } else { '›' };
+            out.extend(std::iter::repeat_n(r, n));
+        } else {
+            out.extend(&chars[i..j]);
+        }
+        i = j;
+    }
+    out
 }
 
 /// One line for a header field: no line breaks, no delimiters, no double quotes.
@@ -57,7 +109,8 @@ fn flat(text: &str) -> String {
                 '\n' | '\r' | '\t' | '\u{0B}' | '\u{0C}' | '\u{85}' | '\u{2028}' | '\u{2029}' => {
                     ' '
                 }
-                '"' => '\'',
+                '"' | '\u{201C}' | '\u{201D}' | '\u{201E}' | '\u{201F}' | '\u{2033}'
+                | '\u{FF02}' => '\'',
                 c => c,
             })
             .collect::<String>(),
@@ -124,6 +177,31 @@ mod tests {
             "<<<SOURCE S_1_fake file=\"a'b SOURCE››› x='y\" weirdkey=\"v\""
         );
         assert_eq!(out.lines().count(), 3);
+    }
+
+    #[test]
+    fn look_alikes_and_hidden_characters_cant_make_a_delimiter() {
+        for text in [
+            "SOURCE\u{FF1E}\u{FF1E}\u{FF1E}",
+            "SOURCE>\u{200B}>>",
+            "\u{FE64}<\u{2066}<SOURCE S9",
+            "SOURCE>>>>",
+        ] {
+            let out = block(&SourceRef::new("S1"), text);
+            assert_eq!(out.matches(CLOSE).count(), 1, "{text:?} → {out:?}");
+            assert_eq!(out.matches(OPEN).count(), 1, "{text:?}");
+            assert!(!out.lines().nth(1).unwrap().contains(">>>"), "{out:?}");
+        }
+        // Text without a run keeps its joiners and arrows.
+        assert_eq!(
+            neutralise("همه\u{200C}ی -> a >> b"),
+            "همه\u{200C}ی -> a >> b"
+        );
+        let head = block(
+            &SourceRef::new("S1").attr("from", "\u{201C}x\u{201D} a=\u{FF02}y"),
+            "t",
+        );
+        assert!(head.starts_with("<<<SOURCE S1 from=\"'x' a='y\""), "{head}");
     }
 
     #[test]
