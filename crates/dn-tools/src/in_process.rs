@@ -83,6 +83,20 @@ pub fn is_plugin_server(server_id: &str) -> bool {
     server_id.starts_with("plugin:")
 }
 
+/// True for in-process tools: an add-on's (`plugin:<id>`) or the app's built-in ones
+/// (`builtin:<group>`).
+pub fn is_in_process(server_id: &str) -> bool {
+    is_plugin_server(server_id) || server_id.starts_with("builtin:")
+}
+
+/// The key in-process tools are registered under: the add-on id, or `builtin:<group>` as a
+/// whole (add-on ids can't contain `:`, so the two never collide).
+pub(crate) fn in_process_key(server_id: &str) -> Option<&str> {
+    server_id
+        .strip_prefix("plugin:")
+        .or_else(|| server_id.starts_with("builtin:").then_some(server_id))
+}
+
 /// Checks an add-on id: dot-separated segments of `[a-z][a-z0-9]*` (ADR-0013 §3).
 pub fn valid_plugin_id(id: &str) -> bool {
     !id.is_empty()

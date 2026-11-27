@@ -54,6 +54,11 @@ the approval gate, the side-effect ledger and MCP OAuth. Decision record: ADR-00
     `dn-plugin-api`, and no `Host` method makes one.
   - **Residual:** in-process add-ons are trusted code (ADR-0013 §1); the token is a check in
     the executor, not a sandbox.
+- **Web search and fetch (#369, `dn_tools::web`, `dn_web`).** Both are `read` tier and their output is untrusted (`dn_core::untrusted::block`).
+  - **Fetch without asking:** a GET carries data out in its address, so `web.fetch` runs without asking only for an address the person typed or a `web.search` in the same chat returned (`web::Provenance`).
+  - **Other addresses** ask once per chat and site (the grant is kept per host), whatever the stored choice. A job's such call is held.
+  - **The fetcher** refuses non-public addresses at DNS time and on every redirect, uses no proxy, and has time and size caps.
+  - **Residual:** search queries go to the backend the person chose, so a model steered by injected text can send chat content to that backend. The backend is one the person picked and holds a key for, not an attacker's server.
 
 ### T2. Malicious or compromised server
 *A server lies in `readOnlyHint`, ships a poisoned tool description, returns huge or hostile

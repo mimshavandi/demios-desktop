@@ -26,6 +26,7 @@ pub mod narrow;
 pub mod oauth;
 pub mod secrets;
 pub mod token;
+pub mod web;
 
 pub use approval::{ApprovalDecision, ApprovalGate, ApprovalPrompt, ApprovalRequest};
 pub use capability::{CapabilityOverride, McpCapability};

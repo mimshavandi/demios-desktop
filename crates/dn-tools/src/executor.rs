@@ -8,7 +8,8 @@ use crate::capability::{CapabilityOverride, McpCapability, preflight, with_hash_
 use crate::client::{McpCallOutput, McpClient};
 use crate::error::{ToolError, ToolErrorKind};
 use crate::in_process::{
-    InProcessTool, PluginTool, is_plugin_server, plugin_server_id, valid_plugin_id, valid_tool_name,
+    InProcessTool, PluginTool, in_process_key, is_in_process, plugin_server_id, valid_plugin_id,
+    valid_tool_name,
 };
 use crate::ledger::{self, Claim};
 use crate::token::{ApprovalToken, Binding, Refused, TokenBook};
@@ -182,6 +183,8 @@ pub struct Executor {
     /// the user's overrides.
     plugins: RwLock<HashMap<String, Vec<PluginTool>>>,
     gate: Arc<ApprovalGate>,
+    /// Addresses with known provenance per chat, for `web.fetch` (#369).
+    web_provenance: Option<Arc<crate::web::Provenance>>,
     /// One-time approvals for tools that always need a fresh approval (ADR-0013 §9.4).
     tokens: TokenBook,
     ledger: Arc<Mutex<rusqlite::Connection>>,
@@ -259,6 +262,14 @@ impl Drop for ClaimGuard {
     }
 }
 
+/// How a call asks: the policy, whether only Allow once counts, and the scope an "allow
+/// for this chat" grant is kept under.
+struct Asking {
+    policy: ApprovalPolicy,
+    approval_required: bool,
+    grant_scope: String,
+}
+
 /// What runs a capability's calls.
 enum Target {
     Mcp(Arc<McpClient>),
@@ -268,7 +279,7 @@ enum Target {
 impl Executor {
     fn target(&self, cap: &McpCapability) -> Result<Target, ToolError> {
         let id = &cap.spec.id;
-        if is_plugin_server(&cap.server_id) {
+        if is_in_process(&cap.server_id) {
             self.handler(cap)
                 .map(Target::InProcess)
                 .ok_or_else(|| ToolError::new(id, ToolErrorKind::NotFound, "add-on removed"))
@@ -359,6 +370,7 @@ impl Executor {
             overrides: RwLock::default(),
             plugins: RwLock::default(),
             gate,
+            web_provenance: None,
             tokens: TokenBook::default(),
             ledger,
             retry: RetryPolicy::default(),
@@ -497,6 +509,13 @@ impl Executor {
         self
     }
 
+    /// The provenance record `web.fetch` checks (the same one given to
+    /// [`crate::web::tools`]). Without it, every `web.fetch` asks.
+    pub fn with_web_provenance(mut self, provenance: Arc<crate::web::Provenance>) -> Self {
+        self.web_provenance = Some(provenance);
+        self
+    }
+
     pub fn gate(&self) -> &ApprovalGate {
         &self.gate
     }
@@ -535,7 +554,7 @@ impl Executor {
         };
         if let Some(mut caps) = self.wr(&self.capabilities) {
             for cap in caps.values_mut() {
-                if is_plugin_server(&cap.server_id) {
+                if is_in_process(&cap.server_id) {
                     if let Some(c) = Self::rebuilt_plugin_capability(cap, &plugins, &ov) {
                         *cap = c;
                     }
@@ -567,6 +586,21 @@ impl Executor {
         t: &PluginTool,
         ov: Option<&CapabilityOverride>,
     ) -> McpCapability {
+        // A built-in family (`builtin:<group>`): ids `<group>.<name>`, source `Builtin`.
+        let (id, source, server_id) = match plugin_id.strip_prefix("builtin:") {
+            Some(group) => (
+                format!("{group}.{}", t.name),
+                CapabilitySource::Builtin,
+                plugin_id.to_owned(),
+            ),
+            None => (
+                format!("plugin.{plugin_id}.{}", t.name),
+                CapabilitySource::Plugin {
+                    plugin_id: plugin_id.to_owned(),
+                },
+                plugin_server_id(plugin_id),
+            ),
+        };
         let risk = ov.and_then(|o| o.risk).unwrap_or(t.risk).max(t.floor);
         // The add-on's mark can't be removed; the user can only add one.
         let approval_required = t.approval_required || ov.is_some_and(|o| o.approval_required);
@@ -574,10 +608,8 @@ impl Executor {
             crate::capability::effective_approval(approval_required, risk, ov);
         McpCapability {
             spec: CapabilitySpec {
-                id: format!("plugin.{plugin_id}.{}", t.name),
-                source: CapabilitySource::Plugin {
-                    plugin_id: plugin_id.to_owned(),
-                },
+                id,
+                source,
                 description: t.description.clone(),
                 input_schema: t.input_schema.clone(),
                 output_schema: t.output_schema.clone(),
@@ -587,7 +619,7 @@ impl Executor {
                     .or_else(|| t.idempotency_key_field.clone()),
                 approval_required,
             },
-            server_id: plugin_server_id(plugin_id),
+            server_id,
             tool_name: t.name.clone(),
             title: Some(t.title.clone()),
             hints: Default::default(),
@@ -603,7 +635,7 @@ impl Executor {
         plugins: &HashMap<String, Vec<PluginTool>>,
         ov: &HashMap<String, CapabilityOverride>,
     ) -> Option<McpCapability> {
-        let plugin_id = cap.server_id.strip_prefix("plugin:")?;
+        let plugin_id = in_process_key(&cap.server_id)?;
         let t = plugins
             .get(plugin_id)?
             .iter()
@@ -618,9 +650,8 @@ impl Executor {
     /// handler's `Host` follows the declared tier, so a user who lowers the tool's tier
     /// doesn't let a lower-tier handler reach that access through it.
     fn limit_tier(&self, cap: &McpCapability) -> RiskTier {
-        let declared = cap
-            .server_id
-            .strip_prefix("plugin:")
+        let declared = cap.server_id.as_str();
+        let declared = in_process_key(declared)
             .and_then(|plugin_id| {
                 self.rd(&self.plugins)?
                     .get(plugin_id)?
@@ -632,20 +663,39 @@ impl Executor {
         cap.spec.risk.max(declared)
     }
 
-    /// The tier an add-on's call to the tool `name` is checked against: see
-    /// [`Self::limit_tier`]. The host checks it before it holds a job's call, so a job can't
+    /// The tier an add-on's call to the tool `name` is checked against: the tool's tier, and
+    /// for an in-process tool also the tier it declared, whichever is higher. The host checks it before it holds a job's call, so a job can't
     /// queue a call above its own tier. `None` for an unknown tool.
     pub fn call_tier(&self, name: &str) -> Option<RiskTier> {
         self.resolve(name).map(|c| self.limit_tier(&c))
     }
 
     fn handler(&self, cap: &McpCapability) -> Option<Arc<dyn InProcessTool>> {
-        let plugin_id = cap.server_id.strip_prefix("plugin:")?;
+        let plugin_id = in_process_key(&cap.server_id)?;
         self.rd(&self.plugins)?
             .get(plugin_id)?
             .iter()
             .find(|t| t.name == cap.tool_name)
             .map(|t| Arc::clone(&t.handler))
+    }
+
+    /// Registers a family of the app's own built-in tools, run in-process through the same
+    /// path as every other tool: preflight, tier, the user's per-tool choices, approvals and
+    /// the ledger. Their ids are `<group>.<name>` (`web.search`), their source `Builtin`,
+    /// and the model sees them as `<group>_<name>`.
+    pub fn add_builtin(
+        &self,
+        group: &str,
+        tools: Vec<PluginTool>,
+    ) -> Result<Vec<McpCapability>, CoreError> {
+        if !valid_tool_name(group) || group.contains('_') {
+            return Err(CoreError::from(ToolError::new(
+                group,
+                ToolErrorKind::Config,
+                format!("`{group}` isn't a built-in tool group"),
+            )));
+        }
+        self.register_in_process(&format!("builtin:{group}"), tools)
     }
 
     /// Registers an add-on's tools (ADR-0013 §2). They run through the same path as MCP
@@ -656,12 +706,29 @@ impl Executor {
         plugin_id: &str,
         tools: Vec<PluginTool>,
     ) -> Result<Vec<McpCapability>, CoreError> {
-        let what = format!("plugin.{plugin_id}");
+        if !valid_plugin_id(plugin_id) {
+            return Err(CoreError::from(ToolError::new(
+                format!("plugin.{plugin_id}"),
+                ToolErrorKind::Config,
+                format!("`{plugin_id}` isn't an add-on id"),
+            )));
+        }
+        self.register_in_process(plugin_id, tools)
+    }
+
+    /// Registers in-process tools under `key`: an add-on id, or `builtin:<group>`.
+    fn register_in_process(
+        &self,
+        key: &str,
+        tools: Vec<PluginTool>,
+    ) -> Result<Vec<McpCapability>, CoreError> {
+        let plugin_id = key;
+        let what = match key.strip_prefix("builtin:") {
+            Some(group) => group.to_owned(),
+            None => format!("plugin.{key}"),
+        };
         self.check_available(&what)?;
         let invalid = |m: String| CoreError::from(ToolError::new(&what, ToolErrorKind::Config, m));
-        if !valid_plugin_id(plugin_id) {
-            return Err(invalid(format!("`{plugin_id}` isn't an add-on id")));
-        }
         for (i, t) in tools.iter().enumerate() {
             if !valid_tool_name(&t.name) || tools[..i].iter().any(|o| o.name == t.name) {
                 return Err(invalid(format!("bad or repeated tool name `{}`", t.name)));
@@ -689,7 +756,11 @@ impl Executor {
             plugins.insert(plugin_id.to_owned(), tools);
         }
         self.reindex_names();
-        let server = plugin_server_id(plugin_id);
+        let server = if key.starts_with("builtin:") {
+            key.to_owned()
+        } else {
+            plugin_server_id(plugin_id)
+        };
         Ok(self
             .capabilities()
             .into_iter()
@@ -884,9 +955,12 @@ impl Executor {
             let Some(cap) = all.get_mut(&id) else {
                 continue;
             };
-            let mut name = match cap.server_id.strip_prefix("plugin:") {
-                Some(plugin_id) => crate::in_process::plugin_llm_name(plugin_id, &cap.tool_name),
-                None => crate::capability::llm_tool_name(&cap.server_id, &cap.tool_name),
+            let mut name = if let Some(group) = cap.server_id.strip_prefix("builtin:") {
+                format!("{group}_{}", cap.tool_name)
+            } else if let Some(plugin_id) = cap.server_id.strip_prefix("plugin:") {
+                crate::in_process::plugin_llm_name(plugin_id, &cap.tool_name)
+            } else {
+                crate::capability::llm_tool_name(&cap.server_id, &cap.tool_name)
             };
             let mut n = 0u32;
             while taken.contains(&name) {
@@ -1081,14 +1155,18 @@ impl Executor {
         ctx: &CallContext,
         cap: &McpCapability,
         call: &ToolCall,
-        policy: ApprovalPolicy,
-        approval_required: bool,
+        how: Asking,
         cancel: std::pin::Pin<&mut (impl std::future::Future<Output = ()> + Send)>,
     ) -> Result<(), ToolError> {
+        let Asking {
+            policy,
+            approval_required,
+            grant_scope,
+        } = how;
         let id = &cap.spec.id;
         let approval = self.gate.check(ApprovalPrompt {
             request_id: Id::new(),
-            scope: ctx.scope(),
+            scope: grant_scope,
             capability_id: id.clone(),
             title: cap.title.clone().unwrap_or_else(|| cap.tool_name.clone()),
             description: cap.spec.description.clone(),
@@ -1258,17 +1336,50 @@ impl Executor {
         let binding = Binding::new(ctx.run_id, &call.id, &id, &call.arguments);
         // A job's call reaches this point only for a tool the user set to run without asking
         // for this add-on, or with a one-time approval: that is the approval.
-        let policy = if job_auto {
+        let mut policy = if job_auto {
             ApprovalPolicy::Auto
         } else {
             cap.approval
         };
+        let mut grant_scope = scope.clone();
+        // `web.fetch` to an address without known provenance in this chat asks first, once
+        // per chat and site, whatever the stored choice: a GET carries data out in its
+        // address (see `crate::web`). A job's such call is held.
+        if id == crate::web::FETCH {
+            let url = call
+                .arguments
+                .get("url")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            let known = self
+                .web_provenance
+                .as_ref()
+                .is_some_and(|p| p.knows(&scope, url));
+            if !known {
+                if let CallOrigin::Plugin(PluginCall { job: Some(j), .. }) = &ctx.origin {
+                    return Err(ToolError::new(
+                        &id,
+                        ToolErrorKind::Held,
+                        format!("job `{}` asks for an address no one gave it", j.id),
+                    ));
+                }
+                if policy != ApprovalPolicy::AlwaysAsk {
+                    policy = ApprovalPolicy::AskOncePerConversation;
+                }
+                let site = crate::web::host_of(url).unwrap_or_default();
+                grant_scope = format!("{scope}|site:{site}");
+            }
+        }
         let token = match (&ctx.approval, required) {
             // A person already answered this exact call (a held call). Checked below.
             (Some(t), true) => Some(t.clone()),
             (_, required) => {
-                self.ask(ctx, &cap, call, policy, required, cancel.as_mut())
-                    .await?;
+                let how = Asking {
+                    policy,
+                    approval_required: required,
+                    grant_scope,
+                };
+                self.ask(ctx, &cap, call, how, cancel.as_mut()).await?;
                 // For such a tool only a plain Allow once gets here: the token for this one
                 // call, checked right before it runs.
                 required.then(|| self.tokens.mint(binding.clone()))

@@ -14,6 +14,8 @@ dn-agent.workspace = true
 dn-secrets.workspace = true
 # Only for `held::Approved`, the proof a person answered a held call (ADR-0013 §9.4).
 dn-jobs.workspace = true
+# The page fetcher and search providers behind the built-in web tools (#369).
+dn-web.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
