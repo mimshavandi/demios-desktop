@@ -13,6 +13,10 @@
 //! 3. Only "yes" adds the device. Closing `dn node pair`, Ctrl-C, or the code expiring
 //!    ends the pairing, and nothing is added.
 //!
+//! **Devices** (#309): `dn node devices` lists the paired devices, and
+//! `dn node remove-device <id>` removes one, with the same rules as a removal from a paired
+//! device: its key is refused for good, and the group key rotates.
+//!
 //! One pairing at a time. Messages are JSON, one per line, at most [`MAX_LINE`] bytes.
 
 use dn_sync::devices::DeviceKind;
@@ -32,6 +36,28 @@ pub enum Request {
     Pair { address: String },
     /// The person's answer to the check numbers.
     Confirm { accepted: bool },
+    /// List the paired devices (`dn node devices`).
+    Devices,
+    /// Remove a paired device (`dn node remove-device`).
+    RemoveDevice { id: String },
+}
+
+/// One paired device, as `dn node devices` shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceRow {
+    pub id: String,
+    pub name: String,
+    /// `desktop`, `node` or `phone`.
+    pub kind: String,
+    /// Unix milliseconds.
+    pub last_synced_at: Option<i64>,
+}
+
+/// What the control channel needs from the running Node besides pairing.
+pub trait NodeOps: Send + Sync {
+    fn devices(&self) -> Result<Vec<DeviceRow>, String>;
+    /// Removes the device with this id (hex); returns its name.
+    fn remove(&self, id: &str) -> Result<String, String>;
 }
 
 /// From the Node to `dn node pair`.
@@ -53,6 +79,12 @@ pub enum Reply {
         name: String,
     },
     Declined,
+    Devices {
+        devices: Vec<DeviceRow>,
+    },
+    Removed {
+        name: String,
+    },
     Error {
         message: String,
     },
@@ -96,7 +128,7 @@ pub fn kind_name(kind: DeviceKind) -> &'static str {
 }
 
 #[cfg(unix)]
-pub use unix::{bind, client_pair, serve};
+pub use unix::{bind, client_pair, client_request, serve};
 
 #[cfg(unix)]
 mod unix {
@@ -174,6 +206,7 @@ mod unix {
         data_dir: std::path::PathBuf,
         node: PublicIdentity,
         pairing: PairingState,
+        ops: std::sync::Arc<dyn NodeOps>,
     ) {
         let Ok(owner) = owner_uid(&data_dir) else {
             eprintln!("dn node: control channel off: can't read the data folder's owner");
@@ -190,10 +223,10 @@ mod unix {
                     continue;
                 }
             }
-            let (node, pairing) = (node, pairing.clone());
+            let (node, pairing, ops) = (node, pairing.clone(), ops.clone());
             tokio::spawn(async move {
-                if let Err(e) = session(stream, node, pairing).await {
-                    eprintln!("dn node: pairing: {e}");
+                if let Err(e) = session(stream, node, pairing, &*ops).await {
+                    eprintln!("dn node: control: {e}");
                 }
             });
         }
@@ -203,17 +236,35 @@ mod unix {
         stream: UnixStream,
         node: PublicIdentity,
         pairing: PairingState,
+        ops: &dyn NodeOps,
     ) -> Result<(), String> {
         let (read, mut write) = stream.into_split();
         let mut reader = BufReader::new(read);
-        let Some(Request::Pair { address }) = read_line::<Request>(&mut reader).await? else {
-            return write_line(
-                &mut write,
-                &Reply::Error {
-                    message: "expected a pairing request".into(),
-                },
-            )
-            .await;
+        let address = match read_line::<Request>(&mut reader).await? {
+            Some(Request::Pair { address }) => address,
+            Some(Request::Devices) => {
+                let reply = match ops.devices() {
+                    Ok(devices) => Reply::Devices { devices },
+                    Err(message) => Reply::Error { message },
+                };
+                return write_line(&mut write, &reply).await;
+            }
+            Some(Request::RemoveDevice { id }) => {
+                let reply = match ops.remove(&id) {
+                    Ok(name) => Reply::Removed { name },
+                    Err(message) => Reply::Error { message },
+                };
+                return write_line(&mut write, &reply).await;
+            }
+            _ => {
+                return write_line(
+                    &mut write,
+                    &Reply::Error {
+                        message: "expected a request".into(),
+                    },
+                )
+                .await;
+            }
         };
         let (tx, mut rx) = mpsc::channel(1);
         let expires_at = {
@@ -302,6 +353,25 @@ mod unix {
         write_line(write, &reply).await
     }
 
+    /// One request and its reply, for `dn node devices` and `dn node remove-device`.
+    pub async fn client_request(data_dir: &Path, request: &Request) -> Result<Reply, String> {
+        let path = data_dir.join(SOCKET_FILE);
+        let stream = UnixStream::connect(&path).await.map_err(|e| {
+            format!(
+                "couldn't reach the running Node at {}: {e}. Is `dn node run` running?",
+                path.display()
+            )
+        })?;
+        let (read, mut write) = stream.into_split();
+        let mut reader = BufReader::new(read);
+        write_line(&mut write, request).await?;
+        match read_line::<Reply>(&mut reader).await? {
+            Some(Reply::Error { message }) => Err(message),
+            Some(reply) => Ok(reply),
+            None => Err("the Node closed the connection".into()),
+        }
+    }
+
     /// `dn node pair`: asks the running Node for a code, shows it, and asks the person to
     /// compare the numbers.
     pub async fn client_pair(
@@ -345,6 +415,9 @@ mod unix {
                     return Err("Pairing stopped. Nothing was added.".into());
                 }
                 Reply::Error { message } => return Err(message),
+                Reply::Devices { .. } | Reply::Removed { .. } => {
+                    return Err("the Node answered something else".into());
+                }
             }
         }
     }

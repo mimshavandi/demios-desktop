@@ -521,6 +521,7 @@ mod tests {
                                 .into(),
                             protected_at_rest: true,
                             devices: 2,
+                            reachable_from_outside: false,
                         }),
                         Message::DevicesRequest => Message::Devices {
                             devices: Vec::new(),
