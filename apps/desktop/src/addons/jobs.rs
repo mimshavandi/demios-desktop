@@ -555,12 +555,12 @@ impl JobHost for AppJobHost {
                     r.jobs
                         .iter()
                         .find(|j| j.decl.id == job.job)
-                        .map(|j| (m, g, Arc::clone(&j.handler)))
+                        .map(|j| (m, g, j.decl.tier, Arc::clone(&j.handler)))
                 });
-            let Some((manifest, grants, handler)) = found else {
+            let Some((manifest, grants, tier, handler)) = found else {
                 return Err(PluginError::unavailable("The add-on isn't running"));
             };
-            let host = Addons::job_host(&state, &manifest, grants, &job.job, ctx.run);
+            let host = Addons::job_host(&state, &manifest, grants, &job.job, tier, ctx.run);
             match backend::guarded(handler.run(&host, ctx)).await {
                 Some(r) => r,
                 None => {

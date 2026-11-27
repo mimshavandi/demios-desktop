@@ -538,18 +538,20 @@ impl Drop for CancelOnDrop {
 }
 
 impl Addons {
-    /// A `Host` for one run of `job` (used by [`super::jobs`]).
+    /// A `Host` for one run of `job` (used by [`super::jobs`]), limited to the tier the job
+    /// declared (`None`: declared without one, ADR-0013 §9.1, #300).
     pub(crate) fn job_host(
         state: &Arc<AppState>,
         manifest: &PluginManifest,
         grants: GrantsHandle,
         job_id: &str,
+        tier: Option<dn_core::capability::RiskTier>,
         run: Id,
     ) -> Host {
         Host::new(
             AppBackend::new(state),
             grants,
-            Caller::for_job(manifest, job_id, run),
+            Caller::for_job_at(manifest, job_id, run, tier),
         )
     }
 }

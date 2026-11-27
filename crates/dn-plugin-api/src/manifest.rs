@@ -259,25 +259,19 @@ pub fn check_host(h: &str) -> Result<(), PluginError> {
     }
 }
 
-/// The lowest risk tier a tool of this add-on can have (ADR-0013 §2). The host can't see what
-/// an opaque handler does, so the floor comes from the add-on's permissions:
+/// The lowest risk tier a tool of this add-on may declare (ADR-0013 §9.1): [`RiskTier::Read`]
+/// for every tool.
 ///
-/// - [`RiskTier::ExternalWrite`] if it holds `network` or `tools.call`. The tools a
-///   `tools.call` list names can change tier (the user can raise or lower them), so any
-///   `tools.call` counts as a write.
-/// - [`RiskTier::LowWrite`] if it holds `memory`.
-/// - Otherwise [`RiskTier::Read`]: the tool's own declaration decides.
+/// The add-on-wide floor is gone because the host now limits every handler to its own
+/// declared tier: a `read` handler can't write or reach the network, a `low_write` handler
+/// can write only the add-on's own data and has no `http()`, and a handler can't call a tool
+/// above its tier ([`Access`](crate::Access)). So a tool's tier is what it declares.
 ///
-/// A handler can only write its settings, files or database when its tier is above `read`
-/// (the `Host` it gets is read-only otherwise), so a read-tier tool can't write anything.
-pub fn risk_floor(m: &PluginManifest) -> RiskTier {
-    if m.asks_for(Permission::Network) || m.asks_for(Permission::ToolsCall) {
-        RiskTier::ExternalWrite
-    } else if m.asks_for(Permission::Memory) {
-        RiskTier::LowWrite
-    } else {
-        RiskTier::Read
-    }
+/// The function stays the one place the rule lives (the [`Registrar`](crate::Registrar) is
+/// its only caller), so a later permission that can't be limited per handler has one place
+/// to put a floor back.
+pub fn risk_floor(_m: &PluginManifest) -> RiskTier {
+    RiskTier::Read
 }
 
 #[cfg(test)]
@@ -350,26 +344,20 @@ mod tests {
     }
 
     #[test]
-    fn the_floor_follows_the_permissions() {
-        assert_eq!(risk_floor(&m()), RiskTier::Read);
-        assert_eq!(
-            risk_floor(&m().with_permission(PermissionRequest::Memory)),
-            RiskTier::LowWrite
-        );
-        assert_eq!(
-            risk_floor(&m().with_permission(PermissionRequest::Network {
-                hosts: vec!["a.example.com".into()]
-            })),
-            RiskTier::ExternalWrite
-        );
-        assert_eq!(
-            risk_floor(
-                &m().with_permission(PermissionRequest::Memory)
-                    .with_permission(PermissionRequest::ToolsCall {
-                        tools: vec!["mcp.files.read".into()]
-                    })
-            ),
-            RiskTier::ExternalWrite
-        );
+    fn the_floor_is_read_whatever_the_permissions() {
+        // ADR-0013 §9.1: each handler's Host is limited to its own tier instead.
+        for manifest in [
+            m(),
+            m().with_permission(PermissionRequest::Memory),
+            m().with_permission(PermissionRequest::Network {
+                hosts: vec!["a.example.com".into()],
+            }),
+            m().with_permission(PermissionRequest::Memory)
+                .with_permission(PermissionRequest::ToolsCall {
+                    tools: vec!["mcp.files.read".into()],
+                }),
+        ] {
+            assert_eq!(risk_floor(&manifest), RiskTier::Read);
+        }
     }
 }

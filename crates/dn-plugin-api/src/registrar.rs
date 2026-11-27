@@ -30,8 +30,10 @@ pub struct ToolDecl {
     pub input_schema: serde_json::Value,
     /// JSON Schema of structured output, if any.
     pub output_schema: Option<serde_json::Value>,
-    /// The tier the add-on declares. It must be at least the add-on's floor
-    /// ([`risk_floor`]); the user can raise it, never below the floor.
+    /// The tier the add-on declares (at least [`risk_floor`], which is `read` for every
+    /// tool, ADR-0013 §9.1). Its handler's `Host` is limited to this tier: a `read` tool
+    /// can't write or reach the network, a `low_write` tool can write only the add-on's own
+    /// data. The user can make the tool ask more often; that never widens its access.
     pub risk: RiskTier,
     /// An argument whose value makes a write idempotent, so a retry replays the first
     /// result instead of repeating the side effect.
@@ -104,6 +106,15 @@ pub struct JobDecl {
     /// The longest one run may take, in seconds (at most [`MAX_JOB_BUDGET_SECS`]). The
     /// host stops the job when it runs out.
     pub budget_secs: u64,
+    /// The job's tier (ADR-0013 §9.1). Its `Host` is limited like a tool handler's of the
+    /// same tier: a `read` job can't write or reach the network, a `low_write` job can
+    /// write only its own data. Set it with [`JobDecl::with_tier`].
+    ///
+    /// `None` keeps the access jobs had before tiers: read and write, the network, and
+    /// tools up to `sensitive`. That allowance ends at the next major version (#300); the
+    /// conformance kit warns about it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<RiskTier>,
 }
 
 impl JobDecl {
@@ -121,7 +132,14 @@ impl JobDecl {
             schedule,
             missed_run: MissedRunRule::CatchUpOnce { fresh_for_secs },
             budget_secs,
+            tier: None,
         }
+    }
+
+    /// Declares the job's tier (see [`JobDecl::tier`]).
+    pub fn with_tier(mut self, tier: RiskTier) -> Self {
+        self.tier = Some(tier);
+        self
     }
 
     /// Proposes another missed-run rule.
@@ -282,7 +300,7 @@ impl Registrar {
         }
     }
 
-    /// The lowest tier this add-on's tools may declare.
+    /// The lowest tier this add-on's tools may declare ([`risk_floor`]).
     pub fn risk_floor(&self) -> RiskTier {
         self.floor
     }

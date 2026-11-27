@@ -328,7 +328,7 @@ fn a_jobs_tool_call_is_held_and_runs_once_after_the_person_allows_it() {
         let manifest = a.m.clone();
         Addons::install(&st, vec![Arc::new(a)]);
         let grants = st.addons.loaded()[0].1.clone();
-        let host = Addons::job_host(&st, &manifest, grants, "daily", Id::new());
+        let host = Addons::job_host(&st, &manifest, grants, "daily", None, Id::new());
         let e = host
             .tools()
             .call("plugin.notes.save", serde_json::json!({"x": 1}))
@@ -367,6 +367,7 @@ fn a_jobs_tool_call_is_held_and_runs_once_after_the_person_allows_it() {
             &manifest,
             st.addons.loaded()[0].1.clone(),
             "daily",
+            None,
             Id::new(),
         );
         let _ = host
@@ -413,7 +414,7 @@ fn delete_all_revokes_first_lets_the_add_on_delete_and_then_wipes_the_rest() {
             )
             .unwrap();
         let grants = st.addons.loaded()[0].1.clone();
-        let old = Addons::job_host(&st, &manifest, grants, "daily", Id::new());
+        let old = Addons::job_host(&st, &manifest, grants, "daily", None, Id::new());
         old.settings()
             .set("tone", serde_json::json!("short"))
             .await
