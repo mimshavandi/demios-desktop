@@ -264,6 +264,7 @@ impl Addons {
                     risk: t.decl.risk,
                     floor,
                     idempotency_key_field: t.decl.idempotency_key_field.clone(),
+                    approval_required: t.decl.approval_required,
                     handler: Arc::new(backend::ToolBridge::new(
                         state,
                         e.manifest.clone(),

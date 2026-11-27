@@ -3,8 +3,8 @@
 //! 1. It refuses while `dn node run` is running: the running Node holds the database and
 //!    the keys.
 //! 2. It says what it deletes, and asks for the Node's name (or takes `--confirm <name>`).
-//! 3. It deletes the Node's secrets first: its device keys and every group key, from the
-//!    secret store it was set up with. A store inside the data folder goes with the folder.
+//! 3. It deletes the Node's secrets first: its device keys, every group key and the synced
+//!    records' keys, from the secret store it was set up with. A store inside the data folder goes with the folder.
 //!    A keychain that can't be opened stops everything, so no key is left behind unnoticed.
 //! 4. It deletes the database, the store files, the control socket and `node.json` last, so
 //!    a failure part-way can be run again.
@@ -104,9 +104,10 @@ fn store_name(secrets: &SecretsConfig) -> String {
     }
 }
 
-/// Deletes the Node's keys from its secret store: its own identity and every group key the
-/// membership chain names. A store kept as a file in the data folder that can't be opened
-/// is left to the file deletion; a keychain that can't be opened is an error.
+/// Deletes the Node's keys from its secret store: its own identity, the synced records' keys
+/// and every group key the membership chain names. A store kept as a file in the data folder
+/// that can't be opened is left to the file deletion; a keychain that can't be opened is an
+/// error.
 fn delete_keys(
     data_dir: &Path,
     config: &NodeConfig,
@@ -141,6 +142,8 @@ fn delete_keys(
     }
     if data_dir.join(DATABASE_FILE).exists() {
         let conn = open_db(data_dir)?;
+        deleted += dn_sync::at_rest::delete_keys(&conn, store)
+            .map_err(|e| format!("couldn't delete the synced records' keys: {e}"))?;
         let node = DeviceList::members(&conn)
             .map_err(|e| format!("couldn't read the device list: {e}"))?
             .into_iter()
@@ -238,6 +241,7 @@ mod tests {
         )
         .unwrap();
         dn_sync::group::NodeGroup::load_or_create(&conn, &*store, &keys, "Test node").unwrap();
+        dn_sync::at_rest::RecordsKeys::load(&conn, &*store).unwrap();
         store
             .set(
                 &SecretId::device("other"),
@@ -251,7 +255,10 @@ mod tests {
         assert_eq!(plan.devices, 0, "the Node itself isn't counted");
 
         let report = delete_all(&dir, &no_env).unwrap();
-        assert_eq!(report.keys_deleted, 2, "identity and the epoch-0 group key");
+        assert_eq!(
+            report.keys_deleted, 3,
+            "identity, the epoch-0 group key and records key 1"
+        );
         assert!(report.files_deleted.contains(&CONFIG_FILE.to_owned()));
         assert!(report.files_deleted.contains(&"node.db".to_owned()));
         assert!(report.files_deleted.contains(&PLAINTEXT_FILE.to_owned()));

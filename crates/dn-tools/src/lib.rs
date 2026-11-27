@@ -21,10 +21,13 @@ pub mod config;
 pub mod error;
 pub mod executor;
 pub mod in_process;
+#[cfg(feature = "test-support")]
+pub mod injection;
 pub mod ledger;
 pub mod narrow;
 pub mod oauth;
 pub mod secrets;
+pub mod token;
 
 pub use approval::{ApprovalDecision, ApprovalGate, ApprovalPrompt, ApprovalRequest};
 pub use capability::{CapabilityOverride, McpCapability};
@@ -38,3 +41,4 @@ pub use ledger::migrations;
 pub use narrow::{CapabilityResolver, Narrowed, ToolAllowlist};
 pub use oauth::{LoopbackRedirect, OAuthManager, PendingAuthorization};
 pub use secrets::{DnSecrets, MemorySecretStore, SecretStore};
+pub use token::ApprovalToken;

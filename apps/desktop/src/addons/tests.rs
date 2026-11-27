@@ -350,6 +350,62 @@ fn a_read_tier_jobs_call_above_its_tier_is_refused_not_held() {
 }
 
 #[test]
+fn an_add_on_replaces_its_held_call_and_an_answer_to_the_old_one_is_refused() {
+    with_state(async |st| {
+        let a = TestAddon::new(
+            "notes",
+            vec![PermissionRequest::Jobs],
+            Does::CallMailFromJob,
+        );
+        let calls = Arc::clone(&a.calls);
+        let manifest = a.m.clone();
+        Addons::install(&st, vec![Arc::new(a)]);
+        let key = dn_jobs::JobKey::new(manifest.id.clone(), "daily");
+        st.addons.jobs.set_enabled(&st, &key, true).unwrap();
+        let host = Addons::job_host(
+            &st,
+            &manifest,
+            st.addons.loaded()[0].1.clone(),
+            "daily",
+            Some(RiskTier::LowWrite),
+            Id::new(),
+        );
+        let _ = host
+            .tools()
+            .call("plugin.notes.save", serde_json::json!({"x": 1}))
+            .await;
+        let old = host.held().list().await.unwrap();
+        assert_eq!(old.len(), 1);
+        let new = host
+            .held()
+            .replace(old[0].id, serde_json::json!({"x": 2}))
+            .await
+            .unwrap();
+        assert_eq!(new.replaces, Some(old[0].id));
+        let d = st.addons.detail(&st, "notes").unwrap();
+        assert_eq!(d.held.len(), 1, "every device shows only the new one");
+        assert_eq!(d.held[0].id, new.id);
+        // The person answers the version they saw before it was replaced.
+        let old_sha = dn_jobs::held::get(&st.jobs_db.clone().unwrap().lock().unwrap(), old[0].id)
+            .unwrap()
+            .arguments_sha256;
+        let e = st
+            .addons
+            .jobs
+            .answer_held(&st, old[0].id, true, old_sha)
+            .await
+            .unwrap_err();
+        assert!(e.contains("replaced by a newer version"), "{e}");
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        // Withdrawn: nothing waits, nothing runs.
+        host.held().withdraw(new.id).await.unwrap();
+        assert!(st.addons.detail(&st, "notes").unwrap().held.is_empty());
+        assert!(host.held().withdraw(new.id).await.is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    });
+}
+
+#[test]
 fn a_jobs_tool_call_is_held_and_runs_once_after_the_person_allows_it() {
     with_state(async |st| {
         let a = TestAddon::new(

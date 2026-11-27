@@ -37,6 +37,23 @@ the approval gate, the side-effect ledger and MCP OAuth. Decision record: ADR-00
 - **Residual:** reads auto-run, and a read can exfiltrate through its *arguments* to an
   open-world server (e.g. `search(query=<secret>)`). See T3. Users can raise any tool to
   `always_ask` or disable it (`CapabilityOverride`).
+- **Tools that always need a fresh approval** (ADR-0013 §9.4; `CapabilitySpec::approval_required`,
+  set by the tool's add-on, the Connect catalogue or the user): sending a message,
+  answering an invitation, paying.
+  - No standing permission: a stored "run without asking" or "ask once per chat" choice is
+    ignored (`McpCapability::approval_ignored` says so), "Always allow in this chat" is
+    refused (`GateOutcome::StandingRefused`), and a job's call is always held, whatever its
+    `auto_tools` say.
+  - The call runs only with a one-time token (`dn_tools::token`) bound to the call (run and
+    call id, or the held call's id), the capability and the exact arguments. The executor
+    consumes it right before the call runs; it's single-use, expires after a minute and is
+    revoked with its held call.
+  - Only a person's answer mints one: the card's Allow once, inside the executor, or a held
+    call's verified answer, through `Executor::approval_for_held`, which takes the
+    `dn_jobs::held::Approved` proof only `take_approved` hands out. No token type is in
+    `dn-plugin-api`, and no `Host` method makes one.
+  - **Residual:** in-process add-ons are trusted code (ADR-0013 §1); the token is a check in
+    the executor, not a sandbox.
 
 ### T2. Malicious or compromised server
 *A server lies in `readOnlyHint`, ships a poisoned tool description, returns huge or hostile

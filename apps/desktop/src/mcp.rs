@@ -1045,6 +1045,7 @@ mod tests {
             policy: ApprovalPolicy::AskOncePerConversation,
             arguments: serde_json::json!({}),
             requester: Default::default(),
+            approval_required: false,
         };
         let (_, req) = tokio::join!(exec.gate().check(prompt), rx.recv());
         let _ = req;

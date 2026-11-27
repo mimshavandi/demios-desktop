@@ -48,8 +48,10 @@ use tokio_rustls::{TlsAcceptor, TlsConnector, TlsStream};
 pub const PROTOCOL: &str = "demios-node";
 /// Protocol major version: a different major refuses to sync.
 pub const PROTOCOL_MAJOR: u16 = 1;
-/// Protocol minor version: newer minors only add optional fields.
-pub const PROTOCOL_MINOR: u16 = 0;
+/// Protocol minor version: newer minors only add optional fields and messages a peer sends
+/// only to a peer of that minor or later.
+/// - 1: `SyncStart.applied`, `SyncState.floor` and the snapshot messages (#294).
+pub const PROTOCOL_MINOR: u16 = 1;
 /// Largest frame accepted, in bytes.
 pub const MAX_FRAME: usize = 64 * 1024;
 /// Largest frame once the other side is a checked member and the channel carries sync
@@ -325,11 +327,35 @@ pub enum Message {
     SyncStart {
         chain_len: u64,
         vector: std::collections::BTreeMap<String, u64>,
+        /// What the device has applied, for compaction (minor 1).
+        #[serde(default)]
+        applied: std::collections::BTreeMap<String, u64>,
     },
     /// The Node's answer: the chain entries the device lacks, and what the Node has applied.
     SyncState {
         entries: Vec<ChainEntry>,
         vector: std::collections::BTreeMap<String, u64>,
+        /// Envelopes at or below this are no longer in the Node's log: a device that lacks
+        /// any of them asks for a snapshot (minor 1).
+        #[serde(default)]
+        floor: std::collections::BTreeMap<String, u64>,
+    },
+    /// A device asks for the Node's current snapshot (minor 1).
+    SnapshotRequest,
+    /// The snapshot the Node has ready: the vector it covers and its sealed size.
+    Snapshot {
+        vector: std::collections::BTreeMap<String, u64>,
+        size: u64,
+    },
+    /// A device asks for the sealed snapshot's bytes from `offset`.
+    SnapshotPull {
+        vector: std::collections::BTreeMap<String, u64>,
+        offset: u64,
+    },
+    /// Up to 1 MiB of the sealed snapshot (base64); `more` when another pull gets more.
+    SnapshotChunk {
+        data: String,
+        more: bool,
     },
     /// Envelopes (base64) for the Node to keep and apply.
     Push {
