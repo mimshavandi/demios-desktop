@@ -131,23 +131,53 @@ If the Node doesn't answer, the page says **Your Node isn't answering**, with wh
 
 In **Devices**, open a device's **More** menu (the … button) and choose **Remove device**.
 
+You can also remove one on the Node, for example a device that's lost or one that has forgotten the Node. While the Node runs, as the same user:
+
+```sh
+dn node devices --data-dir /var/lib/demios
+dn node remove-device --data-dir /var/lib/demios <id>
+```
+
+`dn node devices` lists the paired devices with their ids. `dn node remove-device` removes the one you name.
+
+Either way:
+
 - The device can't connect or sync again. Changes it makes after it's removed are refused.
 - The Node makes a new key and gives it only to the devices that remain, so the removed device can't read what syncs from now on.
 - The removed device keeps its copy of your data, because it may be offline or lost. If you have it, use **Delete all local data** on it first.
 
-You can't remove the Node itself from a device.
+You can't remove the Node itself this way. To delete it, see [Delete the Node](#delete-the-node).
 
 ## Unpair, forget or delete
 
 - **Unpair this device:** in **Devices**, open this device's **More** menu and choose **Unpair this device**. The Node removes this computer, and this computer stops syncing. Your chats and projects stay here. This needs the Node to answer; if it doesn't, nothing changes and the app says so.
-- **Forget this Node:** shown when the Node isn't answering or has refused this computer, for example after it was removed. This computer stops syncing with it and your data stays here. The Node still lists this computer until you remove it from another device.
-- **Delete all local data** (Settings → General) also ends sync and deletes this computer's device keys. See [Privacy and your data](privacy.md). Nothing is deleted on your other devices. The Node still lists this computer until you remove it from another device.
+- **Forget this Node:** shown when the Node isn't answering or has refused this computer, for example after it was removed. This computer stops syncing with it and your data stays here. The Node still lists this computer until you run `dn node remove-device` on the Node, or remove it from another paired device.
+- **Delete all local data** (Settings → General) also ends sync and deletes this computer's device keys. See [Privacy and your data](privacy.md). Nothing is deleted on your other devices. The Node still lists this computer until you run `dn node remove-device` on the Node, or remove it from another paired device.
 
 To pair again after any of these, start over with `dn node pair`.
+
+## Delete the Node
+
+Stop the Node, then run this on its machine:
+
+```sh
+dn node delete-all --data-dir /var/lib/demios
+```
+
+- **Before it deletes anything,** it lists what it will delete and asks you to type the Node's name. You can pass `--confirm "<name>"` instead.
+- **It deletes:**
+  - the Node's keys from its secret store: its own key, the sync keys and the records keys;
+  - its database;
+  - `node.json`.
+- **Then it removes the data folder,** if nothing else is left in it. Files it didn't make are kept, and it names them.
+- **It refuses to run while the Node is running.**
+- **Your paired devices keep their own copies.** On each one, open **Settings → Node** and choose **Forget this Node**.
+
+Uninstalling the Node doesn't delete its data folder; `dn node delete-all` does.
 
 ## Current limits
 
 - **Your devices reach the Node directly.** That means on its network, or over a VPN, a forwarded port or a proxy (see [Where to run it](#where-to-run-it)). There's no relay for devices away from home yet. Settings → Node shows **Relay: None**.
-- **On Windows, a Node can't pair devices or rotate its records key yet.** `dn node pair` and `dn node rotate-records-key` aren't available, and the Node turns away devices that aren't paired.
+- **On Windows, the Node's own commands aren't there yet.** `dn node pair`, `devices`, `remove-device`, `delete-all` and `rotate-records-key` aren't available, and the Node turns away devices that aren't paired.
 - **Pair from the Node only.** You can't pair another device from this computer yet; use `dn node pair`.
 - **Not there yet:** a passphrase-protected secret store (`dn node unlock`), a QR code in the terminal and the phone app.
