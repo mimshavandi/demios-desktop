@@ -49,9 +49,13 @@ function noNode(): NodeOverview {
   return { paired: null, online: false, status: null, devices: [], problem: null, sync: { state: "off", last_synced_at: null, failures: 0, error: null, applied: 0 } };
 }
 
-/** A link with "outside" in it pairs a Node reachable from outside its network. */
-function mockPairedNode(outside = false): NodeOverview {
+/**
+ * A link with "outside" in it pairs a Node reachable from outside its network; one with
+ * "offline" pairs a Node that then stops answering.
+ */
+function mockPairedNode(link = ""): NodeOverview {
   const now = Date.now();
+  const outside = link.includes("outside");
   return {
     paired: { name: "Home server", address: "192.168.1.20:7443", paired_at: now, last_reached_at: now },
     online: true,
@@ -814,7 +818,13 @@ export function createMockApi(): Api {
     },
     nodeJoinWait: async () => {
       await new Promise((r) => setTimeout(r, 2500));
-      nodeView = mockPairedNode(joinLink.includes("outside"));
+      nodeView = mockPairedNode(joinLink);
+      if (joinLink.includes("offline")) {
+        const view = nodeView;
+        setTimeout(() => {
+          nodeView = { ...view, online: false, status: null };
+        }, 0);
+      }
       return nodeView;
     },
     nodeJoinCancel: async () => null,
