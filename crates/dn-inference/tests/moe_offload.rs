@@ -42,6 +42,7 @@ async fn generate(moe: MoeOffload) -> String {
         response_schema: None,
         reasoning: Default::default(),
         caller: "test".into(),
+        native_web_search: None,
     });
     let mut text = String::new();
     while let Some(ev) = next_event(&mut s).await {

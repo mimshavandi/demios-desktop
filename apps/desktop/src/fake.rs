@@ -288,6 +288,7 @@ pub(crate) mod test_support {
             response_schema: None,
             reasoning: Reasoning::Off,
             caller: "test".into(),
+            native_web_search: None,
         }
     }
 }

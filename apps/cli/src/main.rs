@@ -491,6 +491,8 @@ async fn run(a: RunArgs) -> Result<(), String> {
             StreamEvent::ToolCall { call } => {
                 let _ = writeln!(out, "\n[tool call] {} {}", call.name, call.arguments);
             }
+            // `dn run` never asks for the provider's own search.
+            StreamEvent::WebCitations { .. } => {}
             StreamEvent::Done {
                 finish_reason,
                 usage,
@@ -537,6 +539,7 @@ fn chat<B: InferenceBackend>(
         },
         // A person reads this answer, like a chat reply.
         caller: "chat.reply".into(),
+        native_web_search: None,
     })
 }
 

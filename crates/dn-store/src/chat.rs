@@ -128,6 +128,8 @@ impl StoredMessage {
             content: self.content.clone(),
             tool_calls: self.tool_calls.clone(),
             tool_call_id: self.tool_call_id.clone(),
+            // Citations are for showing the answer's sources, not model input.
+            web_citations: vec![],
         }
     }
 }

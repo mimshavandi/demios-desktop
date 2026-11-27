@@ -33,6 +33,7 @@ pub fn request(model: ModelRef) -> ChatRequest {
         response_schema: None,
         reasoning: Reasoning::Off,
         caller: "tool_probe".into(),
+        native_web_search: None,
     }
 }
 

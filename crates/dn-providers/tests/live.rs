@@ -47,6 +47,7 @@ async fn smoke(mut cfg: ProviderConfig, model: &str) {
         response_schema: None,
         reasoning: Reasoning::Auto,
         caller: "chat.title".into(),
+        native_web_search: None,
     });
     let mut text = String::new();
     let mut done = false;

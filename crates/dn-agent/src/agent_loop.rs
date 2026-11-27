@@ -22,6 +22,8 @@ pub struct LoopConfig {
     pub temperature: Option<f32>,
     pub reasoning: Reasoning,
     pub conversation_id: Option<dn_core::Id>,
+    /// The provider's own web search, when the person chose it in Settings (#369).
+    pub native_web_search: Option<dn_core::chat::NativeWebSearch>,
 }
 
 impl LoopConfig {
@@ -35,6 +37,7 @@ impl LoopConfig {
             temperature: None,
             reasoning: Reasoning::Auto,
             conversation_id: None,
+            native_web_search: None,
         }
     }
 
@@ -48,6 +51,7 @@ impl LoopConfig {
             temperature: m.policies.temperature,
             reasoning: m.policies.reasoning,
             conversation_id: None,
+            native_web_search: None,
         }
     }
 }
@@ -164,9 +168,11 @@ pub async fn run_loop(
             response_schema: None,
             reasoning: cfg.reasoning,
             caller: cfg.caller.clone(),
+            native_web_search: cfg.native_web_search,
         };
         let mut stream = model.chat(req);
         let mut text = String::new();
+        let mut web_citations = Vec::new();
         let mut calls: Vec<ToolCall> = Vec::new();
         let mut finish = FinishReason::Stop;
         let mut got_done = false;
@@ -188,6 +194,9 @@ pub async fn run_loop(
                     on_event(AgentEvent::ReasoningDelta { step, text: t });
                 }
                 Some(Ok(StreamEvent::ToolCall { call })) => calls.push(call),
+                Some(Ok(StreamEvent::WebCitations { citations })) => {
+                    web_citations.extend(citations);
+                }
                 Some(Ok(StreamEvent::Done {
                     finish_reason,
                     usage: u,
@@ -263,6 +272,7 @@ pub async fn run_loop(
             },
             tool_calls: calls.clone(),
             tool_call_id: None,
+            web_citations,
         });
         if calls.is_empty() {
             let stop = if finish == FinishReason::Length {
@@ -344,6 +354,7 @@ fn tool_message(call: &ToolCall, out: &ToolOutput) -> ChatMessage {
         content,
         tool_calls: vec![],
         tool_call_id: Some(call.id.clone()),
+        web_citations: vec![],
     }
 }
 

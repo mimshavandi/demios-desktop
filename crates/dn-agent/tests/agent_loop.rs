@@ -541,12 +541,14 @@ async fn ids_already_in_history_are_never_reused() {
                 arguments: json!({}),
             }],
             tool_call_id: None,
+            web_citations: vec![],
         });
         h.push(ChatMessage {
             role: Role::Tool,
             content: vec![ContentPart::Text { text: "x".into() }],
             tool_calls: vec![],
             tool_call_id: Some(id.into()),
+            web_citations: vec![],
         });
     }
     let model = ScriptedModel::new(vec![

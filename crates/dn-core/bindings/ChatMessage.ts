@@ -2,9 +2,15 @@
 import type { ContentPart } from "./ContentPart";
 import type { Role } from "./Role";
 import type { ToolCall } from "./ToolCall";
+import type { WebCitation } from "./WebCitation";
 
 export type ChatMessage = { role: Role, content: Array<ContentPart>, tool_calls?: Array<ToolCall>, 
 /**
  * Set when `role == Tool`.
  */
-tool_call_id?: string | null, };
+tool_call_id?: string | null, 
+/**
+ * The web pages the model's own search cited for this answer (#369), on an assistant
+ * message. Untrusted: see [`WebCitation`].
+ */
+web_citations?: Array<WebCitation>, };
