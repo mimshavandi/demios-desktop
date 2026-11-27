@@ -1591,6 +1591,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "dn-runtime"
+version = "0.1.0"
+dependencies = [
+ "dn-core",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
 name = "dn-secrets"
 version = "0.1.0"
 dependencies = [
