@@ -317,6 +317,39 @@ fn turning_an_add_on_off_takes_its_tools_away_and_a_panic_stops_it_until_restart
 }
 
 #[test]
+fn a_read_tier_jobs_call_above_its_tier_is_refused_not_held() {
+    with_state(async |st| {
+        let a = TestAddon::new(
+            "notes",
+            vec![PermissionRequest::Jobs],
+            Does::CallMailFromJob,
+        );
+        let calls = Arc::clone(&a.calls);
+        let manifest = a.m.clone();
+        Addons::install(&st, vec![Arc::new(a)]);
+        let grants = st.addons.loaded()[0].1.clone();
+        // ADR-0013 §9.1: a `read` job may call tools up to `read`; `save` is low_write.
+        let host = Addons::job_host(
+            &st,
+            &manifest,
+            grants,
+            "daily",
+            Some(RiskTier::Read),
+            Id::new(),
+        );
+        let e = host
+            .tools()
+            .call("plugin.notes.save", serde_json::json!({"x": 1}))
+            .await
+            .unwrap_err();
+        assert_eq!(e.kind, ErrorKind::TierLimit, "{e}");
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        let d = st.addons.detail(&st, "notes").unwrap();
+        assert!(d.held.is_empty(), "nothing was queued for the person");
+    });
+}
+
+#[test]
 fn a_jobs_tool_call_is_held_and_runs_once_after_the_person_allows_it() {
     with_state(async |st| {
         let a = TestAddon::new(
@@ -328,7 +361,7 @@ fn a_jobs_tool_call_is_held_and_runs_once_after_the_person_allows_it() {
         let manifest = a.m.clone();
         Addons::install(&st, vec![Arc::new(a)]);
         let grants = st.addons.loaded()[0].1.clone();
-        let host = Addons::job_host(&st, &manifest, grants, "daily", Id::new());
+        let host = Addons::job_host(&st, &manifest, grants, "daily", None, Id::new());
         let e = host
             .tools()
             .call("plugin.notes.save", serde_json::json!({"x": 1}))
@@ -367,6 +400,7 @@ fn a_jobs_tool_call_is_held_and_runs_once_after_the_person_allows_it() {
             &manifest,
             st.addons.loaded()[0].1.clone(),
             "daily",
+            None,
             Id::new(),
         );
         let _ = host
@@ -413,7 +447,7 @@ fn delete_all_revokes_first_lets_the_add_on_delete_and_then_wipes_the_rest() {
             )
             .unwrap();
         let grants = st.addons.loaded()[0].1.clone();
-        let old = Addons::job_host(&st, &manifest, grants, "daily", Id::new());
+        let old = Addons::job_host(&st, &manifest, grants, "daily", None, Id::new());
         old.settings()
             .set("tone", serde_json::json!("short"))
             .await
