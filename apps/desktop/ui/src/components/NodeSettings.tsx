@@ -385,7 +385,8 @@ export function NodeSettings({ api }: { api: Api }) {
       >
         <p>
           This computer stops syncing with it. Your data stays here. The Node still lists this
-          computer until you remove it there, or from another device.
+          computer until you run <code>dn node remove-device</code> on the Node, or remove it from
+          another paired device.
         </p>
       </ConfirmDialog>
     </>
