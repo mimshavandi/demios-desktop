@@ -13,6 +13,12 @@
 //! - **Expiry is a refusal, never a run.** A call past its expiry becomes `expired`
 //!   ("expired, not run"), and a late answer is refused.
 //! - **"Delete all" empties it** ([`delete_all`]).
+//! - **An add-on can take back its own call while it is held** (ADR-0013 §9.2):
+//!   [`withdraw`] makes it `withdrawn`, and [`replace`] makes it `replaced` and holds a new
+//!   call for the same tool, linked to it. Only calls the add-on put in the queue, only
+//!   while held: the held-to-answered step happens once, so an answer and a withdrawal
+//!   can't both win. An answer to a withdrawn or replaced call is refused
+//!   ([`JobsError::Withdrawn`]).
 
 use crate::{JobKey, JobsError, Result, parse_id, parse_plugin};
 use dn_core::Id;
@@ -43,6 +49,41 @@ CREATE TABLE held_approvals (
 CREATE INDEX held_approvals_state ON held_approvals (state, created_at);
 ";
 
+/// ADR-0013 §9.2: the `withdrawn` and `replaced` states, and `replaces`, the call a
+/// replacement replaces. SQLite can't change a CHECK, so the table is rebuilt.
+pub(crate) const MIGRATION_WITHDRAW: &str = "
+CREATE TABLE held_approvals_v2 (
+    id               TEXT    PRIMARY KEY NOT NULL,
+    plugin_id        TEXT    NOT NULL,
+    job_id           TEXT    NOT NULL,
+    run_id           TEXT    NOT NULL,
+    tool             TEXT    NOT NULL,
+    arguments        TEXT    NOT NULL,
+    arguments_sha256 TEXT    NOT NULL,
+    summary          TEXT    NOT NULL,
+    created_at       INTEGER NOT NULL,
+    expires_at       INTEGER,
+    state            TEXT    NOT NULL CHECK (state IN
+        ('held', 'approved', 'denied', 'dismissed', 'expired', 'running', 'ran', 'failed',
+         'withdrawn', 'replaced')),
+    answered_by      TEXT,
+    answered_at      INTEGER,
+    signature        BLOB,
+    error            TEXT,
+    replaces         TEXT
+);
+INSERT INTO held_approvals_v2 (id, plugin_id, job_id, run_id, tool, arguments,
+    arguments_sha256, summary, created_at, expires_at, state, answered_by, answered_at,
+    signature, error)
+SELECT id, plugin_id, job_id, run_id, tool, arguments, arguments_sha256, summary,
+    created_at, expires_at, state, answered_by, answered_at, signature, error
+FROM held_approvals;
+DROP TABLE held_approvals;
+ALTER TABLE held_approvals_v2 RENAME TO held_approvals;
+CREATE INDEX held_approvals_state ON held_approvals (state, created_at);
+CREATE INDEX held_approvals_replaces ON held_approvals (replaces);
+";
+
 /// Where a held call is in its life.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -56,6 +97,10 @@ pub enum HeldState {
     Running,
     Ran,
     Failed,
+    /// Taken back by its add-on; never runs.
+    Withdrawn,
+    /// Taken back by its add-on for a newer version, which replaces it; never runs.
+    Replaced,
 }
 
 impl HeldState {
@@ -69,6 +114,8 @@ impl HeldState {
             Self::Running => "running",
             Self::Ran => "ran",
             Self::Failed => "failed",
+            Self::Withdrawn => "withdrawn",
+            Self::Replaced => "replaced",
         }
     }
 
@@ -82,6 +129,8 @@ impl HeldState {
             "running" => Self::Running,
             "ran" => Self::Ran,
             "failed" => Self::Failed,
+            "withdrawn" => Self::Withdrawn,
+            "replaced" => Self::Replaced,
             other => return Err(JobsError::Damaged(format!("held state `{other}`"))),
         })
     }
@@ -106,6 +155,8 @@ pub struct HeldApproval {
     pub answered_by: Option<String>,
     pub answered_at: Option<i64>,
     pub error: Option<String>,
+    /// The call this one replaces (ADR-0013 §9.2): the review shows what changed.
+    pub replaces: Option<Id>,
 }
 
 /// A call to hold.
@@ -162,7 +213,7 @@ fn sha256_hex(text: &str) -> String {
 }
 
 const COLUMNS: &str = "id, plugin_id, job_id, run_id, tool, arguments, arguments_sha256, summary,
-                       created_at, expires_at, state, answered_by, answered_at, error";
+                       created_at, expires_at, state, answered_by, answered_at, error, replaces";
 
 /// The columns as stored; [`RawRow::parse`] checks them.
 struct RawRow {
@@ -180,6 +231,7 @@ struct RawRow {
     answered_by: Option<String>,
     answered_at: Option<i64>,
     error: Option<String>,
+    replaces: Option<String>,
 }
 
 fn from_row(r: &Row<'_>) -> rusqlite::Result<RawRow> {
@@ -198,6 +250,7 @@ fn from_row(r: &Row<'_>) -> rusqlite::Result<RawRow> {
         answered_by: r.get(11)?,
         answered_at: r.get(12)?,
         error: r.get(13)?,
+        replaces: r.get(14)?,
     })
 }
 
@@ -217,6 +270,7 @@ impl RawRow {
             answered_by: self.answered_by,
             answered_at: self.answered_at,
             error: self.error,
+            replaces: self.replaces.as_deref().map(parse_id).transpose()?,
         })
     }
 }
@@ -300,6 +354,12 @@ pub fn answer(
     match current.state {
         HeldState::Held => {}
         HeldState::Expired => return Err(JobsError::Expired),
+        HeldState::Withdrawn => return Err(JobsError::Withdrawn { replaced_by: None }),
+        HeldState::Replaced => {
+            return Err(JobsError::Withdrawn {
+                replaced_by: replacement_of(&tx, current.id)?,
+            });
+        }
         _ => return Err(JobsError::NotHeld),
     }
     if answer.arguments_sha256 != current.arguments_sha256 {
@@ -335,6 +395,127 @@ pub fn answer(
     }
     tx.commit()?;
     Ok(state)
+}
+
+/// The call that replaced `id`, if any.
+fn replacement_of(conn: &Connection, id: Id) -> Result<Option<Id>> {
+    conn.query_row(
+        "SELECT id FROM held_approvals WHERE replaces = ?1",
+        [id.to_string()],
+        |r| r.get::<_, String>(0),
+    )
+    .optional()?
+    .map(|s| parse_id(&s))
+    .transpose()
+}
+
+/// The calls `plugin` put in the queue that still wait for an answer, oldest first
+/// (ADR-0013 §9.2). Expired ones are moved out first.
+pub fn waiting_for(
+    conn: &Connection,
+    plugin: &dn_plugin_api::PluginId,
+    now: i64,
+) -> Result<Vec<HeldApproval>> {
+    expire_due(conn, now)?;
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {COLUMNS} FROM held_approvals WHERE state = 'held' AND plugin_id = ?1
+         ORDER BY created_at, id"
+    ))?;
+    let rows = stmt.query_map([plugin.as_str()], from_row)?;
+    rows.map(|row| row?.parse()).collect()
+}
+
+/// A held call of `plugin`'s, still held. Another add-on's call reads as unknown, so an
+/// add-on can't learn about calls it didn't make.
+fn held_of(
+    conn: &Connection,
+    plugin: &dn_plugin_api::PluginId,
+    id: Id,
+    now: i64,
+) -> Result<HeldApproval> {
+    let call = get(conn, id)?;
+    if &call.job.plugin != plugin {
+        return Err(JobsError::UnknownApproval);
+    }
+    if call.state == HeldState::Held && call.expires_at.is_some_and(|e| e <= now) {
+        return Err(JobsError::Expired);
+    }
+    match call.state {
+        HeldState::Held => Ok(call),
+        HeldState::Expired => Err(JobsError::Expired),
+        HeldState::Withdrawn => Err(JobsError::Withdrawn { replaced_by: None }),
+        HeldState::Replaced => Err(JobsError::Withdrawn {
+            replaced_by: replacement_of(conn, id)?,
+        }),
+        _ => Err(JobsError::NotHeld),
+    }
+}
+
+/// `plugin` takes back its held call `id`: it becomes `withdrawn` and never runs. Only
+/// while held: an approved, running or finished call is refused ([`JobsError::NotHeld`]).
+pub fn withdraw(
+    conn: &Connection,
+    plugin: &dn_plugin_api::PluginId,
+    id: Id,
+    now: i64,
+) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    held_of(&tx, plugin, id, now)?;
+    let changed = tx.execute(
+        "UPDATE held_approvals SET state = 'withdrawn' WHERE id = ?1 AND state = 'held'",
+        [id.to_string()],
+    )?;
+    if changed != 1 {
+        return Err(JobsError::NotHeld);
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+/// `plugin` replaces its held call `id` with the same call and new `arguments`, in one
+/// transaction: the old call becomes `replaced` and the new one is held, linked to it
+/// ([`HeldApproval::replaces`]), with the same tool, job, run, summary and expiry. Only
+/// while held. Returns the new call.
+pub fn replace(
+    conn: &Connection,
+    plugin: &dn_plugin_api::PluginId,
+    id: Id,
+    arguments: &serde_json::Value,
+    now: i64,
+) -> Result<HeldApproval> {
+    let tx = conn.unchecked_transaction()?;
+    let old = held_of(&tx, plugin, id, now)?;
+    let changed = tx.execute(
+        "UPDATE held_approvals SET state = 'replaced' WHERE id = ?1 AND state = 'held'",
+        [id.to_string()],
+    )?;
+    if changed != 1 {
+        return Err(JobsError::NotHeld);
+    }
+    let new_id = Id::new();
+    let text = serde_json::to_string(arguments).map_err(|e| JobsError::Damaged(e.to_string()))?;
+    tx.execute(
+        "INSERT INTO held_approvals (id, plugin_id, job_id, run_id, tool, arguments,
+                                     arguments_sha256, summary, created_at, expires_at, state,
+                                     replaces)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'held', ?11)",
+        params![
+            new_id.to_string(),
+            old.job.plugin.as_str(),
+            old.job.job,
+            old.run.to_string(),
+            old.tool,
+            text,
+            sha256_hex(&text),
+            old.summary,
+            now,
+            old.expires_at,
+            id.to_string()
+        ],
+    )?;
+    let new = get(&tx, new_id)?;
+    tx.commit()?;
+    Ok(new)
 }
 
 /// The user dismissed a held call: it won't run.
@@ -649,5 +830,159 @@ mod tests {
             answer_message(id, "t", true, "ab"),
             answer_message(id, "u", true, "ab")
         );
+    }
+
+    fn brief() -> dn_plugin_api::PluginId {
+        key("daily").plugin
+    }
+
+    fn notes() -> dn_plugin_api::PluginId {
+        dn_plugin_api::PluginId::new("notes").unwrap()
+    }
+
+    #[test]
+    fn an_add_on_lists_and_withdraws_only_its_own_held_calls() {
+        let conn = db();
+        let mine = hold(&conn, &request(), None, 100).unwrap();
+        let mut other = request();
+        other.job = crate::JobKey::new(notes(), "x");
+        let theirs = hold(&conn, &other, None, 100).unwrap();
+
+        let listed = waiting_for(&conn, &brief(), 100).unwrap();
+        assert_eq!(listed.iter().map(|h| h.id).collect::<Vec<_>>(), [mine.id]);
+        // Another add-on's call reads as unknown, for withdraw and replace alike.
+        assert!(matches!(
+            withdraw(&conn, &brief(), theirs.id, 100),
+            Err(JobsError::UnknownApproval)
+        ));
+        assert!(matches!(
+            replace(&conn, &brief(), theirs.id, &serde_json::json!({}), 100),
+            Err(JobsError::UnknownApproval)
+        ));
+        assert_eq!(get(&conn, theirs.id).unwrap().state, HeldState::Held);
+
+        withdraw(&conn, &brief(), mine.id, 100).unwrap();
+        assert_eq!(get(&conn, mine.id).unwrap().state, HeldState::Withdrawn);
+        assert!(waiting_for(&conn, &brief(), 100).unwrap().is_empty());
+        // Withdrawn calls never go back into the queue.
+        assert_eq!(waiting(&conn, 100).unwrap().len(), 1);
+        // An answer to it is refused.
+        assert!(matches!(
+            answer(
+                &conn,
+                &Devices(&["phone"]),
+                &answer_for(&mine, "phone", true),
+                101
+            ),
+            Err(JobsError::Withdrawn { replaced_by: None })
+        ));
+        assert!(matches!(
+            withdraw(&conn, &brief(), mine.id, 102),
+            Err(JobsError::Withdrawn { .. })
+        ));
+    }
+
+    #[test]
+    fn replace_holds_a_new_version_and_an_answer_to_the_old_one_is_refused() {
+        let conn = db();
+        let old = hold(&conn, &request(), Some(1_000), 100).unwrap();
+        let args = serde_json::json!({"to": "team@example.com", "subject": "Brief (edited)"});
+        let new = replace(&conn, &brief(), old.id, &args, 200).unwrap();
+        assert_eq!(new.state, HeldState::Held);
+        assert_eq!(new.replaces, Some(old.id));
+        assert_eq!(new.tool, old.tool);
+        assert_eq!(new.job, old.job);
+        assert_eq!(new.run, old.run);
+        assert_eq!(new.expires_at, Some(1_000));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&new.arguments).unwrap(),
+            args
+        );
+        assert_ne!(new.arguments_sha256, old.arguments_sha256);
+        assert_eq!(get(&conn, old.id).unwrap().state, HeldState::Replaced);
+        // Every device shows only the new one.
+        assert_eq!(
+            waiting(&conn, 200)
+                .unwrap()
+                .iter()
+                .map(|h| h.id)
+                .collect::<Vec<_>>(),
+            [new.id]
+        );
+        // An answer to the old one: "replaced by a newer version".
+        let e = answer(
+            &conn,
+            &Devices(&["phone"]),
+            &answer_for(&old, "phone", true),
+            201,
+        )
+        .unwrap_err();
+        assert!(matches!(e, JobsError::Withdrawn { replaced_by: Some(id) } if id == new.id));
+        assert_eq!(e.to_string(), "this was replaced by a newer version");
+        // The new one is answered as usual.
+        assert_eq!(
+            answer(
+                &conn,
+                &Devices(&["phone"]),
+                &answer_for(&new, "phone", true),
+                202
+            )
+            .unwrap(),
+            HeldState::Approved
+        );
+    }
+
+    #[test]
+    fn only_a_held_call_can_be_withdrawn_or_replaced() {
+        let conn = db();
+        let h = hold(&conn, &request(), None, 100).unwrap();
+        answer(
+            &conn,
+            &Devices(&["phone"]),
+            &answer_for(&h, "phone", true),
+            101,
+        )
+        .unwrap();
+        // Approved: the answer won, the withdrawal loses.
+        assert!(matches!(
+            withdraw(&conn, &brief(), h.id, 102),
+            Err(JobsError::NotHeld)
+        ));
+        assert!(matches!(
+            replace(&conn, &brief(), h.id, &serde_json::json!({}), 102),
+            Err(JobsError::NotHeld)
+        ));
+        assert_eq!(get(&conn, h.id).unwrap().state, HeldState::Approved);
+
+        let late = hold(&conn, &request(), Some(150), 100).unwrap();
+        assert!(matches!(
+            withdraw(&conn, &brief(), late.id, 150),
+            Err(JobsError::Expired)
+        ));
+    }
+
+    #[test]
+    fn the_migration_keeps_existing_held_calls() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(crate::store::MIGRATION).unwrap();
+        conn.execute_batch(MIGRATION).unwrap();
+        let h = hold_v1(&conn);
+        conn.execute_batch(MIGRATION_WITHDRAW).unwrap();
+        let after = get(&conn, h).unwrap();
+        assert_eq!(after.state, HeldState::Held);
+        assert_eq!(after.replaces, None);
+    }
+
+    /// Inserts a row the way the first schema did.
+    fn hold_v1(conn: &rusqlite::Connection) -> Id {
+        let id = Id::new();
+        conn.execute(
+            "INSERT INTO held_approvals (id, plugin_id, job_id, run_id, tool, arguments,
+                 arguments_sha256, summary, created_at, state)
+             VALUES (?1, 'brief', 'daily', ?2, 't', '{}', 'x', 's', 1, 'held')",
+            params![id.to_string(), Id::new().to_string()],
+        )
+        .unwrap();
+        id
     }
 }
