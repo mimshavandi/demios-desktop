@@ -1,0 +1,9 @@
+id: answer.rules
+description: >-
+  How to answer from sources (project files, search results, tool results, pasted documents) and how
+  to cite them. Added once to the system prompt of every answer that has sources. No variables, so the
+  prompt prefix stays the same from turn to turn. Changes: CHANGELOG.md next to this file.
+active_version: v1
+versions:
+  - version: v1
+    file: v1.md

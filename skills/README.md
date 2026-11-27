@@ -22,6 +22,15 @@ skills/<skill-id>/prompt/v1.md
 Prompt templates use `{name}` placeholders; `{{` / `}}` are literal braces.
 Run `cargo test -p dn-agent` to validate every manifest here.
 
+## Shared prompts (`shared/`)
+
+These are prompt blocks the runtime adds on its own, not skills the user picks. Each one is a versioned prompt with a `CHANGELOG.md`. A new version is tied to the `dn eval parity` run it was checked with.
+
+| Prompt | Used for |
+|---|---|
+| `answer.rules` | Every answer that has sources (project files, search, tool results). How to lead with the answer, cite with labels such as `[S1]`, and handle missing or conflicting sources. |
+| `answer.rules.local` | The same rules, shorter, for models that run on this computer. |
+
 ## Chat skills (`library/`)
 
 A chat skill changes how the assistant works in one chat. The user picks it in the composer's **Skill** menu, and it applies from the next answer on. Each one is a folder with a `SKILL.md`:
