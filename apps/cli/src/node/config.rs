@@ -5,7 +5,7 @@
 use dn_secrets::server::{KeySource, ServerStoreChoice};
 use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 
 pub const CONFIG_FILE: &str = "node.json";
@@ -88,6 +88,46 @@ impl SecretsConfig {
     }
 }
 
+/// Who may connect to the Node (ADR-0014 §4a).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Reach {
+    /// The default: devices on the local network only, from private, link-local and
+    /// loopback addresses. Anything else is refused before the TLS handshake.
+    #[default]
+    LocalNetwork,
+    /// Chosen by the person (`dn node init --reachable-from-outside`): any address, for a
+    /// VPN or overlay, a forwarded port or a TLS-passthrough proxy. Pairing and the pinned
+    /// keys still decide who gets in; the Node sees every attempt.
+    Outside,
+}
+
+impl Reach {
+    fn is_default(&self) -> bool {
+        *self == Self::LocalNetwork
+    }
+
+    /// Whether a connection from `peer` may go on to the handshake.
+    pub fn allows(self, peer: IpAddr) -> bool {
+        self == Self::Outside || is_local_network(peer)
+    }
+}
+
+/// Private (RFC 1918), link-local and loopback IPv4; unique-local (`fc00::/7`), link-local
+/// (`fe80::/10`) and loopback IPv6, and IPv4 addresses mapped into IPv6.
+pub fn is_local_network(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => v4.is_private() || v4.is_link_local() || v4.is_loopback(),
+        IpAddr::V6(v6) => {
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_local_network(IpAddr::V4(v4));
+            }
+            let first = v6.segments()[0];
+            v6.is_loopback() || (first & 0xfe00) == 0xfc00 || (first & 0xffc0) == 0xfe80
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NodeConfig {
@@ -99,6 +139,10 @@ pub struct NodeConfig {
     /// The IANA time zone for jobs at a time of day, e.g. `Europe/Berlin`. Daylight saving
     /// follows it.
     pub time_zone: String,
+    /// Who may connect. Left out of `node.json` while it's the default, so files written
+    /// before this setting read the same.
+    #[serde(default, skip_serializing_if = "Reach::is_default")]
+    pub reach: Reach,
 }
 
 impl NodeConfig {
@@ -114,6 +158,7 @@ impl NodeConfig {
             listen,
             secrets,
             time_zone,
+            reach: Reach::LocalNetwork,
         };
         config.check()?;
         Ok(config)
@@ -297,6 +342,62 @@ mod tests {
         ] {
             assert!(SecretsConfig::parse(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn only_local_network_peers_pass_by_default() {
+        for ok in [
+            "10.0.0.5",
+            "172.16.4.1",
+            "172.31.255.255",
+            "192.168.1.20",
+            "169.254.10.1",
+            "127.0.0.1",
+            "::1",
+            "fd00::1",
+            "fc12::7",
+            "fe80::1",
+            "::ffff:192.168.1.20",
+        ] {
+            let ip: IpAddr = ok.parse().unwrap();
+            assert!(Reach::LocalNetwork.allows(ip), "{ok}");
+        }
+        for public in [
+            "8.8.8.8",
+            "172.32.0.1",
+            "100.64.0.1",
+            "192.169.0.1",
+            "2001:db8::1",
+            "2a00:1450::1",
+            "::ffff:8.8.8.8",
+            "0.0.0.0",
+            "::",
+        ] {
+            let ip: IpAddr = public.parse().unwrap();
+            assert!(!Reach::LocalNetwork.allows(ip), "{public}");
+            assert!(Reach::Outside.allows(ip), "{public}");
+        }
+    }
+
+    #[test]
+    fn the_reach_is_written_only_when_chosen() {
+        let mut c = NodeConfig::new(
+            "VPS".into(),
+            "0.0.0.0:7443".parse().unwrap(),
+            SecretsConfig::InsecurePlaintext,
+            "UTC".into(),
+        )
+        .unwrap();
+        let local = serde_json::to_string(&c).unwrap();
+        assert!(!local.contains("reach"), "{local}");
+        assert_eq!(
+            serde_json::from_str::<NodeConfig>(&local).unwrap().reach,
+            Reach::LocalNetwork
+        );
+        c.reach = Reach::Outside;
+        let outside = serde_json::to_string(&c).unwrap();
+        assert!(outside.contains(r#""reach":"outside""#), "{outside}");
+        assert_eq!(serde_json::from_str::<NodeConfig>(&outside).unwrap(), c);
     }
 
     #[test]
