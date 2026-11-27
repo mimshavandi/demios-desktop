@@ -1,6 +1,6 @@
 # ADR-0020: One agent runtime: harness, context and memory for every surface
 
-**Status:** Proposed · **Date:** 2026-11-27 · **Deciders:** project owner, lead · **Extends:** [ADR-0001](0001-repo-and-crate-layout.md), [ADR-0009](0009-security-baseline.md), [ADR-0013](0013-plugin-api.md) (§5, §9), [ADR-0014](0014-demios-node.md) · **Issue:** to be filed on acceptance
+**Status:** Accepted (owner, 2026-11-27) · **Date:** 2026-11-27 · **Deciders:** project owner, lead · **Extends:** [ADR-0001](0001-repo-and-crate-layout.md), [ADR-0009](0009-security-baseline.md), [ADR-0013](0013-plugin-api.md) (§5, §9), [ADR-0014](0014-demios-node.md) · **Issue:** to be filed on acceptance
 
 ## Context
 
@@ -136,10 +136,10 @@ Each stage ships behind a setting and is measured by §8 before it's turned on b
 
 R0 goes first so every later change is measured; R1–R2 give the biggest quality and speed gains for chat; R3–R6 follow. The Twin's plan (demios-pro) builds on R1, R3 and R6 instead of its own copies.
 
-## Open questions for the owner
+## Owner's answers (2026-11-27)
 
-- **Q1** Approve one runtime crate (`dn-runtime`) and this rollout order.
-- **Q2** Memory defaults: inferred memories wait for confirmation (recommended) or are kept automatically with an undo.
-- **Q3** Incognito chats: offered from the start (recommended).
-- **Q4** Routing: the router may pick the frontier role on its own when one is configured (recommended), or only when the user asks.
-- **Q5** Parity references: we generate reference answers from Claude and ChatGPT for the private eval set through their APIs, at our own cost, under their terms (recommended), or judge without references.
+- **Q1** One runtime crate (`dn-runtime`) and the rollout order R0–R6: **yes**.
+- **Q2** Inferred memories **wait for the user's confirmation**; "remember automatically" is an opt-in per scope.
+- **Q3** Incognito chats are offered **from the start** (in R3).
+- **Q4** The router **may pick the frontier role on its own** when one is configured; the user's explicit choice still wins.
+- **Q5** Reference answers for the private eval set are generated **from Claude and ChatGPT through their APIs**, at our cost and under their terms.
