@@ -30,6 +30,7 @@ pub mod link;
 pub mod membership;
 pub mod pairing;
 pub mod records;
+pub mod relay_pair;
 pub mod session;
 pub mod snapshot;
 pub mod transport;

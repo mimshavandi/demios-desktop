@@ -290,6 +290,31 @@ While they stay connected, new changes go straight away. The desktop app keeps i
 - Through a Relay, blobs go up to **64 MiB**. Bigger ones wait for a direct connection, and the file shows "Waiting to sync directly."
 - A blob no record uses any more is deleted, like the app's purge.
 
+### 10.4 Pairing through the Relay (ADR-0014 §4a, #304)
+For a Node that shares no network with the device, such as one on a rented server. Code: `dn-sync/src/relay_pair.rs`.
+
+- **The link** is version 2. Besides the Node's keys, the code and the expiry, it carries:
+  - the Relay's `https` URL (`r`);
+  - an **open, one-message pairing mailbox** (`m`), owned by a fresh key for this offer;
+  - the direct address (`a`) only if there is one.
+
+  An older app says "update this app".
+- **The request:**
+  - The device makes its own one-message **reply mailbox**, with a fresh key.
+  - It sends its keys, name, kind, the reply mailbox and the proof.
+  - The request is **signed** with its Ed25519 key, in place of TLS's proof that it holds the key.
+  - It's padded to 4 KiB, then **sealed** with HPKE to the Node's X25519 key from the link, with the pairing mailbox in `info` and as associated data.
+- **The proof** is the direct route's HMAC. The TLS channel binding is replaced by a hash of a Relay-only label, the Node's keys and the pairing mailbox. So a proof made for one route or mailbox never checks on another.
+- **The Node:**
+  - It opens the request and checks the signature, the device list (refusing already-paired and removed keys) and the proof.
+  - It shows the check numbers.
+  - The first message closes the mailbox and the offer, whether it checks or not.
+- **The answer:**
+  - The Node signs it, pads and seals it to the device, names the hash of the request, and delivers it to the reply mailbox.
+  - On yes, the device is added first.
+  - The device believes "accepted" only under the Node's key from the link.
+- **The Relay** is behind the `PairingRelay` trait. The HTTP client comes with the Relay client (#315).
+
 ## 11. Threat model notes
 This extends ADR-0014 action 10. A full Node threat model is its own document, `docs/security/node.md`.
 
