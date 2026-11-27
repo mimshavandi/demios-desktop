@@ -28,7 +28,8 @@ pub enum StopReason {
     Failed,
 }
 
-/// The context assembler's slots, in their fixed order (ADR-0020 §2.2).
+/// The context assembler's slots, in their fixed order (ADR-0020 §2.2, as amended:
+/// retrieved items after the conversation).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
@@ -40,9 +41,10 @@ pub enum Slot {
     Profile,
     /// Project or add-on knowledge.
     Knowledge,
-    Retrieved,
     /// Summary and recent turns.
     Conversation,
+    /// After the conversation, so the prefix before it stays cacheable.
+    Retrieved,
     /// The new input.
     Input,
     /// The one-line task recap.
@@ -213,6 +215,37 @@ mod tests {
         let first = r.first_token_ms.expect("a text token came");
         assert!(first <= r.wall_ms);
         assert!(r.dropped.is_empty());
+    }
+
+    #[test]
+    fn slots_order_as_assembled() {
+        use Slot::*;
+        let mut v = vec![
+            Recap,
+            Retrieved,
+            Input,
+            Conversation,
+            Knowledge,
+            Profile,
+            Skills,
+            Tools,
+            System,
+        ];
+        v.sort();
+        assert_eq!(
+            v,
+            [
+                System,
+                Tools,
+                Skills,
+                Profile,
+                Knowledge,
+                Conversation,
+                Retrieved,
+                Input,
+                Recap
+            ]
+        );
     }
 
     #[test]
