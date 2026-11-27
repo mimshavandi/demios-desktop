@@ -1147,8 +1147,9 @@ mod tests {
         .unwrap();
         let out = block_on(kit.call_tool("t", json!({}))).unwrap();
         assert_eq!(out, ToolResult::text("TierLimit"));
-        // A declaration carries a tier and nothing else about approval: the only way to
-        // skip asking is the user's own choice in Settings.
+        // A declaration carries a tier and, about approval, only a mark that makes it ask
+        // more (ADR-0013 §9.4): the only way to skip asking is the user's own choice in
+        // Settings.
         let d = serde_json::to_value(ToolDecl::new(
             "x",
             "X",
@@ -1158,7 +1159,9 @@ mod tests {
         ))
         .unwrap();
         let keys: Vec<&str> = d.as_object().unwrap().keys().map(String::as_str).collect();
-        assert!(!keys.iter().any(|k| k.contains("approv")), "{keys:?}");
+        let about_approval: Vec<&&str> = keys.iter().filter(|k| k.contains("approv")).collect();
+        assert_eq!(about_approval, [&"approval_required"], "{keys:?}");
+        assert_eq!(d["approval_required"], json!(false));
     }
 
     #[test]

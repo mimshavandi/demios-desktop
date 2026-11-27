@@ -353,7 +353,7 @@ impl Jobs {
             return Ok(());
         }
         let call = held::take_approved(&lock(&db), id).map_err(err)?;
-        let result = run_approved(state, &call).await;
+        let result = run_approved(state, call).await;
         held::finish(&lock(&db), id, result.clone()).map_err(err)?;
         self.changed();
         result
@@ -378,11 +378,14 @@ fn owned_job(state: &AppState, key: &JobKey) -> Result<(), String> {
 }
 
 /// Runs a held call the person allowed: through the executor, with this answer as its only
-/// approval for this one call.
-async fn run_approved(state: &Arc<AppState>, call: &HeldApproval) -> Result<(), String> {
+/// approval for this one call. A tool that always needs a fresh approval (ADR-0013 §9.4)
+/// runs with the one-time approval made from this answer; "run without asking" never
+/// counts for it.
+async fn run_approved(state: &Arc<AppState>, approved: held::Approved) -> Result<(), String> {
+    let call: &HeldApproval = &approved;
     // What was turned off since the call was held takes effect now too: the add-on must
     // still be running and on, and still hold `tools.call` for a tool that isn't its own.
-    let plugin = &call.job.plugin;
+    let plugin = &call.job.plugin.clone();
     let (manifest, _, _) = state
         .addons
         .loaded()
@@ -412,8 +415,10 @@ async fn run_approved(state: &Arc<AppState>, call: &HeldApproval) -> Result<(), 
         .addons
         .with_entry(&call.job.plugin, |e| e.manifest.name.clone())
         .ok_or_else(|| "The add-on is gone.".to_owned())?;
-    let arguments: serde_json::Value =
-        serde_json::from_str(&call.arguments).map_err(|e| e.to_string())?;
+    let run = call.run;
+    let (call, tc, token) = exec
+        .approval_for_held(approved)
+        .map_err(|e| e.to_string())?;
     let ctx = dn_tools::CallContext::for_plugin(
         call.run,
         dn_tools::PluginCall {
@@ -440,16 +445,16 @@ async fn run_approved(state: &Arc<AppState>, call: &HeldApproval) -> Result<(), 
             }),
         },
         Vec::new(),
-    );
-    let tc = dn_core::chat::ToolCall {
-        id: call.id.to_string(),
-        name: call.tool.clone(),
-        arguments,
-    };
-    exec.execute(&ctx, &tc)
+    )
+    .with_approval(token);
+    let result = exec
+        .execute(&ctx, &tc)
         .await
         .map(|_| ())
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string());
+    // Unused (a tool outside the class runs on its "run without asking" choice): gone.
+    exec.revoke_held_approval(run, call.id);
+    result
 }
 
 /// Holds a job's tool call for the person (the app's part of `HostBackend::call_tool`).

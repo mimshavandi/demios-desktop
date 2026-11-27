@@ -51,6 +51,28 @@ pub struct CapabilityOverride {
     /// Turn the tool off entirely (preflight → `Blocked`).
     #[serde(default)]
     pub disabled: bool,
+    /// The user marked the tool "always needs a fresh approval" (ADR-0013 §9.4). It adds to
+    /// a mark from the add-on or the Connect catalogue and never removes one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub approval_required: bool,
+}
+
+/// The approval policy that applies, and the stored choice it ignores, if any.
+///
+/// A tool in the "approval required" class asks every time: a standing choice ("run
+/// without asking", "ask once per chat") is ignored, and returned so Settings can say so.
+pub fn effective_approval(
+    approval_required: bool,
+    risk: RiskTier,
+    ov: Option<&CapabilityOverride>,
+) -> (ApprovalPolicy, Option<ApprovalPolicy>) {
+    let chosen = ov.and_then(|o| o.approval);
+    if approval_required {
+        let ignored = chosen.filter(|p| *p != ApprovalPolicy::AlwaysAsk);
+        (ApprovalPolicy::AlwaysAsk, ignored)
+    } else {
+        (chosen.unwrap_or_else(|| risk.default_approval()), None)
+    }
 }
 
 /// An MCP tool wrapped as a capability, with the effective approval policy.
@@ -62,6 +84,10 @@ pub struct McpCapability {
     pub title: Option<String>,
     pub hints: ToolHints,
     pub approval: ApprovalPolicy,
+    /// A stored choice that doesn't apply because the tool always needs a fresh approval
+    /// (ADR-0013 §9.4). Settings shows that it is ignored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_ignored: Option<ApprovalPolicy>,
     pub disabled: bool,
     /// Name the model sees (`^[a-zA-Z0-9_-]{1,64}$`); unique within an [`Executor`](crate::Executor).
     pub llm_name: String,
@@ -78,9 +104,10 @@ impl McpCapability {
     ) -> Self {
         let seeded = seed_risk(&tool.hints, trust_annotations);
         let risk = ov.and_then(|o| o.risk).unwrap_or(seeded);
-        let approval = ov
-            .and_then(|o| o.approval)
-            .unwrap_or_else(|| risk.default_approval());
+        // MCP tools are in the class only by the user's mark for now; the Connect
+        // catalogue's marks come with its entries' tool lists.
+        let approval_required = ov.is_some_and(|o| o.approval_required);
+        let (approval, approval_ignored) = effective_approval(approval_required, risk, ov);
         Self {
             spec: CapabilitySpec {
                 id: capability_id(server_id, &tool.name),
@@ -92,12 +119,14 @@ impl McpCapability {
                 output_schema: tool.output_schema.clone(),
                 risk,
                 idempotency_key_field: ov.and_then(|o| o.idempotency_key_field.clone()),
+                approval_required,
             },
             server_id: server_id.to_owned(),
             tool_name: tool.name.clone(),
             title: tool.title.clone(),
             hints: tool.hints,
             approval,
+            approval_ignored,
             disabled: ov.is_some_and(|o| o.disabled),
             llm_name: llm_tool_name(server_id, &tool.name),
         }

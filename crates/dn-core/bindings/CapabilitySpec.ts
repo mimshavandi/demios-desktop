@@ -10,4 +10,11 @@ id: string, source: CapabilitySource, description: string, input_schema: unknown
 /**
  * Input field whose value makes a write idempotent (enables safe retry/replay).
  */
-idempotency_key_field?: string | null, };
+idempotency_key_field?: string | null, 
+/**
+ * The tool always needs a fresh approval (ADR-0013 §9.4): no standing permission, a
+ * job's call is always held, and it runs only with a one-time approval token for that
+ * exact call. Set by the Connect catalogue, the tool's add-on or the user. Absent in
+ * data stored before it existed, which reads as `false`.
+ */
+approval_required?: boolean, };

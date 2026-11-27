@@ -11,6 +11,7 @@ use crate::in_process::{
     InProcessTool, PluginTool, is_plugin_server, plugin_server_id, valid_plugin_id, valid_tool_name,
 };
 use crate::ledger::{self, Claim};
+use crate::token::{ApprovalToken, Binding, Refused, TokenBook};
 use dn_core::CoreError;
 use dn_core::Id;
 use dn_core::capability::{
@@ -36,6 +37,10 @@ pub struct CallContext {
     /// (a chat skill's `allowed-tools`, inherited by an add-on handler). Empty = no
     /// narrowing. Layers are only added, never removed.
     pub allowed_tools: Vec<Vec<String>>,
+    /// A one-time approval for this exact call (ADR-0013 §9.4), from a held call a person
+    /// answered ([`Executor::approval_for_held`]). Only tools that always need a fresh
+    /// approval use it; it replaces the approval card for that one call.
+    pub approval: Option<ApprovalToken>,
 }
 
 /// Who a call comes from.
@@ -80,6 +85,7 @@ impl CallContext {
             run_id,
             origin: CallOrigin::Chat,
             allowed_tools: Vec::new(),
+            approval: None,
         }
     }
 
@@ -91,7 +97,14 @@ impl CallContext {
             run_id,
             origin: CallOrigin::Plugin(call),
             allowed_tools: inherited,
+            approval: None,
         }
+    }
+
+    /// Runs the call with a one-time approval from [`Executor::approval_for_held`].
+    pub fn with_approval(mut self, token: ApprovalToken) -> Self {
+        self.approval = Some(token);
+        self
     }
 
     /// Adds a narrowing layer.
@@ -169,6 +182,8 @@ pub struct Executor {
     /// the user's overrides.
     plugins: RwLock<HashMap<String, Vec<PluginTool>>>,
     gate: Arc<ApprovalGate>,
+    /// One-time approvals for tools that always need a fresh approval (ADR-0013 §9.4).
+    tokens: TokenBook,
     ledger: Arc<Mutex<rusqlite::Connection>>,
     retry: RetryPolicy,
     diagnostics: Mutex<std::collections::VecDeque<ToolDiagnostic>>,
@@ -309,6 +324,21 @@ impl Executor {
             )));
         }
         match &p.job {
+            // A tool that always needs a fresh approval: a job's call is held unless it
+            // carries the one-time approval a person gave for it. "Run without asking"
+            // for the add-on doesn't count, whatever is stored (ADR-0013 §9.4).
+            Some(j) if cap.spec.approval_required => match ctx.approval {
+                Some(_) => Ok(false),
+                None => Err(ToolError::new(
+                    id,
+                    ToolErrorKind::Held,
+                    format!(
+                        "job `{}` of {} needs the user's answer: this tool always needs a \
+                         fresh approval",
+                        j.id, p.name
+                    ),
+                )),
+            },
             Some(j) if j.auto_tools.iter().any(|t| t == id) => Ok(true),
             Some(j) => Err(ToolError::new(
                 id,
@@ -329,6 +359,7 @@ impl Executor {
             overrides: RwLock::default(),
             plugins: RwLock::default(),
             gate,
+            tokens: TokenBook::default(),
             ledger,
             retry: RetryPolicy::default(),
             diagnostics: Mutex::default(),
@@ -537,9 +568,10 @@ impl Executor {
         ov: Option<&CapabilityOverride>,
     ) -> McpCapability {
         let risk = ov.and_then(|o| o.risk).unwrap_or(t.risk).max(t.floor);
-        let approval = ov
-            .and_then(|o| o.approval)
-            .unwrap_or_else(|| risk.default_approval());
+        // The add-on's mark can't be removed; the user can only add one.
+        let approval_required = t.approval_required || ov.is_some_and(|o| o.approval_required);
+        let (approval, approval_ignored) =
+            crate::capability::effective_approval(approval_required, risk, ov);
         McpCapability {
             spec: CapabilitySpec {
                 id: format!("plugin.{plugin_id}.{}", t.name),
@@ -553,12 +585,14 @@ impl Executor {
                 idempotency_key_field: ov
                     .and_then(|o| o.idempotency_key_field.clone())
                     .or_else(|| t.idempotency_key_field.clone()),
+                approval_required,
             },
             server_id: plugin_server_id(plugin_id),
             tool_name: t.name.clone(),
             title: Some(t.title.clone()),
             hints: Default::default(),
             approval,
+            approval_ignored,
             disabled: ov.is_some_and(|o| o.disabled),
             llm_name: String::new(),
         }
@@ -1040,6 +1074,60 @@ impl Executor {
             .unwrap_or_default()
     }
 
+    /// Shows the approval card when the policy needs it, and waits for the answer. A tool
+    /// that always needs a fresh approval always asks, and only Allow once approves it.
+    async fn ask(
+        &self,
+        ctx: &CallContext,
+        cap: &McpCapability,
+        call: &ToolCall,
+        policy: ApprovalPolicy,
+        approval_required: bool,
+        cancel: std::pin::Pin<&mut (impl std::future::Future<Output = ()> + Send)>,
+    ) -> Result<(), ToolError> {
+        let id = &cap.spec.id;
+        let approval = self.gate.check(ApprovalPrompt {
+            request_id: Id::new(),
+            scope: ctx.scope(),
+            capability_id: id.clone(),
+            title: cap.title.clone().unwrap_or_else(|| cap.tool_name.clone()),
+            description: cap.spec.description.clone(),
+            risk: cap.spec.risk,
+            policy,
+            arguments: call.arguments.clone(),
+            requester: ctx.requester(),
+            approval_required,
+        });
+        let outcome = tokio::select! {
+            o = approval => o,
+            () = cancel => {
+                return Err(ToolError::new(
+                    id,
+                    ToolErrorKind::Cancelled,
+                    "cancelled while waiting for approval",
+                ));
+            }
+        };
+        match outcome {
+            GateOutcome::AutoAllowed | GateOutcome::Approved => Ok(()),
+            GateOutcome::Denied => Err(ToolError::new(id, ToolErrorKind::Denied, "user denied")),
+            GateOutcome::Unanswered => Err(ToolError::new(
+                id,
+                ToolErrorKind::Denied,
+                "approval not answered (timed out or UI gone)",
+            )),
+            GateOutcome::StandingRefused => Err(ToolError::new(
+                id,
+                ToolErrorKind::Denied,
+                "\"always allow\" isn't accepted for a tool that always needs a fresh approval",
+            )
+            .with_model_message(
+                "This tool needs the user's approval every time, so \"always allow\" doesn't \
+                 apply. It wasn't run.",
+            )),
+        }
+    }
+
     async fn execute_inner(
         &self,
         ctx: &CallContext,
@@ -1064,7 +1152,12 @@ impl Executor {
         let job_auto = Self::check_origin(ctx, &cap, self.limit_tier(&cap))?;
         let target = self.target(&cap)?;
 
-        let approved_already = job_auto || self.gate.is_satisfied(&scope, &id, cap.approval);
+        let required = cap.spec.approval_required;
+        let approved_already = if required {
+            ctx.approval.is_some()
+        } else {
+            job_auto || self.gate.is_satisfied(&scope, &id, cap.approval)
+        };
         let status = match &target {
             Target::Mcp(c) => c.status(),
             Target::InProcess(_) => crate::client::ConnectionStatus::Connected,
@@ -1162,51 +1255,46 @@ impl Executor {
             ));
         }
 
+        let binding = Binding::new(ctx.run_id, &call.id, &id, &call.arguments);
         // A job's call reaches this point only for a tool the user set to run without asking
-        // for this add-on: that choice is the approval.
+        // for this add-on, or with a one-time approval: that is the approval.
         let policy = if job_auto {
             ApprovalPolicy::Auto
         } else {
             cap.approval
         };
-        let approval = self.gate.check(ApprovalPrompt {
-            request_id: Id::new(),
-            scope: scope.clone(),
-            capability_id: id.clone(),
-            title: cap.title.clone().unwrap_or_else(|| cap.tool_name.clone()),
-            description: cap.spec.description.clone(),
-            risk: cap.spec.risk,
-            policy,
-            arguments: call.arguments.clone(),
-            requester: ctx.requester(),
-        });
-        let outcome = tokio::select! {
-            o = approval => o,
-            () = cancel.as_mut() => {
-                return Err(ToolError::new(
-                    &id,
-                    ToolErrorKind::Cancelled,
-                    "cancelled while waiting for approval",
-                ));
+        let token = match (&ctx.approval, required) {
+            // A person already answered this exact call (a held call). Checked below.
+            (Some(t), true) => Some(t.clone()),
+            (_, required) => {
+                self.ask(ctx, &cap, call, policy, required, cancel.as_mut())
+                    .await?;
+                // For such a tool only a plain Allow once gets here: the token for this one
+                // call, checked right before it runs.
+                required.then(|| self.tokens.mint(binding.clone()))
             }
         };
-        match outcome {
-            GateOutcome::AutoAllowed | GateOutcome::Approved => {}
-            GateOutcome::Denied => {
-                return Err(ToolError::new(&id, ToolErrorKind::Denied, "user denied"));
-            }
-            GateOutcome::Unanswered => {
-                return Err(ToolError::new(
-                    &id,
-                    ToolErrorKind::Denied,
-                    "approval not answered (timed out or UI gone)",
-                ));
-            }
-        }
         // The user approved what the card showed. If the server changed its tools while
         // the card was open (even if the change was already reviewed again), that may no
         // longer be what runs: refuse, and a retry shows a new card.
         self.check_fresh(&cap.server_id, &id, seen)?;
+        if let Some(token) = &token {
+            self.tokens.consume(token, &binding).map_err(|why| {
+                let detail = match why {
+                    Refused::Unknown => "no unused approval for this call",
+                    Refused::Expired => "its approval expired",
+                    Refused::OtherCall => "the approval is for another call or other arguments",
+                };
+                ToolError::new(
+                    &id,
+                    ToolErrorKind::Denied,
+                    format!("this tool always needs a fresh approval: {detail}"),
+                )
+                .with_model_message(
+                    "This tool runs only after the user allows this exact call. It wasn't run.",
+                )
+            })?;
+        }
 
         let mut guard = None;
         let attempt_base = match &key {
@@ -1356,7 +1444,54 @@ impl Executor {
 
     /// Deletes the whole ledger ("Delete all local data").
     pub fn forget_all(&self) -> Result<usize, CoreError> {
+        self.tokens.clear();
         Ok(self.with_ledger("ledger", ledger::delete_all)?)
+    }
+
+    /// The one-time approval for a held call a person allowed (ADR-0013 §9.4): bound to
+    /// the held call's id and run, its tool and its exact stored arguments, usable once and
+    /// for [`crate::token::TOKEN_TTL`]. Run the call with a [`CallContext`] for that run,
+    /// [`CallContext::with_approval`], and a [`ToolCall`] whose id is the held call's id.
+    ///
+    /// It takes the [`dn_jobs::held::Approved`] proof by value: only
+    /// `dn_jobs::held::take_approved` makes one, once per answered call, so one answer
+    /// approves one run.
+    pub fn approval_for_held(
+        &self,
+        approved: dn_jobs::held::Approved,
+    ) -> Result<(dn_jobs::held::HeldApproval, ToolCall, ApprovalToken), ToolError> {
+        let held = approved.into_call();
+        let arguments: serde_json::Value = serde_json::from_str(&held.arguments).map_err(|e| {
+            ToolError::new(
+                &held.tool,
+                ToolErrorKind::InvalidInput,
+                format!("held call {}: stored arguments aren't JSON: {e}", held.id),
+            )
+        })?;
+        let call = ToolCall {
+            id: held.id.to_string(),
+            name: held.tool.clone(),
+            arguments,
+        };
+        // The executor binds to the capability id; the add-on may have held the call
+        // under the name the model sees.
+        let capability_id = self
+            .resolve(&held.tool)
+            .map(|c| c.spec.id)
+            .ok_or_else(|| Self::not_found(&held.tool))?;
+        let token = self.tokens.mint(Binding::new(
+            held.run,
+            &call.id,
+            &capability_id,
+            &call.arguments,
+        ));
+        Ok((held, call, token))
+    }
+
+    /// Refuses every unused one-time approval for the held call `held_id` of run `run`,
+    /// e.g. when it was withdrawn or its add-on removed.
+    pub fn revoke_held_approval(&self, run: Id, held_id: Id) {
+        self.tokens.revoke_call(&format!("{run}/{held_id}"));
     }
 
     /// Writes waiting for the user to resolve.

@@ -531,10 +531,41 @@ pub fn dismiss(conn: &Connection, id: Id) -> Result<()> {
     }
 }
 
+/// An approved call, handed to the runner once by [`take_approved`].
+///
+/// Only [`take_approved`] makes one, after a person's answer passed the host's
+/// [`AnswerVerifier`] and the call moved `approved → running` (once). It isn't `Clone`.
+/// The executor turns it into the one-time approval token that a tool which always needs a
+/// fresh approval (ADR-0013 §9.4) runs with (`dn_tools::Executor::approval_for_held`).
+#[derive(Debug, PartialEq, Eq)]
+pub struct Approved {
+    call: HeldApproval,
+}
+
+impl Approved {
+    /// The call as stored.
+    pub fn call(&self) -> &HeldApproval {
+        &self.call
+    }
+
+    /// The call as stored, giving up the proof.
+    pub fn into_call(self) -> HeldApproval {
+        self.call
+    }
+}
+
+impl std::ops::Deref for Approved {
+    type Target = HeldApproval;
+
+    fn deref(&self) -> &HeldApproval {
+        &self.call
+    }
+}
+
 /// Hands an approved call to the runner, once. A second call gets [`JobsError::NotApproved`].
 /// Nothing is handed out while jobs are paused or the job is off or removed; the call
 /// stays approved until then.
-pub fn take_approved(conn: &Connection, id: Id) -> Result<HeldApproval> {
+pub fn take_approved(conn: &Connection, id: Id) -> Result<Approved> {
     let call = get(conn, id)?;
     if call.state != HeldState::Approved {
         return Err(JobsError::NotApproved);
@@ -552,7 +583,9 @@ pub fn take_approved(conn: &Connection, id: Id) -> Result<HeldApproval> {
     if changed != 1 {
         return get(conn, id).and(Err(JobsError::NotApproved));
     }
-    get(conn, id)
+    Ok(Approved {
+        call: get(conn, id)?,
+    })
 }
 
 /// Records how an approved call went.

@@ -12,6 +12,8 @@ description = "MCP client, capability wrapper, approval gate and side-effect led
 dn-core.workspace = true
 dn-agent.workspace = true
 dn-secrets.workspace = true
+# Only for `held::Approved`, the proof a person answered a held call (ADR-0013 §9.4).
+dn-jobs.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -28,6 +30,7 @@ rmcp = { version = "3.11", default-features = false, features = [
 ] }
 
 [dev-dependencies]
+dn-plugin-api.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "process", "net", "io-util", "io-std", "test-util"] }
 axum = { version = "0.8", default-features = false, features = ["tokio", "http1", "json", "form", "query"] }
 rmcp = { version = "3.11", default-features = false, features = [
