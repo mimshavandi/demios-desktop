@@ -1473,7 +1473,7 @@ mod tests {
     #[tokio::test]
     async fn a_data_case_runs_the_real_tool_with_the_skill_and_checks_the_numbers() {
         let (t, check, reqs) = run_data_case(
-            "project-data-001",
+            "project-054",
             "The total is 1537.00 [F48]; one order has no amount, so it isn't counted.",
         )
         .await;
@@ -1499,14 +1499,14 @@ mod tests {
     #[tokio::test]
     async fn an_invented_number_or_a_missing_known_answer_fails_the_check() {
         let (_, check, _) = run_data_case(
-            "project-data-001",
+            "project-054",
             "The total is about 1600, roughly 1537.00 before the refund of 63.",
         )
         .await;
         let check = check.unwrap();
         assert!(!check.passed);
         assert_eq!(check.untraced, ["1600", "63"]);
-        let (_, check, _) = run_data_case("project-data-001", "The total is in the sheet.").await;
+        let (_, check, _) = run_data_case("project-054", "The total is in the sheet.").await;
         assert_eq!(check.unwrap().missing_numbers, ["1537.00"]);
     }
 

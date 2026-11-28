@@ -461,7 +461,7 @@ fn the_golden_sets_data_files_have_their_known_answers() {
     );
 }
 
-/// The golden set's data_aggregate cases (project-data-016 to 020): answers worked out by
+/// The golden set's data_aggregate cases (project-069 to 073): answers worked out by
 /// hand from evals/golden/files/studio-data.
 #[test]
 fn the_golden_sets_aggregate_cases_have_their_known_answers() {

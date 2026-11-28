@@ -40,6 +40,7 @@ The categories are `chat`, `writing`, `summarise`, `project`, `tools`, `multiste
     tool_calls:                 # optional
       required: []              # each called at least once
       forbidden: []             # never called
+    numbers: ["1537.00"]        # optional: numbers a correct answer states, checked mechanically
 ```
 
 Paths in `files` and `attach` are relative to `files/`.
@@ -51,13 +52,20 @@ Paths in `files` and `attach` are relative to `files/`.
   description: Current weather and a 3-day forecast for a place.
   input_schema: {type: object, properties: {place: {type: string}}, required: [place]}
   effect: read                  # read, or write: a write tool would ask for approval in the app
+  capability: weather.get       # optional: the id a skill's allowed-tools names it by (default: its name)
   results:                      # the first match wins: a case-insensitive substring per argument
     - match: {place: lindenfeld}
       result: "Lindenfeld: 14°C, light rain."
     - default: No weather data for that place.
 ```
 
-`calculator` and `contrast_check` have no canned results. The runner works them out itself: the arithmetic (`+ - * /`, `%`, parentheses and decimals), and the WCAG contrast ratio of two colours with its AA and AAA results.
+`calculator` and `contrast_check` have no canned results. The runner works them out itself: the arithmetic (`+ - * /`, `%`, parentheses and decimals), and the WCAG contrast ratio of two colours with its AA and AAA results, using the app's own function.
+
+`data_profile` and `data_aggregate` aren't in `tools.yaml`: they're built into the runner. A case lists them in `tools`, and they read the case's project files and attachments the way the app's data tools do. They return a fact sheet or one computed figure. Spreadsheets such as `.xlsx` reach the model only through these tools, never as text.
+
+`expect.numbers` is checked by the runner, not the judge: each number must appear in the answer at the precision the answer writes it. When a case uses `data_profile`, every number in the answer must also trace back to a fact sheet.
+
+Running with `--local-skills` uses each skill's `SKILL.local.md`, where it has one. How the runner works is described in [docs/eval/README.md](../../docs/eval/README.md).
 
 Read tools always run. A write tool runs only if the case lists it under `approve`; otherwise the model is told the user declined. A case approves a write tool only when the user's last turn plainly asks for that exact action, and lists write tools the answer must not call under `tool_calls.forbidden`. Tool calls are checked against `required` and `forbidden` from the run's record, not by the judge.
 
@@ -77,3 +85,4 @@ Paths in `files` and `attach` stay inside `files/`, and each file is at most 256
   - `format`: the request sets a format;
   - `poisoning`: memory holds planted instructions.
 - **Number new cases** after the last id in the file. Don't reuse an id.
+- **For sample files made by a script** (such as `files/studio-data/make_budget_xlsx.py`), keep the script next to the file, so it can be made again. Record answers worked out separately in a test, as `crates/dn-data/tests/known_answers.rs` does.
