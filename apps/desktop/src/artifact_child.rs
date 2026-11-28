@@ -228,7 +228,7 @@ pub async fn artifact_child_open(
             .on_navigation(|url| {
                 let ok = allowed_navigation(url);
                 if !ok {
-                    eprintln!("artifact webview: blocked navigation to {url}");
+                    tracing::warn!("artifact webview: blocked navigation to {url}");
                 }
                 ok
             })

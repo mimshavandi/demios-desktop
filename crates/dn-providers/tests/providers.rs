@@ -141,7 +141,8 @@ async fn openai_streams_text() {
             FinishReason::Stop,
             Usage {
                 input_tokens: 12,
-                output_tokens: 4
+                output_tokens: 4,
+                ..Default::default()
             }
         )
     );
@@ -163,6 +164,24 @@ async fn openai_streams_text() {
     );
     // Not a reasoning model: no reasoning_effort.
     assert!(r.body.get("reasoning_effort").is_none());
+}
+
+#[tokio::test]
+async fn openai_reports_cached_prompt_tokens() {
+    let srv = serve(vec![Reply::sse("openai/cached.sse")]).await;
+    let p = build(cfg("openai", ProviderKind::OpenAi, &srv.base)).unwrap();
+    let evs = collect(&*p, request("byok:openai:gpt-4o-mini", "chat.reply"))
+        .await
+        .unwrap();
+    assert_eq!(
+        done(&evs).1,
+        Usage {
+            input_tokens: 2048,
+            output_tokens: 4,
+            cached_input_tokens: 1920,
+            ..Default::default()
+        }
+    );
 }
 
 #[tokio::test]
@@ -370,7 +389,8 @@ async fn anthropic_streams_text_and_thinking() {
             FinishReason::Stop,
             Usage {
                 input_tokens: 21,
-                output_tokens: 18
+                output_tokens: 18,
+                ..Default::default()
             }
         )
     );
@@ -387,6 +407,30 @@ async fn anthropic_streams_text_and_thinking() {
     );
     // Thinking requires default temperature.
     assert!(r.body.get("temperature").is_none());
+}
+
+/// Prompt caching: cached and written tokens are part of `input_tokens` and reported on
+/// their own (ADR-0020 §8).
+#[tokio::test]
+async fn anthropic_reports_cache_reads_and_writes() {
+    let srv = serve(vec![Reply::sse("anthropic/cached.sse")]).await;
+    let p = build(cfg("anthropic", ProviderKind::Anthropic, &srv.base)).unwrap();
+    let evs = collect(
+        &*p,
+        request("byok:anthropic:claude-sonnet-4-5", "chat.reply"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        done(&evs).1,
+        Usage {
+            input_tokens: 21 + 3400 + 1200,
+            output_tokens: 18,
+            cached_input_tokens: 3400,
+            cache_write_tokens: 1200,
+            ..Default::default()
+        }
+    );
 }
 
 #[tokio::test]
@@ -413,7 +457,8 @@ async fn anthropic_tool_call_round_trip() {
             FinishReason::ToolCalls,
             Usage {
                 input_tokens: 402,
-                output_tokens: 54
+                output_tokens: 54,
+                ..Default::default()
             }
         )
     );
@@ -477,7 +522,8 @@ async fn gemini_streams_text_and_thoughts() {
             FinishReason::Stop,
             Usage {
                 input_tokens: 8,
-                output_tokens: 24
+                output_tokens: 24,
+                ..Default::default()
             }
         )
     );

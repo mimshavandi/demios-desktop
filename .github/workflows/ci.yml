@@ -84,6 +84,32 @@ jobs:
       - run: cargo test -p demios-desktop --features flatpak
       # Connect (ADR-0018): debug builds that trust the test key read the signed catalogue.
       - run: cargo test -p demios-desktop --features connect-test-key
+  # ADR-0009 / ADR-0019 §2: `unsafe` only in UniFFI's generated code in dn-mobile; every other
+  # crate keeps the workspace's forbid(unsafe_code).
+  unsafe-code:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/check-unsafe.py --self-test
+      - run: python3 scripts/check-unsafe.py
+  # The iPhone app's Rust core as an XCFramework, device and Simulator (ADR-0019 §2). Its
+  # tests run on the host in the main Rust job.
+  ios-core:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios, aarch64-apple-ios-sim
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: apps/ios/build-xcframework.sh debug
+      # The SwiftUI app over the core, for the Simulator, unsigned.
+      - run: >-
+          xcodebuild -project apps/ios/Demios.xcodeproj -scheme Demios
+          -destination 'generic/platform=iOS Simulator' -derivedDataPath apps/ios/build/dd
+          CODE_SIGNING_ALLOWED=NO build
   design-tokens:
     runs-on: ubuntu-latest
     steps:

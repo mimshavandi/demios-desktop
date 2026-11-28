@@ -8,7 +8,9 @@ use crate::artifacts::{ArtifactMode, ArtifactTools, RunTools};
 use crate::error::{IpcError, IpcResult};
 use crate::skills::Skill;
 use crate::state::AppState;
-use dn_agent::{AgentEvent, CancelToken, LoopConfig, RunOutcome, StopReason, ToolExecutor};
+use dn_agent::{
+    AgentEvent, CancelToken, LoopConfig, RunMeter, RunOutcome, RunResult, StopReason, ToolExecutor,
+};
 use dn_core::chat::{ChatMessage, ChatModel, ContentPart, FinishReason, Role, Usage};
 use dn_core::model::ModelRef;
 use dn_core::{CoreError, Id, RecoveryAction};
@@ -356,15 +358,29 @@ fn start(
     let message_id = assistant.id;
     let model_ref = model.to_string();
     let sink: Arc<dyn EventSink> = Arc::new(sink);
+    // The chat's project, for the data tool (the callers have released the database).
+    let project_id = state
+        .db()
+        .ok()
+        .and_then(|db| store::get_conversation(&db, conversation_id).ok())
+        .and_then(|c| c.project_id);
     // Artifacts only through tool calls (ADR-0004): a model without tool calling gets none.
+    let contrast = crate::artifacts::contrast_offered(&state, mode, skill.as_deref());
     let tools: Arc<dyn ToolExecutor> = Arc::new(RunTools {
         base: Arc::clone(&state.tools),
+        contrast,
         artifacts: (mode == ArtifactMode::Tools).then(|| ArtifactTools {
             state: Arc::clone(&state),
             conversation_id,
             message_id,
             sink: Arc::clone(&sink),
         }),
+        data: project_id
+            .filter(|_| mode == ArtifactMode::Tools)
+            .map(|project_id| crate::data_tools::DataTools {
+                state: Arc::clone(&state),
+                project_id,
+            }),
     });
     // The chat's skill only narrows: approvals are decided behind this, by the executor.
     let tools = match &skill {
@@ -372,7 +388,7 @@ fn start(
         None => tools,
     };
     tauri::async_runtime::spawn(async move {
-        let (result, failed_calls) = run(
+        let (result, failed_calls, run_result) = run(
             &*backend, &*tools, &cfg, history, &cancel, &state, message_id, &*sink,
         )
         .await;
@@ -380,6 +396,7 @@ fn start(
         let live = state.live_text(message_id);
         // SQLite is blocking: keep it off the async workers.
         let write = tauri::async_runtime::spawn_blocking(move || {
+            record_run(&st, conversation_id, message_id, &run_result);
             persist(
                 &st,
                 conversation_id,
@@ -398,14 +415,14 @@ fn start(
         match write {
             Ok(Ok(ev)) => sink.send(ev),
             Ok(Err(e)) => {
-                eprintln!("could not store the answer {message_id}: {e}");
+                tracing::warn!("could not store the answer {message_id}: {e}");
                 sink.send(ChatEvent::Error {
                     message_id,
                     message: "The answer couldn't be saved.".into(),
                     recovery: vec![],
                 });
             }
-            Err(e) => eprintln!("could not store the answer {message_id}: {e}"),
+            Err(e) => tracing::warn!("could not store the answer {message_id}: {e}"),
         }
     });
 }
@@ -424,10 +441,33 @@ async fn run(
 ) -> (
     Result<RunOutcome, CoreError>,
     std::collections::HashSet<String>,
+    RunResult,
 ) {
     // Tool calls that came back as errors: their stored result rows say so.
     let mut failed = std::collections::HashSet::new();
-    let mut on_event = |ev: AgentEvent| match ev {
+    // A run that ends in Err returns no outcome: its result comes from the events.
+    let mut meter = RunMeter::start(Id::new(), cfg.caller.clone(), cfg.model.clone());
+    let mut on_event = |ev: AgentEvent| {
+        dn_agent::observe_event(&mut meter, &ev);
+        on_agent_event(ev, state, message_id, sink, &mut failed)
+    };
+    let result = dn_agent::run_loop(model, tools, cfg, history, cancel, &mut on_event).await;
+    let run = match &result {
+        Ok(o) => o.result.clone(),
+        Err(_) => meter.finish(StopReason::Failed),
+    };
+    (result, failed, run)
+}
+
+/// Turns one loop event into UI events.
+fn on_agent_event(
+    ev: AgentEvent,
+    state: &AppState,
+    message_id: Id,
+    sink: &dyn EventSink,
+    failed: &mut std::collections::HashSet<String>,
+) {
+    match ev {
         AgentEvent::StepStarted { step } if step > 0 && state.live_len(message_id) > 0 => {
             // Separate the text of successive steps (after tool results).
             let text = "\n\n".to_string();
@@ -469,9 +509,7 @@ async fn run(
             })
         }
         AgentEvent::StepStarted { .. } | AgentEvent::StepFinished { .. } => {}
-    };
-    let result = dn_agent::run_loop(model, tools, cfg, history, cancel, &mut on_event).await;
-    (result, failed)
+    }
 }
 
 fn summary(parts: &[ContentPart]) -> String {
@@ -511,6 +549,19 @@ fn finish_of(stop: StopReason) -> (FinishReason, MessageStatus, &'static str) {
             MessageStatus::Cancelled,
             "cancelled",
         ),
+        StopReason::Failed => (FinishReason::Error, MessageStatus::Error, "failed"),
+    }
+}
+
+/// Stores the turn's run result with its answer. Usage is a record, not part of the answer:
+/// a failure to store it doesn't lose the answer, but it is reported. Blocking.
+fn record_run(state: &AppState, conversation_id: Id, message_id: Id, run: &RunResult) {
+    let r = state.db().map_err(|e| e.message).and_then(|db| {
+        crate::runs::record(&db, run, Some(conversation_id), Some(message_id))
+            .map_err(|e| e.to_string())
+    });
+    if let Err(e) = r {
+        tracing::warn!(run_id = %run.run_id, error = %e, "could not store the run's usage");
     }
 }
 
@@ -549,7 +600,7 @@ fn persist(
             });
         }
     };
-    let (finish_reason, status, stop) = finish_of(outcome.stop);
+    let (finish_reason, status, stop) = finish_of(outcome.result.stop);
     let mut msgs = outcome.messages.into_iter();
     match msgs.next() {
         Some(first) if first.role == Role::Assistant => {
@@ -622,7 +673,7 @@ fn persist(
     Ok(ChatEvent::Done {
         message_id: placeholder,
         finish_reason,
-        usage: outcome.usage,
+        usage: outcome.result.usage,
         stop,
     })
 }
@@ -800,6 +851,65 @@ mod tests {
         assert_eq!(msgs[1].status, MessageStatus::Complete);
         assert_eq!(msgs[1].text(), streamed);
         assert!(streamed.contains("> Hello there"));
+        // The turn's run result is stored with the answer (ADR-0020 §8).
+        let run = crate::runs::for_message(&db, msgs[1].id)
+            .unwrap()
+            .expect("a run record");
+        assert_eq!(run.stop, StopReason::Completed);
+        assert_eq!(run.caller, st.agent.manifest.policies.caller);
+        assert_eq!(run.steps, 1);
+        assert!(run.usage.output_tokens > 0, "{run:?}");
+        assert!(run.first_token_ms.is_some_and(|t| t <= run.wall_ms));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_model_that_fails_mid_answer_still_leaves_a_failed_run_record() {
+        type Item = Result<dn_core::chat::StreamEvent, CoreError>;
+        /// Streams a word, then fails.
+        struct Breaks;
+        struct Items(std::collections::VecDeque<Item>);
+        impl futures_core::Stream for Items {
+            type Item = Item;
+            fn poll_next(
+                mut self: std::pin::Pin<&mut Self>,
+                _: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<Option<Item>> {
+                std::task::Poll::Ready(self.0.pop_front())
+            }
+        }
+        impl ChatModel for Breaks {
+            fn chat(&self, _: dn_core::chat::ChatRequest) -> dn_core::chat::EventStream {
+                Box::pin(Items(
+                    vec![
+                        Ok(dn_core::chat::StreamEvent::TextDelta { text: "Hal".into() }),
+                        Err(CoreError::ModelUnavailable {
+                            user_message: "The model stopped.".into(),
+                            developer_message: "test".into(),
+                            recovery: vec![],
+                        }),
+                    ]
+                    .into(),
+                ))
+            }
+        }
+        let mut models = crate::models::ModelRegistry::default();
+        models.register("local:breaks".parse().unwrap(), Arc::new(Breaks));
+        let mut s = AppState::in_memory().unwrap();
+        s.models = models;
+        let st = Arc::new(s);
+        let mut settings = crate::settings::Settings::default();
+        settings.slots.insert("chat".into(), "local:breaks".into());
+        st.save_settings(&settings).unwrap();
+        let conv = st.create_conversation().unwrap();
+        let (_e, sink) = sink();
+        let started = send(&st, conv.id, "hi".into(), sink).unwrap();
+        wait_idle(&st, conv.id).await;
+        let db = st.db().unwrap();
+        let run = crate::runs::for_message(&db, started.assistant_message.id)
+            .unwrap()
+            .expect("a run record for the failed answer");
+        assert_eq!((run.stop, run.steps), (StopReason::Failed, 1));
+        assert!(run.first_token_ms.is_some());
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -827,6 +937,10 @@ mod tests {
         assert_eq!(msgs[1].status, MessageStatus::Cancelled);
         let full = FakeChatModel::reply_for(&crate::fake::test_support::request("stop me"));
         assert!(msgs[1].text().len() < full.len());
+        let run = crate::runs::for_message(&db, msgs[1].id)
+            .unwrap()
+            .expect("a run record");
+        assert_eq!(run.stop, StopReason::Cancelled);
         assert!(matches!(
             events.lock().unwrap().last(),
             Some(ChatEvent::Done {
@@ -1387,6 +1501,77 @@ mod tests {
         assert!(system_text(&reqs[0]).contains("Answer in bullet points."));
         // The listed tool ran.
         assert_eq!(crate::artifacts::list(&st, conv).unwrap().len(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn contrast_check_is_offered_only_to_a_skill_that_names_it() {
+        let rec = Arc::new(Recorder::default());
+        let (st, conv) = skill_state(rec.clone(), true, &["contrast.check"]);
+        turn(&st, conv, "check my colours").await;
+        let names: Vec<String> = rec.requests.lock().unwrap()[0]
+            .tools
+            .iter()
+            .map(|t| t.name.clone())
+            .collect();
+        assert_eq!(names, ["contrast_check"]);
+
+        // A skill that doesn't name it, and a chat without a skill, don't get it.
+        let rec = Arc::new(Recorder::default());
+        let (st, conv) = skill_state(rec.clone(), true, &["artifact.*"]);
+        turn(&st, conv, "hi").await;
+        crate::skills::set_chat_skill(&st.db().unwrap(), conv, None).unwrap();
+        turn(&st, conv, "hi").await;
+        for req in rec.requests.lock().unwrap().iter() {
+            assert!(req.tools.iter().all(|t| t.name != "contrast_check"));
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn contrast_check_runs_in_code() {
+        use dn_agent::ToolExecutor;
+        let tools = RunTools {
+            base: Arc::new(Calc(false)),
+            artifacts: None,
+            contrast: true,
+            data: None,
+        };
+        let ctx = dn_agent::ToolContext {
+            agent_id: "assistant.default".into(),
+            caller: "chat.reply".into(),
+            conversation_id: None,
+            run_id: Id::new(),
+            step: 0,
+            cancel: Default::default(),
+            allowed_tools: vec![],
+        };
+        let call = |args: serde_json::Value| dn_core::chat::ToolCall {
+            id: "c1".into(),
+            name: "contrast_check".into(),
+            arguments: args,
+        };
+        let out = tools
+            .execute(
+                &call(serde_json::json!({"foreground": "#777777", "background": "white"})),
+                &ctx,
+            )
+            .await
+            .unwrap();
+        assert!(!out.is_error);
+        let text = match &out.content[..] {
+            [dn_core::chat::ContentPart::Text { text }] => text.clone(),
+            other => panic!("{other:?}"),
+        };
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(v["ratio"], 4.47);
+        assert_eq!(v["aa_normal_text"], false);
+        let bad = tools
+            .execute(
+                &call(serde_json::json!({"foreground": "#zzz", "background": "#fff"})),
+                &ctx,
+            )
+            .await
+            .unwrap();
+        assert!(bad.is_error);
     }
 
     #[tokio::test(flavor = "multi_thread")]

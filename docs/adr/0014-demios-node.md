@@ -1,6 +1,6 @@
 # ADR-0014: Demios Node: the engine run headless on the user's own machine or server, with paired clients
 
-**Status:** Accepted (owner, 2026-11-26), amended (§4a, owner 2026-11-26) · **Date:** 2026-11-25 (amended 2026-11-26: offline notice; amended 2026-11-26: §4a remote access) · **Deciders:** project owner, lead · **Extends:** [ADR-0001](0001-repo-and-crate-layout.md), [ADR-0006](0006-tools-mcp-capabilities.md), [ADR-0007](0007-local-storage-and-secrets.md), [ADR-0009](0009-security-baseline.md), [ADR-0013](0013-plugin-api.md), [ADR-0016](0016-demios-relay.md) · **Issue:** #203
+**Status:** Accepted (owner, 2026-11-26), amended (§4a, owner 2026-11-26; §9a, owner 2026-11-27) · **Date:** 2026-11-25 (amended 2026-11-26: offline notice; amended 2026-11-26: §4a remote access; amended 2026-11-27: §9a licence) · **Deciders:** project owner, lead · **Extends:** [ADR-0001](0001-repo-and-crate-layout.md), [ADR-0006](0006-tools-mcp-capabilities.md), [ADR-0007](0007-local-storage-and-secrets.md), [ADR-0009](0009-security-baseline.md), [ADR-0013](0013-plugin-api.md), [ADR-0016](0016-demios-relay.md) · **Issue:** #203
 
 ## Context
 Everything in Demios runs inside the desktop app today. When the app is closed or the computer sleeps, nothing runs:
@@ -134,7 +134,18 @@ This ADR decides the Node's shape: pairing, sync, models, approvals, secrets, op
 - **ADR-0016 needs no change.** Restricted mailboxes with delivery grants, the size limits, long-poll and WebSocket, and the open one-message mailbox are all there already. Pairing through the Relay is a new use of the invitation pattern (§4.4), and is listed here rather than there.
 - **Push (§4) is unchanged:** content-free and opt-in per device.
 
-#### Options considered
+##### 9a. Amendment (accepted, owner 2026-11-27): the Node is a Pro feature
+> **Status of this section: accepted (owner, 2026-11-27; demios-pro D-047).**
+
+Multi-device use is part of Pro. Free is the desktop app on one computer; the Node, sync between devices, the phone app, add-ons such as the Twin and the SearXNG search add-on, and the hosted Relay are Pro.
+
+- **Check.** The official Node build (`dn node run`, `dn node pair`) verifies the same signed, offline licence file as add-ons (ADR-0013 §6): a Pro licence or a trial. It never phones home; an online refresh happens only when the user asks.
+- **Without a valid licence** the Node doesn't start, and pairing refuses, each with a clear message naming what's missing and how to get it. A licence that expires while the Node runs stops sync and jobs at the next check, keeps all data on every device readable and exportable, and never deletes anything (ADR-0013: data is never locked behind the licence).
+- **Trial.** The 14-day trial, extended once to 30 days when a Node is set up, works through the same signed trial licence.
+- **What this is not.** The Relay stays ungated in code (ADR-0016, D-033), and the desktop app needs no licence. The Node's source stays public under PolyForm Shield 1.0.0 (ADR-0017): a person may remove the check for their own non-competing use; offering a modified Node to others is a competing use and stays forbidden. This is the first licence check in the public engine, made deliberately.
+- **Existing Nodes** started before this change get the trial when they first update.
+
+## Options considered
 | Option | Away from home | Exposure | Setup | Notes |
 |---|---|---|---|---|
 | A. Direct only; the user sets up a VPN or port (today's §4) | Only with the user's setup | Depends on the user | High | Most users never get past it |

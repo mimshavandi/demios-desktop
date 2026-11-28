@@ -14,6 +14,11 @@ tools:
   - artifact.create
   - artifact.update
   - artifact.rewrite
+  # Built in: a WCAG contrast ratio worked out in code; offered only with a skill that names it.
+  - contrast.check
+  # Fact sheets and computed figures for a project's CSV and spreadsheet files (#366); read-only.
+  - data.profile
+  - data.aggregate
   # Tools of the add-ons built into this copy (ADR-0013). They still ask per their tier.
   - "plugin.*"
 policies:

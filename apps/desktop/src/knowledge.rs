@@ -82,12 +82,12 @@ pub fn start(state: &Arc<AppState>) {
                         .and_then(|()| embed_pending(&st, None))
                 };
                 if let Err(e) = result {
-                    eprintln!("knowledge index: {e}");
+                    tracing::warn!("knowledge index: {e}");
                 }
             }
         });
     if let Err(e) = spawned {
-        eprintln!("knowledge index: could not start ({e}); project files won't be searched");
+        tracing::warn!("knowledge index: could not start ({e}); project files won't be searched");
     }
 }
 
@@ -116,7 +116,7 @@ pub fn index_project(state: &AppState, project_id: Id) -> Result<(), String> {
         .sync_source(&project_id.to_string(), &sources, None)
         .map_err(err)?;
     if !report.skipped.is_empty() {
-        eprintln!(
+        tracing::info!(
             "knowledge index: {} file(s) of a project are not searchable (not text, or empty)",
             report.skipped.len()
         );
@@ -142,7 +142,7 @@ fn read_files(state: &AppState, files: &[dn_store::project::ProjectFile]) -> Vec
                     content,
                 }),
                 Err(e) => {
-                    eprintln!("knowledge index: a project file's copy can't be read: {e}");
+                    tracing::warn!("knowledge index: a project file's copy can't be read: {e}");
                     None
                 }
             }
@@ -359,7 +359,7 @@ pub fn context_for(
         return Ok(None);
     };
     let fail = |e: String| {
-        eprintln!("knowledge search: {e}");
+        tracing::warn!("knowledge search: {e}");
         IpcError::new(
             "knowledge",
             "Searching this project's files failed. Try again, or check the embedding model in Settings › Models.",

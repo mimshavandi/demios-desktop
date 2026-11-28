@@ -1254,3 +1254,143 @@
       2 carrots, ginger, a lemon and vegetable stock
     must_not:
     - Lists onions, garlic or tomatoes twice
+- id: project-049
+  category: project
+  lang: en
+  tags:
+  - citation
+  - format
+  - csv
+  project:
+    instructions: You are the back-office assistant for Harrow & Pike Bakery. Staff ask you questions.
+      Answer from the project files. If something isn't covered, say so and suggest asking Mia Harrow,
+      the manager. Keep it short and practical.
+    files:
+    - bakery/staff-handbook.md
+    - bakery/memo-may.md
+    - bakery/suppliers.md
+    - bakery/price-sheet.csv
+    - bakery/inbox-notes.txt
+  turns:
+  - role: user
+    content: |
+      which of our products are vegan? table with price pls
+  expect:
+    must:
+    - Gives a table with readable column headers (for example Product and Price)
+    - 'Lists exactly these six: Sourdough white loaf 5.20, Seeded rye loaf 4.80, Spelt tin loaf 5.40,
+      Baguette 2.30, Vegan oat cookie 1.80, Focaccia slice 3.10 (EUR)'
+    - Cites the price sheet with a source label
+    must_not:
+    - Ends with a "Sources", "References" or similar list
+    - Writes a file name or path (such as price-sheet.csv) or a raw column name (such as price_eur)
+    - Includes a non-vegan product
+- id: project-050
+  category: project
+  lang: en
+  tags:
+  - citation
+  - math
+  - answer-first
+  project:
+    instructions: 'Help us with household admin. We''re retired and not technical: plain words, short
+      answers, euros.'
+    files:
+    - household/insurance-summary.md
+    - household/washing-machine-manual.md
+    - household/boiler-notes.md
+    - household/bills-2026.csv
+  turns:
+  - role: user
+    content: |
+      What did we pay for gas in January, February and March together?
+  expect:
+    must:
+    - 'The first sentence gives the total: €382.70'
+    - Shows or cites the three months (€142.50, €131.80, €108.40) with a source label
+    must_not:
+    - Ends with a "Sources", "References" or similar list
+    - Writes a file name or path (such as price-sheet.csv) or a raw column name (such as price_eur)
+    - Starts with a preamble such as "Let me look at your bills" before the figure
+- id: project-051
+  category: project
+  lang: en
+  tags:
+  - citation
+  - count
+  - not-in-source
+  project:
+    instructions: You are the back-office assistant for Harrow & Pike Bakery. Staff ask you questions.
+      Answer from the project files. If something isn't covered, say so and suggest asking Mia Harrow,
+      the manager. Keep it short and practical.
+    files:
+    - bakery/staff-handbook.md
+    - bakery/memo-may.md
+    - bakery/suppliers.md
+    - bakery/price-sheet.csv
+    - bakery/inbox-notes.txt
+  turns:
+  - role: user
+    content: |
+      Name three products that contain nuts, a customer with an allergy is asking.
+  expect:
+    must:
+    - 'Says only one product on the price sheet lists nuts: the Hazelnut morning bun'
+    - Says it found one, not three, rather than padding the list
+    - Cites the price sheet with a source label
+    must_not:
+    - Names other products as containing nuts
+    - Invents nut ingredients for products whose allergens do not list them
+- id: project-052
+  category: project
+  lang: en
+  tags:
+  - citation
+  - answer-first
+  project:
+    instructions: You help the committee of the Lindenfeld Allotment & Garden Club. Answer in British
+      English. Keep answers under 150 words unless asked for more.
+    files:
+    - garden-club/minutes-march.md
+    - garden-club/minutes-april.md
+    - garden-club/budget.csv
+    - garden-club/watering-rota.md
+  turns:
+  - role: user
+    content: |
+      Is the annual fee going up?
+  expect:
+    must:
+    - 'Opens with yes: from €35 to €40 from January 2027'
+    - Cites the March minutes with a source label right after the claim
+    must_not:
+    - Ends with a "Sources", "References" or similar list
+    - Writes the minutes' file name or a path
+    - Restates the question before answering
+- id: project-053
+  category: project
+  lang: de
+  tags:
+  - citation
+  - language-switch
+  - answer-first
+  project:
+    instructions: 'Help us with household admin. We''re retired and not technical: plain words, short
+      answers, euros.'
+    files:
+    - household/insurance-summary.md
+    - household/washing-machine-manual.md
+    - household/boiler-notes.md
+    - household/bills-2026.csv
+  turns:
+  - role: user
+    content: |
+      Wie viel haben wir im Juli und August zusammen fürs Internet bezahlt?
+  expect:
+    must:
+    - Antwortet auf Deutsch
+    - 'Nennt zuerst die Summe: 79,98 € (2 × 39,99 €)'
+    - Belegt die Zahl mit einem Quellen-Label
+    must_not:
+    - Hängt am Ende eine Quellenliste an
+    - Nennt Dateinamen oder Spaltennamen wie internet_eur

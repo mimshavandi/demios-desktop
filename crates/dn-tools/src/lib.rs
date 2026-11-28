@@ -9,6 +9,7 @@
 //! - [`executor`]: ties it together; the agent loop's `ToolExecutor` adapter wraps this.
 //! - [`oauth`]: OAuth 2.1 (code + PKCE, discovery) for remote servers.
 //! - [`agent`]: `dn_agent::ToolExecutor` for [`Executor`].
+//! - [`contrast`]: the `contrast_check` tool, a WCAG contrast ratio worked out in code.
 //!
 //! Errors leave the crate as [`dn_core::CoreError::Capability`]. Threat model:
 //! `docs/security/mcp-tools.md`.
@@ -18,9 +19,12 @@ pub mod approval;
 pub mod capability;
 pub mod client;
 pub mod config;
+pub mod contrast;
 pub mod error;
 pub mod executor;
 pub mod in_process;
+#[cfg(feature = "test-support")]
+pub mod injection;
 pub mod ledger;
 pub mod narrow;
 pub mod oauth;

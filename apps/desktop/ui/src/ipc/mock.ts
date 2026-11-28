@@ -49,9 +49,13 @@ function noNode(): NodeOverview {
   return { paired: null, online: false, status: null, devices: [], problem: null, sync: { state: "off", last_synced_at: null, failures: 0, error: null, applied: 0 } };
 }
 
-/** A link with "outside" in it pairs a Node reachable from outside its network. */
-function mockPairedNode(outside = false): NodeOverview {
+/**
+ * A link with "outside" in it pairs a Node reachable from outside its network; one with
+ * "offline" pairs a Node that then stops answering.
+ */
+function mockPairedNode(link = ""): NodeOverview {
   const now = Date.now();
+  const outside = link.includes("outside");
   return {
     paired: { name: "Home server", address: "192.168.1.20:7443", paired_at: now, last_reached_at: now },
     online: true,
@@ -433,7 +437,7 @@ export function createMockApi(): Api {
         timers.delete(cid);
         a.content = [{ type: "text", text }];
         a.status = "complete";
-        onEvent({ type: "done", message_id: a.id, finish_reason: "stop", usage: { input_tokens: 1, output_tokens: i } });
+        onEvent({ type: "done", message_id: a.id, finish_reason: "stop", usage: { input_tokens: 1, output_tokens: i, cached_input_tokens: 0, cache_write_tokens: 0, draft_tokens: 0, draft_accepted_tokens: 0 } });
         return;
       }
       const w = words[i++] ?? "";
@@ -448,7 +452,7 @@ export function createMockApi(): Api {
       window.clearTimeout(timers.get(cid));
       timers.delete(cid);
       a.status = "cancelled";
-      onEvent({ type: "done", message_id: a.id, finish_reason: "cancelled", usage: { input_tokens: 0, output_tokens: 0 } });
+      onEvent({ type: "done", message_id: a.id, finish_reason: "cancelled", usage: { input_tokens: 0, output_tokens: 0, cached_input_tokens: 0, cache_write_tokens: 0, draft_tokens: 0, draft_accepted_tokens: 0 } });
     };
   };
   const stops = new Map<string, () => void>();
@@ -482,7 +486,7 @@ export function createMockApi(): Api {
       a.finish_reason = "tool_calls";
       msgs.get(cid)?.push(tool, final);
       onEvent({ type: "text_delta", message_id: a.id, offset: 0, text });
-      onEvent({ type: "done", message_id: a.id, finish_reason: "stop", usage: { input_tokens: 1, output_tokens: 1 }, stop: "completed" });
+      onEvent({ type: "done", message_id: a.id, finish_reason: "stop", usage: { input_tokens: 1, output_tokens: 1, cached_input_tokens: 0, cache_write_tokens: 0, draft_tokens: 0, draft_accepted_tokens: 0 }, stop: "completed" });
     };
     waiting.set(prompt.request_id, {
       prompt,
@@ -521,7 +525,7 @@ export function createMockApi(): Api {
     window.setTimeout(() => {
       onEvent({ type: "artifact_changed", message_id: a.id, conversation_id: cid, artifact_id: target.id, title: target.title, version: v });
       onEvent({ type: "text_delta", message_id: a.id, offset: 0, text });
-      onEvent({ type: "done", message_id: a.id, finish_reason: "stop", usage: { input_tokens: 1, output_tokens: 1 }, stop: "completed" });
+      onEvent({ type: "done", message_id: a.id, finish_reason: "stop", usage: { input_tokens: 1, output_tokens: 1, cached_input_tokens: 0, cache_write_tokens: 0, draft_tokens: 0, draft_accepted_tokens: 0 }, stop: "completed" });
     }, 200);
   };
   const findArtifact = (cid: string, aid: string): ArtifactDetail => {
@@ -814,7 +818,13 @@ export function createMockApi(): Api {
     },
     nodeJoinWait: async () => {
       await new Promise((r) => setTimeout(r, 2500));
-      nodeView = mockPairedNode(joinLink.includes("outside"));
+      nodeView = mockPairedNode(joinLink);
+      if (joinLink.includes("offline")) {
+        const view = nodeView;
+        setTimeout(() => {
+          nodeView = { ...view, online: false, status: null };
+        }, 0);
+      }
       return nodeView;
     },
     nodeJoinCancel: async () => null,
