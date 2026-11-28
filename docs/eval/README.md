@@ -4,10 +4,11 @@
 ([ADR-0020](../adr/0020-agent-runtime.md) §8). Every case comes with its typed run result:
 why it stopped, the model, tokens in and out, cached tokens, wall time, time to the first
 token, steps, and what the context assembler left out (nothing yet; the assembler arrives with
-R1). Each run writes one JSON report (`dn.eval.v1`) and sends nothing anywhere: the model is a
-local GGUF, or an OpenAI-compatible server you name with `--endpoint`.
+R1). Each answering run writes one JSON report (`dn.eval.v1`) and sends nothing anywhere: the
+model is a local GGUF, or an OpenAI-compatible server you name with `--endpoint`. Judging is a
+separate step (`dn eval judge`, below), and the only one that sends anything: to the judge.
 
-This is the first stage (R0). Judging answers, embeddings in the LongMemEval retrieval and
+This is the first stage (R0). Pairwise judging, embeddings in the LongMemEval retrieval and
 more speed cases come later; see "Not yet" below.
 
 ## Parity: golden prompts
@@ -61,8 +62,7 @@ median, minimum, maximum or count), exactly as the app does for a project's file
 that every number in the answer traces to a fact sheet (`data_check`).
 
 The report keeps every answer, its tool calls and its run result. It checks
-`tool_calls.required` and `forbidden` itself; `must` and `must_not` are for the judge, which
-comes later.
+`tool_calls.required` and `forbidden` itself; `must` and `must_not` are for the judge.
 
 The golden set is written separately. A **private holdout** has the same shape, and its ids
 start with `h-`. `dn eval` refuses a holdout, or its report, inside a git work tree, so neither
@@ -95,6 +95,34 @@ dn eval longmemeval ~/.cache/demios-eval/longmemeval/longmemeval_s_cleaned.json 
 Comparing the two modes shows what our pipeline loses or gains against reading everything.
 `--hypotheses` writes the answers in LongMemEval's format for its own evaluation script.
 
+## Judging parity answers
+
+```bash
+dn eval judge <answers.json> --judge evals/judge/judge.yaml --set evals/golden [--out judged.json]
+```
+
+The judge is one fixed model, pinned in a `judge.yaml`: its exact model id, an
+OpenAI-compatible endpoint, the variable holding its key (never the key itself) and its prompt,
+a versioned file next to it ([evals/judge](../../evals/judge)). There's no default judge;
+[judge.example.yaml](../../evals/judge/judge.example.yaml) is refused until a model is filled
+in. The judge isn't Claude or GPT, which write the reference answers, nor a family of the
+local models under test.
+
+For each case, the judge is shown the conversation, the project's instructions and files, the
+tool calls with their results and the answer, all as quoted untrusted blocks, and checks every
+`must` and `must_not` (one call, JSON out). A case passes when every `must` is met and no
+`must_not` is broken. A case whose answer run failed is `no_answer`; one with no criteria is
+`no_criteria`; neither is sent to the judge.
+
+Nothing is guessed: a reply that isn't the expected JSON is retried once, then the case is a
+`judge_error` with the raw reply. Any judge error makes the report say `"judged": "incomplete"`
+and the command exit with an error (after writing the report). The judged report (`dn.judge.v1`)
+records the answers report's SHA-256, the judge's model and its prompt's SHA-256, so reports
+from different judges aren't mistaken for each other. The set's `must` / `must_not` must still
+match the answers report's.
+
+For a holdout's answers, pass the same `--holdout`, and `--out` outside any git work tree.
+
 ## Speed
 
 ```bash
@@ -112,8 +140,8 @@ data (`dn.speed.v1`), so new ones are added to a file.
 
 These are tracked as issues:
 
-- judging parity answers (pairwise against reference answers, a fixed judge from another
-  model family) and LongMemEval answers;
+- pairwise judging against reference answers (order swapped, length controlled), the judge's
+  calibration on human-labelled pairs, and judging LongMemEval answers (#355);
 - earlier sessions in memory cases (with memory, R3);
 - embeddings in LongMemEval's retrieval mode (keyword search only for now);
 - the app's own system prompt in `dn eval parity` (it moves into the shared runtime in R1);
