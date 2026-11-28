@@ -181,7 +181,9 @@ confusion matrix (person × judge) and how often the order changed the judge's v
 Saved as `calibration.json` next to `judge.yaml`, it's quoted in every `dn eval judge` report
 that uses references, but only if it was made with the same judge model and pairwise prompt
 and is complete. Otherwise the report's `calibration` says why there's none, and the command
-says so on stderr. Labels for holdout cases, and their report, stay outside any git work tree.
+says so on stderr. Calibrate on the public set: a calibration with holdout cases (`--holdout`)
+quotes them, so it and its labels stay outside any git work tree, and `dn eval judge` never
+quotes it.
 
 ## Speed
 

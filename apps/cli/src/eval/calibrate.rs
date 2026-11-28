@@ -265,6 +265,7 @@ pub async fn run(a: CalibrateArgs) -> Result<(), String> {
         &judge.file.pairwise_prompt.clone().unwrap_or_default(),
         &pairwise_sha,
         &sha256_hex(&raw),
+        a.holdout.is_some(),
     );
     let out = a
         .out
@@ -296,6 +297,7 @@ fn report(
     prompt: &str,
     prompt_sha256: &str,
     labels_sha256: &str,
+    holdout: bool,
 ) -> serde_json::Value {
     let mut m = [[0usize; 3]; 3];
     for r in results {
@@ -315,6 +317,8 @@ fn report(
             "pairwise_prompt_sha256": prompt_sha256,
         },
         "labels_sha256": labels_sha256,
+        // Its items quote holdout cases: it never goes next to judge.yaml in the repository.
+        "holdout": holdout,
         "summary": {
             "pairs": results.len(),
             "judged": ag.pairs,
@@ -357,6 +361,13 @@ pub fn for_judge(judge_yaml: &Path, judge: &Judge) -> Result<serde_json::Value, 
     {
         return Err(format!(
             "{} was made with another judge model or pairwise prompt",
+            p.display()
+        ));
+    }
+    if v["holdout"] != false {
+        return Err(format!(
+            "{} was made with holdout cases (or doesn't say): only a calibration on the public \
+             set is quoted",
             p.display()
         ));
     }
@@ -428,7 +439,7 @@ mod tests {
             r(Better::B, Some(Better::B)),
             r(Better::Tie, None),
         ];
-        let rep = report(&results, "m-1", "pairwise-v1.md", "abc", "lsha");
+        let rep = report(&results, "m-1", "pairwise-v1.md", "abc", "lsha", false);
         assert_eq!(rep["summary"]["judge_errors"], 1);
         assert_eq!(rep["summary"]["complete"], false);
         assert_eq!(rep["summary"]["judged"], 2);
@@ -451,12 +462,14 @@ mod tests {
         };
         write(&rep);
         assert!(for_judge(&yaml, &judge).is_err(), "another prompt");
-        write(&report(&results, "m-1", "p.md", &sha, "lsha"));
+        write(&report(&results, "m-1", "p.md", &sha, "lsha", false));
         assert!(for_judge(&yaml, &judge).unwrap_err().contains("incomplete"));
-        write(&report(&results[..2], "m-1", "p.md", &sha, "lsha"));
+        write(&report(&results[..2], "m-1", "p.md", &sha, "lsha", false));
         let c = for_judge(&yaml, &judge).unwrap();
         assert_eq!(c["agreement"], 1.0);
-        write(&report(&results[..2], "m-2", "p.md", &sha, "lsha"));
+        write(&report(&results[..2], "m-1", "p.md", &sha, "lsha", true));
+        assert!(for_judge(&yaml, &judge).unwrap_err().contains("holdout"));
+        write(&report(&results[..2], "m-2", "p.md", &sha, "lsha", false));
         assert!(for_judge(&yaml, &judge).is_err(), "another model");
         let _ = std::fs::remove_dir_all(dir);
     }
