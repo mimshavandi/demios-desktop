@@ -158,7 +158,7 @@ jobs:
           t0=$(date +%s%N)
           "$dn" fit "$m" | tee fit.txt
           t1=$(date +%s%N)
-          grep -F "runs on   Local models run on the processor: no graphics chip Demios can use was found" fit.txt
+          grep -F "runs on   Local models run on the processor: no graphics chip Almend can use was found" fit.txt
           "$dn" bench "$m" --n-prompt 32 --n-gen 16 --reps 1 -o bench.json
           {
             echo "### $RUNNER_OS"
