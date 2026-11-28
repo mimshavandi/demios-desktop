@@ -157,6 +157,13 @@ share of the training context.
 task under 0.85 there is reported as too hard for this model (`too_hard`): it isn't run at
 longer lengths, gets no effective length, and isn't pooled.
 
+**track** (only with `--tasks track`) checks this runner against a known benchmark's setup:
+RULER-style variable tracking, with one chain of four hops (`VAR A = 12345`, `VAR B = VAR A`, …)
+in one short passage repeated, asked forward ("which variables hold 12345?"). The start of the
+answer is given at the end of the question, and the score is the share of the five names found.
+It's much easier than multihop (no decoy chains, no real prose, a forward question), so a
+model that does well on track and poorly on multihop finds the harder task hard, not the runner.
+
 `--tasks` runs only some tasks. `--reasoning` lets the model think before answering (only the
 answer is scored), with 1,024 answer tokens unless `--answer-tokens` says otherwise.
 `empty_answers` counts answers that ran out of tokens before saying anything. It loads the model with a

@@ -56,7 +56,7 @@ pub struct ContextArgs {
     /// (five depths), so 20 per length by default.
     #[arg(long, default_value_t = 5)]
     samples: u32,
-    /// Only these tasks (needle, multikey, multihop, count); default all.
+    /// Only these tasks (needle, multikey, multihop, count, track); default all but track.
     #[arg(long, value_delimiter = ',')]
     tasks: Option<Vec<String>>,
     /// Let the model reason before answering (its reasoning isn't scored, only the answer).
@@ -193,9 +193,21 @@ pub enum Task {
     Multikey,
     Multihop,
     Count,
+    /// RULER-style variable tracking, to check this runner against a known benchmark's setup
+    /// (#350): one chain of four hops in repeated filler, a forward question ("which names
+    /// hold this value?"), an answer prefix, partial credit. Only with `--tasks track`.
+    Track,
 }
 
-const ALL_TASKS: [Task; 4] = [Task::Needle, Task::Multikey, Task::Multihop, Task::Count];
+const ALL_TASKS: [Task; 5] = [
+    Task::Needle,
+    Task::Multikey,
+    Task::Multihop,
+    Task::Count,
+    Task::Track,
+];
+/// What runs when `--tasks` isn't given.
+const DEFAULT_TASKS: [Task; 4] = [Task::Needle, Task::Multikey, Task::Multihop, Task::Count];
 /// The tasks the effective length is based on.
 const HARD_TASKS: [Task; 2] = [Task::Multihop, Task::Count];
 
@@ -207,10 +219,24 @@ pub struct Case {
     pub document: String,
     pub question: String,
     pub expected: String,
+    /// Track: every name the answer must list (scored as the share found).
+    pub expected_all: Vec<String>,
+    /// Track: the start of the answer, put at the end of the question (this backend can't
+    /// prefill the assistant's turn, as RULER does).
+    pub prefix: Option<String>,
 }
 
 /// Places `inserts` (sentence, relative position 0..1) among `n` filler sentences.
-fn compose(r: &mut Rng, n: usize, mut inserts: Vec<(String, f64)>) -> String {
+fn compose(r: &mut Rng, n: usize, inserts: Vec<(String, f64)>) -> String {
+    compose_with(r, n, inserts, filler)
+}
+
+fn compose_with(
+    r: &mut Rng,
+    n: usize,
+    mut inserts: Vec<(String, f64)>,
+    filler: impl Fn(&mut Rng) -> String,
+) -> String {
     inserts.sort_by(|a, b| a.1.total_cmp(&b.1));
     let mut out = String::new();
     let mut ins = inserts.into_iter().peekable();
@@ -252,6 +278,8 @@ pub fn build(task: Task, seed: u64, n: usize, depth: Option<f64>) -> Case {
                 document: doc,
                 question: format!("What is the access code for the {place} archive?"),
                 expected: code,
+                expected_all: Vec::new(),
+                prefix: None,
             }
         }
         Task::Multikey => {
@@ -279,6 +307,8 @@ pub fn build(task: Task, seed: u64, n: usize, depth: Option<f64>) -> Case {
                 document: doc,
                 question: format!("What is the access code for the {} archive?", places[ask]),
                 expected: codes[ask].clone(),
+                expected_all: Vec::new(),
+                prefix: None,
             }
         }
         Task::Multihop => {
@@ -316,6 +346,8 @@ pub fn build(task: Task, seed: u64, n: usize, depth: Option<f64>) -> Case {
                     asked.0
                 ),
                 expected: asked.1,
+                expected_all: Vec::new(),
+                prefix: None,
             }
         }
         Task::Count => {
@@ -350,13 +382,74 @@ pub fn build(task: Task, seed: u64, n: usize, depth: Option<f64>) -> Case {
                     docks[0]
                 ),
                 expected: counts[0].to_string(),
+                expected_all: Vec::new(),
+                prefix: None,
+            }
+        }
+        Task::Track => {
+            // One chain: VAR A = 12345, then B = A, C = B, D = C, E = D, in order, spread
+            // through repeated filler. Names are five random capital letters.
+            let value = r.digits(5);
+            let mut names: Vec<String> = Vec::new();
+            while names.len() < 5 {
+                let name: String = (0..5)
+                    .map(|_| char::from(b'A' + (r.next() % 26) as u8))
+                    .collect();
+                if !names.contains(&name) {
+                    names.push(name);
+                }
+            }
+            let mut inserts = vec![(format!("VAR {} = {value}.", names[0]), 0.05)];
+            let mut at = 0.05;
+            for w in names.windows(2) {
+                at += 0.15 + (r.next() % 50) as f64 / 1000.0;
+                inserts.push((format!("VAR {} = VAR {}.", w[1], w[0]), at));
+            }
+            let doc = compose_with(&mut r, n, inserts, |_| NOISE.to_owned());
+            Case {
+                task,
+                depth: None,
+                document: doc,
+                question: format!(
+                    "Keep track of the chain of variable assignments in the text above. Which \
+                     variables are assigned the value {value}?"
+                ),
+                expected: names.join(", "),
+                expected_all: names,
+                prefix: Some(format!(
+                    "Answer: following the assignments in the text, 5 variables are assigned \
+                     the value {value}, and they are:"
+                )),
             }
         }
     }
 }
 
+/// Track's filler: one short passage, repeated (RULER uses such "noise" filler).
+const NOISE: &str =
+    "The river is wide. The hills are quiet. The road goes on. Here we stay. Then home again.";
+
+/// The share of `expected` that appears in `answer`, ignoring case (RULER's string_match_all).
+pub fn share_found(answer: &str, expected: &[String]) -> f64 {
+    if expected.is_empty() {
+        return 0.0;
+    }
+    let a = answer.to_lowercase();
+    let found = expected
+        .iter()
+        .filter(|e| a.contains(&e.to_lowercase()))
+        .count();
+    found as f64 / expected.len() as f64
+}
+
 /// The chat request for a case.
 pub fn history(c: &Case) -> Vec<ChatMessage> {
+    if let Some(prefix) = &c.prefix {
+        return vec![ChatMessage::text(
+            Role::User,
+            format!("{}\n\nQuestion: {}\n\n{prefix}", c.document, c.question),
+        )];
+    }
     vec![
         ChatMessage::text(
             Role::System,
@@ -405,12 +498,12 @@ pub struct Stat {
 }
 
 /// Accuracy per length (pooled over `tasks`) for the lengths that have cases of them.
-fn stats(outcomes: &[(u32, Task, bool)], tasks: &[Task]) -> BTreeMap<u32, Stat> {
-    let mut out = BTreeMap::<u32, (usize, usize)>::new();
-    for (len, task, ok) in outcomes {
+fn stats(outcomes: &[(u32, Task, f64)], tasks: &[Task]) -> BTreeMap<u32, Stat> {
+    let mut out = BTreeMap::<u32, (f64, usize)>::new();
+    for (len, task, score) in outcomes {
         if tasks.contains(task) {
             let e = out.entry(*len).or_default();
-            e.0 += usize::from(*ok);
+            e.0 += *score;
             e.1 += 1;
         }
     }
@@ -419,7 +512,7 @@ fn stats(outcomes: &[(u32, Task, bool)], tasks: &[Task]) -> BTreeMap<u32, Stat> 
             (
                 l,
                 Stat {
-                    accuracy: right as f64 / n as f64,
+                    accuracy: right / n as f64,
                     cases: n,
                 },
             )
@@ -442,15 +535,15 @@ pub struct Summary {
 
 /// The hard tasks under [`THRESHOLD`] at [`GATE`].
 fn gate(items: &[Item]) -> Vec<Task> {
-    let at: Vec<(u32, Task, bool)> = items
+    let at: Vec<(u32, Task, f64)> = items
         .iter()
         .filter(|i| i.target_tokens == GATE)
-        .map(|i| (i.target_tokens, i.task, i.correct))
+        .map(|i| (i.target_tokens, i.task, i.score))
         .collect();
     gate_of(&at)
 }
 
-fn gate_of(outcomes: &[(u32, Task, bool)]) -> Vec<Task> {
+fn gate_of(outcomes: &[(u32, Task, f64)]) -> Vec<Task> {
     HARD_TASKS
         .into_iter()
         .filter(|t| {
@@ -463,7 +556,7 @@ fn gate_of(outcomes: &[(u32, Task, bool)]) -> Vec<Task> {
 
 /// Per task, the hard tasks pooled, and everything pooled; a task that wasn't run is absent,
 /// never a zero. A task in `too_hard` gets no effective length and isn't pooled.
-pub fn summarize(outcomes: &[(u32, Task, bool)], too_hard: &[Task]) -> Summary {
+pub fn summarize(outcomes: &[(u32, Task, f64)], too_hard: &[Task]) -> Summary {
     let usable: Vec<Task> = HARD_TASKS
         .into_iter()
         .filter(|t| !too_hard.contains(t))
@@ -504,6 +597,8 @@ struct Item {
     expected: String,
     answer: String,
     correct: bool,
+    /// 1 or 0, or for track the share of the expected names in the answer (RULER's scoring).
+    score: f64,
     #[serde(flatten)]
     turn: Turn,
 }
@@ -538,13 +633,13 @@ pub async fn run(a: ContextArgs) -> Result<(), String> {
         .find(|t| !ALL_TASKS.iter().any(|k| k.name().eq_ignore_ascii_case(t)))
     {
         return Err(format!(
-            "unknown task {bad:?}; the tasks are needle, multikey, multihop and count"
+            "unknown task {bad:?}; the tasks are needle, multikey, multihop, count and track"
         ));
     }
     let wanted = |t: Task| {
-        a.tasks
-            .as_ref()
-            .is_none_or(|ts| ts.iter().any(|x| x.eq_ignore_ascii_case(&t.name())))
+        a.tasks.as_ref().map_or(DEFAULT_TASKS.contains(&t), |ts| {
+            ts.iter().any(|x| x.eq_ignore_ascii_case(&t.name()))
+        })
     };
     let answer_tokens = a
         .answer_tokens
@@ -583,6 +678,22 @@ pub async fn run(a: ContextArgs) -> Result<(), String> {
     let (per_sentence, overhead) = match (
         count(&m.chat, &m.model_ref, &history(&probe)),
         count(&m.chat, &m.model_ref, &history(&probe0)),
+    ) {
+        (Some(n400), Some(n1)) => (f64::from(n400 - n1) / 399.0, n1),
+        _ => return Err("this backend can't count tokens; run with a local GGUF".into()),
+    };
+    // Track's filler is different, so it's measured on its own.
+    let (track_per_sentence, track_overhead) = match (
+        count(
+            &m.chat,
+            &m.model_ref,
+            &history(&build(Task::Track, 1, 400, None)),
+        ),
+        count(
+            &m.chat,
+            &m.model_ref,
+            &history(&build(Task::Track, 1, 1, None)),
+        ),
     ) {
         (Some(n400), Some(n1)) => (f64::from(n400 - n1) / 399.0, n1),
         _ => return Err("this backend can't count tokens; run with a local GGUF".into()),
@@ -636,12 +747,28 @@ pub async fn run(a: ContextArgs) -> Result<(), String> {
                 None,
             ));
         }
+        if wanted(Task::Track) {
+            let nt = sentences_for(len, track_per_sentence, track_overhead);
+            for s in 0..a.samples {
+                cases.push(build(
+                    Task::Track,
+                    5000 + li as u64 * 100 + u64::from(s),
+                    nt,
+                    None,
+                ));
+            }
+        }
         cases.retain(|c| wanted(c.task) && !too_hard.contains(&c.task));
         for c in cases {
             let h = history(&c);
             let tokens = count(&m.chat, &m.model_ref, &h);
             let t = turn(&m.chat, &cfg, h).await;
-            let ok = correct(&t.text, &c.expected);
+            let score = if c.task == Task::Track {
+                share_found(&t.text, &c.expected_all)
+            } else {
+                f64::from(u8::from(correct(&t.text, &c.expected)))
+            };
+            let ok = score >= 1.0;
             eprintln!(
                 "[eval context] {len} tokens ({}), {:?}{}: {}",
                 tokens.map_or("?".into(), |t| t.to_string()),
@@ -659,6 +786,7 @@ pub async fn run(a: ContextArgs) -> Result<(), String> {
                 expected: c.expected,
                 answer: t.text.chars().take(200).collect(),
                 correct: ok,
+                score,
                 turn: t,
             });
         }
@@ -673,9 +801,9 @@ pub async fn run(a: ContextArgs) -> Result<(), String> {
             }
         }
     }
-    let outcomes: Vec<(u32, Task, bool)> = items
+    let outcomes: Vec<(u32, Task, f64)> = items
         .iter()
-        .map(|i| (i.target_tokens, i.task, i.correct))
+        .map(|i| (i.target_tokens, i.task, i.score))
         .collect();
     let s = summarize(&outcomes, &too_hard);
     let eff = s.effective_hard;
@@ -702,6 +830,7 @@ pub async fn run(a: ContextArgs) -> Result<(), String> {
         "all_tasks": s.all,
         "effective_tokens_all_tasks": s.effective_all,
         "tokens_per_filler_sentence": per_sentence,
+        "tokens_per_track_filler_sentence": track_per_sentence,
     });
     let report = Report::new("context", &m, summary, items);
     let out = report.write(a.out)?;
@@ -730,7 +859,7 @@ mod tests {
             let a = build(task, 7, 300, Some(0.3));
             let b = build(task, 7, 300, Some(0.3));
             assert_eq!(a.document, b.document);
-            if task != Task::Count {
+            if !matches!(task, Task::Count | Task::Track) {
                 assert!(a.document.contains(&a.expected), "{task:?}");
             }
             assert_ne!(a.document, build(task, 8, 300, Some(0.3)).document);
@@ -805,9 +934,15 @@ mod tests {
     fn the_effective_length_rests_on_the_hard_tasks_with_their_cases() {
         let mut o = Vec::new();
         for len in [4096, 8192] {
-            o.extend((0..10).map(|_| (len, Task::Needle, true)));
-            o.extend((0..5).map(|i| (len, Task::Multihop, len == 4096 || i < 2)));
-            o.extend((0..5).map(|_| (len, Task::Count, true)));
+            o.extend((0..10).map(|_| (len, Task::Needle, 1.0)));
+            o.extend((0..5).map(|i| {
+                (
+                    len,
+                    Task::Multihop,
+                    f64::from(u8::from(len == 4096 || i < 2)),
+                )
+            }));
+            o.extend((0..5).map(|_| (len, Task::Count, 1.0)));
         }
         let s = summarize(&o, &[]);
         assert_eq!(s.effective_hard, Some(4096));
@@ -825,20 +960,46 @@ mod tests {
         );
         assert_eq!(s.by_task["multihop"][&8192].cases, 5);
         assert!(!s.by_task.contains_key("multikey"), "not run, not zero");
+        assert!(summarize(&[(4096, Task::Needle, 1.0)], &[]).hard.is_empty());
+    }
+
+    #[test]
+    fn a_track_case_holds_one_forward_chain_and_scores_like_ruler() {
+        let c = build(Task::Track, 9, 300, None);
+        assert_eq!(c.expected_all.len(), 5);
+        let value = c
+            .question
+            .split("value ")
+            .nth(1)
+            .unwrap()
+            .trim_end_matches('?');
         assert!(
-            summarize(&[(4096, Task::Needle, true)], &[])
-                .hard
-                .is_empty()
+            c.document
+                .contains(&format!("VAR {} = {value}.", c.expected_all[0]))
         );
+        for w in c.expected_all.windows(2) {
+            let line = format!("VAR {} = VAR {}.", w[1], w[0]);
+            assert!(c.document.contains(&line), "{line}");
+        }
+        assert!(c.document.contains(NOISE));
+        let h = history(&c);
+        assert_eq!(h.len(), 1, "no system prompt, like RULER");
+        let names = c.expected_all.join(" ");
+        assert_eq!(share_found(&names.to_lowercase(), &c.expected_all), 1.0);
+        assert_eq!(
+            share_found(&c.expected_all[..2].join(", "), &c.expected_all),
+            0.4
+        );
+        assert_eq!(share_found("none", &c.expected_all), 0.0);
     }
 
     #[test]
     fn a_task_under_the_threshold_at_2k_is_too_hard_and_gets_no_length() {
         let mut o = Vec::new();
-        o.extend((0..10).map(|i| (GATE, Task::Multihop, i < 9)));
-        o.extend((0..10).map(|i| (GATE, Task::Count, i < 8)));
+        o.extend((0..10).map(|i| (GATE, Task::Multihop, f64::from(u8::from(i < 9)))));
+        o.extend((0..10).map(|i| (GATE, Task::Count, f64::from(u8::from(i < 8)))));
         assert_eq!(gate_of(&o), vec![Task::Count], "8 of 10 is under 0.85");
-        o.extend((0..5).map(|_| (4096, Task::Multihop, true)));
+        o.extend((0..5).map(|_| (4096, Task::Multihop, 1.0)));
         let s = summarize(&o, &[Task::Count]);
         assert_eq!(s.effective_hard, Some(4096), "pooled over multihop only");
         assert_eq!(s.effective_by_task["count"], None);
