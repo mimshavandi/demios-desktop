@@ -348,7 +348,8 @@ pre.code .code-copy { position: absolute; top: var(--dn-space-1); right: var(--d
 .chat-file { display: inline-flex; align-items: center; gap: var(--dn-space-2); max-width: calc(var(--dn-space-16) * 4); min-height: var(--dn-hit-target); padding: 0 var(--dn-space-1) 0 var(--dn-space-2); border: 1px solid var(--dn-color-border); border-radius: var(--dn-radius-md); background: var(--dn-color-surface-sunken); font-size: var(--dn-text-sm); color: var(--dn-color-text); }
 .chat-file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-file-missing { color: var(--dn-color-warning); flex: none; }
-.chat-file .dn-skeleton { width: var(--dn-space-8); }
+/* The chip is already on surface-sunken: the bar uses the hairline colour so it shows. */
+.chat-file .dn-skeleton { width: var(--dn-space-8); background: var(--dn-color-border-strong); }
 .chat-file-size { color: var(--dn-color-text-muted); white-space: nowrap; }
 .chat-files-notice { margin: 0 auto var(--dn-space-2); width: calc(100% - var(--dn-space-12)); max-width: var(--dn-chat-max-width); }
 .chat-files-skipped { margin: var(--dn-space-1) 0 0; padding-left: var(--dn-space-4); display: grid; gap: var(--dn-space-1); }
