@@ -555,10 +555,9 @@ mod tests {
             .collect();
         let var = c
             .question
-            .split_whitespace()
-            .last()
-            .unwrap()
-            .trim_end_matches('?');
+            .split(|ch: char| !ch.is_ascii_alphabetic())
+            .find(|w| CODE_NAMES.contains(w))
+            .unwrap();
         assert!(
             var.chars().all(|ch| ch.is_ascii_uppercase()),
             "letters only: {var}"
