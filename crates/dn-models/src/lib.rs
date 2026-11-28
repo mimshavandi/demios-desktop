@@ -20,7 +20,7 @@ pub mod template;
 #[cfg(test)]
 mod testserver;
 
-pub use catalog::{Catalog, CatalogEntry, Recommendation};
+pub use catalog::{Catalog, CatalogEntry, EffectiveContext, Recommendation};
 pub use fit::{FitReport, Machine, MemoryKind, ModelFootprint, fit};
 pub use gguf::Gguf;
 

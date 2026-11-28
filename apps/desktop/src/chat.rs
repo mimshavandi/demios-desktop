@@ -465,10 +465,13 @@ fn start(
         inner: Arc::clone(&backend),
         size: user_size,
     });
-    // Every step of the run goes through the context assembler (ADR-0020 §2).
+    // Every step of the run goes through the context assembler (ADR-0020 §2). A catalogue
+    // model measured with `dn eval context` reads up to its measured context (#350); any
+    // other model, Hub and cache copies included, keeps the 60% default.
+    let measured = measured_context(&state, &model);
     let builder = dn_runtime::TurnBuilder::new(
         sized,
-        dn_runtime::Policy::chat(),
+        dn_runtime::Policy::chat().with_measured(measured),
         history.parts,
         history.turns,
         Arc::clone(&state.estimator),
@@ -831,6 +834,20 @@ fn add_run_message(
     Ok(())
 }
 
+/// The measured effective context of a local catalogue model, by catalogue id (#350).
+fn measured_context(state: &AppState, model: &ModelRef) -> Option<u32> {
+    let ModelRef::Local { model_id } = model else {
+        return None;
+    };
+    state
+        .models
+        .local
+        .as_ref()?
+        .catalog_entry(model_id)?
+        .effective_context
+        .map(|e| e.tokens)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1040,6 +1057,18 @@ mod tests {
             .unwrap()
             .expect("a run record");
         assert_eq!(run.stop, StopReason::Cancelled);
+        // The Done event is sent after the row is stored and the busy flag is released, so
+        // wait for it rather than assume it's there (flaky on CI otherwise).
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|e| matches!(e, ChatEvent::Done { .. }))
+        {
+            assert!(std::time::Instant::now() < deadline, "no Done event");
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
         assert!(matches!(
             events.lock().unwrap().last(),
             Some(ChatEvent::Done {
@@ -1954,6 +1983,7 @@ mod tests {
             version: 1,
             models: vec![dn_models::CatalogEntry {
                 recommended: None,
+                effective_context: None,
                 id: "tiny".into(),
                 name: "Tiny".into(),
                 repo: "o/r".into(),
@@ -2003,6 +2033,7 @@ mod tests {
             version: 1,
             models: vec![dn_models::CatalogEntry {
                 recommended: None,
+                effective_context: None,
                 id: "huge".into(),
                 name: "Huge Model".into(),
                 repo: "o/r".into(),
@@ -2056,6 +2087,7 @@ mod tests {
             version: 1,
             models: vec![dn_models::CatalogEntry {
                 recommended: None,
+                effective_context: None,
                 id: "tiny".into(),
                 name: "Tiny".into(),
                 repo: "o/r".into(),

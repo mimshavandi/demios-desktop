@@ -1697,6 +1697,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "dn-sandbox"
+version = "0.1.0"
+dependencies = [
+ "landlock",
+ "rustix",
+ "seccompiler",
+ "serde",
+ "serde_json",
+ "sysinfo",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "dn-secrets"
 version = "0.1.0"
 dependencies = [
@@ -3379,6 +3392,17 @@ dependencies = [
  "windows-sys 0.60.2",
  "zbus 4.4.0",
  "zeroize",
+]
+
+[[package]]
+name = "landlock"
+version = "0.4.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "03795bb5dba9d001e861618f7301289e3ad0bb146d0a8192ff5fd8b06d069087"
+dependencies = [
+ "enumflags2",
+ "libc",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -5113,6 +5137,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "seccompiler"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a4ae55de56877481d112a559bbc12667635fdaf5e005712fd4e2b2fa50ffc884"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

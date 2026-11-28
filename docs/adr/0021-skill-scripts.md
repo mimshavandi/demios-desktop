@@ -87,7 +87,7 @@ On every OS a **watchdog** in the app polls the run's process tree for memory an
 
 | OS | Mechanism | Requirements and notes |
 |---|---|---|
-| **macOS** | Seatbelt profile through `sandbox_init` from the launcher (deny by default, the reads and writes above, no network, Mach lookups by name) | Works from a notarised, hardened-runtime app (developer tools do this today). It does **not** work inside an App-Sandboxed app, so a Mac App Store build couldn't run scripts (Q6). `sandbox_init` is deprecated: if it's removed, scripts stop on macOS until there's a replacement, labelled as such. |
+| **macOS** | Seatbelt profile loaded by `/usr/bin/sandbox-exec -f <profile>`, which the launcher `exec`s (amended 2026-11-28, from the #431 spike: `sandbox_init` would need `unsafe` FFI, which the workspace forbids). Deny by default, the reads and writes above, no network, no Mach services, no fork | Works from a notarised, hardened-runtime app (developer tools do this today; checked when it's wired into the app). It does **not** work inside an App-Sandboxed app, so a Mac App Store build couldn't run scripts (Q6). `sandbox-exec`, like `sandbox_init`, is deprecated: if a macOS release removes it, script skills on that macOS are unavailable and say so ("unavailable on this macOS version"), and a replacement is decided then. There's no silent fallback. |
 | **Linux** | Landlock for files (**ABI v3 or later**, so `truncate` is covered; v6 with abstract-socket and signal scoping when the kernel has it), plus a seccomp filter: no sockets except `socketpair`, no `ptrace`, no new namespaces, no `TIOCSTI` | Landlock's network rules cover only TCP, so seccomp is the network control. "Unavailable" names the real cause: a kernel that's too old, or Landlock left out of the `lsm=` boot list. |
 | **Linux in Flatpak** | The same launcher inside the app's Flatpak sandbox | Whether `landlock_*` and stacked seccomp filters work inside Flatpak depends on the Flatpak version: **not claimed until the spike shows it**. No LibreOffice: the host's `soffice` is reachable only through `flatpak-spawn --host`, which would run it unsandboxed. |
 | **Windows** | LPAC with one capability, **`registryRead`** (read-only registry access; no other capability, no network), a fresh profile per run, ACL grants to the run folder, runtime and skill folder only; a Job Object for limits, UI restrictions and killing the tree | *Amended 2026-11-28 (owner), after the spike (#433):* with no capabilities the runtime doesn't start (Python exits with access denied while loading; only `registryRead` fixes it), and a plain AppContainer without LPAC let UDP out, so LPAC stays. **Residual risk:** a script can read registry values its LPAC is allowed to and write them to its output, which reaches the model; the skill's run details on Windows say so. Writes to the registry stay denied. The spike also settled the MSIX points: a packaged full-trust app can create the profile and the LPAC, and nothing inside `WindowsApps` can be granted, so runtimes and skills live in the app's data folder. Named pipes or COM servers that grant *ALL APPLICATION PACKAGES* stay reachable; LPAC narrows that, and the self-test probes for it. |
@@ -167,7 +167,7 @@ A **self-test** runs at start and is shown in Settings › Skills. It's an extra
 
 ## Trade-offs
 - **Size and first-use friction:** a skill that needs Python downloads roughly 40–60 MB (measured in the spike) plus its package bundle once. The offer says so; nothing downloads silently.
-- **Platform work:** three sandbox mechanisms (four with the Node) to build and keep working, each with a self-test and an e2e test per OS. macOS's `sandbox_init` is deprecated; its removal would stop scripts on macOS until a replacement exists.
+- **Platform work:** three sandbox mechanisms (four with the Node) to build and keep working, each with a self-test and an e2e test per OS. macOS's `sandbox-exec` is deprecated; its removal would stop scripts on macOS until a replacement exists.
 - **Narrower reach:**
   - Linux needs Landlock ABI 3 (kernel 6.2) or later;
   - Flatpak builds may not run scripts at all until the spike says otherwise;
@@ -186,7 +186,7 @@ A **self-test** runs at start and is shown in Settings › Skills. It's an extra
 
 ## Action items (after acceptance)
 1. **Spikes, one per OS.** Each one includes the self-test and measures the runtime sizes.
-   - macOS: Seatbelt through `sandbox_init` from a hardened, notarised app.
+   - macOS: Seatbelt through `sandbox-exec` from a hardened, notarised app.
    - Linux: Landlock ABI ≥ 3 with seccomp, on bare metal and inside Flatpak.
    - Windows: LPAC plus a Job Object with Python and Node, from both the MSIX and the direct build.
    - Node: `DynamicUser` with cgroups.
