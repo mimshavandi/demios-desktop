@@ -1,0 +1,8 @@
+# The fixed judge for `dn eval judge` (#355). Copy to judge.yaml and fill in the model once
+# it's chosen. The judge must not be Claude or GPT (they write the reference answers), nor a
+# family of the local models under test. There is no default judge: this example is refused
+# until `model` is filled in.
+model: ""                          # the exact, dated model id
+endpoint: ""                       # an OpenAI-compatible base URL
+api_key_env: DN_JUDGE_KEY          # the variable holding the key; never the key itself
+prompt: criteria-v1.md             # next to this file; its SHA-256 goes into every report
