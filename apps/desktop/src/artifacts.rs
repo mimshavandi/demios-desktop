@@ -47,7 +47,7 @@ fn frame_csp() -> &'static FrameCsp {
     static CSP: OnceLock<FrameCsp> = OnceLock::new();
     CSP.get_or_init(|| {
         serde_json::from_str(FRAME_CSP_JSON).unwrap_or_else(|e| {
-            eprintln!("artifact frame CSP is unreadable ({e}); serving a deny-all policy");
+            tracing::warn!("artifact frame CSP is unreadable ({e}); serving a deny-all policy");
             FrameCsp {
                 strict: "default-src 'none'".into(),
                 network: "default-src 'none'".into(),
@@ -170,7 +170,7 @@ fn store_error(e: ArtifactError) -> IpcError {
             IpcError::new("not_found", e.to_string())
         }
         ArtifactError::Db(_) | ArtifactError::Corrupt(_) => {
-            eprintln!("artifact store error: {e}");
+            tracing::warn!("artifact store error: {e}");
             IpcError::new("storage", "Could not read or write local data.")
         }
         // The store's own text is written for the model; the user gets plain words.
@@ -276,10 +276,13 @@ impl ArtifactMode {
 }
 
 /// Capability id in the agent manifest for an artifact tool name (`artifact_create` →
-/// `artifact.create`), or for `contrast_check` (`contrast.check`).
+/// `artifact.create`), for a data tool, or for `contrast_check` (`contrast.check`).
 pub(crate) fn capability_id(tool: &str) -> Option<String> {
     if tool == dn_tools::contrast::TOOL_NAME {
         return Some(dn_tools::contrast::CAPABILITY_ID.into());
+    }
+    if let Some(c) = crate::data_tools::capability_id(tool) {
+        return Some(c.into());
     }
     tool.strip_prefix("artifact_")
         .map(|op| format!("artifact.{op}"))
@@ -297,8 +300,8 @@ fn changed(message_id: Id, conversation_id: Id, a: &Applied) -> ChatEvent {
 }
 
 /// The run's tools: the manifest-filtered dn-tools executor plus, in [`ArtifactMode::Tools`],
-/// the artifact tools the manifest allows (`artifact.create` / `.update` / `.rewrite`), and
-/// `contrast_check` when the chat's skill asks for it.
+/// the artifact tools the manifest allows (`artifact.create` / `.update` / `.rewrite`), in a
+/// project chat `data_profile` (#366), and `contrast_check` when the chat's skill asks for it.
 pub struct RunTools {
     pub base: Arc<dyn ToolExecutor>,
     /// `None` in [`ArtifactMode::Unavailable`]: no artifact tools at all.
@@ -306,6 +309,8 @@ pub struct RunTools {
     /// Offer `contrast_check` (#365): a pure function, so it runs without approval and
     /// writes nothing. See [`contrast_offered`].
     pub contrast: bool,
+    /// `None` outside a project, or for a model without tool calls.
+    pub data: Option<crate::data_tools::DataTools>,
 }
 
 /// Whether a run offers `contrast_check`: the model calls tools, the agent manifest allows
@@ -349,6 +354,10 @@ impl ToolExecutor for RunTools {
             v.retain(|s| !dn_artifacts::protocol::is_artifact_tool(&s.name));
             v.extend(a.specs());
         }
+        if let Some(d) = &self.data {
+            v.retain(|s| !crate::data_tools::is_data_tool(&s.name));
+            v.extend(d.specs());
+        }
         if self.contrast {
             v.retain(|s| s.name != dn_tools::contrast::TOOL_NAME);
             v.push(dn_tools::contrast::tool_spec());
@@ -367,6 +376,11 @@ impl ToolExecutor for RunTools {
                     Ok(json) => ToolOutput::text(json),
                     Err(e) => ToolOutput::error(e),
                 });
+            }
+            if crate::data_tools::is_data_tool(&call.name)
+                && let Some(d) = self.data.as_ref().filter(|d| d.offers(&call.name))
+            {
+                return Ok(d.execute(call).await);
             }
             if !dn_artifacts::protocol::is_artifact_tool(&call.name) {
                 return self.base.execute(call, ctx).await;
@@ -399,7 +413,7 @@ impl ToolExecutor for RunTools {
             let result = match applied {
                 Ok(r) => r,
                 Err(e) => {
-                    eprintln!("artifact tool failed: {e}");
+                    tracing::warn!("artifact tool failed: {e}");
                     return Ok(ToolOutput::error(
                         "The artifact couldn't be saved. Try again.",
                     ));
@@ -533,5 +547,13 @@ mod tests {
             Some("artifact.rewrite")
         );
         assert_eq!(capability_id("calc"), None);
+        assert_eq!(
+            capability_id("data_profile").as_deref(),
+            Some("data.profile")
+        );
+        assert_eq!(
+            capability_id("data_aggregate").as_deref(),
+            Some("data.aggregate")
+        );
     }
 }

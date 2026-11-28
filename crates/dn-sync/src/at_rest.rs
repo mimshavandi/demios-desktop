@@ -457,6 +457,32 @@ impl RecordsKeys {
     }
 }
 
+/// Deletes every records key the Node's database names from the secret store, for
+/// `dn node delete-all`. Returns how many were there. A database without a records key yet
+/// deletes nothing.
+pub fn delete_keys(conn: &Connection, store: &dyn SecretStore) -> Result<usize> {
+    let current: Option<i64> = conn
+        .query_row(
+            "SELECT current FROM sync_records_key WHERE id = 1",
+            [],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let Some(current) = current else {
+        return Ok(0);
+    };
+    let current =
+        u32::try_from(current).map_err(|_| SyncError::Protocol("damaged sync_records_key"))?;
+    let mut deleted = 0;
+    // From key 1, not `oldest`: a rotation that stopped before deleting may have left older ones.
+    for n in 1..=current {
+        if store.delete(&key_id(n))? {
+            deleted += 1;
+        }
+    }
+    Ok(deleted)
+}
+
 struct OldConflict {
     collection: String,
     id: String,

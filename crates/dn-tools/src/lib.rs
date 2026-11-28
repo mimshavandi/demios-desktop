@@ -23,6 +23,8 @@ pub mod contrast;
 pub mod error;
 pub mod executor;
 pub mod in_process;
+#[cfg(feature = "test-support")]
+pub mod injection;
 pub mod ledger;
 pub mod narrow;
 pub mod oauth;

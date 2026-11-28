@@ -49,7 +49,7 @@ impl Agent {
         let result = match skills {
             None => Err("the skills folder wasn't found".to_owned()),
             Some(dir) => Self::try_load(dir).map_err(|e| {
-                eprintln!(
+                tracing::warn!(
                     "could not load agent `{AGENT_ID}` from {}: {e}",
                     dir.display()
                 );

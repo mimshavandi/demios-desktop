@@ -30,7 +30,7 @@ const done = (id = "a1"): ChatEvent => ({
   type: "done",
   message_id: id,
   finish_reason: "stop",
-  usage: { input_tokens: 1, output_tokens: 2 },
+  usage: { input_tokens: 1, output_tokens: 2, cached_input_tokens: 0, cache_write_tokens: 0, draft_tokens: 0, draft_accepted_tokens: 0 },
 });
 
 describe("chatReducer", () => {
@@ -106,7 +106,7 @@ describe("chatReducer", () => {
     expect(s.streamingId).toBe("a1");
     s = chatReducer(s, {
       kind: "event",
-      event: { type: "done", message_id: "a1", finish_reason: "cancelled", usage: { input_tokens: 0, output_tokens: 0 } },
+      event: { type: "done", message_id: "a1", finish_reason: "cancelled", usage: { input_tokens: 0, output_tokens: 0, cached_input_tokens: 0, cache_write_tokens: 0, draft_tokens: 0, draft_accepted_tokens: 0 } },
     });
     expect(s.messages[1]?.status).toBe("cancelled");
     s = chatReducer(s, { kind: "event", event: { type: "error", message_id: "a2", message: "boom", recovery: [] } });

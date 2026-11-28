@@ -398,7 +398,7 @@ async fn blocking<T: Send + 'static>(
     tauri::async_runtime::spawn_blocking(move || f(&st))
         .await
         .map_err(|e| {
-            eprintln!("blocking task failed: {e}");
+            tracing::warn!("blocking task failed: {e}");
             IpcError::new("internal", "Something went wrong. Try again.")
         })?
 }

@@ -510,7 +510,7 @@ describe("App", () => {
     act(() => {
       emit({ type: "artifact_changed", message_id: assistantId, conversation_id: conv, artifact_id: "art-1", title: "Fake artifact", version: 1 });
       emit({ type: "text_delta", message_id: assistantId, offset: 0, text: "Made it." });
-      emit({ type: "done", message_id: assistantId, finish_reason: "stop", usage: { input_tokens: 1, output_tokens: 2 } });
+      emit({ type: "done", message_id: assistantId, finish_reason: "stop", usage: { input_tokens: 1, output_tokens: 2, cached_input_tokens: 0, cache_write_tokens: 0, draft_tokens: 0, draft_accepted_tokens: 0 } });
     });
     const card = await screen.findByTestId("artifact-card");
     expect(card.textContent).toContain("Fake artifact");
@@ -568,7 +568,7 @@ describe("App", () => {
     });
     expect((await screen.findByText("there")).tagName).toBe("STRONG");
     act(() => {
-      emit({ type: "done", message_id: assistantId, finish_reason: "stop", usage: { input_tokens: 1, output_tokens: 2 } });
+      emit({ type: "done", message_id: assistantId, finish_reason: "stop", usage: { input_tokens: 1, output_tokens: 2, cached_input_tokens: 0, cache_write_tokens: 0, draft_tokens: 0, draft_accepted_tokens: 0 } });
     });
     expect(await screen.findByRole("button", { name: "Retry" })).toBeTruthy();
     await waitFor(() => expect(screen.getByRole("button", { name: "Hello" })).toBeTruthy());
@@ -628,7 +628,7 @@ describe("App", () => {
     await screen.findByRole("button", { name: "Stop answer" });
     act(() => {
       emit({ type: "text_delta", message_id: "id-3", offset: 0, text: "Hi" });
-      emit({ type: "done", message_id: "id-3", finish_reason: "stop", usage: { input_tokens: 1, output_tokens: 1 } });
+      emit({ type: "done", message_id: "id-3", finish_reason: "stop", usage: { input_tokens: 1, output_tokens: 1, cached_input_tokens: 0, cache_write_tokens: 0, draft_tokens: 0, draft_accepted_tokens: 0 } });
     });
     const answer = await screen.findByTestId("message-assistant");
     expect(answer.getAttribute("data-ai-generated")).toBe("true");
@@ -651,7 +651,7 @@ describe("App", () => {
     }
     act(() => {
       emit({ type: "text_delta", message_id: "id-3", offset: 0, text: "an answer" });
-      emit({ type: "done", message_id: "id-3", finish_reason: "stop", usage: { input_tokens: 1, output_tokens: 1 } });
+      emit({ type: "done", message_id: "id-3", finish_reason: "stop", usage: { input_tokens: 1, output_tokens: 1, cached_input_tokens: 0, cache_write_tokens: 0, draft_tokens: 0, draft_accepted_tokens: 0 } });
     });
     // Wait until the chat has settled (the list reloads after the answer ends).
     await waitFor(() => expect(screen.getByRole("button", { name: "private question" })).toBeTruthy());
@@ -772,7 +772,7 @@ describe("App", () => {
     }
     act(() => {
       emit({ type: "text_delta", message_id: "id-3", offset: 0, text });
-      emit({ type: "done", message_id: "id-3", finish_reason: "stop", usage: { input_tokens: 1, output_tokens: 1 } });
+      emit({ type: "done", message_id: "id-3", finish_reason: "stop", usage: { input_tokens: 1, output_tokens: 1, cached_input_tokens: 0, cache_write_tokens: 0, draft_tokens: 0, draft_accepted_tokens: 0 } });
     });
     await waitFor(() => expect(screen.getByRole("button", { name: "Where?" })).toBeTruthy());
     const before = window.location.href;
@@ -1760,7 +1760,7 @@ describe("No silent fallbacks (#141)", () => {
     api.listMessages = async () => fail();
     act(() => {
       emit({ type: "text_delta", message_id: "id-3", offset: 0, text: "Hi" });
-      emit({ type: "done", message_id: "id-3", finish_reason: "stop", usage: { input_tokens: 1, output_tokens: 1 } });
+      emit({ type: "done", message_id: "id-3", finish_reason: "stop", usage: { input_tokens: 1, output_tokens: 1, cached_input_tokens: 0, cache_write_tokens: 0, draft_tokens: 0, draft_accepted_tokens: 0 } });
     });
     expect(await screen.findByText(/Couldn't load the saved answer/)).toBeTruthy();
   });

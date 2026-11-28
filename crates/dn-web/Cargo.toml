@@ -1,0 +1,20 @@
+[package]
+name = "dn-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Web search providers and the local page fetcher: private-network guard, redirects, caps, rate limits (#369)"
+
+[dependencies]
+reqwest.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["net", "sync", "time"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "io-util", "test-util"] }
+
+[lints]
+workspace = true

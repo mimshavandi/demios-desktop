@@ -233,6 +233,7 @@ describe("Settings › Node (ADR-0014)", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Forget this Node" }));
     const confirm = await screen.findByRole("alertdialog");
     expect(within(confirm).getByText(/still lists this computer/)).toBeTruthy();
+    expect(within(confirm).getByText("dn node remove-device")).toBeTruthy();
     const button = within(confirm).getByRole("button", { name: "Forget this Node" }) as HTMLButtonElement;
     await waitFor(() => expect(button.disabled).toBe(false));
     fireEvent.click(button);

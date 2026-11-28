@@ -15,7 +15,7 @@ fn export_all(dir: &Path) {
     macro_rules! export {
         ($($t:ty),* $(,)?) => { $( <$t>::export_all(&cfg).expect(stringify!($t)); )* };
     }
-    use crate::{artifact::*, capability::*, chat::*, error::*, event::*, id::*, model::*};
+    use crate::{artifact::*, capability::*, chat::*, error::*, event::*, id::*, model::*, run::*};
     export!(
         Id,
         ArtifactType,
@@ -38,6 +38,11 @@ fn export_all(dir: &Path) {
         ChatRequest,
         FinishReason,
         Usage,
+        StopReason,
+        Slot,
+        DropAction,
+        Dropped,
+        RunResult,
         StreamEvent,
         RecoveryAction,
         CoreError,
