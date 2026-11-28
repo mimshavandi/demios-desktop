@@ -982,6 +982,23 @@ pub fn model_files(first: &Path) -> Result<Vec<PathBuf>, Finding> {
         .collect())
 }
 
+/// The Hugging Face cache a file belongs to, when it resolves to one of its blobs
+/// (`<cache>/models--*/blobs/<64 hex>`).
+fn hf_cache_of_blob(path: &Path) -> Option<PathBuf> {
+    let target = std::fs::canonicalize(path).ok()?;
+    let name = target.file_name()?.to_str()?;
+    if name.len() != 64 || !name.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    let blobs = target.parent()?;
+    let repo = blobs.parent()?;
+    let is_repo = repo
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.starts_with("models--"));
+    (blobs.file_name()? == "blobs" && is_repo).then(|| repo.parent().map(Path::to_path_buf))?
+}
+
 /// What identifies a file's content for the stored result: a changed file has a different
 /// size, modification time or (on Unix) inode, and is checked again.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -1045,15 +1062,19 @@ pub fn check_model(first: &Path, origin: &Origin, mut progress: impl FnMut(u64))
         Ok(f) => findings.extend(f),
         Err(e) => findings.push(unreadable(first, e)),
     }
-    if let Some(cache) = &origin.hf_cache {
-        let mut done = 0u64;
-        for p in &parts {
-            match rehash_hf_blob(p, cache, |n| progress(done + n)) {
+    // A file that is (or links to) a Hugging Face blob is always re-hashed, wherever the
+    // cache is configured: the file decides, not the environment. A file in the configured
+    // cache that isn't a blob link is reported too (a link elsewhere, a plain copy).
+    let mut done = 0u64;
+    for p in &parts {
+        let cache = hf_cache_of_blob(p).or_else(|| origin.hf_cache.clone());
+        if let Some(cache) = cache {
+            match rehash_hf_blob(p, &cache, |n| progress(done + n)) {
                 Ok(r) => findings.extend(r.finding()),
                 Err(e) => findings.push(unreadable(p, e)),
             }
-            done += std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
         }
+        done += std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
     }
     if let Ok(g) = Gguf::open(first)
         && let Some(t) = template_of(&g)
@@ -1079,11 +1100,15 @@ pub fn check_model(first: &Path, origin: &Origin, mut progress: impl FnMut(u64))
 pub struct CheckKey {
     pub files: Vec<FileId>,
     pub sidecar: Option<FileId>,
+    /// The Hugging Face cache the check knew of: a result from a run that saw another cache
+    /// isn't reused.
+    #[serde(default)]
+    pub hf_cache: Option<PathBuf>,
     pub rules: u32,
 }
 
 impl CheckKey {
-    pub fn of(first: &Path) -> std::io::Result<Self> {
+    pub fn of(first: &Path, origin: &Origin) -> std::io::Result<Self> {
         let parts = model_files(first).unwrap_or_else(|_| vec![first.to_path_buf()]);
         let files = parts
             .iter()
@@ -1093,6 +1118,7 @@ impl CheckKey {
         Ok(Self {
             files,
             sidecar: FileId::of(&side).ok(),
+            hf_cache: origin.hf_cache.clone(),
             rules: RULES,
         })
     }
@@ -1134,9 +1160,13 @@ impl CheckCache {
             .take()
     }
 
+    /// The stored result for `key`. Its state is worked out again from its findings, and a
+    /// result from other rules isn't used.
     fn get(&self, key: &CheckKey) -> Option<Report> {
         let e = self.entries.lock().unwrap_or_else(|p| p.into_inner());
-        e.iter().find(|(k, _)| k == key).map(|(_, r)| r.clone())
+        e.iter()
+            .find(|(k, r)| k == key && r.rules == RULES)
+            .map(|(_, r)| Report::new(r.findings.clone()))
     }
 
     fn put(&self, key: CheckKey, report: Report) {
@@ -1168,8 +1198,9 @@ impl CheckCache {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Verdict {
     /// It may load. `report` may hold Warnings that were accepted (or, in the app until
-    /// #452, logged).
-    Load(Report),
+    /// #452, logged). The key is what was checked: call [`still_same`] with it right before
+    /// loading, so a file changed in between isn't loaded.
+    Load(Report, CheckKey),
     /// It may not: Blocked, or Warnings that weren't accepted.
     Refuse(Report),
 }
@@ -1177,7 +1208,7 @@ pub enum Verdict {
 impl Verdict {
     pub fn report(&self) -> &Report {
         match self {
-            Self::Load(r) | Self::Refuse(r) => r,
+            Self::Load(r, _) | Self::Refuse(r) => r,
         }
     }
 }
@@ -1202,26 +1233,39 @@ pub fn gate(
     on_warnings: OnWarnings,
     progress: impl FnMut(u64),
 ) -> Verdict {
-    let key = CheckKey::of(first);
-    let report = match key.as_ref().ok().and_then(|k| cache.get(k)) {
+    let key = match CheckKey::of(first, origin) {
+        Ok(k) => k,
+        Err(e) => {
+            return Verdict::Refuse(Report::new(vec![Finding::blocked(
+                "structure.unreadable",
+                "The file can't be read.",
+                format!("{}: {e}", first.display()),
+            )]));
+        }
+    };
+    let report = match cache.get(&key) {
         Some(r) => r,
         None => {
             let r = check_model(first, origin, progress);
             // Store it only if the files didn't change while they were checked.
-            if let Ok(k) = key
-                && CheckKey::of(first).is_ok_and(|now| now == k)
-            {
-                cache.put(k, r.clone());
+            if CheckKey::of(first, origin).is_ok_and(|now| now == key) {
+                cache.put(key.clone(), r.clone());
             }
             r
         }
     };
     match (report.state, on_warnings) {
         (State::Checked, _) | (State::Warnings, OnWarnings::Accept | OnWarnings::Log) => {
-            Verdict::Load(report)
+            Verdict::Load(report, key)
         }
         _ => Verdict::Refuse(report),
     }
+}
+
+/// Whether the model's files are still the ones `key` was checked for. Called right before
+/// loading, so a file swapped after the check isn't loaded.
+pub fn still_same(first: &Path, origin: &Origin, key: &CheckKey) -> bool {
+    CheckKey::of(first, origin).is_ok_and(|now| &now == key)
 }
 
 /// The reasons of a report, one per line, for an error message.
@@ -1466,11 +1510,11 @@ mod tests {
         let o = Origin::default();
         assert!(matches!(
             gate(&m, &o, &cache, OnWarnings::Refuse, |_| {}),
-            Verdict::Load(_)
+            Verdict::Load(..)
         ));
         // Stored, and read back from the file by a new cache.
         let again = CheckCache::open(Some(dir.join("checks.json")));
-        assert!(again.get(&CheckKey::of(&m).unwrap()).is_some());
+        assert!(again.get(&CheckKey::of(&m, &o).unwrap()).is_some());
         // An appended payload changes the file, so it's checked again and refused.
         let mut b = model(&base());
         b.extend(b"MZ payload");
@@ -1490,11 +1534,11 @@ mod tests {
         ));
         assert!(matches!(
             gate(&m, &o, &cache, OnWarnings::Accept, |_| {}),
-            Verdict::Load(_)
+            Verdict::Load(..)
         ));
         assert!(matches!(
             gate(&m, &o, &cache, OnWarnings::Log, |_| {}),
-            Verdict::Load(_)
+            Verdict::Load(..)
         ));
         // A file that can't be read is refused.
         let gone = dir.join("missing.gguf");
@@ -1502,6 +1546,82 @@ mod tests {
             gate(&gone, &o, &cache, OnWarnings::Accept, |_| {}),
             Verdict::Refuse(_)
         ));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_hugging_face_blob_is_re_hashed_whatever_cache_is_configured() {
+        let dir = std::env::temp_dir().join(format!("dn-check-blob-{}", std::process::id()));
+        let repo = dir.join("models--org--m");
+        let (blobs, snap) = (repo.join("blobs"), repo.join("snapshots").join("abc"));
+        std::fs::create_dir_all(&blobs).unwrap();
+        std::fs::create_dir_all(&snap).unwrap();
+        // A valid model whose blob name isn't its hash: changed in place.
+        std::fs::write(blobs.join("0".repeat(64)), model(&base())).unwrap();
+        let link = snap.join("m.gguf");
+        std::os::unix::fs::symlink(blobs.join("0".repeat(64)), &link).unwrap();
+        // No cache configured (another HF_HOME): the file itself says it's a blob.
+        let r = check_model(&link, &Origin::default(), |_| {});
+        assert_eq!(codes(&r.findings), ["rehash.mismatch"]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_stored_result_is_not_trusted_as_written() {
+        let dir = std::env::temp_dir().join(format!("dn-check-stored-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut bad = model(&base());
+        bad.extend(b"MZ payload");
+        let m = dir.join("m.gguf");
+        std::fs::write(&m, &bad).unwrap();
+        let file = dir.join("checks.json");
+        let o = Origin::default();
+        assert!(matches!(
+            gate(
+                &m,
+                &o,
+                &CheckCache::open(Some(file.clone())),
+                OnWarnings::Accept,
+                |_| {}
+            ),
+            Verdict::Refuse(_)
+        ));
+        // Someone edits the stored state to "checked"; the findings still say Blocked.
+        let edited = std::fs::read_to_string(&file)
+            .unwrap()
+            .replace("\"state\":\"blocked\"", "\"state\":\"checked\"");
+        std::fs::write(&file, edited).unwrap();
+        assert!(matches!(
+            gate(
+                &m,
+                &o,
+                &CheckCache::open(Some(file)),
+                OnWarnings::Accept,
+                |_| {}
+            ),
+            Verdict::Refuse(_)
+        ));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_file_changed_after_the_check_is_noticed() {
+        let dir = std::env::temp_dir().join(format!("dn-check-swap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let m = dir.join("m.gguf");
+        std::fs::write(&m, model(&base())).unwrap();
+        let o = Origin::default();
+        let Verdict::Load(_, key) =
+            gate(&m, &o, &CheckCache::open(None), OnWarnings::Refuse, |_| {})
+        else {
+            panic!("a clean model was refused");
+        };
+        assert!(still_same(&m, &o, &key));
+        let mut bad = model(&base());
+        bad.extend(b"MZ payload");
+        std::fs::write(&m, bad).unwrap();
+        assert!(!still_same(&m, &o, &key));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

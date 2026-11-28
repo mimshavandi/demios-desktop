@@ -24,6 +24,36 @@ use std::time::Instant;
 /// The model check's results, in the models folder (#421).
 const CHECKS_FILE: &str = ".model-checks.json";
 
+/// A model that passed the check (#421). [`Checked::confirm`] right before loading makes
+/// sure its files are still the ones checked.
+struct Checked {
+    name: String,
+    path: PathBuf,
+    origin: dn_models::check::Origin,
+    key: dn_models::check::CheckKey,
+}
+
+impl Checked {
+    fn confirm(&self) -> Result<(), CoreError> {
+        if dn_models::check::still_same(&self.path, &self.origin, &self.key) {
+            return Ok(());
+        }
+        Err(CoreError::ModelUnavailable {
+            user_message: format!(
+                "{} changed while it was being checked, so it isn't used. Try again.",
+                self.name
+            ),
+            developer_message: format!(
+                "model check {}: changed after the check",
+                self.path.display()
+            ),
+            recovery: vec![RecoveryAction::Retry {
+                after_seconds: None,
+            }],
+        })
+    }
+}
+
 /// The catalogue id in `local:<id>`, if `model` is a local model.
 pub fn catalogue_id(model: &ModelRef) -> Option<&str> {
     match model {
@@ -1580,16 +1610,17 @@ impl<B: InferenceBackend> LocalModels<B> {
     /// The model check (#421) before the model `name` at `path` loads. Blocked findings
     /// refuse it. Warnings are only logged for now: the app enforces them from PR 3 of #421
     /// (#452), when the originals of chat templates are known.
-    async fn check_before_load(&self, name: &str, path: &Path) -> Result<(), CoreError> {
+    async fn check_before_load(&self, name: &str, path: &Path) -> Result<Checked, CoreError> {
         use dn_models::check::{self, OnWarnings, Verdict};
         let (checks, hf, p) = (
             Arc::clone(&self.checks),
             self.hf_cache.clone(),
             path.to_path_buf(),
         );
-        let verdict = tauri::async_runtime::spawn_blocking(move || {
+        let (verdict, origin) = tauri::async_runtime::spawn_blocking(move || {
             let origin = check::origin_of(&p, hf.as_deref());
-            check::gate(&p, &origin, &checks, OnWarnings::Log, |_| {})
+            let v = check::gate(&p, &origin, &checks, OnWarnings::Log, |_| {});
+            (v, origin)
         })
         .await
         .map_err(|e| CoreError::ModelUnavailable {
@@ -1603,7 +1634,7 @@ impl<B: InferenceBackend> LocalModels<B> {
             tracing::warn!("model check: {e}");
         }
         match verdict {
-            Verdict::Load(r) => {
+            Verdict::Load(r, key) => {
                 // Temporary (#452): Warnings don't stop the load in the app until #421's PR 3.
                 for f in &r.findings {
                     tracing::warn!(
@@ -1614,7 +1645,12 @@ impl<B: InferenceBackend> LocalModels<B> {
                         f.detail
                     );
                 }
-                Ok(())
+                Ok(Checked {
+                    name: name.to_string(),
+                    path: path.to_path_buf(),
+                    origin,
+                    key,
+                })
             }
             Verdict::Refuse(r) => Err(CoreError::ModelUnavailable {
                 user_message: format!(
@@ -1768,13 +1804,14 @@ impl<B: InferenceBackend> LocalModels<B> {
             }
         }
         let path = self.path(&e);
-        self.check_before_load(&e.name, &path).await?;
+        let checked = self.check_before_load(&e.name, &path).await?;
         let opts = {
             let (path, machine) = (path.clone(), self.machine());
             tauri::async_runtime::spawn_blocking(move || load_options(&path, &machine))
                 .await
                 .unwrap_or_default()
         };
+        checked.confirm()?;
         let m = LoadedModel::load(Arc::clone(&self.backend), &ModelSpec::gguf(path), &opts)
             .await
             .map_err(|err| CoreError::ModelUnavailable {
@@ -1849,7 +1886,7 @@ impl<B: InferenceBackend> LocalModels<B> {
         // for v1.5): text past it is cut rather than embedded at positions the model never
         // saw. A small embedding model needs no GPU/CPU split (`load_options`).
         let path = self.path(&e);
-        self.check_before_load(&e.name, &path).await?;
+        let checked = self.check_before_load(&e.name, &path).await?;
         let n_ctx = {
             let path = path.clone();
             tauri::async_runtime::spawn_blocking(move || embedding_ctx(&path))
@@ -1860,6 +1897,7 @@ impl<B: InferenceBackend> LocalModels<B> {
             n_ctx: Some(n_ctx),
             ..Default::default()
         };
+        checked.confirm()?;
         let m = LoadedModel::load(Arc::clone(&self.backend), &ModelSpec::gguf(path), &opts)
             .await
             .map_err(|err| {

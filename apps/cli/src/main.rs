@@ -181,12 +181,12 @@ pub struct LoadArgs {
 
 impl LoadArgs {
     /// The model check for `path` and the draft model, if one is given ([`check_model`]).
-    pub fn check(&self, path: &std::path::Path) -> Result<(), String> {
-        check_model(path, self.accept_model_warnings)?;
+    pub fn check(&self, path: &std::path::Path) -> Result<Checked, String> {
+        let mut c = check_model(path, self.accept_model_warnings)?;
         if let Some(d) = &self.draft {
-            check_model(d, self.accept_model_warnings)?;
+            c = c.and(check_model(d, self.accept_model_warnings)?);
         }
-        Ok(())
+        Ok(c)
     }
 
     /// `--ctx` as given.
@@ -431,7 +431,7 @@ pub fn resolve_model(s: &str) -> Result<PathBuf, String> {
 /// in the Hugging Face cache, its hash. Blocked findings always refuse the model; Warnings
 /// refuse it unless `accept_warnings`. Results are kept in the models folder, so a model is
 /// hashed once and again only when it changes.
-pub fn check_model(path: &std::path::Path, accept_warnings: bool) -> Result<(), String> {
+pub fn check_model(path: &std::path::Path, accept_warnings: bool) -> Result<Checked, String> {
     let cache = dn_models::check::CheckCache::open(Some(
         dn_models::download::default_models_dir().join(".model-checks.json"),
     ));
@@ -443,13 +443,42 @@ pub fn check_model(path: &std::path::Path, accept_warnings: bool) -> Result<(), 
     )
 }
 
+/// Models that passed the check. [`Checked::confirm`] right before loading makes sure the
+/// files are still the ones checked.
+pub struct Checked(
+    Vec<(
+        PathBuf,
+        dn_models::check::Origin,
+        dn_models::check::CheckKey,
+    )>,
+);
+
+impl Checked {
+    pub fn confirm(&self) -> Result<(), String> {
+        for (path, origin, key) in &self.0 {
+            if !dn_models::check::still_same(path, origin, key) {
+                return Err(format!(
+                    "{} changed after it was checked, so it isn't loaded. Run the command again.",
+                    path.display()
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn and(mut self, other: Checked) -> Self {
+        self.0.extend(other.0);
+        self
+    }
+}
+
 /// [`check_model`] with a given result cache and Hugging Face cache (for tests).
 fn check_model_with(
     path: &std::path::Path,
     accept_warnings: bool,
     cache: &dn_models::check::CheckCache,
     hf_cache: Option<&std::path::Path>,
-) -> Result<(), String> {
+) -> Result<Checked, String> {
     use dn_models::check::{self, OnWarnings, State, Verdict};
     let origin = check::origin_of(path, hf_cache);
     let on = if accept_warnings {
@@ -462,14 +491,14 @@ fn check_model_with(
         eprintln!("[dn] {e}");
     }
     match verdict {
-        Verdict::Load(r) => {
+        Verdict::Load(r, key) => {
             for f in &r.findings {
                 eprintln!(
                     "[dn] model check: accepted warning: {} ({}) [{}]",
                     f.reason, f.detail, f.code
                 );
             }
-            Ok(())
+            Ok(Checked(vec![(path.to_path_buf(), origin, key)]))
         }
         Verdict::Refuse(r) => Err(format!(
             "{} was checked for known issues and isn't loaded:\n{}\n{}",
@@ -522,7 +551,7 @@ async fn run(a: RunArgs) -> Result<(), String> {
         chat(&m, r, messages, tools, &a)
     } else {
         let path = resolve_model(&a.model)?;
-        a.load.check(&path)?;
+        let checked = a.load.check(&path)?;
         let spec = ModelSpec::gguf(&path);
         let backend = Arc::new(LlamaCppBackend::new());
         let (opts, report) = a.load.auto_options(&path)?;
@@ -531,6 +560,7 @@ async fn run(a: RunArgs) -> Result<(), String> {
         {
             eprintln!("[dn] fit: {} (see `dn fit`)", status_label(r.status));
         }
+        checked.confirm()?;
         let m = LoadedModel::load(backend.clone(), &spec, &opts)
             .await
             .map_err(|e| e.to_string())?;
@@ -1413,22 +1443,26 @@ mod tests {
         );
         let m = dir.join("m.gguf");
         std::fs::write(&m, &good).unwrap();
-        assert_eq!(check_model_with(&m, false, &cache, None), Ok(()));
+        assert!(check_model_with(&m, false, &cache, None).is_ok());
         // A Warning (a URL in the stored template): refused without the flag.
         std::fs::write(
             dn_models::template::sidecar_path(&m),
             "{{ 'see https://x' }}",
         )
         .unwrap();
-        let e = check_model_with(&m, false, &cache, None).unwrap_err();
+        let Err(e) = check_model_with(&m, false, &cache, None) else {
+            panic!()
+        };
         assert!(e.contains("--accept-model-warnings"), "{e}");
-        assert_eq!(check_model_with(&m, true, &cache, None), Ok(()));
+        assert!(check_model_with(&m, true, &cache, None).is_ok());
         // Blocked: bytes after the data, refused even with the flag.
         let mut bad = good.clone();
         bad.extend(b"MZ payload");
         let b = dir.join("b.gguf");
         std::fs::write(&b, bad).unwrap();
-        let e = check_model_with(&b, true, &cache, None).unwrap_err();
+        let Err(e) = check_model_with(&b, true, &cache, None) else {
+            panic!()
+        };
         assert!(e.contains("can't be overridden"), "{e}");
         std::fs::remove_dir_all(&dir).unwrap();
     }
