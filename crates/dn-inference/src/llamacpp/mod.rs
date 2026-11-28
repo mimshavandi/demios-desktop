@@ -158,11 +158,25 @@ struct Entry {
 /// GPU teardown at process exit aborts if a context is still alive then (Metal:
 /// `GGML_ASSERT([rsets->data count] == 0)`). Dropping the sender ends the thread's job loop;
 /// a reply still running sees its stream closed and stops at its next token.
+///
+/// The join blocks until a reply that's still being read ends. On a multi-threaded tokio
+/// runtime it runs in `block_in_place`, so the runtime moves its other tasks off this
+/// thread meanwhile; elsewhere (a current-thread runtime, plain threads) it blocks the
+/// caller. `unload` always joins on a blocking thread.
 impl Drop for Entry {
     fn drop(&mut self) {
         drop(self.jobs.take());
-        if let Some(t) = self.thread.take() {
+        let Some(t) = self.thread.take() else {
+            return;
+        };
+        let join = move || {
             let _ = t.join();
+        };
+        match tokio::runtime::Handle::try_current() {
+            Ok(h) if h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+                tokio::task::block_in_place(join)
+            }
+            _ => join(),
         }
     }
 }
