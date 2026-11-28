@@ -359,3 +359,15 @@ fn a_runs_steps_are_assembled_and_each_step_extends_the_last() {
     // A local model counts exactly, so nothing is calibrated.
     b.reported(123);
 }
+
+#[test]
+fn with_tools_the_system_message_says_what_the_blocks_are() {
+    let mut p = parts();
+    p.knowledge.clear();
+    p.system = vec!["You are Demios.".into()];
+    let a = run(&local(8192), &Policy::chat(), p.clone()).unwrap();
+    assert!(texts(&a.request.messages[0])[0].contains(dn_core::untrusted::NOTICE));
+    p.tools.clear();
+    let a = run(&local(8192), &Policy::chat(), p).unwrap();
+    assert!(!texts(&a.request.messages[0])[0].contains(dn_core::untrusted::NOTICE));
+}

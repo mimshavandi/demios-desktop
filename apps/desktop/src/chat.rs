@@ -310,7 +310,14 @@ fn attached_files_note(
             let flat: String = f
                 .name
                 .chars()
-                .map(|c| if c.is_control() { ' ' } else { c })
+                .map(|c| {
+                    // One line: no control characters, line or paragraph separators.
+                    if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') {
+                        ' '
+                    } else {
+                        c
+                    }
+                })
                 .collect();
             format!(
                 "\"{}\"",
