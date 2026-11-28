@@ -50,6 +50,62 @@ pub const MAX_AGE_DAYS: i64 = 183;
 pub const PUBLISHED: &[Published] = &[
     Published {
         kind: ProviderKind::Anthropic,
+        id: "claude-fable-5-2",
+        tokens: 1_000_000,
+        source: "https://platform.claude.com/docs/en/about-claude/models/overview",
+        checked: "2026-11-28",
+    },
+    Published {
+        kind: ProviderKind::Anthropic,
+        id: "claude-opus-5-5",
+        tokens: 1_000_000,
+        source: "https://platform.claude.com/docs/en/about-claude/models/overview",
+        checked: "2026-11-28",
+    },
+    Published {
+        kind: ProviderKind::Anthropic,
+        id: "claude-sonnet-5-5",
+        tokens: 1_000_000,
+        source: "https://platform.claude.com/docs/en/about-claude/models/overview",
+        checked: "2026-11-28",
+    },
+    Published {
+        kind: ProviderKind::Anthropic,
+        id: "claude-haiku-5-5",
+        tokens: 1_000_000,
+        source: "https://platform.claude.com/docs/en/about-claude/models/overview",
+        checked: "2026-11-28",
+    },
+    Published {
+        kind: ProviderKind::OpenAi,
+        id: "gpt-6.2-astra",
+        tokens: 1_050_000,
+        source: "https://developers.openai.com/api/docs/models/gpt-6.2-astra",
+        checked: "2026-11-28",
+    },
+    Published {
+        kind: ProviderKind::OpenAi,
+        id: "gpt-6.2-sol",
+        tokens: 1_050_000,
+        source: "https://developers.openai.com/api/docs/models/gpt-6.2-sol",
+        checked: "2026-11-28",
+    },
+    Published {
+        kind: ProviderKind::OpenAi,
+        id: "gpt-6.1-terra",
+        tokens: 1_050_000,
+        source: "https://developers.openai.com/api/docs/models/gpt-6.1-terra",
+        checked: "2026-11-28",
+    },
+    Published {
+        kind: ProviderKind::OpenAi,
+        id: "gpt-6-luna",
+        tokens: 1_050_000,
+        source: "https://developers.openai.com/api/docs/models/gpt-6-luna",
+        checked: "2026-11-28",
+    },
+    Published {
+        kind: ProviderKind::Anthropic,
         id: "claude-opus-4-1",
         tokens: 200_000,
         source: "https://docs.anthropic.com/en/docs/about-claude/models/overview",
@@ -335,6 +391,9 @@ mod tests {
         assert_eq!(published(o, "gpt-4.1-2025-04-14"), Some(1_047_576));
         assert_eq!(published(o, "gpt-4.1-mini"), Some(1_047_576));
         assert_eq!(published(o, "gpt-4o-mini"), Some(128_000));
+        assert_eq!(published(a, "claude-opus-5-5"), Some(1_000_000));
+        assert_eq!(published(o, "gpt-6.2-sol"), Some(1_050_000));
+        assert_eq!(published(o, "gpt-6-luna"), Some(1_050_000));
         // Not a version of an entry: unknown, never the nearest match.
         for id in [
             "gpt-4o-audio-preview",
