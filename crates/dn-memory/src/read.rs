@@ -368,6 +368,20 @@ mod tests {
     }
 
     #[test]
+    fn the_citation_rule_is_the_one_in_answer_rules() {
+        // answer.rules' active version carries the same sentence pair, word for word, so
+        // surfaces with and without answer.rules tell the model the same thing (#371).
+        let manifest = include_str!("../../../skills/shared/answer.rules/prompt/manifest.yaml");
+        assert!(
+            manifest.contains("active_version: v2"),
+            "update this test with answer.rules"
+        );
+        let v2 = include_str!("../../../skills/shared/answer.rules/prompt/v2.md");
+        let flat = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(flat(v2).contains(&flat(CITE_INSTRUCTION)));
+    }
+
+    #[test]
     fn citations_are_stripped_and_only_known_labels_count() {
         let (t, c) = cited(
             "You prefer metric [M1]. Lisbon [M2][M1], see [M9] and [Mx].",
