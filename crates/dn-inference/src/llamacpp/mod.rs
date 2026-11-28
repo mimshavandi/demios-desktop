@@ -89,6 +89,15 @@ fn global_backend() -> Result<&'static LlamaBackend> {
 
 static ACTIVE: AtomicU64 = AtomicU64::new(0);
 
+/// Model worker threads alive, each owning its model's context.
+static WORKERS: AtomicU64 = AtomicU64::new(0);
+
+/// Model worker threads still alive. 0 once every model is unloaded and its backend dropped:
+/// unloading waits for the worker to free its context.
+pub fn live_workers() -> u64 {
+    WORKERS.load(Ordering::SeqCst)
+}
+
 /// Generation threads currently running (drops to 0 shortly after streams are dropped).
 pub fn active_generations() -> u64 {
     ACTIVE.load(Ordering::SeqCst)
@@ -141,7 +150,21 @@ struct DraftLoaded {
 /// A loaded model and its worker thread's job queue. Dropping it ends the thread.
 struct Entry {
     loaded: Arc<Loaded>,
-    jobs: std::sync::mpsc::Sender<worker::Job>,
+    jobs: Option<std::sync::mpsc::Sender<worker::Job>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+/// Ending a model's worker waits for it: the thread owns the model's context, and llama.cpp's
+/// GPU teardown at process exit aborts if a context is still alive then (Metal:
+/// `GGML_ASSERT([rsets->data count] == 0)`). Dropping the sender ends the thread's job loop;
+/// a reply still running sees its stream closed and stops at its next token.
+impl Drop for Entry {
+    fn drop(&mut self) {
+        drop(self.jobs.take());
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
 }
 
 /// The default local backend.
@@ -259,7 +282,7 @@ impl LlamaCppBackend {
             .lock()
             .map_err(|_| InferenceError::Runtime("model table poisoned".into()))?
             .get(&h.id)
-            .map(|e| (e.loaded.clone(), e.jobs.clone()))
+            .and_then(|e| Some((e.loaded.clone(), e.jobs.clone()?)))
             .ok_or(InferenceError::UnknownHandle(h.id))
     }
 
@@ -756,11 +779,18 @@ impl InferenceBackend for LlamaCppBackend {
             .map_err(|e| InferenceError::Load(e.to_string()))??;
         let id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
         let loaded = Arc::new(loaded);
-        let jobs = worker::spawn(loaded.clone())?;
+        let (jobs, thread) = worker::spawn(loaded.clone())?;
         self.models
             .lock()
             .map_err(|_| InferenceError::Runtime("model table poisoned".into()))?
-            .insert(id, Entry { loaded, jobs });
+            .insert(
+                id,
+                Entry {
+                    loaded,
+                    jobs: Some(jobs),
+                    thread: Some(thread),
+                },
+            );
         Ok(ModelHandle::new(id, model_id))
     }
 
@@ -808,12 +838,16 @@ impl InferenceBackend for LlamaCppBackend {
     }
 
     async fn unload(&self, h: ModelHandle) -> Result<()> {
-        self.models
+        let entry = self
+            .models
             .lock()
             .map_err(|_| InferenceError::Runtime("model table poisoned".into()))?
             .remove(&h.id)
-            .map(|_| ())
-            .ok_or(InferenceError::UnknownHandle(h.id))
+            .ok_or(InferenceError::UnknownHandle(h.id))?;
+        // Joining the worker blocks until its context is freed.
+        tokio::task::spawn_blocking(move || drop(entry))
+            .await
+            .map_err(|e| InferenceError::Runtime(e.to_string()))
     }
 }
 
