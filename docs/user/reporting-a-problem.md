@@ -10,7 +10,7 @@ Go to **Settings → General → About** and select **Report a problem**. The fo
 
 Select the flag button (**Report this answer**) under the answer. The form opens with the app version, your operating system and the identifier of the model that wrote the answer (for example `local:qwen3-4b-q4_k_m`) filled in. Paste the parts of the chat you want to share yourself.
 
-Answers come from the model you chose, not from Demios. For problems with a provider's model, you can also report to that provider.
+Answers come from the model you chose, not from Almend. For problems with a provider's model, you can also report to that provider.
 
 ## Security problems
 

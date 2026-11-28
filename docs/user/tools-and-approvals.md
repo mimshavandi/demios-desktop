@@ -4,11 +4,11 @@ Tools let a model do things beyond writing an answer, like reading a file or cal
 
 ## Connect a service
 
-**Settings → Tools → Connect** lists services that run their own tool server, reviewed by Demios. Each row says who runs the server; **Details** shows its address, what it asks for, where your data goes, the service's terms and when it was last reviewed.
+**Settings → Tools → Connect** lists services that run their own tool server, reviewed by Almend. Each row says who runs the server; **Details** shows its address, what it asks for, where your data goes, the service's terms and when it was last reviewed.
 
-Select **Connect** to add the service as one of your tool servers, then finish signing in to the service in your browser. Its tools then work like any other tool server's: they ask before they act, as described below, and you can change each one. Your data goes between the service and this app; Demios's servers never see it. **Cancel** while you sign in removes the server again.
+Select **Connect** to add the service as one of your tool servers, then finish signing in to the service in your browser. Its tools then work like any other tool server's: they ask before they act, as described below, and you can change each one. Your data goes between the service and this app; Almend's servers never see it. **Cancel** while you sign in removes the server again.
 
-Demios checks the list's signature before showing it. If the check fails, the list isn't shown at all; servers you already added keep working. A service Demios no longer reviews is marked **No longer reviewed** and offered for removal; it's never removed for you.
+Almend checks the list's signature before showing it. If the check fails, the list isn't shown at all; servers you already added keep working. A service Almend no longer reviews is marked **No longer reviewed** and offered for removal; it's never removed for you.
 
 ## Add a tool server
 
@@ -23,9 +23,9 @@ Select **Add tool server** to save. The server connects, and its row shows **Con
 
 ### Starting a local server
 
-Before Demios starts a program for the first time, a system dialog, **Start a tool server?**, shows the exact command, every argument and the environment variables (secret values are hidden). Select **Allow and start** or **Don't start**. Your answer is remembered for that exact command; if the command changes, you're asked again.
+Before Almend starts a program for the first time, a system dialog, **Start a tool server?**, shows the exact command, every argument and the environment variables (secret values are hidden). Select **Allow and start** or **Don't start**. Your answer is remembered for that exact command; if the command changes, you're asked again.
 
-A Flatpak build of Demios can't start programs on your computer and offers remote servers only. There is no published Flatpak yet.
+A Flatpak build of Almend can't start programs on your computer and offers remote servers only. There is no published Flatpak yet.
 
 ### Signing in to a remote server
 
@@ -70,7 +70,7 @@ The confirmation names the tool and what it could do. **Keep asking** leaves you
 
 ### New or changed tools
 
-Demios remembers each server's tools as they were when it first connected. If a server later adds a tool, or changes one's description, inputs or risk hints, the tool is marked **New** or **Changed**, the row shows how many tools are **to review**, and those tools ask before every use, whatever your choice. Read what changed, then select **Mark reviewed** (or **Mark all reviewed**).
+Almend remembers each server's tools as they were when it first connected. If a server later adds a tool, or changes one's description, inputs or risk hints, the tool is marked **New** or **Changed**, the row shows how many tools are **to review**, and those tools ask before every use, whatever your choice. Read what changed, then select **Mark reviewed** (or **Mark all reviewed**).
 
 ## The approval card
 

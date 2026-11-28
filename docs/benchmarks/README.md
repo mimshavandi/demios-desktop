@@ -1,6 +1,6 @@
 # Benchmarks
 
-How fast local models run in Demios on 8, 16 and 32 GB machines, how much memory they use, and
+How fast local models run in Almend on 8, 16 and 32 GB machines, how much memory they use, and
 whether they still answer correctly. The numbers decide whether
 [mistral.rs](https://github.com/EricLBuehler/mistral.rs) becomes a second in-process backend
 next to llama.cpp ([ADR-0003](../adr/0003-inference-layer.md) planned it as "adopt if the

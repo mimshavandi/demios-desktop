@@ -1,6 +1,6 @@
 # AI literacy for contributors
 
-Demios Desktop runs AI models the user chooses: local GGUF models through llama.cpp, or providers the user adds a key for. This page is the short version of what contributors need to know. It is our AI-literacy measure (EU AI Act Art. 4; readiness audit S-11, T-STORE-09).
+Almend Desktop runs AI models the user chooses: local GGUF models through llama.cpp, or providers the user adds a key for. This page is the short version of what contributors need to know. It is our AI-literacy measure (EU AI Act Art. 4; readiness audit S-11, T-STORE-09).
 
 ## What the models are and aren't
 
@@ -34,4 +34,4 @@ Demios Desktop runs AI models the user chooses: local GGUF models through llama.
 
 ## Open question
 
-Whether Demios is the *provider* of a generative AI system or only a deployer-side UI, when it runs a model the user picked, is a legal question for the owner. Until it's answered, we apply the transparency duties (Art. 50) in full.
+Whether Almend is the *provider* of a generative AI system or only a deployer-side UI, when it runs a model the user picked, is a legal question for the owner. Until it's answered, we apply the transparency duties (Art. 50) in full.

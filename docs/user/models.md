@@ -1,6 +1,6 @@
 # Adding a model
 
-Demios Desktop doesn't come with a model. Add one in **Settings → Models**, in either of two ways:
+Almend Desktop doesn't come with a model. Add one in **Settings → Models**, in either of two ways:
 
 - **On this device:** download an open model and run it on your computer. Nothing you type leaves your computer.
 - **Your own key:** add an API key for Anthropic, OpenAI or Google Gemini. Your messages go to that provider under your account with them.
@@ -15,7 +15,7 @@ Under its title, a line says where local models run on this computer:
 
 - **On the graphics card**, with its name and memory. On Windows and Linux this works with NVIDIA, AMD and Intel graphics that have a current driver.
 - **On the built-in graphics**, which share the computer's memory (Apple Silicon Macs, laptops with integrated graphics).
-- **On the processor**, when there is no graphics chip Demios can use (for example in a virtual machine, or without a graphics driver). Models still work, but replies are slower; smaller models are a good fit.
+- **On the processor**, when there is no graphics chip Almend can use (for example in a virtual machine, or without a graphics driver). Models still work, but replies are slower; smaller models are a good fit.
 
 Whether a model fits (below) is worked out for that graphics card or memory.
 
@@ -57,7 +57,7 @@ Models you add this way show "From Hugging Face" on their row.
 
 ### Links that add a model
 
-A web page or a message can contain a `demios://models/add` link that points at a model on Hugging Face. Opening it brings Demios to the front on **Settings → Models → On this device** and opens the **Add a model** window on that model, with a note that a link asked to add this model. You see the same details as above: the licence, the model card and whether each version fits. The version the link chose is listed first and marked **Chosen by the link**.
+A web page or a message can contain a `demios://models/add` link that points at a model on Hugging Face. Opening it brings Almend to the front on **Settings → Models → On this device** and opens the **Add a model** window on that model, with a note that a link asked to add this model. You see the same details as above: the licence, the model card and whether each version fits. The version the link chose is listed first and marked **Chosen by the link**.
 
 Nothing downloads until you select **Download**. Select **Not now** to close it. While one link's model is open, other links are ignored.
 
@@ -79,7 +79,7 @@ Models you downloaded from Hugging Face with the `dn` command-line tool show up 
 
 ### Chat templates
 
-Each model on this device writes its prompts with its own chat template. The template comes from the model file. If the file has none, Demios uses the template from the model's Hugging Face repository, saved when you downloaded the model. A model without a chat template can't be used for chat: its row says "This model has no chat template, so it can't be used for chat." Choose another model, or another version of the same one.
+Each model on this device writes its prompts with its own chat template. The template comes from the model file. If the file has none, Almend uses the template from the model's Hugging Face repository, saved when you downloaded the model. A model without a chat template can't be used for chat: its row says "This model has no chat template, so it can't be used for chat." Choose another model, or another version of the same one.
 
 ## Your own key
 
@@ -126,9 +126,9 @@ Select **Refresh** after loading or removing models on the server. **Remove** de
 
 Models on your computer are listed under **On this device**, the others under their provider.
 
-**Your first model is saved as the choice.** When a task has no model and you download or add the first model that suits it (a chat model for **Chat**, a search model for **Project search**), Demios saves that model as the task's choice. Downloading or adding more models later doesn't change it; you change it in the menu, or with **Set as default** (below).
+**Your first model is saved as the choice.** When a task has no model and you download or add the first model that suits it (a chat model for **Chat**, a search model for **Project search**), Almend saves that model as the task's choice. Downloading or adding more models later doesn't change it; you change it in the menu, or with **Set as default** (below).
 
-If a task has no model and you have several that suit it (for example after updating from an earlier version), Demios doesn't pick one for you. The task says so, for example "Choose a model for Chat." under the message box, with **Choose a model**, which opens this page. If you clear a task's menu, it stays empty until you choose again.
+If a task has no model and you have several that suit it (for example after updating from an earlier version), Almend doesn't pick one for you. The task says so, for example "Choose a model for Chat." under the message box, with **Choose a model**, which opens this page. If you clear a task's menu, it stays empty until you choose again.
 
 **Set as default:** each model you can use, under **On this device**, **Model servers** and **Providers** (once its key is saved), has **Set as default** for the task it suits. Selecting it makes that model the task's choice and says so ("Now used for Chat"); the row then shows **Default for Chat**. A search model shows it only if it runs on this device, since project search uses models on this device.
 

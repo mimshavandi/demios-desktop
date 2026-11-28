@@ -21,11 +21,11 @@ The error under the answer says what happened. Select **Retry** to try again.
 
 ## "This model has no chat template"
 
-The model file doesn't say how to write a chat prompt for it, so Demios can't use it for chat. Choose another model, or another version of the same model from Hugging Face. See [Chat templates](models.md#chat-templates).
+The model file doesn't say how to write a chat prompt for it, so Almend can't use it for chat. Choose another model, or another version of the same model from Hugging Face. See [Chat templates](models.md#chat-templates).
 
 ## macOS asks for keychain access
 
-Provider keys are stored in your system keychain. macOS may ask whether Demios can use it. Allow it, or the app can't read your saved keys.
+Provider keys are stored in your system keychain. macOS may ask whether Almend can use it. Allow it, or the app can't read your saved keys.
 
 ## A tool call is stuck on "Did this go through?"
 

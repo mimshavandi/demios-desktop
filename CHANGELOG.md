@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to Demios Desktop are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html). [docs/releasing.md](docs/releasing.md) explains how this file becomes the release notes.
+All notable changes to Almend Desktop (called Demios Desktop until 28 November 2026) are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html). [docs/releasing.md](docs/releasing.md) explains how this file becomes the release notes.
 
 Only changes people using the app or the `dn` command-line tool can notice are listed. Each entry links the pull request that made it.
 
@@ -20,6 +20,7 @@ Only changes people using the app or the `dn` command-line tool can notice are l
 
 ### Changed
 
+- **New name: Almend.** Demios Desktop is now Almend Desktop, and the Demios Node is the Almend Node. The README and the user guide use the new name. The app itself, the `dn` command, file and folder names, and `demios://` links keep the old name for now.
 - **Chat fits each conversation to the model:** every answer is put together to fit what the model can read at once, counted with a local model's own tokenizer and estimated for a provider's. When something has to give, project excerpts go first. A chat that's still too long now says so before anything is sent, instead of failing in the model. The assistant's date is current on every message. Project excerpts and tool results are marked as data the model must not follow ([#414](https://github.com/mimshavandi/demios-desktop/pull/414)).
 - **Settings → General → Privacy** now says, like the privacy policy, that a project's instructions are sent to the provider with each message, what Demios sends from a project's data files, and what syncs to a Demios Node if you pair one ([#402](https://github.com/mimshavandi/demios-desktop/issues/402)).
 - **Skills:** **Write email** never invents names, dates, amounts or email addresses, and never leaves placeholders such as [date]. It uses the real details of what you attached, and lists anything missing after the draft. **Design review** now reviews screens and UI designs in seven areas: hierarchy, spacing, type, WCAG contrast, grid, touch targets and content. It gives exact fixes, and contrast ratios are measured in code, never estimated by the model ([#365](https://github.com/mimshavandi/demios-desktop/issues/365)).
