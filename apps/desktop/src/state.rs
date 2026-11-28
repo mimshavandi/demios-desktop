@@ -98,6 +98,7 @@ pub fn migration_sets() -> Vec<MigrationSet> {
         MigrationSet::new("app_addons", crate::addons::store::migrations()),
         MigrationSet::new("jobs", dn_jobs::migrations()),
         MigrationSet::new("app_runs", crate::runs::migrations()),
+        MigrationSet::new("app_chat_files", crate::chat_files::migrations()),
     ]
 }
 
@@ -227,6 +228,8 @@ pub struct AppState {
     /// Local copies of project files (`<data dir>/project-files`). `None` in tests that
     /// don't use them.
     pub project_files: Option<std::path::PathBuf>,
+    /// Folder of the files attached to chats (#370); `None` in in-memory states.
+    pub chat_files: Option<std::path::PathBuf>,
     /// The add-ons of this build (none in the regular build) (ADR-0013).
     pub addons: crate::addons::Addons,
     /// dn-jobs' own connection to the app database (its scheduler and held calls). `None`
@@ -281,9 +284,14 @@ pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 fn forget_chat_data(
     conn: &Connection,
     executor: Option<&dn_tools::Executor>,
+    chat_files: Option<&std::path::Path>,
     id: Id,
 ) -> Vec<&'static str> {
     let mut failed = Vec::new();
+    if let Err(e) = crate::chat_files::forget_chat(conn, chat_files, id) {
+        tracing::warn!("could not delete the files of a deleted chat: {e}");
+        failed.push("its attached files");
+    }
     if let Err(e) = dn_artifacts::ArtifactStore::new(conn).delete_conversation(id) {
         tracing::warn!("could not delete the artifacts of a deleted chat: {e}");
         failed.push("its artifacts");
@@ -343,6 +351,7 @@ impl AppState {
             launch_approver: std::sync::OnceLock::new(),
             tools_settling: Default::default(),
             project_files: None,
+            chat_files: None,
             addons: Default::default(),
             jobs_db: None,
         }
@@ -398,6 +407,7 @@ impl AppState {
         store::purge_deleted(&conn, dn_store::now_ms())?;
         // Then projects and project files deleted earlier (their chats went just above).
         let project_files = path.parent().map(|d| d.join(crate::projects::FILES_DIR));
+        let chat_files = path.parent().map(|d| d.join(crate::chat_files::FILES_DIR));
         if let Some(root) = &project_files {
             crate::projects::purge_on_start(&conn, root)?;
         }
@@ -417,7 +427,7 @@ impl AppState {
         ));
         // A purged chat keeps none of the app's data either (idempotent: runs on every start).
         for (id, _) in &tombstones {
-            forget_chat_data(&conn, Some(&executor), *id);
+            forget_chat_data(&conn, Some(&executor), chat_files.as_deref(), *id);
         }
         let agent = Agent::load(skills);
         let settling: Arc<crate::tool_review::Settling> = Default::default();
@@ -437,6 +447,7 @@ impl AppState {
         state.executor = Some(Arc::clone(&executor));
         state.tools_settling = settling;
         state.project_files = project_files;
+        state.chat_files = chat_files;
         state.jobs_db = Some(Arc::new(Mutex::new(dn_store::open_connection(path)?)));
         if let Some(a) = launch_approver {
             let _ = state.launch_approver.set(a);
@@ -495,6 +506,12 @@ impl AppState {
     /// state has one. Read-only for everything but [`crate::projects`].
     pub fn project_files_root(&self) -> Option<&std::path::Path> {
         self.project_files.as_deref()
+    }
+
+    /// Folder of the files attached to chats (`<data dir>/chat-files`), if this state has
+    /// one (#370). Read-only for everything but [`crate::chat_files`].
+    pub fn chat_files_root(&self) -> Option<&std::path::Path> {
+        self.chat_files.as_deref()
     }
 
     /// The database itself, for work that takes and lets go of it in batches (sync).
@@ -838,7 +855,8 @@ impl AppState {
                 let r = store::delete_all(&db)
                     .and_then(|()| settings::delete_all(&db))
                     .and_then(|()| crate::skills::delete_all(&db))
-                    .and_then(|()| crate::runs::delete_all(&db));
+                    .and_then(|()| crate::runs::delete_all(&db))
+                    .and_then(|()| crate::chat_files::delete_all(&db, self.chat_files_root()));
                 let artifacts = dn_artifacts::ArtifactStore::new(&db).delete_all();
                 if let Err(e) = &artifacts {
                     tracing::warn!("could not delete artifacts: {e}");
@@ -893,7 +911,12 @@ impl AppState {
     pub fn forget_purged_chat(&self, conversation_id: Id) -> Vec<&'static str> {
         self.stop(conversation_id);
         match self.db() {
-            Ok(db) => forget_chat_data(&db, self.executor.as_deref(), conversation_id),
+            Ok(db) => forget_chat_data(
+                &db,
+                self.executor.as_deref(),
+                self.chat_files_root(),
+                conversation_id,
+            ),
             Err(_) => vec!["its artifacts, skill, sources and tool history"],
         }
     }
