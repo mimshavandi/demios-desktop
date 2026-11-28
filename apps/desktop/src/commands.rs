@@ -1350,6 +1350,8 @@ mod tests {
             license: "mit".into(),
             notes: String::new(),
             tool_support: None,
+            template_sha256: None,
+            tokenizer_sha256: None,
         }
     }
 

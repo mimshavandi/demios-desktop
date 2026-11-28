@@ -1967,6 +1967,8 @@ mod tests {
                 license: "mit".into(),
                 notes: String::new(),
                 tool_support: None,
+                template_sha256: None,
+                tokenizer_sha256: None,
             }],
         };
         let mut models = crate::models::ModelRegistry::default();
@@ -2016,6 +2018,8 @@ mod tests {
                 license: "mit".into(),
                 notes: String::new(),
                 tool_support: None,
+                template_sha256: None,
+                tokenizer_sha256: None,
             }],
         };
         // 1 MiB of RAM: the 999B model can't fit.
@@ -2069,6 +2073,8 @@ mod tests {
                 license: "mit".into(),
                 notes: String::new(),
                 tool_support: None,
+                template_sha256: None,
+                tokenizer_sha256: None,
             }],
         };
         let local = crate::local::LocalModels::new(

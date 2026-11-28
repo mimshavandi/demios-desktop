@@ -460,7 +460,11 @@ fn load_blocking(spec: &ModelSpec, opts: &LoadOptions) -> Result<Loaded> {
     let n_ctx = opts
         .n_ctx
         .unwrap_or_else(|| model.n_ctx_train().clamp(512, 8192));
-    let source = template_source(&model, path)?;
+    // The model check's choice comes first: the original, when this copy's template differs.
+    let source = match &opts.chat_template {
+        Some(t) => Some(t.clone()),
+        None => template_source(&model, path)?,
+    };
     let thinks = source.as_deref().is_some_and(|t| t.contains("<think>"));
     let vocab = model.vocab();
     let piece = |t| String::from_utf8(vocab.token_to_piece(t, true, None)).unwrap_or_default();

@@ -149,6 +149,10 @@ pub struct LoadOptions {
     /// Speculative decoding with a smaller model of the same family (llama.cpp only).
     #[serde(default)]
     pub draft: Option<DraftModel>,
+    /// The chat template to use instead of the file's own: the original, when the model
+    /// check found this copy's template differs from it (#421). `None`: the file's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat_template: Option<String>,
 }
 
 /// A draft model for speculative decoding (ADR-0020 §6). It must share the target's
@@ -228,6 +232,7 @@ impl Default for LoadOptions {
             mmap: true,
             prompt_cache: PromptCache::default(),
             draft: None,
+            chat_template: None,
         }
     }
 }

@@ -14,7 +14,9 @@
       "capabilities": ["chat"],
       "license": "apache-2.0",
       "notes": "Tiny; smoke tests and very old machines.",
-      "tool_support": "supported"
+      "tool_support": "supported",
+      "template_sha256": "d5495a1e5db0611132a97e46a65dbb64a642a499421228b9c8b93229097fa9a4",
+      "tokenizer_sha256": "173f2ceb4b328bf4f6b6c1817f04d993a04bfff38299948416c11797bc6c3e47"
     },
     {
       "id": "llama-3.2-3b-instruct-q4_k_m",
@@ -30,7 +32,9 @@
       "license": "llama3.2",
       "recommended": {"memory_gb": 8},
       "notes": "Good default for 8 GB machines.",
-      "tool_support": "supported"
+      "tool_support": "supported",
+      "template_sha256": "5816fce10444e03c2e9ee1ef8a4a1ea61ae7e69e438613f3b17b69d0426223a4",
+      "tokenizer_sha256": "643ce0bbba3e5b48805da095a094bf8248f2b3ae4b49e9fd1aa4aaf4928d4918"
     },
     {
       "id": "qwen3-4b-q4_k_m",
@@ -45,7 +49,9 @@
       "capabilities": ["chat"],
       "license": "apache-2.0",
       "notes": "Thinking model with tool calling.",
-      "tool_support": "supported"
+      "tool_support": "supported",
+      "template_sha256": "57f1fd00f0013a2be96aa79b857391f27e23df5b5f847072b524c897e24d0361",
+      "tokenizer_sha256": "4b8d202831da68d69b14f27c6219de991454d7d613831b0f0a6c21ed95bb2804"
     },
     {
       "id": "phi-4-mini-instruct-q4_k_m",
@@ -60,7 +66,9 @@
       "capabilities": ["chat"],
       "license": "mit",
       "notes": "Strong reasoning for its size.",
-      "tool_support": "unknown"
+      "tool_support": "unknown",
+      "template_sha256": "46bcd040271c497ee454c7ff577615abf2853ba2971b472e417468ac2bf47f52",
+      "tokenizer_sha256": "d5930f35ffcb1861f9db9f620880b56bf4089645165bebe0fa5c6baf2b92ebca"
     },
     {
       "id": "gemma-4-e2b-it-q4_k_m",
@@ -75,7 +83,9 @@
       "capabilities": ["chat"],
       "license": "apache-2.0",
       "notes": "Effective-2B on-device model.",
-      "tool_support": "supported"
+      "tool_support": "supported",
+      "template_sha256": "241c50d86bdfe5e43307da87f559cd2416aacd67a8de46c15acc0105ef2200b7",
+      "tokenizer_sha256": "c0c113ff2813fcfbb942799edf7dd943265f8f2633e3f3875e37b48a4f1e2caa"
     },
     {
       "id": "llama-3.1-8b-instruct-q4_k_m",
@@ -90,7 +100,9 @@
       "capabilities": ["chat"],
       "license": "llama3.1",
       "notes": "Well-known 8B baseline for benchmarks.",
-      "tool_support": "supported"
+      "tool_support": "supported",
+      "template_sha256": "e10ca381b1ccc5cf9db52e371f3b6651576caee0a630b452e2816b2d404d4b65",
+      "tokenizer_sha256": "643ce0bbba3e5b48805da095a094bf8248f2b3ae4b49e9fd1aa4aaf4928d4918"
     },
     {
       "id": "qwen3-8b-q4_k_m",
@@ -106,7 +118,9 @@
       "license": "apache-2.0",
       "recommended": {"memory_gb": 16},
       "notes": "Default for 16 GB machines.",
-      "tool_support": "supported"
+      "tool_support": "supported",
+      "template_sha256": "57f1fd00f0013a2be96aa79b857391f27e23df5b5f847072b524c897e24d0361",
+      "tokenizer_sha256": "4b8d202831da68d69b14f27c6219de991454d7d613831b0f0a6c21ed95bb2804"
     },
     {
       "id": "gpt-oss-20b-q4_k_m",
@@ -121,7 +135,9 @@
       "capabilities": ["chat"],
       "license": "apache-2.0",
       "notes": "MoE (3.6B active); expert offload helps on small GPUs.",
-      "tool_support": "supported"
+      "tool_support": "supported",
+      "template_sha256": "70da0d2348e40aaf8dad05f04a316835fd10547bd7e3392ce337e4c79ba91c01",
+      "tokenizer_sha256": "7254c2ebf1d31d41a11794050576fc3aa05ef5acac63c6c1517d26a78063d362"
     },
     {
       "id": "mistral-small-24b-instruct-2501-q4_k_m",
@@ -136,7 +152,9 @@
       "capabilities": ["chat"],
       "license": "apache-2.0",
       "notes": "Dense; 32 GB machines.",
-      "tool_support": "unknown"
+      "tool_support": "unknown",
+      "template_sha256": "d99c0a28fd4eebd7ba2cc0309651f6d7c5486024989bc42f6bb4cc558d553689",
+      "tokenizer_sha256": "96cd5a706d44ccee5674bbab4223efde2130914404dbdc4644a74afc0d773f4b"
     },
     {
       "id": "gemma-4-26b-a4b-it-q4_k_m",
@@ -151,7 +169,9 @@
       "capabilities": ["chat"],
       "license": "apache-2.0",
       "notes": "MoE (4B active).",
-      "tool_support": "supported"
+      "tool_support": "supported",
+      "template_sha256": "845f1ee48e39fc942fe190da9df6a1c5db229e17a96ea08966ad1c9274e73d1b",
+      "tokenizer_sha256": "c0c113ff2813fcfbb942799edf7dd943265f8f2633e3f3875e37b48a4f1e2caa"
     },
     {
       "id": "qwen3-30b-a3b-q4_k_m",
@@ -166,7 +186,9 @@
       "capabilities": ["chat"],
       "license": "apache-2.0",
       "notes": "MoE (3B active); the bigger-model-on-a-laptop showcase.",
-      "tool_support": "supported"
+      "tool_support": "supported",
+      "template_sha256": "57f1fd00f0013a2be96aa79b857391f27e23df5b5f847072b524c897e24d0361",
+      "tokenizer_sha256": "4b8d202831da68d69b14f27c6219de991454d7d613831b0f0a6c21ed95bb2804"
     },
     {
       "id": "nomic-embed-text-v2-moe-q5_k_m",
@@ -181,7 +203,8 @@
       "capabilities": ["embedding"],
       "license": "apache-2.0",
       "recommended": true,
-      "notes": "The default search model for project files: multilingual, finds passages across languages. Same results as Q8_0 in the benchmark (docs/benchmarks/embeddings.md)."
+      "notes": "The default search model for project files: multilingual, finds passages across languages. Same results as Q8_0 in the benchmark (docs/benchmarks/embeddings.md).",
+      "tokenizer_sha256": "b49312f86a961f8fb2c618e50b2c563e7037f93762a610b9e63083da8fbcacc7"
     },
     {
       "id": "nomic-embed-text-v2-moe-q8_0",
@@ -195,7 +218,8 @@
       "params_b": 0.5,
       "capabilities": ["embedding"],
       "license": "apache-2.0",
-      "notes": "Multilingual embeddings for dn-knowledge."
+      "notes": "Multilingual embeddings for dn-knowledge.",
+      "tokenizer_sha256": "b49312f86a961f8fb2c618e50b2c563e7037f93762a610b9e63083da8fbcacc7"
     },
     {
       "id": "nomic-embed-text-v1.5-q4_k_m",
@@ -209,7 +233,8 @@
       "params_b": 0.137,
       "capabilities": ["embedding"],
       "license": "apache-2.0",
-      "notes": "Older English embedding model, no longer the default (v2 replaces it). Small and fast; weak across languages."
+      "notes": "Older English embedding model, no longer the default (v2 replaces it). Small and fast; weak across languages.",
+      "tokenizer_sha256": "e7ce0926e1bb2beb9ef08d302de9b12d6fab16571c3dad54f14574665a8fb91e"
     }
   ]
 }

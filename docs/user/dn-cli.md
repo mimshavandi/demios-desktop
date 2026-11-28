@@ -50,13 +50,15 @@ A `demios://models/add?…` link names a Hugging Face model, and can name one ve
 
 Before a local model is used for the first time, and again whenever its file changes, `dn` checks it for known issues:
 
-- bytes hidden after the model's data;
-- settings that hold a large block of data;
-- a damaged file layout;
-- a file in the Hugging Face cache that no longer matches its hash, or points outside the cache;
-- a chat template with web addresses, shell commands, text that instructs the model, encoded blocks or invisible characters.
+- **The file:** bytes hidden after the model's data, settings that hold a large block of data, or a damaged file layout. The model is never loaded.
+- **The Hugging Face cache:** a file that no longer matches its hash, or points outside the cache. The model is never loaded.
+- **The tokenizer:** a copy of a model in the catalogue whose tokenizer, which turns text into tokens, isn't the original's. The model is never loaded.
+- **The chat template:**
+  - **Same as a known original:** the model loads.
+  - **A copy of a catalogue model with another template:** the original's template is used instead. It's read once from the model's pinned file on Hugging Face and kept in the models folder. The model loads, and a note says so.
+  - **Nothing to compare it with:** the template is "not verified against an original", and the model loads only with `--accept-model-warnings`. If such a template also has web addresses, shell commands, text that instructs the model, encoded blocks or invisible characters, it's never loaded.
 
-A model with a problem in the first group is never loaded, and the message says why. A model with only Warnings, such as an unusual chat template, is loaded only with `--accept-model-warnings`. Results are kept in the models folder, so a large file is hashed only once.
+Results are kept in the models folder, so a large file is hashed only once.
 
 "Checked for known issues" means none of the problems above were found. It doesn't mean a model is safe.
 

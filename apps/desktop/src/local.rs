@@ -31,12 +31,38 @@ struct Checked {
     path: PathBuf,
     origin: dn_models::check::Origin,
     key: dn_models::check::CheckKey,
+    /// The original template to load it with (its SHA-256), when its own differs.
+    template: Option<String>,
 }
 
 impl Checked {
-    fn confirm(&self) -> Result<(), CoreError> {
+    /// The chat template to load the model with: `Some(original)` when its own differs from
+    /// the original, `None` for its own. Fails if a file changed after the check, or the
+    /// original it needs is gone.
+    fn confirm(&self) -> Result<Option<String>, CoreError> {
         if dn_models::check::still_same(&self.path, &self.origin, &self.key) {
-            return Ok(());
+            let Some(sha) = &self.template else {
+                return Ok(None);
+            };
+            return self
+                .origin
+                .originals
+                .as_deref()
+                .and_then(|d| dn_models::check::read_original(d, sha))
+                .map(Some)
+                .ok_or_else(|| CoreError::ModelUnavailable {
+                    user_message: format!(
+                        "{}'s original chat template is missing, so it isn't used. Try again.",
+                        self.name
+                    ),
+                    developer_message: format!(
+                        "model check {}: original template {sha} not found",
+                        self.path.display()
+                    ),
+                    recovery: vec![RecoveryAction::Retry {
+                        after_seconds: None,
+                    }],
+                });
         }
         Err(CoreError::ModelUnavailable {
             user_message: format!(
@@ -301,6 +327,9 @@ pub struct LocalModels<B: InferenceBackend = LlamaCppBackend> {
     /// Results of the model check (#421), kept in the models folder so a model is hashed
     /// once, and again only when it changes.
     checks: Arc<dn_models::check::CheckCache>,
+    /// Read original chat templates from the Hub when a copy's differs (the app's instance;
+    /// never in tests).
+    fetch_originals: bool,
     /// Models removed with Undo still possible (#176), each with the token of its removal so
     /// an old timer never finishes a later removal of the same model.
     removing: Mutex<HashMap<String, u64>>,
@@ -432,6 +461,8 @@ fn external_entry(
         license,
         notes: notes.to_string(),
         tool_support: None,
+        template_sha256: None,
+        tokenizer_sha256: None,
     }
 }
 
@@ -651,6 +682,7 @@ impl LocalModels {
             dn_models::detect_machine(),
         );
         lm.owns_dir = std::env::var_os("DN_MODELS_DIR").is_none();
+        lm.fetch_originals = true;
         lm.probes = Mutex::new(crate::tool_probe::Store::open(
             crate::data_dir().map(|d| d.join("tool-probes.json")),
         ));
@@ -717,6 +749,7 @@ impl<B: InferenceBackend> LocalModels<B> {
             traits: Mutex::new(HashMap::new()),
             probes: Mutex::new(crate::tool_probe::Store::default()),
             checks,
+            fetch_originals: false,
             compute: Mutex::new(None),
             removing: Mutex::new(HashMap::new()),
             remove_errors: Mutex::new(HashMap::new()),
@@ -1607,20 +1640,29 @@ impl<B: InferenceBackend> LocalModels<B> {
         out
     }
 
-    /// The model check (#421) before the model `name` at `path` loads. Blocked findings
-    /// refuse it. Warnings are only logged for now: the app enforces them from PR 3 of #421
-    /// (#452), when the originals of chat templates are known.
+    /// The model check (#421) before the model `name` at `path` loads. Blocked findings and
+    /// Warnings refuse it (until a person can accept a Warning, which needs the designed
+    /// screens). A copy whose template differs from its original loads with the original.
     async fn check_before_load(&self, name: &str, path: &Path) -> Result<Checked, CoreError> {
         use dn_models::check::{self, OnWarnings, Verdict};
-        let (checks, hf, p) = (
-            Arc::clone(&self.checks),
-            self.hf_cache.clone(),
-            path.to_path_buf(),
-        );
-        let (verdict, origin) = tauri::async_runtime::spawn_blocking(move || {
-            let origin = check::origin_of(&p, hf.as_deref());
-            let v = check::gate(&p, &origin, &checks, OnWarnings::Log, |_| {});
-            (v, origin)
+        let mut origin = check::origin_of(path, self.hf_cache.as_deref(), Some(&self.dir));
+        // The models this app knows are its originals (the built-in catalogue in the app).
+        origin.catalog = Some(self.catalog.clone());
+        // A copy of a catalogue model with another template needs the original: read once
+        // from the Hub. If that fails, the check says the original couldn't be read.
+        if self.fetch_originals {
+            match dn_models::hub::HubClient::new(dn_models::hub::HubConfig::from_env()) {
+                Ok(hub) => {
+                    if let Err(e) = check::ensure_original(path, &origin, &hub).await {
+                        tracing::warn!(model = %path.display(), "model check: {e}");
+                    }
+                }
+                Err(e) => tracing::warn!("model check: {e}"),
+            }
+        }
+        let (checks, p, o) = (Arc::clone(&self.checks), path.to_path_buf(), origin.clone());
+        let verdict = tauri::async_runtime::spawn_blocking(move || {
+            check::gate(&p, &o, &checks, OnWarnings::Refuse, |_| {})
         })
         .await
         .map_err(|e| CoreError::ModelUnavailable {
@@ -1635,12 +1677,13 @@ impl<B: InferenceBackend> LocalModels<B> {
         }
         match verdict {
             Verdict::Load(r, key) => {
-                // Temporary (#452): Warnings don't stop the load in the app until #421's PR 3.
+                // Only notes reach here (Warnings are refused): e.g. the original template is
+                // used instead of this copy's.
                 for f in &r.findings {
-                    tracing::warn!(
+                    tracing::info!(
                         model = %path.display(),
                         rule = %f.code,
-                        "model check warning: {} ({})",
+                        "model check: {} ({})",
                         f.reason,
                         f.detail
                     );
@@ -1650,6 +1693,7 @@ impl<B: InferenceBackend> LocalModels<B> {
                     path: path.to_path_buf(),
                     origin,
                     key,
+                    template: r.template,
                 })
             }
             Verdict::Refuse(r) => Err(CoreError::ModelUnavailable {
@@ -1805,13 +1849,13 @@ impl<B: InferenceBackend> LocalModels<B> {
         }
         let path = self.path(&e);
         let checked = self.check_before_load(&e.name, &path).await?;
-        let opts = {
+        let mut opts = {
             let (path, machine) = (path.clone(), self.machine());
             tauri::async_runtime::spawn_blocking(move || load_options(&path, &machine))
                 .await
                 .unwrap_or_default()
         };
-        checked.confirm()?;
+        opts.chat_template = checked.confirm()?;
         let m = LoadedModel::load(Arc::clone(&self.backend), &ModelSpec::gguf(path), &opts)
             .await
             .map_err(|err| CoreError::ModelUnavailable {
@@ -1932,6 +1976,9 @@ mod tests {
             license: "apache-2.0".into(),
             notes: String::new(),
             tool_support: None,
+            // The fixtures' template is these test models' original.
+            template_sha256: Some(dn_models::check::template_sha256(TINY_TEMPLATE)),
+            tokenizer_sha256: None,
         }
     }
 
@@ -2487,15 +2534,15 @@ mod tests {
 
     /// The smallest model file that passes the model check (#421): a valid GGUF header and
     /// one 32-byte tensor.
+    /// The chat template of [`tiny_gguf`], known to the test catalogue ([`entry`]).
+    const TINY_TEMPLATE: &str = "{{ messages[0].content }}";
+
     fn tiny_gguf() -> Vec<u8> {
         use dn_models::gguf::write::{V, gguf};
         gguf(
             &[
                 ("general.architecture", V::Str("llama")),
-                (
-                    "tokenizer.chat_template",
-                    V::Str("{{ messages[0].content }}"),
-                ),
+                ("tokenizer.chat_template", V::Str(TINY_TEMPLATE)),
             ],
             &[("a.weight", &[8], 0, 32)],
         )
@@ -2914,11 +2961,20 @@ mod tests {
         poisoned.extend(b"MZ\x90\x00 hidden program");
         std::fs::write(dir.0.join("p.gguf"), &poisoned).unwrap();
         std::fs::write(dir.0.join("p.gguf.sha256"), "aa").unwrap();
-        std::fs::write(dir.0.join("w.gguf"), tiny_gguf()).unwrap();
+        // A model without a template of its own, whose stored one nothing can verify: a
+        // Warning.
+        let bare = {
+            use dn_models::gguf::write::{V, gguf};
+            gguf(
+                &[("general.architecture", V::Str("llama"))],
+                &[("a.weight", &[8], 0, 32)],
+            )
+        };
+        std::fs::write(dir.0.join("w.gguf"), &bare).unwrap();
         std::fs::write(dir.0.join("w.gguf.sha256"), "aa").unwrap();
         std::fs::write(
             dir.0.join("w.gguf.chat_template.jinja"),
-            "{{ 'see https://x' }}",
+            "{{ messages[1].content }}",
         )
         .unwrap();
         let rec = Arc::new(Recorder::default());
@@ -2928,7 +2984,7 @@ mod tests {
                 version: 1,
                 models: vec![
                     entry("p", poisoned.len() as u64, "aa"),
-                    entry("w", tiny_gguf().len() as u64, "aa"),
+                    entry("w", bare.len() as u64, "aa"),
                 ],
             },
             Machine::cpu_only(16 << 30),
@@ -2955,8 +3011,17 @@ mod tests {
             !lock(&rec.0).iter().any(|l| l.starts_with("load ")),
             "never loaded"
         );
-        // Warnings don't stop the app yet (#452): the model loads.
-        drop(lm.chat_model("w").await.unwrap());
+        // Warnings stop the app's load too (#452 closed): a person can't accept them yet.
+        let Err(CoreError::ModelUnavailable {
+            developer_message, ..
+        }) = lm.chat_model("w").await
+        else {
+            panic!("a model with Warnings loaded");
+        };
+        assert!(
+            developer_message.contains("template"),
+            "{developer_message}"
+        );
         // The result is stored next to the models.
         assert!(dir.0.join(CHECKS_FILE).exists());
     }

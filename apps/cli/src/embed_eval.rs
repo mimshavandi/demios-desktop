@@ -124,7 +124,7 @@ struct Report {
 pub async fn run(a: EmbedArgs) -> Result<(), String> {
     let set: Set = serde_json::from_str(SET).map_err(|e| format!("embed_set.json: {e}"))?;
     let path = resolve_model(&a.model)?;
-    let checked = crate::check_model(&path, a.accept_model_warnings)?;
+    let checked = crate::check_model(&path, a.accept_model_warnings).await?;
     let file = path
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
