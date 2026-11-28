@@ -130,7 +130,7 @@ impl HubPulls {
             Ok(v) => Ok(v),
             Err(e) if e.is_cancelled() => Err(RunEnd::Cancelled),
             Err(e) => {
-                eprintln!("hub pull task: {e}");
+                tracing::warn!("hub pull task: {e}");
                 Err(RunEnd::Failed)
             }
         }
@@ -200,7 +200,7 @@ impl Throttle {
 
 /// User words for a Hub error, with the recovery dn-models attaches.
 pub fn hub_error(e: HubError) -> IpcError {
-    eprintln!("hub: {e}");
+    tracing::warn!("hub: {e}");
     crate::agent::model_error(e.into())
 }
 

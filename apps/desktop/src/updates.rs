@@ -317,7 +317,7 @@ mod imp {
 
     /// A short, user-facing error for an updater failure; the detail goes to the log.
     pub fn failure(e: &E) -> IpcError {
-        eprintln!("update: {e}");
+        tracing::warn!("update: {e}");
         match e {
             E::Reqwest(r) if r.is_connect() || r.is_timeout() => IpcError::new(
                 "update_offline",

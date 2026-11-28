@@ -78,10 +78,10 @@ pub fn open<R: Runtime>(app: &tauri::AppHandle<R>, state: &AppState) -> tauri::R
         .visible(false)
         .build()?;
     if let Err(e) = place(&w, state) {
-        eprintln!("could not fit the window to the screen: {e}");
+        tracing::warn!("could not fit the window to the screen: {e}");
     }
     if let Err(e) = w.show().and_then(|()| w.set_focus()) {
-        eprintln!("could not show the window: {e}");
+        tracing::warn!("could not show the window: {e}");
     }
     Ok(())
 }
@@ -92,7 +92,7 @@ fn place<R: Runtime>(w: &WebviewWindow<R>, state: &AppState) -> Result<(), Strin
         .map_err(|e| e.message)
         .and_then(|db| crate::settings::load_window(&db).map_err(|e| e.to_string()))
         .unwrap_or_else(|e| {
-            eprintln!("could not read the saved window position: {e}");
+            tracing::warn!("could not read the saved window position: {e}");
             None
         });
     let (list, here) = screens(w).map_err(|e| e.to_string())?;
@@ -107,9 +107,13 @@ fn place<R: Runtime>(w: &WebviewWindow<R>, state: &AppState) -> Result<(), Strin
     };
     let f = p.frame;
     #[cfg(debug_assertions)]
-    eprintln!(
+    tracing::info!(
         "window: {:?} on {:?} (work area {:?}, scale {}), saved {:?}",
-        p, list[p.screen].name, list[p.screen].work_area, list[p.screen].scale, saved
+        p,
+        list[p.screen].name,
+        list[p.screen].work_area,
+        list[p.screen].scale,
+        saved
     );
     // Move first, then size, then move again: crossing to a monitor with another scale
     // makes Windows rescale the window, so it is sized where it ends up (and the second
@@ -182,9 +186,9 @@ pub fn persist<R: Runtime>(app: &tauri::AppHandle<R>) {
     match state.db() {
         Ok(db) => {
             if let Err(e) = crate::settings::save_window(&db, &saved) {
-                eprintln!("could not save the window position: {e}");
+                tracing::warn!("could not save the window position: {e}");
             }
         }
-        Err(e) => eprintln!("could not save the window position: {}", e.message),
+        Err(e) => tracing::warn!("could not save the window position: {}", e.message),
     }
 }

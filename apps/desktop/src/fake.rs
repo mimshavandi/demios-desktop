@@ -266,6 +266,7 @@ impl futures_core::Stream for FakeStream {
                     usage: Usage {
                         input_tokens: self.input_tokens,
                         output_tokens: self.output_tokens,
+                        ..Default::default()
                     },
                 }
             }

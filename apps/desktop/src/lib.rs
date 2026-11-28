@@ -27,6 +27,7 @@ pub mod node;
 pub mod node_sync;
 pub mod projects;
 pub mod remote;
+pub mod runs;
 pub mod secrets;
 pub mod settings;
 pub mod skills;
@@ -79,7 +80,7 @@ fn navigation_guard<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
                 allowed_navigation(url)
             };
             if !ok {
-                eprintln!("blocked navigation to {url}");
+                tracing::warn!("blocked navigation to {url}");
             }
             ok
         })
@@ -99,13 +100,13 @@ fn install_add_links(app: &tauri::AppHandle, state: &std::sync::Arc<state::AppSt
         std::env::var_os("APPIMAGE").is_some(),
     ) && let Err(e) = app.deep_link().register_all()
     {
-        eprintln!("could not register demios:// links: {e}");
+        tracing::warn!("could not register demios:// links: {e}");
     }
     let receive = {
         let state = std::sync::Arc::clone(state);
         move |url: &str| {
             if let Err(why) = state.add_links.receive(url) {
-                eprintln!("ignored a demios:// link: {why:?}");
+                tracing::warn!("ignored a demios:// link: {why:?}");
             }
         }
     };
@@ -159,9 +160,24 @@ pub fn run() {
     run_with_addons(Vec::new());
 }
 
+/// The app's log (ADR-0020 §8): warnings and the app's own notes on stderr, as before, plus
+/// one line per finished model run (counts and timings, never content). Local only: nothing
+/// is sent anywhere. `RUST_LOG` overrides the filter (e.g. `RUST_LOG=dn_agent=debug`).
+fn init_tracing() {
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        tracing_subscriber::EnvFilter::new("warn,demios_desktop_lib=info,dn_agent=info")
+    });
+    // Fails only when a subscriber is already set (e.g. by an embedding build): keep that one.
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .try_init();
+}
+
 /// [`run`] with add-ons (ADR-0013 §1): an add-on build's `main` passes its registry list.
 /// The regular build passes none, and Settings › Add-ons doesn't appear.
 pub fn run_with_addons(addons: Vec<std::sync::Arc<dyn dn_plugin_api::Plugin>>) {
+    init_tracing();
     let builder = tauri::Builder::default()
         // First: a second launch (e.g. from a demios:// link) hands over to this one. With
         // the `deep-link` feature the link is forwarded to the deep-link plugin below; the
@@ -380,7 +396,7 @@ pub fn run_with_addons(addons: Vec<std::sync::Arc<dyn dn_plugin_api::Plugin>>) {
                         executor.shutdown_all(std::time::Duration::from_millis(1500)),
                     );
                     if stuck > 0 {
-                        eprintln!("{stuck} MCP server(s) did not stop in time");
+                        tracing::warn!("{stuck} MCP server(s) did not stop in time");
                     }
                 }
             }
