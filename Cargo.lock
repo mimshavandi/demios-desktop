@@ -1496,6 +1496,7 @@ dependencies = [
  "dn-knowledge",
  "dn-models",
  "dn-plugin-api",
+ "dn-providers",
  "dn-secrets",
  "dn-store",
  "dn-sync",
