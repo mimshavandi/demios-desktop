@@ -1555,4 +1555,5 @@
     required:
     - foreground
     - background
+  capability: contrast.check
   effect: read
