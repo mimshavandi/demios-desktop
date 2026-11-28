@@ -43,6 +43,9 @@ pub struct ContextArgs {
     /// (five depths), so 20 per length by default.
     #[arg(long, default_value_t = 5)]
     samples: u32,
+    /// Only these tasks (needle, multikey, multihop); default all.
+    #[arg(long, value_delimiter = ',')]
+    tasks: Option<Vec<String>>,
     /// Report path (default: eval-context-<time>.json).
     #[arg(long, short)]
     out: Option<PathBuf>,
@@ -111,6 +114,11 @@ const PLACES: &[&str] = &[
     "museum",
     "theatre",
     "pharmacy",
+];
+/// Names for the multihop chains: letters only, never words the filler uses.
+const CODE_NAMES: &[&str] = &[
+    "KESTREL", "JUNIPER", "OBSIDIAN", "MARIGOLD", "TUNDRA", "SAFFRON", "QUASAR", "BRAMBLE",
+    "CINDER", "NARWHAL", "ZEPHYR", "LANTERN",
 ];
 const WEATHER: &[&str] = &["rain", "fog", "sunshine", "wind", "snow", "a cold breeze"];
 const DAYS: &[&str] = &[
@@ -255,8 +263,10 @@ pub fn build(task: Task, seed: u64, n: usize, depth: Option<f64>) -> Case {
             let mut asked = (String::new(), String::new());
             for chain in 0..3 {
                 let value = r.digits(5);
+                // Letter-only names: names with digits got their digits answered instead of
+                // the value (#350, first run).
                 let vars: Vec<String> = (0..4)
-                    .map(|i| format!("V{}{}", chain * 4 + i + 11, (b'A' + chain as u8) as char))
+                    .map(|i| CODE_NAMES[chain * 4 + i].to_string())
                     .collect();
                 // Assignments in order through the document.
                 let mut at = (r.next() % 100) as f64 / 1000.0 + 0.02;
@@ -275,7 +285,8 @@ pub fn build(task: Task, seed: u64, n: usize, depth: Option<f64>) -> Case {
                 depth: None,
                 document: doc,
                 question: format!(
-                    "Follow the notes: which number does {} stand for in the end?",
+                    "Each note sets a name to a number or to another name. Following the notes, \
+                     what number is {} equal to?",
                     asked.0
                 ),
                 expected: asked.1,
@@ -423,6 +434,12 @@ pub async fn run(a: ContextArgs) -> Result<(), String> {
                 None,
             ));
         }
+        let wanted = |t: Task| {
+            a.tasks
+                .as_ref()
+                .is_none_or(|ts| ts.iter().any(|x| x.eq_ignore_ascii_case(&format!("{t:?}"))))
+        };
+        cases.retain(|c| wanted(c.task));
         for c in cases {
             let h = history(&c);
             let tokens = count(&m.chat, &m.model_ref, &h);
@@ -465,6 +482,19 @@ pub async fn run(a: ContextArgs) -> Result<(), String> {
         }
     }
     let eff = effective(&acc);
+    // Per task too: a task that fails at every length is a task problem, not a context one.
+    let mut eff_by_task = BTreeMap::new();
+    for task in [Task::Needle, Task::Multikey, Task::Multihop] {
+        let name = format!("{task:?}").to_lowercase();
+        let per: BTreeMap<u32, f64> = by_task
+            .iter()
+            .filter_map(|(l, t)| t.get(&name).map(|v| (*l, *v)))
+            .filter(|_| items.iter().any(|i| i.task == task))
+            .collect();
+        if !per.is_empty() {
+            eff_by_task.insert(name, effective(&per));
+        }
+    }
     let summary = serde_json::json!({
         "n_ctx_train": n_ctx_train,
         "loaded_ctx": max + HEADROOM,
@@ -472,6 +502,7 @@ pub async fn run(a: ContextArgs) -> Result<(), String> {
         "accuracy": acc,
         "by_task": by_task,
         "effective_tokens": eff,
+        "effective_tokens_by_task": eff_by_task,
         "effective_share_of_training_context": eff.map(|e| f64::from(e) / f64::from(n_ctx_train)),
         "tokens_per_filler_sentence": per_sentence,
     });
@@ -525,8 +556,13 @@ mod tests {
         let var = c
             .question
             .split_whitespace()
-            .find(|w| w.starts_with('V'))
-            .unwrap();
+            .last()
+            .unwrap()
+            .trim_end_matches('?');
+        assert!(
+            var.chars().all(|ch| ch.is_ascii_uppercase()),
+            "letters only: {var}"
+        );
         let mut cur = var.to_string();
         for _ in 0..8 {
             match notes.iter().find(|(k, _)| *k == cur) {
