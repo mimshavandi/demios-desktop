@@ -4,7 +4,8 @@
 //!
 //! It owns its `memory_*` tables through [`migrations`] and works on the
 //! `&rusqlite::Connection` the app passes in. Nothing here talks to a model or the network;
-//! extraction, the core profile and retrieval build on this API (#346, R3 PRs 2–3).
+//! [`extract`] runs the background passes (suggesting memories, marking older ones
+//! superseded) with a model passed in; the core profile and retrieval build on the same API.
 //!
 //! Rules enforced here, not left to callers:
 //! - **Trust.** 3 user-stated, 2 user-confirmed, 1 from the person's own content, 0 from
@@ -24,6 +25,7 @@
 //!   sync later.
 //! - **Atomic.** Every call that changes data runs as one unit (a savepoint).
 
+pub mod extract;
 mod store;
 
 pub use store::*;
