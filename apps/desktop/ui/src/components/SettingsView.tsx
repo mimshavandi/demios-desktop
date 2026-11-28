@@ -38,7 +38,7 @@ import { NodeSettings } from "./NodeSettings";
 import { Updates } from "./Updates";
 import { LocalModelsCard, formatBytes } from "./LocalModels";
 import { DefaultsContext, SetDefault, type Defaults } from "./SetDefault";
-import { NODE_TEXT, NODE_TITLE, PROJECT_INSTRUCTIONS_SENT } from "./privacyText";
+import { DATA_FILES_SENT, NODE_TEXT, NODE_TITLE, PROJECT_INSTRUCTIONS_SENT } from "./privacyText";
 import { useToast } from "./toast";
 
 export type SettingsSection = "general" | "models" | "tools" | "skills" | "node" | "addons";
@@ -845,7 +845,7 @@ function GeneralPage({
             <span className="row-title">Model providers you add a key for</span>
             <span className="dn-help">
               Messages in chats that use a provider's models are sent to that provider under your account with them, and
-              their terms apply. {PROJECT_INSTRUCTIONS_SENT}
+              their terms apply. {PROJECT_INSTRUCTIONS_SENT} {DATA_FILES_SENT}
             </span>
           </li>
           <li>
