@@ -415,6 +415,10 @@ impl AppState {
         if let Some(root) = &project_files {
             crate::projects::purge_on_start(&conn, root)?;
         }
+        // Copies of chat files removed in an earlier session (their Undo is long over).
+        if let Some(root) = &chat_files {
+            crate::chat_files::expire_removed(&conn, root, dn_store::now_ms())?;
+        }
         // Every purged chat, including ones purged by older builds that kept ledger rows.
         let tombstones = store::list_tombstones(&conn)?;
 
