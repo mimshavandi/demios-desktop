@@ -46,11 +46,11 @@ A `demios://models/add?…` link names a Hugging Face model, and can name one ve
 
 `dn run` and `dn bench` pick the context size, cache type and GPU layers that fit your machine, using the same estimate as `dn fit`. For a mixture-of-experts model that doesn't fit on the GPU, they keep some or all of its experts in CPU memory (`dn fit` prints this as the `preset` line); `--moe-cpu all` or `--moe-cpu <layers>` sets it yourself. Any option you set yourself wins. A model that won't fit is refused; pass `--force` to try anyway. `--no-auto` turns the automatic choice off.
 
-## Demios Node (early preview)
+## Almend Node (early preview)
 
-A Node is the Demios engine running as a service on a machine you own, such as a home PC, a Mac mini or a server, so background work can go on while the app is closed. It keeps your data on that machine, unencrypted while it works on it, so only run one on hardware you control.
+A Node is the Almend engine running as a service on a machine you own, such as a home PC, a Mac mini or a server, so background work can go on while the app is closed. It keeps your data on that machine, unencrypted while it works on it, so only run one on hardware you control.
 
-For pairing, what syncs, removing devices and the current limits, see [Your Demios Node](node.md).
+For pairing, what syncs, removing devices and the current limits, see [Your Almend Node](node.md).
 
 ```sh
 dn node init --data-dir /var/lib/demios --name "Home server" --secrets systemd-credential:demios-node --time-zone Europe/Berlin

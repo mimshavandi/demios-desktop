@@ -19,13 +19,13 @@ If you leave the page before saving, your changes are kept until you come back. 
 
 ## Files
 
-Select **Add files** and pick one or more files. Demios keeps a copy of each file in its data folder, so moving, changing or deleting the original afterwards doesn't affect the project. A file can be up to 50 MB, and a project can hold up to 100 files. Files that can't be added are listed with the reason.
+Select **Add files** and pick one or more files. Almend keeps a copy of each file in its data folder, so moving, changing or deleting the original afterwards doesn't affect the project. A file can be up to 50 MB, and a project can hold up to 100 files. Files that can't be added are listed with the reason.
 
 To remove a file, select the remove button next to it. A message lets you **Undo** for 10 seconds. The copy is deleted for good the next time the app starts.
 
 ## Answers from your files
 
-In a project's chats, Demios searches the project's text files for each question and gives the model the best passages, so answers can use them. Only text files of up to 2 MB are searched. Chats outside a project don't use any files.
+In a project's chats, Almend searches the project's text files for each question and gives the model the best passages, so answers can use them. Only text files of up to 2 MB are searched. Chats outside a project don't use any files.
 
 Under each answer, a list shows the sources the model was given, for example "[S1] plan.md lines 3–9". If nothing matched, it says "No passages in this project's files matched this question." Sources record only the file and lines, not the text.
 
@@ -42,10 +42,10 @@ While the model downloads and your files are prepared, Sources show the progress
 
 #### If you used the earlier search model
 
-Earlier versions offered a smaller, English-only search model (nomic-embed-text v1.5, 84 MB). Its results can't be mixed with the new model's, so Demios doesn't use it any more:
+Earlier versions offered a smaller, English-only search model (nomic-embed-text v1.5, 84 MB). Its results can't be mixed with the new model's, so Almend doesn't use it any more:
 
 - The project page asks once whether to download the new model. Until you do, search uses keywords only, and the sources under an answer say so.
-- After the download, the passages of your projects are re-indexed with the new model from the text Demios already stored. Your files aren't read again.
+- After the download, the passages of your projects are re-indexed with the new model from the text Almend already stored. Your files aren't read again.
 - The earlier model isn't used any more. You can remove it from the model list to free 84 MB.
 
 

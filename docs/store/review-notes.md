@@ -25,10 +25,10 @@ The recording shows:
 There are no accounts, purchases, ads or user-to-user content, so those flows do not exist.
 
 2. APP PURPOSE
-Demios Desktop is a free, open-source (Apache-2.0) AI chat app that runs on your own computer.
+Almend Desktop is a free, open-source (Apache-2.0) AI chat app that runs on your own computer.
 You pick the model: a local model that runs on this machine (llama.cpp), or a cloud model through your own API key with a provider you already use.
 Chats and settings are stored locally. Keys are stored in the operating system's credential store.
-There is no Demios account, no Demios server and no telemetry.
+There is no Almend account, no Almend server and no telemetry.
 
 3. ACCESS INSTRUCTIONS
 No sign-in is needed. To reach the core feature:
@@ -46,7 +46,7 @@ No sign-in is needed. To reach the core feature:
     Each tool that changes anything asks for approval first and shows the exact arguments.
 
 4. EXTERNAL SERVICES
-The app talks only to services the user configures or starts. There is no Demios backend.
+The app talks only to services the user configures or starts. There is no Almend backend.
 Service / Purpose
 Hugging Face (huggingface.co, or an HF_ENDPOINT mirror) / browsing and downloading open model files the user picks
 The user's own AI provider (OpenAI, Anthropic, Google Gemini, or a custom OpenAI-compatible URL) / chat replies, sent with the user's own key

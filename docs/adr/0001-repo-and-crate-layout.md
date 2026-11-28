@@ -1,5 +1,7 @@
 # ADR-0001: Repo and crate layout
 
+> **Name (2026-11-28):** the product is now called **Almend**. ADRs keep the name Demios as it was when they were written. Internal ids are unchanged for now: `dn`, the `dn-*` crates, the `demios-desktop` repository, bundle ids, data folders and `demios://` links.
+
 **Status:** Proposed · **Date:** 2026-11-24 (amended 2026-11-26: `dn-jobs`; 2026-11-27: `dn-web`, `dn-licence` (ADR-0014 §9a); 2026-11-28: `dn-runtime`, ADR-0020; `dn-data`; `dn-memory`, ADR-0020 §4) · **Deciders:** project owner
 
 ## Context

@@ -1,8 +1,8 @@
-# Your Demios Node
+# Your Almend Node
 
-A Node is Demios running as a service on a machine you own, such as a home PC, a Mac mini or a server. You pair this computer with it, and your chats and projects sync through it to your other paired devices. The Node is an early preview: this page covers what it does today, and the [limits](#current-limits) at the end.
+A Node is Almend running as a service on a machine you own, such as a home PC, a Mac mini or a server. You pair this computer with it, and your chats and projects sync through it to your other paired devices. The Node is an early preview: this page covers what it does today, and the [limits](#current-limits) at the end.
 
-There's no Demios account and no Demios server in this. Your devices talk to your Node directly.
+There's no Almend account and no Almend server in this. Your devices talk to your Node directly.
 
 ## Where to run it
 

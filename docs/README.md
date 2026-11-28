@@ -1,6 +1,6 @@
 # Documentation
 
-Docs for people who use, build or contribute to Demios Desktop. Start with the [project README](../README.md) and [CONTRIBUTING.md](../CONTRIBUTING.md).
+Docs for people who use, build or contribute to Almend Desktop. Start with the [project README](../README.md) and [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ## Using the app
 
@@ -18,7 +18,7 @@ Docs for people who use, build or contribute to Demios Desktop. Start with the [
 | [dependencies.md](dependencies.md) | Every direct dependency, why it is used and its licence |
 | [releasing.md](releasing.md) | How changelog entries are written and how a release turns them into release notes |
 | [benchmarks/](benchmarks/README.md) | How local models perform on 8, 16 and 32 GB machines, how to run the benchmark suite, and how the mistral.rs decision will be made |
-| [eval/](eval/README.md) | `dn eval`: parity on golden prompts, LongMemEval through Demios's own pipeline, and the speed suite (ADR-0020 R0) |
+| [eval/](eval/README.md) | `dn eval`: parity on golden prompts, LongMemEval through Almend's own pipeline, and the speed suite (ADR-0020 R0) |
 
 ## Architecture
 
@@ -32,7 +32,7 @@ Docs for people who use, build or contribute to Demios Desktop. Start with the [
 |---|---|
 | [design/design-system.md](design/design-system.md) | Tokens, components, states, writing and accessibility rules |
 | [design/preview.html](design/preview.html) | A preview of the tokens and components |
-| [design/dn-sync.md](design/dn-sync.md) | How devices and a Demios Node keep one data set: records, clock, deletes, conflicts, the group key, and Relay mailboxes (draft) |
+| [design/dn-sync.md](design/dn-sync.md) | How devices and an Almend Node keep one data set: records, clock, deletes, conflicts, the group key, and Relay mailboxes (draft) |
 
 ## Security and privacy
 

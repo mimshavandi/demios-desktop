@@ -1,6 +1,6 @@
-# Evaluating Demios: `dn eval`
+# Evaluating Almend: `dn eval`
 
-`dn eval` measures what Demios does with a model, through the same agent loop the app runs
+`dn eval` measures what Almend does with a model, through the same agent loop the app runs
 ([ADR-0020](../adr/0020-agent-runtime.md) §8). Every case comes with its typed run result:
 why it stopped, the model, tokens in and out, cached tokens, wall time, time to the first
 token, steps, and what the context assembler left out (nothing yet; the assembler arrives with
@@ -87,7 +87,7 @@ dn eval longmemeval ~/.cache/demios-eval/longmemeval/longmemeval_s_cleaned.json 
 ```
 
 - `--mode history` puts the whole history in front of the question (reading it directly).
-- `--mode retrieval` indexes the sessions with Demios's own search (dn-knowledge, in memory,
+- `--mode retrieval` indexes the sessions with Almend's own search (dn-knowledge, in memory,
   discarded after the run) and gives the model only the best passages, quoted as untrusted
   data the same way the app quotes project files. The report adds the session recall: the share
   of the sessions holding the answer that were retrieved.
@@ -174,10 +174,10 @@ References from two models never share a folder. For a holdout, pass `--holdout`
 outside any git work tree.
 
 For every case and source, the judge sees the case and the two answers as A and B, twice: once
-with Demios's answer first, once with the reference first. It's a **win** or a **loss** only
+with Almend's answer first, once with the reference first. It's a **win** or a **loss** only
 when both orders agree; otherwise it's a **tie**, and `orders_disagree` counts how often the
 order changed the verdict (position bias). The tool calls aren't shown here, because only
-Demios's are recorded.
+Almend's are recorded.
 
 Per source, the report gives:
 

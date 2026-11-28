@@ -1,13 +1,13 @@
-# Demios Desktop
+# Almend Desktop
 
 A source-available desktop app for chatting with AI models you choose: one running on your own computer, or a provider you reach with your own API key. No account needed.
 
-## Why Demios Desktop
+## Why Almend Desktop
 
 - **Local first.** Chats and settings stay in a database on your computer. Models from the catalogue run on your machine, and nothing leaves it.
 - **Your keys stay yours.** Provider API keys are stored in your operating system's keychain, not in a file.
-- **Nothing is sent to us.** There is no Demios account, server, analytics or crash reporting.
-- **Source available.** PolyForm Shield 1.0.0 licence: read the code, build it yourself, change it and use it, for anything except a product that competes with Demios. Versions up to v0.1.0-preview.8cd482c stay under Apache-2.0.
+- **Nothing is sent to us.** There is no Almend account, server, analytics or crash reporting.
+- **Source available.** PolyForm Shield 1.0.0 licence: read the code, build it yourself, change it and use it, for anything except a product that competes with Almend. Versions up to v0.1.0-preview.8cd482c stay under Apache-2.0.
 
 ## What it does today
 
@@ -21,7 +21,7 @@ A source-available desktop app for chatting with AI models you choose: one runni
 - Add GGUF models from Hugging Face: search, see each version's size, whether it fits and its licence before downloading, and add a Hugging Face token for gated models. GGUF models already in your Hugging Face cache are used where they are, never changed or deleted. A `demios://models/add` link opens the same check in the app; nothing downloads until you choose to.
 - Use your own key for Anthropic, OpenAI or Google Gemini.
 - Light and dark appearance that follows your system, and keyboard shortcuts for the main actions.
-- See where your data goes in **Settings → General**, and remove everything with **Delete all local data**: chats, settings, downloaded models and the keys Demios saved, after a confirmation that lists what will go.
+- See where your data goes in **Settings → General**, and remove everything with **Delete all local data**: chats, settings, downloaded models and the keys Almend saved, after a confirmation that lists what will go.
 - A notice on first run, and a line under the message box, say that answers come from the model you chose and can be wrong.
 - Report a problem, or a single answer, through a prefilled form on GitHub. Nothing from your chats is sent.
 - Read the licence of every package shipped with the app, searchable, in **Settings → General → Help and legal → Open-source licences**.
@@ -46,7 +46,7 @@ Screenshots coming with the first release.
 
 ## Install
 
-A **preview build** of Demios Desktop 0.1.0 is available for macOS, Windows and Linux. Download it from [demios.io/download](https://demios.io/download/) or from the [GitHub release](https://github.com/mimshavandi/demios-desktop/releases/tag/v0.1.0-preview.8cd482c).
+A **preview build** of Almend Desktop 0.1.0 is available for macOS, Windows and Linux. Download it from [demios.io/download](https://demios.io/download/) or from the [GitHub release](https://github.com/mimshavandi/demios-desktop/releases/tag/v0.1.0-preview.8cd482c).
 
 | System | File |
 |---|---|
@@ -70,7 +70,7 @@ The release lists every file's SHA-256 in `SHA256SUMS.txt`, and its notes have t
 
 ### Build from source
 
-To build Demios Desktop yourself instead:
+To build Almend Desktop yourself instead:
 
 #### Prerequisites
 

@@ -1,6 +1,6 @@
 # Golden prompts
 
-The golden-prompt set for `dn eval`'s parity suite (ADR-0020 §8). Each case is a chat turn, with the files, tools and earlier chats it needs. Each also lists what a good answer must and must not do. The suite runs every case through Demios with a chosen model. A judge model from another family then compares the answer with reference answers and checks the expected properties.
+The golden-prompt set for `dn eval`'s parity suite (ADR-0020 §8). Each case is a chat turn, with the files, tools and earlier chats it needs. Each also lists what a good answer must and must not do. The suite runs every case through Almend with a chosen model. A judge model from another family then compares the answer with reference answers and checks the expected properties.
 
 A private holdout of about a fifth of the set is kept outside this repo, so results can be checked against cases no one has tuned for. It has the same layout, with ids starting `h-`.
 
