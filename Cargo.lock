@@ -1624,11 +1624,14 @@ dependencies = [
 name = "dn-memory"
 version = "0.1.0"
 dependencies = [
+ "dn-agent",
  "dn-core",
+ "futures-core",
  "rusqlite",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "tokio",
 ]
 
 [[package]]
