@@ -34,7 +34,7 @@ On the project's page, **Delete project** deletes it with its chats and files, a
 - Downloaded models, including the ones the `dn` command-line tool uses. Models in your own Hugging Face cache are left alone.
 - The keys and tokens Demios saved in your system keychain, including your Hugging Face token.
 - The app window's own storage.
-- If this computer is paired with a Node: sync ends here, and this computer's device keys are deleted. Nothing is deleted on your other devices, and the Node still lists this computer until you remove it from another device. See [Your Demios Node](node.md).
+- If this computer is paired with a Node: sync ends here, and this computer's device keys are deleted. Nothing is deleted on your other devices, and the Node still lists this computer until you run `dn node remove-device` on the Node, or remove it from another paired device. See [Your Demios Node](node.md).
 
 Before anything is deleted, a confirmation lists what will go, with the number of chats, the size of your models and the keys found. **This can't be undone.** Your accounts with providers aren't affected; to close those, go to the provider.
 

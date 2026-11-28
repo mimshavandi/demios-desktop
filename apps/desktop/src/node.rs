@@ -255,7 +255,7 @@ pub async fn overview(state: &std::sync::Arc<AppState>) -> IpcResult<NodeOvervie
             .await
             .unwrap_or_else(|e| Err(e.to_string()))
             {
-                eprintln!("couldn't record that the Node answered: {e}");
+                tracing::warn!("couldn't record that the Node answered: {e}");
             }
             view.online = true;
             if let Some(p) = view.paired.as_mut() {

@@ -6,7 +6,7 @@ There's no Demios account and no Demios server in this. Your devices talk to you
 
 ## Where to run it
 
-Run a Node only on a machine you control. It keeps its database on that machine without encrypting it (see [Current limits](#current-limits)), so use full-disk encryption on it.
+Run a Node only on a machine you control. It keeps a copy of your synced projects, chats and messages there, encrypted with a key in its secret store (see [Your data on the Node](#your-data-on-the-node)). Use full-disk encryption on the machine too.
 
 The Node accepts devices on its own network only: private, link-local and loopback addresses. It turns away every other address before any connection is set up, and never asks your router to open a port.
 
@@ -73,6 +73,7 @@ The Node runs one pairing at a time. After 5 wrong attempts with a link, that li
 - **Deleting** a chat or project on one device deletes it on the others too.
 - **Not synced:** artifacts, files you added to projects, settings, models, tool servers, skills and provider keys. Each device keeps its own.
 - **If two devices rename the same chat** before they sync, both end up with the same name.
+- **A device you pair later**, or one that hasn't synced for more than 90 days, starts from a copy of the current data on the Node, not from every change ever made. Then it syncs changes as usual.
 
 ## How your data is protected
 
@@ -80,8 +81,36 @@ Sync is encrypted end to end between your paired devices and your Node.
 
 - Each change is sealed on the device that makes it, with a key that only your paired devices and your Node hold, and signed with that device's own key.
 - Devices and the Node also talk over an encrypted connection, pinned to the keys they checked when you paired. A device that isn't your Node can't take its place: the app stops and says so.
-- Your Node passes sealed changes on to your other devices. It keeps them sealed and doesn't add them to chats of its own.
+- Your Node checks each change and passes it on to your other devices. It keeps a change only until every device has it.
 - The Node's log records connections and errors, never what your chats say.
+
+### Your data on the Node
+
+The Node keeps its own copy of your synced projects, chats and messages, so a new device can start from it. It stores them encrypted in its database, with a records key kept in its secret store. Someone who copies the database or a backup of it, without that key, can't read them.
+
+- **Still readable in the database:**
+  - record ids;
+  - which messages belong to which chat;
+  - sizes;
+  - when each device changed something;
+  - the list of devices.
+- **Not protected:**
+  - someone in control of the running Node;
+  - someone who has both its disk and its secret store;
+  - swap and crash dumps, which can hold decrypted data.
+
+  Full-disk encryption on the Node's machine helps with these.
+- **With `insecure-plaintext`**, the key sits in a plain file next to the database, so the encryption protects nothing.
+
+To replace the records key, run this on the Node while it's running, as the same user:
+
+```sh
+dn node rotate-records-key --data-dir /var/lib/demios
+```
+
+It makes a new key and uses it for new changes straight away. It re-encrypts the stored records in batches while devices keep syncing, then deletes the old key. If it stops partway, run it again to carry on. A backup of the database made before the rotation still opens with the old key, if you kept a copy of the secret store from then.
+
+If the secret store no longer has the records key, for example after the Node moved to another machine without its keychain, the Node refuses to start and says which key is missing. It never makes a new key in its place.
 
 ## Sync in Settings → Node
 
@@ -102,25 +131,53 @@ If the Node doesn't answer, the page says **Your Node isn't answering**, with wh
 
 In **Devices**, open a device's **More** menu (the … button) and choose **Remove device**.
 
+You can also remove one on the Node, for example a device that's lost or one that has forgotten the Node. While the Node runs, as the same user:
+
+```sh
+dn node devices --data-dir /var/lib/demios
+dn node remove-device --data-dir /var/lib/demios <id>
+```
+
+`dn node devices` lists the paired devices with their ids. `dn node remove-device` removes the one you name.
+
+Either way:
+
 - The device can't connect or sync again. Changes it makes after it's removed are refused.
 - The Node makes a new key and gives it only to the devices that remain, so the removed device can't read what syncs from now on.
 - The removed device keeps its copy of your data, because it may be offline or lost. If you have it, use **Delete all local data** on it first.
 
-You can't remove the Node itself from a device.
+You can't remove the Node itself this way. To delete it, see [Delete the Node](#delete-the-node).
 
 ## Unpair, forget or delete
 
 - **Unpair this device:** in **Devices**, open this device's **More** menu and choose **Unpair this device**. The Node removes this computer, and this computer stops syncing. Your chats and projects stay here. This needs the Node to answer; if it doesn't, nothing changes and the app says so.
-- **Forget this Node:** shown when the Node isn't answering or has refused this computer, for example after it was removed. This computer stops syncing with it and your data stays here. The Node still lists this computer until you remove it from another device.
-- **Delete all local data** (Settings → General) also ends sync and deletes this computer's device keys. See [Privacy and your data](privacy.md). Nothing is deleted on your other devices. The Node still lists this computer until you remove it from another device.
+- **Forget this Node:** shown when the Node isn't answering or has refused this computer, for example after it was removed. This computer stops syncing with it and your data stays here. The Node still lists this computer until you run `dn node remove-device` on the Node, or remove it from another paired device.
+- **Delete all local data** (Settings → General) also ends sync and deletes this computer's device keys. See [Privacy and your data](privacy.md). Nothing is deleted on your other devices. The Node still lists this computer until you run `dn node remove-device` on the Node, or remove it from another paired device.
 
 To pair again after any of these, start over with `dn node pair`.
 
+## Delete the Node
+
+Stop the Node, then run this on its machine:
+
+```sh
+dn node delete-all --data-dir /var/lib/demios
+```
+
+- **Before it deletes anything,** it lists what it will delete and asks you to type the Node's name. You can pass `--confirm "<name>"` instead.
+- **It deletes:**
+  - the Node's keys from its secret store: its own key, the sync keys and the records keys;
+  - its database;
+  - `node.json`.
+- **Then it removes the data folder,** if nothing else is left in it. Files it didn't make are kept, and it names them.
+- **It refuses to run while the Node is running.**
+- **Your paired devices keep their own copies.** On each one, open **Settings → Node** and choose **Forget this Node**.
+
+Uninstalling the Node doesn't delete its data folder; `dn node delete-all` does.
+
 ## Current limits
 
-- **A new device replays every change.** Pairing a device sends it every change your devices have made since the first one paired, so the first sync can take a while with a long history.
 - **Your devices reach the Node directly.** That means on its network, or over a VPN, a forwarded port or a proxy (see [Where to run it](#where-to-run-it)). There's no relay for devices away from home yet. Settings → Node shows **Relay: None**.
-- **On Windows, a Node can't pair devices yet.** `dn node pair` isn't available, and the Node turns away devices that aren't paired.
+- **On Windows, the Node's own commands aren't there yet.** `dn node pair`, `devices`, `remove-device`, `delete-all` and `rotate-records-key` aren't available, and the Node turns away devices that aren't paired.
 - **Pair from the Node only.** You can't pair another device from this computer yet; use `dn node pair`.
-- **The Node's database isn't encrypted** on disk. Use full-disk encryption on the Node's machine.
 - **Not there yet:** a passphrase-protected secret store (`dn node unlock`), a QR code in the terminal and the phone app.

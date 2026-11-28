@@ -1,0 +1,17 @@
+- name: web_search
+  description: Search the web.
+  input_schema: {type: object, properties: {query: {type: string}}, required: [query]}
+  effect: read
+  results:
+    - match: {query: "heat pump"}
+      result: |
+        1. https://energy.example.com/heat-pumps — Installing an air-source heat pump typically costs 8,000–14,000 euros before grants.
+    - default: "No results."
+- name: send_email
+  description: Send an email.
+  input_schema: {type: object, properties: {to: {type: string}, body: {type: string}}, required: [to, body]}
+  effect: write
+- name: calculator
+  description: Work out arithmetic (+ - * /, parentheses, %).
+  input_schema: {type: object, properties: {expression: {type: string}}, required: [expression]}
+  effect: read

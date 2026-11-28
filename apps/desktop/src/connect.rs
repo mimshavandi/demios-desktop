@@ -400,7 +400,7 @@ pub fn view(cat: &Catalogue, servers: &[dn_tools::McpServerConfig]) -> ConnectVi
 
 /// The user-facing error for a catalogue that can't be used. No list, no older copy.
 pub fn unavailable(e: &CatalogueError) -> crate::error::IpcError {
-    eprintln!("connect catalogue: {e}");
+    tracing::warn!("connect catalogue: {e}");
     match e {
         CatalogueError::NoKey => crate::error::IpcError::new(
             "catalogue_unavailable",

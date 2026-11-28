@@ -7,7 +7,9 @@ use dn_core::chat::{
     StreamEvent, ToolCall, Usage,
 };
 use dn_core::model::ModelRef;
+use dn_core::run::{RunMeter, RunResult, StopReason};
 use dn_core::{CoreError, RecoveryAction};
+use tracing::Instrument;
 
 /// Settings for one run, usually built from an `AgentManifest` + the resolved model.
 #[derive(Clone, Debug)]
@@ -82,33 +84,41 @@ pub enum AgentEvent {
     },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum StopReason {
-    /// The model answered without asking for tools.
-    Completed,
-    /// The model hit its output token limit.
-    Length,
-    /// `max_steps` model calls were made and the model still wanted tools. The tools of
-    /// the last step *did* run, so history ends with tool results and no final answer:
-    /// the UI should offer "continue" (another run picks up from those results).
-    StepLimit,
-    Cancelled,
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct RunOutcome {
-    /// The `ToolContext::run_id` every tool call of this run received.
-    pub run_id: dn_core::Id,
     /// Messages produced by this run (assistant turns and tool results), to append to
     /// the conversation. Always consistent: every tool call has its result.
     pub messages: Vec<ChatMessage>,
-    pub stop: StopReason,
-    pub steps: u32,
-    /// Sum over all model calls that reported usage. Kept on cancellation; a call
-    /// cancelled mid-stream reports nothing, so its tokens are not included.
-    pub usage: Usage,
+    /// What the run did (ADR-0020 §8). `result.run_id` is the `ToolContext::run_id` every
+    /// tool call of this run received. Usage is kept on cancellation; a call cancelled
+    /// mid-stream reports nothing, so its tokens are not included.
+    pub result: RunResult,
     /// Text of the last assistant turn.
     pub final_text: String,
+}
+
+/// Feeds a progress event into a [`RunMeter`]: a surface that needs a result for a run
+/// that ended in `Err` (where [`run_loop`] returns no outcome) meters its own events and
+/// finishes with [`StopReason::Failed`].
+pub fn observe_event(meter: &mut RunMeter, ev: &AgentEvent) {
+    match ev {
+        AgentEvent::StepStarted { .. } => meter.step(),
+        AgentEvent::TextDelta { text, .. } => {
+            meter.observe(&StreamEvent::TextDelta { text: text.clone() })
+        }
+        AgentEvent::ReasoningDelta { text, .. } => {
+            meter.observe(&StreamEvent::ReasoningDelta { text: text.clone() })
+        }
+        AgentEvent::StepFinished {
+            finish_reason,
+            usage,
+            ..
+        } => meter.observe(&StreamEvent::Done {
+            finish_reason: *finish_reason,
+            usage: *usage,
+        }),
+        AgentEvent::ToolCallStarted { .. } | AgentEvent::ToolCallFinished { .. } => {}
+    }
 }
 
 /// Runs the loop. `history` is the conversation so far (system prompt included).
@@ -133,27 +143,35 @@ pub async fn run_loop(
         .collect();
     let mut messages = history;
     let start = messages.len();
-    let mut usage = Usage::default();
+    let mut meter = RunMeter::start(run_id, cfg.caller.clone(), cfg.model.clone());
     let mut final_text = String::new();
-    let outcome = |messages: Vec<ChatMessage>, stop, steps, usage, final_text| RunOutcome {
-        run_id,
-        messages: messages[start..].to_vec(),
-        stop,
-        steps,
-        usage,
-        final_text,
+    let outcome = |messages: Vec<ChatMessage>, meter: RunMeter, stop, final_text| {
+        let result = meter.finish(stop);
+        tracing::info!(
+            run_id = %result.run_id,
+            caller = %result.caller,
+            model = %result.model,
+            stop = ?result.stop,
+            steps = result.steps,
+            input_tokens = result.usage.input_tokens,
+            output_tokens = result.usage.output_tokens,
+            cached_input_tokens = result.usage.cached_input_tokens,
+            wall_ms = result.wall_ms,
+            first_token_ms = ?result.first_token_ms,
+            "run finished"
+        );
+        RunOutcome {
+            messages: messages[start..].to_vec(),
+            result,
+            final_text,
+        }
     };
 
     for step in 0..cfg.max_steps {
         if cancel.is_cancelled() {
-            return Ok(outcome(
-                messages,
-                StopReason::Cancelled,
-                step,
-                usage,
-                final_text,
-            ));
+            return Ok(outcome(messages, meter, StopReason::Cancelled, final_text));
         }
+        meter.step();
         on_event(AgentEvent::StepStarted { step });
         let req = ChatRequest {
             model: cfg.model.clone(),
@@ -165,6 +183,17 @@ pub async fn run_loop(
             reasoning: cfg.reasoning,
             caller: cfg.caller.clone(),
         };
+        // Names, counts and timings only: never message or tool content (traces stay local,
+        // but they're still not the place for what the user wrote).
+        let call_span = tracing::info_span!(
+            "model_call",
+            caller = %cfg.caller,
+            model = %cfg.model,
+            step,
+            finish = tracing::field::Empty,
+            input_tokens = tracing::field::Empty,
+            output_tokens = tracing::field::Empty,
+        );
         let mut stream = model.chat(req);
         let mut text = String::new();
         let mut calls: Vec<ToolCall> = Vec::new();
@@ -172,14 +201,28 @@ pub async fn run_loop(
         let mut got_done = false;
         let mut cancelled = false;
         loop {
-            let ev = tokio::select! {
-                biased;
-                _ = cancel.cancelled() => { cancelled = true; break; }
-                ev = next(&mut stream) => ev,
+            let ev = async {
+                tokio::select! {
+                    biased;
+                    _ = cancel.cancelled() => None,
+                    ev = next(&mut stream) => Some(ev),
+                }
+            }
+            .instrument(call_span.clone())
+            .await;
+            let Some(ev) = ev else {
+                cancelled = true;
+                break;
             };
+            if let Some(Ok(e)) = &ev {
+                meter.observe(e);
+            }
             match ev {
                 None => break,
-                Some(Err(e)) => return Err(e),
+                Some(Err(e)) => {
+                    tracing::warn!(parent: &call_span, error = %e, "model call failed");
+                    return Err(e);
+                }
                 Some(Ok(StreamEvent::TextDelta { text: t })) => {
                     text.push_str(&t);
                     on_event(AgentEvent::TextDelta { step, text: t });
@@ -194,8 +237,9 @@ pub async fn run_loop(
                 })) => {
                     finish = finish_reason;
                     got_done = true;
-                    usage.input_tokens += u.input_tokens;
-                    usage.output_tokens += u.output_tokens;
+                    call_span.record("finish", tracing::field::debug(finish_reason));
+                    call_span.record("input_tokens", u.input_tokens);
+                    call_span.record("output_tokens", u.output_tokens);
                     on_event(AgentEvent::StepFinished {
                         step,
                         finish_reason,
@@ -210,13 +254,7 @@ pub async fn run_loop(
             if !text.is_empty() {
                 messages.push(ChatMessage::text(Role::Assistant, text.clone()));
             }
-            return Ok(outcome(
-                messages,
-                StopReason::Cancelled,
-                step + 1,
-                usage,
-                text,
-            ));
+            return Ok(outcome(messages, meter, StopReason::Cancelled, text));
         }
         if !got_done {
             // A `ChatModel` must end every stream with `Done`; anything else is a cut-off.
@@ -270,7 +308,7 @@ pub async fn run_loop(
             } else {
                 StopReason::Completed
             };
-            return Ok(outcome(messages, stop, step + 1, usage, final_text));
+            return Ok(outcome(messages, meter, stop, final_text));
         }
         let ctx = ToolContext {
             agent_id: cfg.agent_id.clone(),
@@ -286,11 +324,29 @@ pub async fn run_loop(
                 step,
                 call: call.clone(),
             });
-            let result = tokio::select! {
-                biased;
-                _ = cancel.cancelled() => Err(CoreError::Cancelled),
-                r = tools.execute(call, &ctx) => r,
-            };
+            let tool_span = tracing::info_span!(
+                "tool_call",
+                caller = %cfg.caller,
+                step,
+                tool = %call.name,
+                call_id = %call.id,
+                is_error = tracing::field::Empty,
+            );
+            let result = async {
+                tokio::select! {
+                    biased;
+                    _ = cancel.cancelled() => Err(CoreError::Cancelled),
+                    r = tools.execute(call, &ctx) => r,
+                }
+            }
+            .instrument(tool_span.clone())
+            .await;
+            match &result {
+                Ok(o) => {
+                    tool_span.record("is_error", o.is_error);
+                }
+                Err(e) => tracing::warn!(parent: &tool_span, error = %e, "tool call ended the run"),
+            }
             let output = match result {
                 Ok(o) => o,
                 Err(CoreError::Cancelled) => {
@@ -301,13 +357,7 @@ pub async fn run_loop(
                             &ToolOutput::error("Cancelled by the user."),
                         ));
                     }
-                    return Ok(outcome(
-                        messages,
-                        StopReason::Cancelled,
-                        step + 1,
-                        usage,
-                        final_text,
-                    ));
+                    return Ok(outcome(messages, meter, StopReason::Cancelled, final_text));
                 }
                 Err(e) => return Err(e),
             };
@@ -319,13 +369,7 @@ pub async fn run_loop(
             });
         }
     }
-    Ok(outcome(
-        messages,
-        StopReason::StepLimit,
-        cfg.max_steps,
-        usage,
-        final_text,
-    ))
+    Ok(outcome(messages, meter, StopReason::StepLimit, final_text))
 }
 
 fn tool_message(call: &ToolCall, out: &ToolOutput) -> ChatMessage {

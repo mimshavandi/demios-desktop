@@ -105,7 +105,7 @@ impl KeychainStatus {
             },
             e => {
                 // SecretError never contains secret values.
-                eprintln!("keychain check failed: {e}");
+                tracing::warn!("keychain check failed: {e}");
                 Self::Failed {
                     message: "Couldn't read your system keychain, so Demios can't tell which API keys are saved. Try again.".into(),
                 }
@@ -238,7 +238,7 @@ pub async fn answer(mut rx: Pending) -> Arc<KeyCheck> {
             return c;
         }
         if rx.changed().await.is_err() {
-            eprintln!("keychain check stopped without an answer");
+            tracing::warn!("keychain check stopped without an answer");
             return Arc::new(KeyCheck {
                 states: HashMap::new(),
                 status: KeychainStatus::Failed {

@@ -20,6 +20,8 @@ pub mod config;
 // The control channel is a Unix socket; Windows has none yet (#261).
 #[cfg(unix)]
 pub mod control;
+#[cfg(unix)]
+pub mod delete;
 pub mod zone;
 
 use clap::Subcommand;
@@ -101,6 +103,28 @@ pub enum NodeCmd {
         #[arg(long)]
         address: Option<String>,
     },
+    /// List the devices paired with the running Node, with their ids.
+    Devices {
+        #[arg(long)]
+        data_dir: PathBuf,
+    },
+    /// Remove a paired device from the running Node. It can't connect or sync again, and
+    /// the other devices get new keys. Its own copy of your data stays on it.
+    RemoveDevice {
+        #[arg(long)]
+        data_dir: PathBuf,
+        /// The device's id, from `dn node devices`.
+        id: String,
+    },
+    /// Delete this Node and everything on it: its keys, database and settings. Stop the
+    /// Node first. Paired devices keep their own copies.
+    DeleteAll {
+        #[arg(long)]
+        data_dir: PathBuf,
+        /// The Node's name, to confirm without being asked.
+        #[arg(long)]
+        confirm: Option<String>,
+    },
     /// Make a new key for the Node's synced records, re-seal them with it, then delete the
     /// old key. The Node keeps running and syncing meanwhile.
     RotateRecordsKey {
@@ -157,6 +181,9 @@ pub async fn command(cmd: NodeCmd) -> Result<(), String> {
             node.serve(stop).await
         }
         NodeCmd::Pair { data_dir, address } => pair_command(&data_dir, address).await,
+        NodeCmd::Devices { data_dir } => devices_command(&data_dir).await,
+        NodeCmd::RemoveDevice { data_dir, id } => remove_command(&data_dir, &id).await,
+        NodeCmd::DeleteAll { data_dir, confirm } => delete_all_command(&data_dir, confirm).await,
         #[cfg(unix)]
         NodeCmd::RotateRecordsKey { data_dir } => {
             let key = control::client_rotate(&data_dir, |text| eprintln!("{text}")).await?;
@@ -174,6 +201,113 @@ pub async fn command(cmd: NodeCmd) -> Result<(), String> {
                 .into(),
         ),
     }
+}
+
+#[cfg(unix)]
+async fn devices_command(data_dir: &Path) -> Result<(), String> {
+    match control::client_request(data_dir, &control::Request::Devices).await? {
+        control::Reply::Devices { devices } => {
+            for d in devices {
+                let synced = match d.last_synced_at {
+                    Some(ms) => format!("last synced {}", ago(dn_store::now_ms() - ms)),
+                    None if d.kind == "node" => "this Node".to_owned(),
+                    None => "never synced".to_owned(),
+                };
+                println!("{}  {} ({}), {synced}", d.id, d.name, d.kind);
+            }
+            Ok(())
+        }
+        _ => Err("the Node answered something else".into()),
+    }
+}
+
+/// "3 min ago", "2 h ago", "5 days ago".
+#[cfg(unix)]
+fn ago(ms: i64) -> String {
+    let min = ms.max(0) / 60_000;
+    match min {
+        0 => "just now".into(),
+        1..=59 => format!("{min} min ago"),
+        60..=2879 => format!("{} h ago", min / 60),
+        _ => format!("{} days ago", min / 1440),
+    }
+}
+
+#[cfg(unix)]
+async fn remove_command(data_dir: &Path, id: &str) -> Result<(), String> {
+    let request = control::Request::RemoveDevice { id: id.to_owned() };
+    match control::client_request(data_dir, &request).await? {
+        control::Reply::Removed { name } => {
+            eprintln!(
+                "Removed {name}. It can't connect or sync again, and your other devices get new \
+                 keys when they next sync. Its own copy of your data stays on it."
+            );
+            Ok(())
+        }
+        _ => Err("the Node answered something else".into()),
+    }
+}
+
+#[cfg(not(unix))]
+async fn devices_command(_data_dir: &Path) -> Result<(), String> {
+    Err("dn node devices isn't available on Windows yet (#261)".into())
+}
+
+#[cfg(not(unix))]
+async fn remove_command(_data_dir: &Path, _id: &str) -> Result<(), String> {
+    Err("dn node remove-device isn't available on Windows yet (#261)".into())
+}
+
+#[cfg(unix)]
+async fn delete_all_command(data_dir: &Path, confirm: Option<String>) -> Result<(), String> {
+    delete::ensure_stopped(data_dir).await?;
+    let plan = delete::plan(data_dir)?;
+    eprintln!(
+        "This deletes the Node {:?} and everything on it: its keys in {}, its database \
+         (chats, memory, jobs) and its settings in {}.\n\
+         {} paired device(s) keep their own copies but can't reach this Node again.\n\
+         This can't be undone.",
+        plan.name,
+        plan.store,
+        data_dir.display(),
+        plan.devices
+    );
+    let typed = match confirm {
+        Some(name) => name,
+        None => {
+            eprintln!("Type the Node's name to delete it: ");
+            let mut line = String::new();
+            std::io::stdin()
+                .read_line(&mut line)
+                .map_err(|e| e.to_string())?;
+            line.trim().to_owned()
+        }
+    };
+    if typed != plan.name {
+        return Err("That isn't the Node's name. Nothing was deleted.".into());
+    }
+    let report = delete::delete_all(data_dir, &|k| std::env::var_os(k))?;
+    eprintln!(
+        "Deleted {} key(s) and {} file(s).",
+        report.keys_deleted,
+        report.files_deleted.len()
+    );
+    if report.folder_removed {
+        eprintln!("Removed {}.", data_dir.display());
+    } else if !report.left.is_empty() {
+        eprintln!(
+            "{} still holds files dn node didn't make, so it was kept: {}",
+            data_dir.display(),
+            report.left.join(", ")
+        );
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+async fn delete_all_command(_data_dir: &Path, _confirm: Option<String>) -> Result<(), String> {
+    // Without a control channel (#261) there's no way to tell that the Node is stopped.
+    Err("dn node delete-all isn't available on Windows yet (#261)".into())
 }
 
 /// The address devices should use, from `--address` or a specific listen address.
@@ -453,24 +587,36 @@ impl Node {
             let jobs_stop = jobs_stop.clone();
             tokio::spawn(async move { scheduler.run(&jobs_stop).await })
         };
-        #[cfg(unix)]
-        let control = tokio::spawn(control::serve(
-            self.control,
-            self.data_dir.clone(),
-            self.keys.public(),
-            self.pairing.clone(),
-            control::Records {
-                db: self.db.clone(),
-                records: self.records.clone(),
-                secrets: self.secrets.clone(),
-            },
-        ));
         let slots = Arc::new(Semaphore::new(MAX_CONNECTIONS));
         let base = Arc::new(StatusBase {
             name: self.name,
             store: self.store,
             reach: self.reach,
         });
+        #[cfg(unix)]
+        let control = {
+            let ops: Arc<dyn control::NodeOps> = Arc::new(Shared {
+                keys: self.keys.clone(),
+                db: self.db.clone(),
+                base: base.clone(),
+                pairing: self.pairing.clone(),
+                secrets: self.secrets.clone(),
+                group: self.group.clone(),
+                records: self.records.clone(),
+            });
+            tokio::spawn(control::serve(
+                self.control,
+                self.data_dir.clone(),
+                self.keys.public(),
+                self.pairing.clone(),
+                ops,
+                control::Records {
+                    db: self.db.clone(),
+                    records: self.records.clone(),
+                    secrets: self.secrets.clone(),
+                },
+            ))
+        };
         loop {
             let accepted = tokio::select! {
                 () = stop.notified() => break,
@@ -598,6 +744,24 @@ fn status(base: &StatusBase, db: &Mutex<Connection>) -> Result<NodeStatus, SyncE
     })
 }
 
+/// The held calls waiting for a person, for a paired device's list (ADR-0019, read-only).
+fn held_items(db: &Mutex<Connection>) -> Result<Vec<transport::HeldItem>, dn_jobs::JobsError> {
+    Ok(dn_jobs::held::waiting(&lock(db), now_secs())?
+        .into_iter()
+        .map(|h| transport::HeldItem {
+            id: h.id.to_string(),
+            plugin: h.job.plugin.to_string(),
+            job: h.job.job,
+            tool: h.tool,
+            summary: h.summary,
+            arguments: h.arguments,
+            arguments_sha256: h.arguments_sha256,
+            created_at: h.created_at,
+            expires_at: h.expires_at,
+        })
+        .collect())
+}
+
 fn devices(
     db: &Mutex<Connection>,
     asking: &dn_sync::Device,
@@ -619,16 +783,43 @@ fn devices(
 /// next request, its changes after the last one the Node holds are refused, and the group
 /// key rotates to the remaining devices (docs/design/dn-sync.md §8).
 fn remove_device(shared: &Shared, asking: &dn_sync::Device, id: &str) -> Message {
-    let (db, keys) = (&*shared.db, &*shared.keys);
     let refused = |reason: &str| Message::Refused {
         reason: reason.to_owned(),
     };
     let Some(id) = dn_sync::DeviceId::from_hex(id) else {
         return refused("That isn't a device id.");
     };
-    if id == keys.id() {
+    if id == shared.keys.id() {
         return refused("The Node can't be removed from a device. Use dn node on the Node.");
     }
+    match remove_member(shared, id, asking.id) {
+        Ok(_) => {
+            eprintln!(
+                "dn node: {} ({}) removed device {id}",
+                asking.name, asking.id
+            );
+            Message::Done
+        }
+        Err(SyncError::UnknownDevice) => refused("That device isn't paired with this Node."),
+        Err(e) => {
+            eprintln!("dn node: removing {id} failed: {e}");
+            refused("The Node couldn't remove that device. Try again.")
+        }
+    }
+}
+
+/// Removes a member from the device list and the group together (the key rotates), as
+/// asked by `by`. Returns the removed device's name.
+fn remove_member(
+    shared: &Shared,
+    id: dn_sync::DeviceId,
+    by: dn_sync::DeviceId,
+) -> Result<String, SyncError> {
+    let (db, keys) = (&*shared.db, &*shared.keys);
+    let name = DeviceList::get(&lock(db), id)?
+        .filter(dn_sync::Device::is_member)
+        .ok_or(SyncError::UnknownDevice)?
+        .name;
     let removed = {
         let mut group = lock_group(&shared.group);
         let conn = lock(db);
@@ -638,7 +829,7 @@ fn remove_device(shared: &Shared, asking: &dn_sync::Device, id: &str) -> Message
             .map_err(SyncError::from)
             .and_then(|tx| {
                 DeviceList::remove(&tx, id, dn_store::now_ms())?;
-                group.remove(&tx, &*shared.secrets, keys, id, asking.id)?;
+                group.remove(&tx, &*shared.secrets, keys, id, by)?;
                 tx.commit()?;
                 Ok(())
             });
@@ -651,18 +842,46 @@ fn remove_device(shared: &Shared, asking: &dn_sync::Device, id: &str) -> Message
         }
         done
     };
-    match removed {
-        Ok(()) => {
-            eprintln!(
-                "dn node: {} ({}) removed device {id}",
-                asking.name, asking.id
+    removed.map(|()| name)
+}
+
+/// `dn node devices` and `dn node remove-device`, from the control channel. Only the
+/// Node's own user reaches it (control.rs).
+#[cfg(unix)]
+impl control::NodeOps for Shared {
+    fn devices(&self) -> Result<Vec<control::DeviceRow>, String> {
+        let members = DeviceList::members(&lock(&self.db))
+            .map_err(|e| format!("couldn't read the device list: {e}"))?;
+        Ok(members
+            .into_iter()
+            .map(|d| control::DeviceRow {
+                id: d.id.to_hex(),
+                name: d.name,
+                kind: transport::kind_name(d.kind).to_owned(),
+                last_synced_at: d.last_synced_at,
+            })
+            .collect())
+    }
+
+    fn remove(&self, id: &str) -> Result<String, String> {
+        let id = dn_sync::DeviceId::from_hex(id)
+            .ok_or("that isn't a device id; `dn node devices` lists them")?;
+        if id == self.keys.id() {
+            return Err(
+                "that's this Node. To delete the Node and everything on it, stop it and run \
+                 `dn node delete-all`"
+                    .into(),
             );
-            Message::Done
         }
-        Err(SyncError::UnknownDevice) => refused("That device isn't paired with this Node."),
-        Err(e) => {
-            eprintln!("dn node: removing {id} failed: {e}");
-            refused("The Node couldn't remove that device. Try again.")
+        match remove_member(self, id, self.keys.id()) {
+            Ok(name) => {
+                eprintln!("dn node: removed device {name} ({id}) from the Node");
+                Ok(name)
+            }
+            Err(SyncError::UnknownDevice) => {
+                Err("no paired device has that id; `dn node devices` lists them".into())
+            }
+            Err(e) => Err(format!("couldn't remove the device: {e}")),
         }
     }
 }
@@ -783,6 +1002,15 @@ async fn handle(stream: TcpStream, peer: SocketAddr, shared: &Shared) {
                 }
             },
             Message::RemoveDevice { id } => remove_device(shared, &device, &id),
+            Message::HeldRequest => match held_items(db) {
+                Ok(items) => Message::Held { items },
+                Err(e) => {
+                    eprintln!("dn node: reading held calls failed: {e}");
+                    Message::Refused {
+                        reason: "The Node couldn't read what's waiting. Try again.".into(),
+                    }
+                }
+            },
             _ => {
                 eprintln!(
                     "dn node: {} ({}) sent a message this Node doesn't expect",
@@ -1000,6 +1228,63 @@ mod tests {
         let stranger = DeviceKeys::generate().unwrap();
         assert!(ask_status(addr, &stranger, &node_key).await.is_err());
 
+        stop.notify_waiters();
+        serving.await.unwrap().unwrap();
+    }
+
+    /// ADR-0019 (read-only): a paired device reads the held calls, with their exact
+    /// arguments; a stranger can't.
+    #[tokio::test]
+    async fn a_paired_device_reads_what_is_waiting() {
+        let dir = TempDir::new("held");
+        init(&dir.0, SecretsConfig::InsecurePlaintext);
+        let node_key = {
+            let node = started(&dir.0).await;
+            let conn = lock(&node.db);
+            dn_jobs::held::hold(
+                &conn,
+                &dn_jobs::held::HoldRequest {
+                    job: dn_jobs::JobKey::new(
+                        dn_plugin_api::PluginId::new("brief").unwrap(),
+                        "morning",
+                    ),
+                    run: dn_core::Id::new(),
+                    tool: "plugin.brief.send_mail".into(),
+                    arguments: serde_json::json!({"to": ["ana@example.com"], "subject": "Today"}),
+                    summary: "Send an email to 1 person".into(),
+                },
+                None,
+                now_secs(),
+            )
+            .unwrap();
+            DeviceList::members(&conn).unwrap()[0].keys.ed25519
+        };
+        let phone = DeviceKeys::generate().unwrap();
+        add_device(&dir.0, &phone.public(), "Work phone");
+        let node = started(&dir.0).await;
+        let addr = node.local_addr().unwrap();
+        let stop = Arc::new(Notify::new());
+        let serving = tokio::spawn(node.serve(stop.clone()));
+
+        let replies = request(addr, &phone, &node_key, &[Message::HeldRequest])
+            .await
+            .unwrap();
+        let Message::Held { items } = &replies[0] else {
+            panic!("expected the held calls, got {replies:?}");
+        };
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].plugin, "brief");
+        assert_eq!(items[0].job, "morning");
+        assert_eq!(items[0].summary, "Send an email to 1 person");
+        assert!(items[0].arguments.contains("ana@example.com"));
+        assert_eq!(items[0].arguments_sha256.len(), 64);
+
+        let stranger = DeviceKeys::generate().unwrap();
+        assert!(
+            request(addr, &stranger, &node_key, &[Message::HeldRequest])
+                .await
+                .is_err()
+        );
         stop.notify_waiters();
         serving.await.unwrap().unwrap();
     }
@@ -1265,6 +1550,64 @@ mod tests {
                 self.stop.notify_waiters();
                 self.serving.await.unwrap().unwrap();
             }
+        }
+
+        /// #309: `dn node devices` lists the device, `dn node remove-device` removes it for
+        /// good (it can't connect again), and the Node itself can't be removed that way.
+        #[tokio::test]
+        async fn dn_node_remove_device_removes_it_for_good() {
+            let dir = TempDir::new("remove");
+            init(&dir.0, SecretsConfig::InsecurePlaintext);
+            let laptop = DeviceKeys::generate().unwrap();
+            let (cli, device, node) = pair_with(&dir.0, &laptop, true).await;
+            cli.unwrap();
+            device.unwrap();
+
+            let control::Reply::Devices { devices } =
+                control::client_request(&dir.0, &control::Request::Devices)
+                    .await
+                    .unwrap()
+            else {
+                panic!("expected the device list");
+            };
+            let row = devices.iter().find(|d| d.name == "MacBook Pro").unwrap();
+            let node_row = devices.iter().find(|d| d.kind == "node").unwrap();
+            assert!(
+                control::client_request(
+                    &dir.0,
+                    &control::Request::RemoveDevice {
+                        id: node_row.id.clone()
+                    }
+                )
+                .await
+                .unwrap_err()
+                .contains("delete-all")
+            );
+            let removed = control::client_request(
+                &dir.0,
+                &control::Request::RemoveDevice { id: row.id.clone() },
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                removed,
+                control::Reply::Removed {
+                    name: "MacBook Pro".into()
+                }
+            );
+            let members = DeviceList::members(&lock(&node.db)).unwrap();
+            assert!(!members.iter().any(|d| d.keys == laptop.public()));
+            // Removing it again names the list to check.
+            assert!(
+                control::client_request(
+                    &dir.0,
+                    &control::Request::RemoveDevice { id: row.id.clone() }
+                )
+                .await
+                .unwrap_err()
+                .contains("dn node devices")
+            );
+            node.stop().await;
         }
 
         #[tokio::test]
