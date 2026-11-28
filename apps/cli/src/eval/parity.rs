@@ -22,7 +22,7 @@
 //! - no earlier sessions: a memory case is answered without them and reported `memory: none`.
 //!
 //! `tool_calls.required` / `forbidden` are checked here; `expect.must` / `must_not` are for
-//! the judge, which isn't part of R0.
+//! the judge (`dn eval judge`, a separate step).
 
 use super::{ModelArgs, Report, Turn, eval_config, in_git_work_tree, turn_with};
 use clap::Args;
@@ -695,7 +695,7 @@ impl Set {
 
 /// A sample file's path under `<dir>/files/`, checked: relative, no `..`, at most
 /// [`MAX_FILE_BYTES`].
-fn sample_file(dir: &Path, rel: &str) -> Result<PathBuf, String> {
+pub fn sample_file(dir: &Path, rel: &str) -> Result<PathBuf, String> {
     let p = Path::new(rel);
     if !p.components().all(|c| matches!(c, Component::Normal(_))) {
         return Err(format!("file `{rel}` must be a plain path under files/"));
@@ -711,7 +711,7 @@ fn sample_file(dir: &Path, rel: &str) -> Result<PathBuf, String> {
 // ---- running a case
 
 /// One tool call the model made, as the mock answered it.
-#[derive(Clone, Debug, Serialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct CallRecord {
     pub name: String,
     pub arguments: serde_json::Value,
@@ -1111,6 +1111,24 @@ struct Item {
     turn: Turn,
 }
 
+/// Answers one case as `dn eval parity` does: the case's history, its mock tools, the
+/// eval loop settings. Shared with `dn eval references`, so references get the same input.
+pub async fn answer_case<'a>(
+    model: &dyn dn_core::chat::ChatModel,
+    model_ref: &dn_core::model::ModelRef,
+    caller: &str,
+    set: &'a Set,
+    case: &'a Case,
+    root: &'a SetRoot,
+    max_tokens: u32,
+) -> Result<(Turn, MockTools), String> {
+    let mut cfg = eval_config(caller, model_ref, Some(max_tokens));
+    cfg.max_steps = case.max_steps.unwrap_or(DEFAULT_MAX_STEPS);
+    let tools = MockTools::new(set, case, root);
+    let t = turn_with(model, &tools, &cfg, history(set, root, case)?).await;
+    Ok((t, tools))
+}
+
 pub async fn run(a: ParityArgs) -> Result<(), String> {
     if let Some(h) = &a.holdout {
         if in_git_work_tree(&h.join("prompts")) {
@@ -1140,10 +1158,16 @@ pub async fn run(a: ParityArgs) -> Result<(), String> {
     let n = cases.len();
     let mut items = Vec::with_capacity(n);
     for (i, (case, root)) in cases.into_iter().enumerate() {
-        let mut cfg = eval_config("eval.parity", &m.model_ref, Some(a.max_tokens));
-        cfg.max_steps = case.max_steps.unwrap_or(DEFAULT_MAX_STEPS);
-        let tools = MockTools::new(&set, case, root);
-        let t = turn_with(&m.chat, &tools, &cfg, history(&set, root, case)?).await;
+        let (t, tools) = answer_case(
+            &m.chat,
+            &m.model_ref,
+            "eval.parity",
+            &set,
+            case,
+            root,
+            a.max_tokens,
+        )
+        .await?;
         let calls = tools.calls();
         let check = check_tools(&case.expect.tool_calls, &calls);
         let data_check = check_data(&t.text, &case.expect, &tools.sheets());

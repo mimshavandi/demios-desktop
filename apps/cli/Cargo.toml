@@ -21,6 +21,7 @@ dn-knowledge = { path = "../../crates/dn-knowledge", version = "0.1.0" }
 dn-inference = { workspace = true, features = ["llamacpp"] }
 dn-models.workspace = true
 dn-secrets.workspace = true
+dn-providers.workspace = true
 dn-store.workspace = true
 dn-sync.workspace = true
 dn-jobs.workspace = true
@@ -31,6 +32,8 @@ serde_json.workspace = true
 serde_yaml_ng.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util", "net", "signal"] }
 sysinfo.workspace = true
+sha2.workspace = true
+url = "2"
 
 [dev-dependencies]
 futures-core.workspace = true
