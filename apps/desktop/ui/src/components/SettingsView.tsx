@@ -38,6 +38,7 @@ import { NodeSettings } from "./NodeSettings";
 import { Updates } from "./Updates";
 import { LocalModelsCard, formatBytes } from "./LocalModels";
 import { DefaultsContext, SetDefault, type Defaults } from "./SetDefault";
+import { NODE_TEXT, NODE_TITLE, PROJECT_INSTRUCTIONS_SENT } from "./privacyText";
 import { useToast } from "./toast";
 
 export type SettingsSection = "general" | "models" | "tools" | "skills" | "node" | "addons";
@@ -844,12 +845,16 @@ function GeneralPage({
             <span className="row-title">Model providers you add a key for</span>
             <span className="dn-help">
               Messages in chats that use a provider's models are sent to that provider under your account with them, and
-              their terms apply.
+              their terms apply. {PROJECT_INSTRUCTIONS_SENT}
             </span>
           </li>
           <li>
             <span className="row-title">Hugging Face</span>
             <span className="dn-help">Downloading a model fetches it from Hugging Face. Your chats are never sent there.</span>
+          </li>
+          <li>
+            <span className="row-title">{NODE_TITLE}</span>
+            <span className="dn-help">{NODE_TEXT}</span>
           </li>
           <li>
             <span className="row-title">Tool servers (MCP)</span>
