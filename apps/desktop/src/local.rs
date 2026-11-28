@@ -21,6 +21,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 
+/// The model check's results, in the models folder (#421).
+const CHECKS_FILE: &str = ".model-checks.json";
+
 /// The catalogue id in `local:<id>`, if `model` is a local model.
 pub fn catalogue_id(model: &ModelRef) -> Option<&str> {
     match model {
@@ -265,6 +268,9 @@ pub struct LocalModels<B: InferenceBackend = LlamaCppBackend> {
     traits: Mutex<HashMap<String, dn_models::kind::ModelTraits>>,
     /// Results of the user-started tool-call check for "unknown" models (T-INF-26).
     probes: Mutex<crate::tool_probe::Store>,
+    /// Results of the model check (#421), kept in the models folder so a model is hashed
+    /// once, and again only when it changes.
+    checks: Arc<dn_models::check::CheckCache>,
     /// Models removed with Undo still possible (#176), each with the token of its removal so
     /// an old timer never finishes a later removal of the same model.
     removing: Mutex<HashMap<String, u64>>,
@@ -658,6 +664,9 @@ impl<B: InferenceBackend> LocalModels<B> {
         fetch: FetchFn,
         backend: Arc<B>,
     ) -> Self {
+        let checks = Arc::new(dn_models::check::CheckCache::open(Some(
+            dir.join(CHECKS_FILE),
+        )));
         let lm = Self {
             dir,
             catalog,
@@ -677,6 +686,7 @@ impl<B: InferenceBackend> LocalModels<B> {
             hf_cache: None,
             traits: Mutex::new(HashMap::new()),
             probes: Mutex::new(crate::tool_probe::Store::default()),
+            checks,
             compute: Mutex::new(None),
             removing: Mutex::new(HashMap::new()),
             remove_errors: Mutex::new(HashMap::new()),
@@ -1563,7 +1573,65 @@ impl<B: InferenceBackend> LocalModels<B> {
             out.push(p);
         }
         out.push(self.dir.join("hf"));
+        out.push(self.dir.join(CHECKS_FILE));
         out
+    }
+
+    /// The model check (#421) before the model `name` at `path` loads. Blocked findings
+    /// refuse it. Warnings are only logged for now: the app enforces them from PR 3 of #421
+    /// (#452), when the originals of chat templates are known.
+    async fn check_before_load(&self, name: &str, path: &Path) -> Result<(), CoreError> {
+        use dn_models::check::{self, OnWarnings, Verdict};
+        let (checks, hf, p) = (
+            Arc::clone(&self.checks),
+            self.hf_cache.clone(),
+            path.to_path_buf(),
+        );
+        let verdict = tauri::async_runtime::spawn_blocking(move || {
+            let origin = check::origin_of(&p, hf.as_deref());
+            check::gate(&p, &origin, &checks, OnWarnings::Log, |_| {})
+        })
+        .await
+        .map_err(|e| CoreError::ModelUnavailable {
+            user_message: format!("{name} couldn't be checked for known issues, so it isn't used."),
+            developer_message: format!("model check {}: {e}", path.display()),
+            recovery: vec![RecoveryAction::Retry {
+                after_seconds: None,
+            }],
+        })?;
+        if let Some(e) = self.checks.take_save_error() {
+            tracing::warn!("model check: {e}");
+        }
+        match verdict {
+            Verdict::Load(r) => {
+                // Temporary (#452): Warnings don't stop the load in the app until #421's PR 3.
+                for f in &r.findings {
+                    tracing::warn!(
+                        model = %path.display(),
+                        rule = %f.code,
+                        "model check warning: {} ({})",
+                        f.reason,
+                        f.detail
+                    );
+                }
+                Ok(())
+            }
+            Verdict::Refuse(r) => Err(CoreError::ModelUnavailable {
+                user_message: format!(
+                    "{name} was checked for known issues and can't be used. {}",
+                    r.findings.first().map(|f| f.reason.as_str()).unwrap_or("")
+                ),
+                developer_message: format!(
+                    "model check {}: {}",
+                    path.display(),
+                    check::reasons(&r)
+                ),
+                recovery: vec![RecoveryAction::ChooseModelForSlot {
+                    agent_id: crate::agent::AGENT_ID.into(),
+                    slot_id: "primary".into(),
+                }],
+            }),
+        }
     }
 
     /// Bytes "Delete all" would free: the whole folder when it is ours, else our files in
@@ -1700,6 +1768,7 @@ impl<B: InferenceBackend> LocalModels<B> {
             }
         }
         let path = self.path(&e);
+        self.check_before_load(&e.name, &path).await?;
         let opts = {
             let (path, machine) = (path.clone(), self.machine());
             tauri::async_runtime::spawn_blocking(move || load_options(&path, &machine))
@@ -1780,6 +1849,7 @@ impl<B: InferenceBackend> LocalModels<B> {
         // for v1.5): text past it is cut rather than embedded at positions the model never
         // saw. A small embedding model needs no GPU/CPU split (`load_options`).
         let path = self.path(&e);
+        self.check_before_load(&e.name, &path).await?;
         let n_ctx = {
             let path = path.clone();
             tauri::async_runtime::spawn_blocking(move || embedding_ctx(&path))
@@ -2377,19 +2447,36 @@ mod tests {
         }
     }
 
+    /// The smallest model file that passes the model check (#421): a valid GGUF header and
+    /// one 32-byte tensor.
+    fn tiny_gguf() -> Vec<u8> {
+        use dn_models::gguf::write::{V, gguf};
+        gguf(
+            &[
+                ("general.architecture", V::Str("llama")),
+                (
+                    "tokenizer.chat_template",
+                    V::Str("{{ messages[0].content }}"),
+                ),
+            ],
+            &[("a.weight", &[8], 0, 32)],
+        )
+    }
+
     fn two_ready_models() -> (Dir, Arc<Recorder>, LocalModels<Recorder>) {
         let dir = Dir(std::env::temp_dir().join(format!("dn-local-switch-{}", dn_core::Id::new())));
         std::fs::create_dir_all(&dir.0).unwrap();
         for id in ["a", "b"] {
-            std::fs::write(dir.0.join(format!("{id}.gguf")), b"12345").unwrap();
+            std::fs::write(dir.0.join(format!("{id}.gguf")), tiny_gguf()).unwrap();
             std::fs::write(dir.0.join(format!("{id}.gguf.sha256")), "aa").unwrap();
         }
+        let n = tiny_gguf().len() as u64;
         let rec = Arc::new(Recorder::default());
         let lm = LocalModels::with_parts(
             dir.0.clone(),
             Catalog {
                 version: 1,
-                models: vec![entry("a", 5, "aa"), entry("b", 5, "aa")],
+                models: vec![entry("a", n, "aa"), entry("b", n, "aa")],
             },
             Machine::cpu_only(16 << 30),
             pull_fetch(),
@@ -2679,11 +2766,12 @@ mod tests {
         let dir = Dir(std::env::temp_dir().join(format!("dn-local-embed-{}", dn_core::Id::new())));
         std::fs::create_dir_all(&dir.0).unwrap();
         for id in ["a", "e", "f"] {
-            std::fs::write(dir.0.join(format!("{id}.gguf")), b"12345").unwrap();
+            std::fs::write(dir.0.join(format!("{id}.gguf")), tiny_gguf()).unwrap();
             std::fs::write(dir.0.join(format!("{id}.gguf.sha256")), "aa").unwrap();
         }
+        let n = tiny_gguf().len() as u64;
         let embedding = |id: &str| {
-            let mut x = entry(id, 5, "aa");
+            let mut x = entry(id, n, "aa");
             x.capabilities = vec![Capability::Embedding];
             x
         };
@@ -2692,7 +2780,7 @@ mod tests {
             dir.0.clone(),
             Catalog {
                 version: 1,
-                models: vec![entry("a", 5, "aa"), embedding("e"), embedding("f")],
+                models: vec![entry("a", n, "aa"), embedding("e"), embedding("f")],
             },
             Machine::cpu_only(16 << 30),
             pull_fetch(),
@@ -2764,7 +2852,8 @@ mod tests {
         lm.set_owns_dir(true);
         std::fs::create_dir_all(d.0.join("hf")).unwrap();
         std::fs::write(d.0.join("hf").join("x.gguf"), b"123").unwrap();
-        assert_eq!(lm.disk_usage(), 5 + 2 + 5 + 2 + 3);
+        let n = tiny_gguf().len() as u64;
+        assert_eq!(lm.disk_usage(), n + 2 + n + 2 + 3);
         drop(lm.chat_model("a").await.unwrap());
         lm.delete_all().await.unwrap();
         assert_eq!(lm.disk_usage(), 0);
@@ -2780,6 +2869,61 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn the_model_check_refuses_a_hidden_payload_and_logs_warnings() {
+        let dir = Dir(std::env::temp_dir().join(format!("dn-local-check-{}", dn_core::Id::new())));
+        std::fs::create_dir_all(&dir.0).unwrap();
+        let mut poisoned = tiny_gguf();
+        poisoned.extend(b"MZ\x90\x00 hidden program");
+        std::fs::write(dir.0.join("p.gguf"), &poisoned).unwrap();
+        std::fs::write(dir.0.join("p.gguf.sha256"), "aa").unwrap();
+        std::fs::write(dir.0.join("w.gguf"), tiny_gguf()).unwrap();
+        std::fs::write(dir.0.join("w.gguf.sha256"), "aa").unwrap();
+        std::fs::write(
+            dir.0.join("w.gguf.chat_template.jinja"),
+            "{{ 'see https://x' }}",
+        )
+        .unwrap();
+        let rec = Arc::new(Recorder::default());
+        let lm = LocalModels::with_parts(
+            dir.0.clone(),
+            Catalog {
+                version: 1,
+                models: vec![
+                    entry("p", poisoned.len() as u64, "aa"),
+                    entry("w", tiny_gguf().len() as u64, "aa"),
+                ],
+            },
+            Machine::cpu_only(16 << 30),
+            pull_fetch(),
+            Arc::clone(&rec),
+        );
+        let Err(CoreError::ModelUnavailable {
+            user_message,
+            developer_message,
+            ..
+        }) = lm.chat_model("p").await
+        else {
+            panic!("a model with bytes after its data loaded");
+        };
+        assert!(
+            user_message.contains("checked for known issues"),
+            "{user_message}"
+        );
+        assert!(
+            developer_message.contains("Windows program"),
+            "{developer_message}"
+        );
+        assert!(
+            !lock(&rec.0).iter().any(|l| l.starts_with("load ")),
+            "never loaded"
+        );
+        // Warnings don't stop the app yet (#452): the model loads.
+        drop(lm.chat_model("w").await.unwrap());
+        // The result is stored next to the models.
+        assert!(dir.0.join(CHECKS_FILE).exists());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn delete_all_in_a_user_chosen_folder_keeps_their_files() {
         // `$DN_MODELS_DIR`: the folder is the user's, not ours.
         let (d, _rec, lm) = two_ready_models();
@@ -2789,8 +2933,9 @@ mod tests {
         std::fs::write(d.0.join("my-notes.txt"), b"keep me").unwrap();
         std::fs::create_dir_all(d.0.join("other")).unwrap();
         std::fs::write(d.0.join("other").join("x.gguf"), b"keep").unwrap();
-        // Ours: a, b (5 each) + 2 checksum files (2 each) + a.part (2) + hf (3).
-        assert_eq!(lm.disk_usage(), 5 + 5 + 2 + 2 + 2 + 3);
+        // Ours: a, b + 2 checksum files (2 each) + a.part (2) + hf (3).
+        let n = tiny_gguf().len() as u64;
+        assert_eq!(lm.disk_usage(), n + n + 2 + 2 + 2 + 3);
 
         lm.delete_all().await.unwrap();
         assert!(d.0.join("my-notes.txt").exists());
@@ -2945,7 +3090,7 @@ mod tests {
     async fn hub_downloads_from_the_app_or_cli_are_listed_and_loadable() {
         let (d, rec, mut lm) = two_ready_models();
         lm.set_owns_dir(true);
-        let path = fake_hub_download(&d.0, "org/Tiny-GGUF", "Tiny-Q4_K_M.gguf", b"1234567");
+        let path = fake_hub_download(&d.0, "org/Tiny-GGUF", "Tiny-Q4_K_M.gguf", &tiny_gguf());
         // An unverified file (no marker) next to it is ignored.
         let bad = dn_models::hub::HubClient::local_path(&d.0, "org/Tiny-GGUF", "Bad.gguf").unwrap();
         std::fs::write(&bad, b"x").unwrap();

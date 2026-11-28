@@ -351,6 +351,7 @@ pub async fn run(a: BenchArgs) -> Result<(), String> {
 
 async fn run_local(a: &BenchArgs) -> Result<Report, String> {
     let path = resolve_model(&a.model)?;
+    a.load.check(&path)?;
     // Context must hold one run; placement and KV are estimated for that context.
     let ctx = bench_ctx(a.load.ctx(), a.n_prompt, a.n_gen);
     let (opts, _) = a.load.with_ctx(ctx).auto_options(&path)?;

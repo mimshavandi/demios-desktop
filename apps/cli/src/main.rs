@@ -173,9 +173,22 @@ pub struct LoadArgs {
     /// The most tokens the draft model proposes per step (default 8).
     #[arg(long, requires = "draft")]
     draft_max: Option<u32>,
+    /// Load a model whose check found Warnings (an unusual chat template, a file that
+    /// couldn't be verified). Blocked models are never loaded.
+    #[arg(long)]
+    pub accept_model_warnings: bool,
 }
 
 impl LoadArgs {
+    /// The model check for `path` and the draft model, if one is given ([`check_model`]).
+    pub fn check(&self, path: &std::path::Path) -> Result<(), String> {
+        check_model(path, self.accept_model_warnings)?;
+        if let Some(d) = &self.draft {
+            check_model(d, self.accept_model_warnings)?;
+        }
+        Ok(())
+    }
+
     /// `--ctx` as given.
     pub fn ctx(&self) -> Option<u32> {
         self.ctx
@@ -414,6 +427,63 @@ pub fn resolve_model(s: &str) -> Result<PathBuf, String> {
     Err(format!("no such file or catalogue id: {s}"))
 }
 
+/// The model check (#421) before a local model loads: every part, its chat template and,
+/// in the Hugging Face cache, its hash. Blocked findings always refuse the model; Warnings
+/// refuse it unless `accept_warnings`. Results are kept in the models folder, so a model is
+/// hashed once and again only when it changes.
+pub fn check_model(path: &std::path::Path, accept_warnings: bool) -> Result<(), String> {
+    let cache = dn_models::check::CheckCache::open(Some(
+        dn_models::download::default_models_dir().join(".model-checks.json"),
+    ));
+    check_model_with(
+        path,
+        accept_warnings,
+        &cache,
+        dn_models::cache::hf_cache_dir().as_deref(),
+    )
+}
+
+/// [`check_model`] with a given result cache and Hugging Face cache (for tests).
+fn check_model_with(
+    path: &std::path::Path,
+    accept_warnings: bool,
+    cache: &dn_models::check::CheckCache,
+    hf_cache: Option<&std::path::Path>,
+) -> Result<(), String> {
+    use dn_models::check::{self, OnWarnings, State, Verdict};
+    let origin = check::origin_of(path, hf_cache);
+    let on = if accept_warnings {
+        OnWarnings::Accept
+    } else {
+        OnWarnings::Refuse
+    };
+    let verdict = check::gate(path, &origin, cache, on, |_| {});
+    if let Some(e) = cache.take_save_error() {
+        eprintln!("[dn] {e}");
+    }
+    match verdict {
+        Verdict::Load(r) => {
+            for f in &r.findings {
+                eprintln!(
+                    "[dn] model check: accepted warning: {} ({}) [{}]",
+                    f.reason, f.detail, f.code
+                );
+            }
+            Ok(())
+        }
+        Verdict::Refuse(r) => Err(format!(
+            "{} was checked for known issues and isn't loaded:\n{}\n{}",
+            path.display(),
+            check::reasons(&r),
+            if r.state == State::Blocked {
+                "This can't be overridden."
+            } else {
+                "To load it anyway, pass --accept-model-warnings."
+            }
+        )),
+    }
+}
+
 fn gib(b: u64) -> String {
     format!("{:.2} GiB", b as f64 / GIB as f64)
 }
@@ -452,6 +522,7 @@ async fn run(a: RunArgs) -> Result<(), String> {
         chat(&m, r, messages, tools, &a)
     } else {
         let path = resolve_model(&a.model)?;
+        a.load.check(&path)?;
         let spec = ModelSpec::gguf(&path);
         let backend = Arc::new(LlamaCppBackend::new());
         let (opts, report) = a.load.auto_options(&path)?;
@@ -1328,6 +1399,38 @@ mod tests {
         };
         let (_, est) = forced.plan("big.gguf", &moe(), &tiny).unwrap();
         assert_eq!(est.status, FitStatus::MemoryBlocked);
+    }
+
+    #[test]
+    fn the_model_check_refuses_blocked_models_and_needs_a_flag_for_warnings() {
+        use dn_models::gguf::write::{V, gguf};
+        let dir = std::env::temp_dir().join(format!("dn-cli-check-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cache = dn_models::check::CheckCache::open(None);
+        let good = gguf(
+            &[("general.architecture", V::Str("llama"))],
+            &[("a.weight", &[8], 0, 32)],
+        );
+        let m = dir.join("m.gguf");
+        std::fs::write(&m, &good).unwrap();
+        assert_eq!(check_model_with(&m, false, &cache, None), Ok(()));
+        // A Warning (a URL in the stored template): refused without the flag.
+        std::fs::write(
+            dn_models::template::sidecar_path(&m),
+            "{{ 'see https://x' }}",
+        )
+        .unwrap();
+        let e = check_model_with(&m, false, &cache, None).unwrap_err();
+        assert!(e.contains("--accept-model-warnings"), "{e}");
+        assert_eq!(check_model_with(&m, true, &cache, None), Ok(()));
+        // Blocked: bytes after the data, refused even with the flag.
+        let mut bad = good.clone();
+        bad.extend(b"MZ payload");
+        let b = dir.join("b.gguf");
+        std::fs::write(&b, bad).unwrap();
+        let e = check_model_with(&b, true, &cache, None).unwrap_err();
+        assert!(e.contains("can't be overridden"), "{e}");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

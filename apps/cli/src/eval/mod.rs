@@ -174,6 +174,7 @@ impl ModelArgs {
             });
         }
         let path = crate::resolve_model(&self.model)?;
+        self.load.check(&path)?;
         let load = match (min_ctx, self.load.ctx()) {
             (Some(min), None) => self.load.with_ctx(min),
             _ => self.load.clone(),

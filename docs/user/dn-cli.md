@@ -46,6 +46,20 @@ A `demios://models/add?…` link names a Hugging Face model, and can name one ve
 
 `dn run` and `dn bench` pick the context size, cache type and GPU layers that fit your machine, using the same estimate as `dn fit`. For a mixture-of-experts model that doesn't fit on the GPU, they keep some or all of its experts in CPU memory (`dn fit` prints this as the `preset` line); `--moe-cpu all` or `--moe-cpu <layers>` sets it yourself. Any option you set yourself wins. A model that won't fit is refused; pass `--force` to try anyway. `--no-auto` turns the automatic choice off.
 
+## The model check
+
+Before a local model is used for the first time, and again whenever its file changes, `dn` checks it for known issues:
+
+- bytes hidden after the model's data;
+- settings that hold a large block of data;
+- a damaged file layout;
+- a file in the Hugging Face cache that no longer matches its hash, or points outside the cache;
+- a chat template with web addresses, shell commands, text that instructs the model, encoded blocks or invisible characters.
+
+A model with a problem in the first group is never loaded, and the message says why. A model with only Warnings, such as an unusual chat template, is loaded only with `--accept-model-warnings`. Results are kept in the models folder, so a large file is hashed only once.
+
+"Checked for known issues" means none of the problems above were found. It doesn't mean a model is safe.
+
 ## Faster answers (preview)
 
 - **Prompt reuse (on by default):** the model keeps the last request's tokens, and recent other ones in memory. A request that starts like an earlier one, such as the next turn of a chat, only processes what's new. Other requests get the smaller of 2 GB and a tenth of your RAM (about 800 MB on an 8 GB laptop); `--prompt-cache-mib` changes it, and `--no-prompt-cache` turns reuse off. Models with recurrent layers can't do this; `dn run -v` says so. The Demios app uses the same default.
