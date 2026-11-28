@@ -19,10 +19,12 @@ use dn_core::run::{MemoryUse, UsedMemory};
 use dn_core::untrusted::SourceRef;
 use rusqlite::Connection;
 
-/// Added to the system part whenever memory is on for the chat (fixed, so caching holds).
-/// Meant to join the shared citation rule (answer.rules, #371).
-pub const CITE_INSTRUCTION: &str = "When a statement relies on something you remember about \
-     the person, put its label after it, like [M2]. Use only labels you were given.";
+/// The memory citation rule, verbatim as in answer.rules v2 (agreed with W-docs, #371). Added
+/// to the system part only on surfaces that don't get answer.rules, whenever memory is on for
+/// the chat (fixed, so caching holds).
+pub const CITE_INSTRUCTION: &str = "When something you remember about the person shapes the \
+     answer, cite its label right after the statement, like [M2]. Cite only memories you used, \
+     and only labels you were given.";
 
 /// The core profile and the labels of its items.
 #[derive(Clone, Debug, PartialEq)]
