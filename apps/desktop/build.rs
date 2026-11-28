@@ -116,6 +116,7 @@ const COMMANDS: &[&str] = &[
     "list_chat_files",
     "add_chat_files",
     "remove_chat_file",
+    "restore_chat_file",
     // The embedding-model offer (#171).
     "knowledge_status",
     "knowledge_offer",

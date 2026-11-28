@@ -116,7 +116,9 @@ fn candidates(
     let db = state.db().map_err(|e| e.message)?;
     let mut out = Vec::new();
     if let (Some(c), Some(root)) = (conversation_id, state.chat_files_root()) {
-        for f in crate::chat_files::list(&db, c).map_err(|e| e.to_string())? {
+        for f in
+            crate::chat_files::readable(&db, c, dn_store::now_ms()).map_err(|e| e.to_string())?
+        {
             out.push(Candidate {
                 path: crate::chat_files::file_path(root, &f),
                 name: f.name,
@@ -165,6 +167,15 @@ fn run(
         .filter(|f| f.name.eq_ignore_ascii_case(wanted.trim()))
         .collect();
     let Some(file) = matching.first().copied() else {
+        // Removed from the chat (after its Undo time): say so, don't just say it's missing.
+        if let (Some(c), Ok(db)) = (conversation_id, state.db())
+            && crate::chat_files::removed_names(&db, c)
+                .map_err(|e| e.to_string())?
+                .iter()
+                .any(|n| n.eq_ignore_ascii_case(wanted.trim()))
+        {
+            return Err(format!("\"{shown_wanted}\" was removed from this chat."));
+        }
         return Err(if data_files.is_empty() {
             format!(
                 "This chat has no file called \"{shown_wanted}\", and no CSV or spreadsheet files."
@@ -380,6 +391,34 @@ mod tests {
             .execute(&call("extra.csv"))
             .await;
             assert!(out.is_error);
+            // Removed: readable during Undo (a running answer), then "was removed".
+            let extra = added
+                .added
+                .iter()
+                .find(|f| f.name == "extra.csv")
+                .unwrap()
+                .id;
+            crate::chat_files::remove(&st, conv.id, extra)
+                .unwrap()
+                .unwrap();
+            assert!(
+                !alone.execute(&call("extra.csv")).await.is_error,
+                "during Undo"
+            );
+            st.db()
+                .unwrap()
+                .execute(
+                    "UPDATE app_chat_files SET removed_at = 1 WHERE id = ?1",
+                    [extra.to_string()],
+                )
+                .unwrap();
+            let out = alone.execute(&call("extra.csv")).await;
+            assert!(out.is_error);
+            assert!(
+                text_of(&out).contains("\"extra.csv\" was removed from this chat."),
+                "{}",
+                text_of(&out)
+            );
         });
         let _ = std::fs::remove_dir_all(dir);
     }

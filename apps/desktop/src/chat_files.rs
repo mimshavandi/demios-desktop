@@ -4,8 +4,11 @@
 //! under `<data dir>/chat-files/<conversation id>/<file id>`, and deleted with the chat and
 //! by "Delete all local data". App-owned table `app_chat_files`.
 //!
-//! Only data files for now: other kinds (documents, images) come with the attach UI, which
-//! needs an approved design first.
+//! Only data files for now (the approved ChatAttachments design). A file is checked at attach
+//! time to read as a table, so a chip is never a broken file. Removing is deferred: the row
+//! is hidden at once and the copy kept for [`UNDO_MS`], so Undo can bring it back and an
+//! answer already running can still read it; after that the copy is deleted and a tool call
+//! for it says it was removed.
 
 use crate::error::{IpcError, IpcResult};
 use crate::projects::{ImportError, copy_in, display_name, media_type};
@@ -20,9 +23,12 @@ use std::path::{Path, PathBuf};
 pub const FILES_DIR: &str = "chat-files";
 /// Most files one chat holds.
 pub const MAX_FILES: u64 = 20;
+/// How long a removed file can be brought back (the Undo toast's 10 seconds).
+pub const UNDO_MS: i64 = 10_000;
 
 pub fn migrations() -> &'static [&'static str] {
-    &["CREATE TABLE app_chat_files (
+    &[
+        "CREATE TABLE app_chat_files (
         id              TEXT    PRIMARY KEY NOT NULL,
         conversation_id TEXT    NOT NULL,
         name            TEXT    NOT NULL,
@@ -31,7 +37,10 @@ pub fn migrations() -> &'static [&'static str] {
         sha256          TEXT    NOT NULL,
         created_at      INTEGER NOT NULL
     );
-    CREATE INDEX app_chat_files_conversation ON app_chat_files (conversation_id);"]
+    CREATE INDEX app_chat_files_conversation ON app_chat_files (conversation_id);",
+        // Deferred removal (Undo): set when removed; the copy is deleted after UNDO_MS.
+        "ALTER TABLE app_chat_files ADD COLUMN removed_at INTEGER;",
+    ]
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -62,13 +71,47 @@ fn parse_id(s: String) -> rusqlite::Result<Id> {
     })
 }
 
-/// The chat's files, oldest first.
+/// The chat's files, oldest first (not removed ones).
 pub fn list(conn: &Connection, conversation_id: Id) -> dn_store::Result<Vec<ChatFile>> {
-    let mut stmt = conn.prepare(
+    select(conn, conversation_id, "removed_at IS NULL", None)
+}
+
+/// The files the data tools may read: the chat's files, and ones removed less than
+/// [`UNDO_MS`] ago (an answer already running keeps reading them during Undo).
+pub fn readable(
+    conn: &Connection,
+    conversation_id: Id,
+    now: i64,
+) -> dn_store::Result<Vec<ChatFile>> {
+    select(
+        conn,
+        conversation_id,
+        "(removed_at IS NULL OR removed_at > ?2)",
+        Some(now - UNDO_MS),
+    )
+}
+
+/// Names of files removed from the chat, for a clear error when one is asked for.
+pub fn removed_names(conn: &Connection, conversation_id: Id) -> dn_store::Result<Vec<String>> {
+    Ok(
+        select(conn, conversation_id, "removed_at IS NOT NULL", None)?
+            .into_iter()
+            .map(|f| f.name)
+            .collect(),
+    )
+}
+
+fn select(
+    conn: &Connection,
+    conversation_id: Id,
+    filter: &str,
+    since: Option<i64>,
+) -> dn_store::Result<Vec<ChatFile>> {
+    let mut stmt = conn.prepare(&format!(
         "SELECT id, conversation_id, name, media_type, size, sha256, created_at
-         FROM app_chat_files WHERE conversation_id = ?1 ORDER BY created_at, id",
-    )?;
-    let rows = stmt.query_map([conversation_id.to_string()], |r| {
+         FROM app_chat_files WHERE conversation_id = ?1 AND {filter} ORDER BY created_at, id"
+    ))?;
+    let row = |r: &rusqlite::Row<'_>| {
         Ok(ChatFile {
             id: parse_id(r.get(0)?)?,
             conversation_id: parse_id(r.get(1)?)?,
@@ -78,8 +121,36 @@ pub fn list(conn: &Connection, conversation_id: Id) -> dn_store::Result<Vec<Chat
             sha256: r.get(5)?,
             created_at: r.get(6)?,
         })
-    })?;
-    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    };
+    let rows = match since {
+        Some(t) => stmt
+            .query_map(params![conversation_id.to_string(), t], row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?,
+        None => stmt
+            .query_map([conversation_id.to_string()], row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?,
+    };
+    Ok(rows)
+}
+
+/// Deletes the copies of files removed more than [`UNDO_MS`] ago (the rows stay, so a tool
+/// call for one says it was removed). Run by every chat-files command and at start.
+pub fn expire_removed(conn: &Connection, root: &Path, now: i64) -> dn_store::Result<()> {
+    let mut stmt = conn.prepare(
+        "SELECT id, conversation_id FROM app_chat_files WHERE removed_at IS NOT NULL AND removed_at <= ?1",
+    )?;
+    let old: Vec<(String, String)> = stmt
+        .query_map([now - UNDO_MS], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    for (id, conv) in old {
+        let p = root.join(&conv).join(&id);
+        if let Err(e) = std::fs::remove_file(&p)
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!("could not delete a removed chat file's copy: {e}");
+        }
+    }
+    Ok(())
 }
 
 /// Whether the chat has a file the data tools read (decides whether they're offered).
@@ -129,7 +200,7 @@ pub fn add(state: &AppState, conversation_id: Id, paths: &[PathBuf]) -> IpcResul
         };
         if !dn_data::tool::reads(&name) {
             out.skipped.push(skip(
-                "Only CSV and spreadsheet files can be attached to a chat for now.",
+                "only tables (CSV, TSV, TXT) and spreadsheets can be attached for now.",
             ));
             continue;
         }
@@ -137,19 +208,45 @@ pub fn add(state: &AppState, conversation_id: Id, paths: &[PathBuf]) -> IpcResul
         // One file per name, so the data tools never have to pick between two silently.
         if existing.iter().any(|f| f.name.eq_ignore_ascii_case(&name)) {
             out.skipped.push(skip(
-                "A file with this name is already attached to this chat. Remove it first, or rename the new one.",
+                "a file with this name is already attached. Remove it first, or rename the new one.",
             ));
             continue;
         }
         let count = existing.len() as u64;
         if count >= MAX_FILES {
             out.skipped
-                .push(skip(&format!("A chat holds at most {MAX_FILES} files.")));
+                .push(skip(&format!("a chat holds at most {MAX_FILES} files.")));
             continue;
         }
         let dir = chat_dir(&root, conversation_id);
         match copy_in(&dir, p) {
             Ok((id, size, sha256)) => {
+                let copy = dir.join(id.to_string());
+                // Checked now, so a chip is never a file the data tools can't read.
+                let check = std::fs::read(&copy)
+                    .map_err(|_| "it couldn't be read.".to_string())
+                    .and_then(|b| {
+                        dn_data::read(&name, &b, &dn_data::Limits::default())
+                            .map(|_| ())
+                            .map_err(|e| match e {
+                                dn_data::DataError::Empty => {
+                                    "it can't be read as a table (the file is empty).".to_string()
+                                }
+                                dn_data::DataError::TooLarge(_) => "it's larger than 50 MB.".to_string(),
+                                dn_data::DataError::Unreadable(why) => {
+                                    format!("it can't be read as a table ({why}).")
+                                }
+                                dn_data::DataError::Unsupported(_) => {
+                                    "only tables (CSV, TSV, TXT) and spreadsheets can be attached for now."
+                                        .to_string()
+                                }
+                            })
+                    });
+                if let Err(reason) = check {
+                    let _ = std::fs::remove_file(&copy);
+                    out.skipped.push(skip(&reason));
+                    continue;
+                }
                 let f = ChatFile {
                     id,
                     conversation_id,
@@ -177,7 +274,7 @@ pub fn add(state: &AppState, conversation_id: Id, paths: &[PathBuf]) -> IpcResul
                     Err(e) => {
                         let _ = std::fs::remove_file(file_path(&root, &f));
                         tracing::warn!("could not record a chat file: {e}");
-                        out.skipped.push(skip("It couldn't be saved."));
+                        out.skipped.push(skip("it couldn't be saved."));
                     }
                 }
             }
@@ -185,32 +282,90 @@ pub fn add(state: &AppState, conversation_id: Id, paths: &[PathBuf]) -> IpcResul
                 if let ImportError::Unreadable(io) = &e {
                     tracing::warn!("could not add a chat file: {io}");
                 }
-                out.skipped.push(skip(&e.to_string()));
+                out.skipped.push(skip(match e {
+                    ImportError::NotAFile => "it isn't a file.",
+                    ImportError::TooLarge => "it's larger than 50 MB.",
+                    ImportError::Unreadable(_) => "it couldn't be read.",
+                    ImportError::Store(_) => "it couldn't be saved.",
+                }));
             }
         }
     }
     Ok(out)
 }
 
-/// Removes one file from a chat (row and copy). `false` if it wasn't there.
-pub fn remove(state: &AppState, conversation_id: Id, file_id: Id) -> IpcResult<bool> {
+/// A removed file, until [`UNDO_MS`] has passed.
+#[derive(Debug, Serialize)]
+pub struct RemovedFile {
+    pub id: Id,
+    pub name: String,
+    /// Until when [`restore`] brings it back (Unix ms).
+    pub undo_until: i64,
+}
+
+/// Removes one file from a chat: hidden at once, its copy kept for [`UNDO_MS`] so Undo can
+/// bring it back and an answer already running can still read it. `None` if it wasn't there.
+pub fn remove(
+    state: &AppState,
+    conversation_id: Id,
+    file_id: Id,
+) -> IpcResult<Option<RemovedFile>> {
     let root = root(state)?;
     let db = state.db()?;
-    let f: Option<ChatFile> = list(&db, conversation_id)?
+    let now = dn_store::now_ms();
+    expire_removed(&db, &root, now)?;
+    let Some(f) = list(&db, conversation_id)?
         .into_iter()
-        .find(|f| f.id == file_id);
-    let Some(f) = f else { return Ok(false) };
+        .find(|f| f.id == file_id)
+    else {
+        return Ok(None);
+    };
     db.execute(
-        "DELETE FROM app_chat_files WHERE id = ?1 AND conversation_id = ?2",
+        "UPDATE app_chat_files SET removed_at = ?3 WHERE id = ?1 AND conversation_id = ?2 AND removed_at IS NULL",
+        params![f.id.to_string(), conversation_id.to_string(), now],
+    )
+    .map_err(dn_store::StoreError::from)?;
+    Ok(Some(RemovedFile {
+        id: f.id,
+        name: f.name,
+        undo_until: now + UNDO_MS,
+    }))
+}
+
+/// Undo: brings back a file removed less than [`UNDO_MS`] ago, as it was.
+pub fn restore(state: &AppState, conversation_id: Id, file_id: Id) -> IpcResult<ChatFile> {
+    let root = root(state)?;
+    let db = state.db()?;
+    let now = dn_store::now_ms();
+    let gone = || IpcError::new("not_found", "This file can't be brought back any more.");
+    let Some(f) = select(
+        &db,
+        conversation_id,
+        "removed_at IS NOT NULL AND removed_at > ?2",
+        Some(now - UNDO_MS),
+    )?
+    .into_iter()
+    .find(|f| f.id == file_id) else {
+        return Err(gone());
+    };
+    if !file_path(&root, &f).is_file() {
+        return Err(gone());
+    }
+    if list(&db, conversation_id)?
+        .iter()
+        .any(|x| x.name.eq_ignore_ascii_case(&f.name))
+    {
+        return Err(IpcError::new(
+            "conflict",
+            "A file with this name was attached since. Remove it first.",
+        ));
+    }
+    db.execute(
+        "UPDATE app_chat_files SET removed_at = NULL WHERE id = ?1 AND conversation_id = ?2",
         params![f.id.to_string(), conversation_id.to_string()],
     )
     .map_err(dn_store::StoreError::from)?;
-    if let Err(e) = std::fs::remove_file(file_path(&root, &f))
-        && e.kind() != std::io::ErrorKind::NotFound
-    {
-        tracing::warn!("could not delete a chat file's copy: {e}");
-    }
-    Ok(true)
+    Ok(f)
 }
 
 /// Forgets a purged chat's files: rows and the folder of copies. Idempotent.
@@ -258,7 +413,14 @@ pub async fn list_chat_files(
     state: AppStateRef<'_>,
     conversation_id: Id,
 ) -> IpcResult<Vec<ChatFile>> {
-    crate::commands::blocking(&state, move |s| Ok(list(&*s.db()?, conversation_id)?)).await
+    crate::commands::blocking(&state, move |s| {
+        let db = s.db()?;
+        if let Some(root) = s.chat_files_root() {
+            expire_removed(&db, root, dn_store::now_ms())?;
+        }
+        Ok(list(&db, conversation_id)?)
+    })
+    .await
 }
 
 /// Opens the system file picker (from Rust; the webview never chooses a path) and copies
@@ -303,13 +465,24 @@ pub async fn add_chat_files(
     crate::commands::blocking(&state, move |s| add(s, conversation_id, &paths)).await
 }
 
+/// Removes a file (Undo with `restore_chat_file` for [`UNDO_MS`]).
 #[tauri::command]
 pub async fn remove_chat_file(
     state: AppStateRef<'_>,
     conversation_id: Id,
     file_id: Id,
-) -> IpcResult<bool> {
+) -> IpcResult<Option<RemovedFile>> {
     crate::commands::blocking(&state, move |s| remove(s, conversation_id, file_id)).await
+}
+
+/// Undo of `remove_chat_file`.
+#[tauri::command]
+pub async fn restore_chat_file(
+    state: AppStateRef<'_>,
+    conversation_id: Id,
+    file_id: Id,
+) -> IpcResult<ChatFile> {
+    crate::commands::blocking(&state, move |s| restore(s, conversation_id, file_id)).await
 }
 
 #[cfg(test)]
@@ -343,7 +516,11 @@ mod tests {
         assert_eq!(r.added[0].name, "sales.csv");
         assert_eq!(r.added[0].size, 8);
         assert_eq!(r.skipped.len(), 1);
-        assert!(r.skipped[0].reason.contains("Only CSV and spreadsheet"));
+        assert!(
+            r.skipped[0]
+                .reason
+                .starts_with("only tables (CSV, TSV, TXT)")
+        );
         let root = st.chat_files_root().unwrap();
         assert_eq!(
             std::fs::read(file_path(root, &r.added[0])).unwrap(),
@@ -367,12 +544,15 @@ mod tests {
             .remove(0);
         let fb = add(&st, b.id, &[csv]).unwrap().added.remove(0);
         let root = st.chat_files_root().unwrap().to_path_buf();
-        // Removing one file.
-        assert!(remove(&st, a.id, fa.id).unwrap());
+        // Removing one file: hidden at once, the copy kept for Undo, deleted after.
+        let r = remove(&st, a.id, fa.id).unwrap().unwrap();
+        assert!(list(&st.db().unwrap(), a.id).unwrap().is_empty());
+        assert!(file_path(&root, &fa).exists(), "kept for Undo");
+        expire_removed(&st.db().unwrap(), &root, r.undo_until + 1).unwrap();
         assert!(!file_path(&root, &fa).exists());
-        assert!(!remove(&st, a.id, fa.id).unwrap(), "already gone");
+        assert!(remove(&st, a.id, fa.id).unwrap().is_none(), "already gone");
         // Another chat's file can't be removed through this chat.
-        assert!(!remove(&st, a.id, fb.id).unwrap());
+        assert!(remove(&st, a.id, fb.id).unwrap().is_none());
         // Purging chat b deletes its rows and folder.
         forget_chat(&st.db().unwrap(), Some(&root), b.id).unwrap();
         assert!(list(&st.db().unwrap(), b.id).unwrap().is_empty());
@@ -414,6 +594,91 @@ mod tests {
             add(&st, Id::new(), &paths[..1]).unwrap_err().code,
             "not_found"
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn undo_brings_a_removed_file_back_and_a_running_answer_can_still_read_it() {
+        let (st, dir) = state();
+        let c = st.create_conversation().unwrap();
+        let f = add(&st, c.id, &[src(&dir, "sales.csv", b"a,b\n1,2\n")])
+            .unwrap()
+            .added
+            .remove(0);
+        let r = remove(&st, c.id, f.id).unwrap().unwrap();
+        assert_eq!(r.name, "sales.csv");
+        let db = st.db().unwrap();
+        let now = dn_store::now_ms();
+        assert_eq!(
+            readable(&db, c.id, now).unwrap().len(),
+            1,
+            "still readable during Undo"
+        );
+        assert!(readable(&db, c.id, r.undo_until + 1).unwrap().is_empty());
+        drop(db);
+        let back = restore(&st, c.id, f.id).unwrap();
+        assert_eq!(back.id, f.id);
+        assert_eq!(list(&st.db().unwrap(), c.id).unwrap().len(), 1);
+        // After the Undo time, it can't come back, and its name is known as removed.
+        let r = remove(&st, c.id, f.id).unwrap().unwrap();
+        st.db()
+            .unwrap()
+            .execute(
+                "UPDATE app_chat_files SET removed_at = ?1 WHERE id = ?2",
+                rusqlite::params![r.undo_until - 2 * UNDO_MS, f.id.to_string()],
+            )
+            .unwrap();
+        assert!(restore(&st, c.id, f.id).is_err());
+        assert_eq!(
+            removed_names(&st.db().unwrap(), c.id).unwrap(),
+            ["sales.csv"]
+        );
+        // A new file with the same name can be attached once the old one is removed.
+        assert_eq!(
+            add(&st, c.id, &[src(&dir, "sales.csv", b"x\n1\n")])
+                .unwrap()
+                .added
+                .len(),
+            1
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_file_that_doesnt_read_as_a_table_isnt_attached_and_reasons_follow_the_design() {
+        let (st, dir) = state();
+        let c = st.create_conversation().unwrap();
+        let out = add(
+            &st,
+            c.id,
+            &[
+                src(&dir, "export.csv", b""),
+                src(&dir, "broken.xlsx", b"not a workbook"),
+                src(&dir, "notes.pdf", b"%PDF"),
+            ],
+        )
+        .unwrap();
+        assert!(out.added.is_empty());
+        let reasons: Vec<&str> = out.skipped.iter().map(|s| s.reason.as_str()).collect();
+        assert_eq!(
+            reasons[0],
+            "it can't be read as a table (the file is empty)."
+        );
+        assert!(
+            reasons[1].starts_with("it can't be read as a table ("),
+            "{}",
+            reasons[1]
+        );
+        assert_eq!(
+            reasons[2],
+            "only tables (CSV, TSV, TXT) and spreadsheets can be attached for now."
+        );
+        // Nothing left behind for the refused files.
+        let root = st.chat_files_root().unwrap();
+        let left = std::fs::read_dir(chat_dir(root, c.id))
+            .map(|d| d.count())
+            .unwrap_or(0);
+        assert_eq!(left, 0);
         let _ = std::fs::remove_dir_all(dir);
     }
 }

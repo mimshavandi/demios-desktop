@@ -116,6 +116,7 @@
     "allow-list-chat-files",
     "allow-add-chat-files",
     "allow-remove-chat-file",
+    "allow-restore-chat-file",
     "allow-knowledge-status",
     "allow-knowledge-offer",
     "allow-artifact-child-open",
