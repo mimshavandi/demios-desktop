@@ -6,10 +6,13 @@
 //! growing lengths in the model's own tokens:
 //! - **needle:** one fact (an access code) at 10–90% depth; asked for it;
 //! - **multikey:** four similar facts; asked for one of them;
-//! - **multihop:** a chain of four assignments (`V3 = V2`, …) spread through the document,
-//!   with two distractor chains; asked for the last variable's value;
-//! - **count:** 3–9 delivery lines for one dock spread through the document, among lines for
+//! - **multihop:** a chain of three assignments (two hops) spread through the document, with
+//!   two distractor chains; asked for the last name's value;
+//! - **count:** 2–5 delivery lines for one dock spread through the document, among lines for
 //!   two other docks; asked how many arrived at that dock (aggregation).
+//!
+//! Multihop and count must first pass a gate at 2,048 tokens ([`GATE`]); a task that doesn't
+//! is reported as too hard for the model, never with an effective length.
 //!
 //! Multihop and count are the harder tasks: the report's `effective_tokens_hard` is the
 //! effective length over both of them pooled, with the cases behind each length.
@@ -33,8 +36,13 @@ const DEFAULT_LENGTHS: &[u32] = &[4096, 8192, 16384, 32768, 65536, 131072];
 const DEPTHS: &[f64] = &[0.1, 0.3, 0.5, 0.7, 0.9];
 /// Room for the answer: a number, with room for a model that adds a few words.
 const ANSWER_TOKENS: u32 = 64;
-/// Room left in the loaded context for the question, template and answer.
+/// Room left in the loaded context for the question and template (the answer's room is added).
 const HEADROOM: u32 = 1024;
+/// The gate: a hard task must reach [`THRESHOLD`] here, on [`GATE_CASES`] documents, before
+/// any longer length means something. Below it the task is too hard for the model, and no
+/// effective length is reported for it.
+const GATE: u32 = 2048;
+const GATE_CASES: u32 = 10;
 
 #[derive(Args)]
 pub struct ContextArgs {
@@ -51,6 +59,12 @@ pub struct ContextArgs {
     /// Only these tasks (needle, multikey, multihop, count); default all.
     #[arg(long, value_delimiter = ',')]
     tasks: Option<Vec<String>>,
+    /// Let the model reason before answering (its reasoning isn't scored, only the answer).
+    #[arg(long)]
+    reasoning: bool,
+    /// Tokens for the answer (default 64; 1,024 with --reasoning, room to think).
+    #[arg(long)]
+    answer_tokens: Option<u32>,
     /// Report path (default: eval-context-<time>.json).
     #[arg(long, short)]
     out: Option<PathBuf>,
@@ -268,25 +282,27 @@ pub fn build(task: Task, seed: u64, n: usize, depth: Option<f64>) -> Case {
             }
         }
         Task::Multihop => {
-            // Three chains of four; the first is asked about. Names are unique per document.
+            // Three chains of three names (two hops from the asked name to the number); the
+            // first is asked about. Names are unique per document. Four hops were too hard for
+            // 8B models even at 4k without reasoning (#350, second run).
             let mut inserts = Vec::new();
             let mut asked = (String::new(), String::new());
             for chain in 0..3 {
                 let value = r.digits(5);
                 // Letter-only names: names with digits got their digits answered instead of
                 // the value (#350, first run).
-                let vars: Vec<String> = (0..4)
+                let vars: Vec<String> = (0..3)
                     .map(|i| CODE_NAMES[chain * 4 + i].to_string())
                     .collect();
                 // Assignments in order through the document.
                 let mut at = (r.next() % 100) as f64 / 1000.0 + 0.02;
                 inserts.push((format!("Note: {} = {value}.", vars[0]), at));
                 for w in vars.windows(2) {
-                    at += 0.18 + (r.next() % 50) as f64 / 1000.0;
+                    at += 0.25 + (r.next() % 100) as f64 / 1000.0;
                     inserts.push((format!("Note: {} = {}.", w[1], w[0]), at.min(0.98)));
                 }
                 if chain == 0 {
-                    asked = (vars[3].clone(), value);
+                    asked = (vars[2].clone(), value);
                 }
             }
             let doc = compose(&mut r, n, inserts);
@@ -306,8 +322,9 @@ pub fn build(task: Task, seed: u64, n: usize, depth: Option<f64>) -> Case {
             // Three docks with different counts, all spread through the document; the first
             // is asked about.
             let mut counts: Vec<usize> = Vec::new();
+            // 2 to 5 each: 3 to 9 was too hard for 8B models even at 4k (#350, second run).
             while counts.len() < 3 {
-                let k = 3 + (r.next() % 7) as usize;
+                let k = 2 + (r.next() % 4) as usize;
                 if !counts.contains(&k) {
                     counts.push(k);
                 }
@@ -423,17 +440,47 @@ pub struct Summary {
     pub effective_all: Option<u32>,
 }
 
+/// The hard tasks under [`THRESHOLD`] at [`GATE`].
+fn gate(items: &[Item]) -> Vec<Task> {
+    let at: Vec<(u32, Task, bool)> = items
+        .iter()
+        .filter(|i| i.target_tokens == GATE)
+        .map(|i| (i.target_tokens, i.task, i.correct))
+        .collect();
+    gate_of(&at)
+}
+
+fn gate_of(outcomes: &[(u32, Task, bool)]) -> Vec<Task> {
+    HARD_TASKS
+        .into_iter()
+        .filter(|t| {
+            stats(outcomes, &[*t])
+                .get(&GATE)
+                .is_some_and(|s| s.accuracy < THRESHOLD)
+        })
+        .collect()
+}
+
 /// Per task, the hard tasks pooled, and everything pooled; a task that wasn't run is absent,
-/// never a zero.
-pub fn summarize(outcomes: &[(u32, Task, bool)]) -> Summary {
-    let hard = stats(outcomes, &HARD_TASKS);
+/// never a zero. A task in `too_hard` gets no effective length and isn't pooled.
+pub fn summarize(outcomes: &[(u32, Task, bool)], too_hard: &[Task]) -> Summary {
+    let usable: Vec<Task> = HARD_TASKS
+        .into_iter()
+        .filter(|t| !too_hard.contains(t))
+        .collect();
+    let hard = stats(outcomes, &usable);
     let all = stats(outcomes, &ALL_TASKS);
     let mut by_task = BTreeMap::new();
     let mut effective_by_task = BTreeMap::new();
     for t in ALL_TASKS {
         let st = stats(outcomes, &[t]);
         if !st.is_empty() {
-            effective_by_task.insert(t.name(), effective_of(&st));
+            let eff = if too_hard.contains(&t) {
+                None
+            } else {
+                effective_of(&st)
+            };
+            effective_by_task.insert(t.name(), eff);
             by_task.insert(t.name(), st);
         }
     }
@@ -494,6 +541,15 @@ pub async fn run(a: ContextArgs) -> Result<(), String> {
             "unknown task {bad:?}; the tasks are needle, multikey, multihop and count"
         ));
     }
+    let wanted = |t: Task| {
+        a.tasks
+            .as_ref()
+            .is_none_or(|ts| ts.iter().any(|x| x.eq_ignore_ascii_case(&t.name())))
+    };
+    let answer_tokens = a
+        .answer_tokens
+        .unwrap_or(if a.reasoning { 1024 } else { ANSWER_TOKENS });
+    let room = HEADROOM + answer_tokens;
     let path = crate::resolve_model(&a.model.model_name())?;
     let g = dn_models::gguf::Gguf::open(&path).map_err(|e| e.to_string())?;
     let n_ctx_train = dn_models::fit::ModelFootprint::from_gguf(&g).n_ctx_train;
@@ -502,12 +558,15 @@ pub async fn run(a: ContextArgs) -> Result<(), String> {
         .clone()
         .unwrap_or_else(|| DEFAULT_LENGTHS.to_vec())
         .into_iter()
-        .filter(|l| l + HEADROOM <= n_ctx_train)
+        .filter(|l| l + room <= n_ctx_train)
         .collect();
     // The training context itself (less the headroom), if the list stops short of it.
-    let top = n_ctx_train.saturating_sub(HEADROOM);
+    let top = n_ctx_train.saturating_sub(room);
     if a.lengths.is_none() && lengths.last().is_some_and(|l| *l < top) && top <= 131_072 {
         lengths.push(top);
+    }
+    if HARD_TASKS.iter().any(|t| wanted(*t)) {
+        lengths.push(GATE);
     }
     lengths.sort_unstable();
     lengths.dedup();
@@ -516,7 +575,7 @@ pub async fn run(a: ContextArgs) -> Result<(), String> {
             "no length fits the model's training context ({n_ctx_train} tokens)"
         ));
     };
-    let m = a.model.load(Some(max + HEADROOM)).await?;
+    let m = a.model.load(Some(max + room)).await?;
     // Tokens per filler sentence and the fixed overhead, measured with the model's own
     // tokenizer.
     let probe = build(Task::Needle, 1, 400, Some(0.5));
@@ -528,8 +587,12 @@ pub async fn run(a: ContextArgs) -> Result<(), String> {
         (Some(n400), Some(n1)) => (f64::from(n400 - n1) / 399.0, n1),
         _ => return Err("this backend can't count tokens; run with a local GGUF".into()),
     };
-    let cfg = eval_config("eval.context", &m.model_ref, Some(ANSWER_TOKENS));
+    let mut cfg = eval_config("eval.context", &m.model_ref, Some(answer_tokens));
+    if a.reasoning {
+        cfg.reasoning = Reasoning::On;
+    }
     let mut items = Vec::new();
+    let mut too_hard: Vec<Task> = Vec::new();
     for (li, &len) in lengths.iter().enumerate() {
         let n = sentences_for(len, per_sentence, overhead);
         let mut cases: Vec<Case> = DEPTHS
@@ -553,6 +616,13 @@ pub async fn run(a: ContextArgs) -> Result<(), String> {
                 n,
                 None,
             ));
+        }
+        let hard_samples = if len == GATE {
+            a.samples.max(GATE_CASES)
+        } else {
+            a.samples
+        };
+        for s in 0..hard_samples {
             cases.push(build(
                 Task::Multihop,
                 3000 + li as u64 * 100 + u64::from(s),
@@ -566,12 +636,7 @@ pub async fn run(a: ContextArgs) -> Result<(), String> {
                 None,
             ));
         }
-        let wanted = |t: Task| {
-            a.tasks
-                .as_ref()
-                .is_none_or(|ts| ts.iter().any(|x| x.eq_ignore_ascii_case(&format!("{t:?}"))))
-        };
-        cases.retain(|c| wanted(c.task));
+        cases.retain(|c| wanted(c.task) && !too_hard.contains(&c.task));
         for c in cases {
             let h = history(&c);
             let tokens = count(&m.chat, &m.model_ref, &h);
@@ -597,18 +662,37 @@ pub async fn run(a: ContextArgs) -> Result<(), String> {
                 turn: t,
             });
         }
+        if len == GATE {
+            too_hard = gate(&items);
+            for t in &too_hard {
+                eprintln!(
+                    "[eval context] {}: under {THRESHOLD} at {GATE} tokens: too hard for this model, \
+                     not run at longer lengths",
+                    t.name()
+                );
+            }
+        }
     }
     let outcomes: Vec<(u32, Task, bool)> = items
         .iter()
         .map(|i| (i.target_tokens, i.task, i.correct))
         .collect();
-    let s = summarize(&outcomes);
+    let s = summarize(&outcomes, &too_hard);
     let eff = s.effective_hard;
+    let empty = items.iter().filter(|i| i.answer.trim().is_empty()).count();
     let summary = serde_json::json!({
         "n_ctx_train": n_ctx_train,
-        "loaded_ctx": max + HEADROOM,
+        "loaded_ctx": max + room,
         "threshold": THRESHOLD,
+        "reasoning": a.reasoning,
+        "answer_tokens": answer_tokens,
+        // Answers with no text at all (with reasoning: it ran out of answer tokens).
+        "empty_answers": empty,
         "hard_tasks": HARD_TASKS.map(|t| t.name()),
+        "gate_tokens": GATE,
+        // Hard tasks under the threshold at the gate: too hard for this model, so they have no
+        // effective length and aren't in the pooled one.
+        "too_hard": too_hard.iter().map(|t| t.name()).collect::<Vec<_>>(),
         // The effective length: multihop and count pooled, with the cases behind each length.
         "effective_tokens": eff,
         "effective_share_of_training_context": eff.map(|e| f64::from(e) / f64::from(n_ctx_train)),
@@ -625,6 +709,8 @@ pub async fn run(a: ContextArgs) -> Result<(), String> {
     println!(
         "effective context (multihop and count): {} of {n_ctx_train} trained · report: {}",
         match (eff, s.hard.is_empty()) {
+            _ if !too_hard.is_empty() && too_hard.len() == HARD_TASKS.len() =>
+                "none: multihop and count are too hard for this model at 2k".into(),
             (_, true) => "not measured (multihop and count weren't run)".into(),
             (None, false) => "below the shortest length".into(),
             (Some(e), false) => format!("{e} tokens"),
@@ -686,7 +772,7 @@ mod tests {
             }
         }
         assert_eq!(cur, c.expected);
-        assert_eq!(notes.len(), 12, "three chains of four");
+        assert_eq!(notes.len(), 9, "three chains of three");
     }
 
     #[test]
@@ -723,7 +809,7 @@ mod tests {
             o.extend((0..5).map(|i| (len, Task::Multihop, len == 4096 || i < 2)));
             o.extend((0..5).map(|_| (len, Task::Count, true)));
         }
-        let s = summarize(&o);
+        let s = summarize(&o, &[]);
         assert_eq!(s.effective_hard, Some(4096));
         assert_eq!(
             s.hard[&8192],
@@ -739,7 +825,24 @@ mod tests {
         );
         assert_eq!(s.by_task["multihop"][&8192].cases, 5);
         assert!(!s.by_task.contains_key("multikey"), "not run, not zero");
-        assert!(summarize(&[(4096, Task::Needle, true)]).hard.is_empty());
+        assert!(
+            summarize(&[(4096, Task::Needle, true)], &[])
+                .hard
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_task_under_the_threshold_at_2k_is_too_hard_and_gets_no_length() {
+        let mut o = Vec::new();
+        o.extend((0..10).map(|i| (GATE, Task::Multihop, i < 9)));
+        o.extend((0..10).map(|i| (GATE, Task::Count, i < 8)));
+        assert_eq!(gate_of(&o), vec![Task::Count], "8 of 10 is under 0.85");
+        o.extend((0..5).map(|_| (4096, Task::Multihop, true)));
+        let s = summarize(&o, &[Task::Count]);
+        assert_eq!(s.effective_hard, Some(4096), "pooled over multihop only");
+        assert_eq!(s.effective_by_task["count"], None);
+        assert_eq!(s.by_task["count"][&GATE].cases, 10, "still reported");
     }
 
     #[test]

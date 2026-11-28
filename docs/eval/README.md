@@ -126,7 +126,7 @@ For a holdout's answers, pass the same `--holdout`, and `--out` outside any git 
 ## Context: how much of its window a model uses well
 
 ```bash
-dn eval context <model> [--lengths 4096,8192,...] [--samples 5] [--tasks multihop,count] [--out report.json]
+dn eval context <model> [--lengths 4096,8192,...] [--samples 5] [--tasks multihop,count] [--reasoning] [--answer-tokens N] [--out report.json]
 ```
 
 Measures how far into its context a local model still finds what it's asked for, so the
@@ -137,18 +137,29 @@ up to its training context. At each length:
 
 - **needle:** one fact (an access code) at five depths, two documents each;
 - **multikey:** four similar facts, asked for one (`--samples` documents);
-- **multihop:** a chain of four notes (`KESTREL = 48213`, `JUNIPER = KESTREL`, …) spread
-  through the document, with two decoy chains, asked for the last one's value (`--samples`
-  documents);
-- **count:** 3–9 delivery lines for one dock spread through the document, among lines for
+- **multihop:** a chain of three notes (`KESTREL = 48213`, `JUNIPER = KESTREL`,
+  `OBSIDIAN = JUNIPER`) spread through the document, with two decoy chains, asked for the last
+  one's value: two hops (`--samples` documents);
+- **count:** 2–5 delivery lines for one dock spread through the document, among lines for
   two other docks, asked how many arrived there (`--samples` documents).
+
+Four hops and counts up to 9 were too hard for 8B models even at 4k, so they measured the task
+rather than the context.
 
 An answer is right when it states the expected number. A length is **effective** when its
 accuracy, and every shorter length's, is at least 0.85. Finding one fact is easier than
 using a whole document, so the effective length rests on the harder tasks, multihop and count,
 pooled. The report gives, per length, the accuracy and the number of cases behind it for the
 hard tasks, each task and all tasks, the effective length of each, and the effective length's
-share of the training context. `--tasks` runs only some tasks. It loads the model with a
+share of the training context.
+
+**The 2k gate.** Multihop and count first run at 2,048 tokens, on at least 10 documents each. A
+task under 0.85 there is reported as too hard for this model (`too_hard`): it isn't run at
+longer lengths, gets no effective length, and isn't pooled.
+
+`--tasks` runs only some tasks. `--reasoning` lets the model think before answering (only the
+answer is scored), with 1,024 answer tokens unless `--answer-tokens` says otherwise.
+`empty_answers` counts answers that ran out of tokens before saying anything. It loads the model with a
 context just above the longest length, so long lengths need memory and time.
 
 ## Speed
