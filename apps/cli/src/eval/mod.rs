@@ -19,6 +19,7 @@
 
 mod calibrate;
 mod judge;
+mod judge_memory;
 mod longmemeval;
 mod parity;
 mod speed;
@@ -51,8 +52,8 @@ enum Suite {
     Longmemeval(longmemeval::LongMemEvalArgs),
     /// Time to first token and tokens per second, p50/p95, cold and warm.
     Speed(speed::SpeedArgs),
-    /// Judge a parity answers report with the fixed judge (`judge.yaml`): checks each
-    /// case's must / must_not. The only step that sends anything, to the judge's endpoint.
+    /// Judge a parity or LongMemEval report with the fixed judge (`judge.yaml`). The only
+    /// step that sends anything, to the judge's endpoint.
     Judge(judge::JudgeArgs),
     /// How far the pairwise judge agrees with people: agreement and Cohen's κ over a
     /// labels file of answer pairs (dn.labels.v1).

@@ -95,6 +95,23 @@ dn eval longmemeval ~/.cache/demios-eval/longmemeval/longmemeval_s_cleaned.json 
 Comparing the two modes shows what our pipeline loses or gains against reading everything.
 `--hypotheses` writes the answers in LongMemEval's format for its own evaluation script.
 
+The same fixed judge scores the report:
+
+```bash
+dn eval judge eval-longmemeval-….json --judge evals/judge/judge.yaml
+```
+
+The judge sees each question, the benchmark's expected answer and the response, with a rule
+for the question type: abstention questions are right only when the response says it can't
+tell; temporal questions allow being off by one in a count of days, weeks or months; for
+knowledge updates only the latest information counts; preference questions are right when the
+response uses the person's own preferences. `judge.yaml` needs a `longmemeval_prompt`
+([longmemeval-v1.md](../../evals/judge/longmemeval-v1.md)). The report gives accuracy overall,
+per question type, averaged over types and on abstention questions. A failed answer counts as
+wrong, and a judge error makes the report incomplete. It says `method: "dn-judge"`: a score
+from LongMemEval's own script is a different method and is never mixed with it. Reports made
+before judging existed have no question in them, so answer those again.
+
 ## Judging parity answers
 
 ```bash
@@ -202,7 +219,7 @@ data (`dn.speed.v1`), so new ones are added to a file.
 
 These are tracked as issues:
 
-- the labelled pairs for calibration, and judging LongMemEval answers (#355);
+- the labelled pairs for calibration (#355);
 - generating the reference answers (#407);
 - earlier sessions in memory cases (with memory, R3);
 - embeddings in LongMemEval's retrieval mode (keyword search only for now);

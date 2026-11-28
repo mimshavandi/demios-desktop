@@ -35,21 +35,22 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// Output tokens per judge call at most.
-const JUDGE_MAX_TOKENS: u32 = 2048;
+pub(crate) const JUDGE_MAX_TOKENS: u32 = 2048;
 /// Calls per case: the first, and one retry when the reply isn't the expected JSON.
-const ATTEMPTS: usize = 2;
+pub(crate) const ATTEMPTS: usize = 2;
 
 #[derive(Args)]
 pub struct JudgeArgs {
-    /// The answers report (`dn eval parity --out …`).
+    /// The answers report: from `dn eval parity` or `dn eval longmemeval`.
     answers: PathBuf,
     /// The judge: a `judge.yaml` (model, endpoint, key variable, prompt file). There is no
     /// default judge.
     #[arg(long)]
     judge: PathBuf,
-    /// The golden set the answers came from (its cases give the conversation and files).
+    /// The golden set the answers came from (its cases give the conversation and files);
+    /// needed for parity answers.
     #[arg(long)]
-    set: PathBuf,
+    set: Option<PathBuf>,
     /// The private holdout the answers came from, if any (outside any git work tree).
     #[arg(long)]
     holdout: Option<PathBuf>,
@@ -82,6 +83,9 @@ pub struct JudgeFile {
     /// The prompt for pairwise judging against references (needed with `--references`).
     #[serde(default)]
     pub pairwise_prompt: Option<String>,
+    /// The prompt for judging LongMemEval answers (needed for a LongMemEval report).
+    #[serde(default)]
+    pub longmemeval_prompt: Option<String>,
 }
 
 /// The judge, loaded: its settings, its prompt and the prompt's SHA-256.
@@ -91,6 +95,8 @@ pub struct Judge {
     pub prompt_sha256: String,
     /// The pairwise prompt and its SHA-256, when `judge.yaml` names one.
     pub pairwise: Option<(String, String)>,
+    /// The LongMemEval prompt and its SHA-256, when `judge.yaml` names one.
+    pub longmemeval: Option<(String, String)>,
 }
 
 /// A prompt file named in `judge.yaml`: a plain file name next to it, not empty.
@@ -160,11 +166,16 @@ impl Judge {
             Some(n) => Some(read_prompt(path, n)?),
             None => None,
         };
+        let longmemeval = match &file.longmemeval_prompt {
+            Some(n) => Some(read_prompt(path, n)?),
+            None => None,
+        };
         Ok(Self {
             file,
             prompt,
             prompt_sha256,
             pairwise,
+            longmemeval,
         })
     }
 
@@ -400,7 +411,7 @@ pub fn parse_reply(
 }
 
 /// The reply without a ```json fence around it.
-fn unfenced(reply: &str) -> &str {
+pub(crate) fn unfenced(reply: &str) -> &str {
     let t = reply.trim();
     t.strip_prefix("```json")
         .or_else(|| t.strip_prefix("```"))
@@ -984,6 +995,23 @@ pub async fn run(a: JudgeArgs) -> Result<(), String> {
     let judge = Judge::read(&a.judge)?;
     let key = judge.key()?;
     let raw = std::fs::read(&a.answers).map_err(|e| format!("{}: {e}", a.answers.display()))?;
+    let suite = serde_json::from_slice::<serde_json::Value>(&raw)
+        .map_err(|e| format!("{}: {e}", a.answers.display()))?["suite"]
+        .as_str()
+        .map(str::to_owned);
+    if suite.as_deref() == Some("longmemeval") {
+        if a.set.is_some() || a.holdout.is_some() || a.references.is_some() {
+            return Err(
+                "a LongMemEval report is judged on its own: --set, --holdout and --references \
+                 are for parity answers"
+                    .into(),
+            );
+        }
+        return super::judge_memory::run(&judge, &a.judge, &a.answers, &raw, a.out).await;
+    }
+    let Some(set_dir) = &a.set else {
+        return Err("parity answers need --set (the golden set they came from)".into());
+    };
     let answers = Answers::parse(&String::from_utf8_lossy(&raw))
         .map_err(|e| format!("{}: {e}", a.answers.display()))?;
     if answers.holdout() {
@@ -1028,7 +1056,7 @@ pub async fn run(a: JudgeArgs) -> Result<(), String> {
         }
         None => None,
     };
-    let set = Set::read(&a.set, a.holdout.as_deref(), &a.skills, false)?;
+    let set = Set::read(set_dir, a.holdout.as_deref(), &a.skills, false)?;
     let by_id: BTreeMap<&str, &(Case, SetRoot)> =
         set.cases.iter().map(|c| (c.0.id.as_str(), c)).collect();
     let mut inputs = Vec::with_capacity(answers.items.len());
