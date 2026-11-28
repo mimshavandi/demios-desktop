@@ -1,12 +1,12 @@
-# Demios Desktop accessibility statement
+# Almend Desktop accessibility statement
 
 Last reviewed: set on publication · App version: 0.1.0
 
-Demios Desktop is published by DigiNote, Inc.
+Almend Desktop is published by DigiNote, Inc.
 
 ## Our goal
 
-We want Demios Desktop to be usable by everyone, including people who use a keyboard only, screen readers, magnification or high-contrast settings. Our target is **WCAG 2.2 level AA**, applied to a desktop app (see EN 301 549, chapter 11). The app **does not claim full conformance yet**. This page says what we check today and what we know is missing.
+We want Almend Desktop to be usable by everyone, including people who use a keyboard only, screen readers, magnification or high-contrast settings. Our target is **WCAG 2.2 level AA**, applied to a desktop app (see EN 301 549, chapter 11). The app **does not claim full conformance yet**. This page says what we check today and what we know is missing.
 
 ## What we do today
 
@@ -45,6 +45,6 @@ We want Demios Desktop to be usable by everyone, including people who use a keyb
 
 ## Report a problem
 
-If something in the app is hard or impossible to use, please tell us at mahdi@demios.io, or use **Report a problem** in **Settings → General → About**. Tell us your operating system, any assistive technology you use, and what you were trying to do. We aim to reply within 72 hours.
+If something in the app is hard or impossible to use, please tell us at hello@almend.ai, or use **Report a problem** in **Settings → General → About**. Tell us your operating system, any assistive technology you use, and what you were trying to do. We aim to reply within 72 hours.
 
 This statement is voluntary and is not a legal declaration of conformity.

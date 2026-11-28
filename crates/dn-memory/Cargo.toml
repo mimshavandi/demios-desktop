@@ -9,11 +9,16 @@ rust-version.workspace = true
 description = "The memory store (ADR-0020 §4): memory items with scope, trust and sources, the pending queue, purge by source; added with the owner's approval, 2026-11-28 (#346)."
 
 [dependencies]
+dn-agent.workspace = true
 dn-core.workspace = true
 rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+futures-core.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }
 
 [lints]
 workspace = true

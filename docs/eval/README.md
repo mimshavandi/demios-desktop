@@ -221,6 +221,52 @@ says so on stderr. Calibrate on the public set: a calibration with holdout cases
 quotes them, so it and its labels stay outside any git work tree, and `dn eval judge` never
 quotes it.
 
+## Context: how much of its window a model uses well
+
+```bash
+dn eval context <model> [--lengths 4096,8192,...] [--samples 5] [--tasks multihop,count] [--reasoning] [--answer-tokens N] [--out report.json]
+```
+
+Measures how far into its context a local model still finds what it's asked for, so the
+assembler's effective-context default (60% of the loaded context until measured, #350) can be
+set per model. The documents are synthetic and generated in the runner, the same every run,
+so there's nothing to download. Lengths are counted with the model's own tokenizer, from 4k
+up to its training context. At each length:
+
+- **needle:** one fact (an access code) at five depths, two documents each;
+- **multikey:** four similar facts, asked for one (`--samples` documents);
+- **multihop:** a chain of three notes (`KESTREL = 48213`, `JUNIPER = KESTREL`,
+  `OBSIDIAN = JUNIPER`) spread through the document, with two decoy chains, asked for the last
+  one's value: two hops (`--samples` documents);
+- **count:** 2–5 delivery lines for one dock spread through the document, among lines for
+  two other docks, asked how many arrived there (`--samples` documents).
+
+Four hops and counts up to 9 were too hard for 8B models even at 4k, so they measured the task
+rather than the context.
+
+An answer is right when it states the expected number. A length is **effective** when its
+accuracy, and every shorter length's, is at least 0.85. Finding one fact is easier than
+using a whole document, so the effective length rests on the harder tasks, multihop and count,
+pooled. The report gives, per length, the accuracy and the number of cases behind it for the
+hard tasks, each task and all tasks, the effective length of each, and the effective length's
+share of the training context.
+
+**The 2k gate.** Multihop and count first run at 2,048 tokens, on at least 10 documents each. A
+task under 0.85 there is reported as too hard for this model (`too_hard`): it isn't run at
+longer lengths, gets no effective length, and isn't pooled.
+
+**track** (only with `--tasks track`) checks this runner against a known benchmark's setup:
+RULER-style variable tracking, with one chain of four hops (`VAR A = 12345`, `VAR B = VAR A`, …)
+in one short passage repeated, asked forward ("which variables hold 12345?"). The start of the
+answer is given at the end of the question, and the score is the share of the five names found.
+It's much easier than multihop (no decoy chains, no real prose, a forward question), so a
+model that does well on track and poorly on multihop finds the harder task hard, not the runner.
+
+`--tasks` runs only some tasks. `--reasoning` lets the model think before answering (only the
+answer is scored), with 1,024 answer tokens unless `--answer-tokens` says otherwise.
+`empty_answers` counts answers that ran out of tokens before saying anything. It loads the model with a
+context just above the longest length, so long lengths need memory and time.
+
 ## Speed
 
 ```bash
@@ -234,6 +280,22 @@ prompt each time, so nothing can be reused) and warm (the same prompt after a pr
 so a backend that reuses prefixes can; `cached_input_tokens` shows whether it did). Cases are
 data (`dn.speed.v1`), so new ones are added to a file.
 
+Two kinds time what prompt reuse is for:
+
+- `next_turn`: a chat's second turn after a 2k, 8k or 16k-token first message;
+- `switch_back`: going back to a chat after another one.
+
+Whether those are cold or warm is the model's setting, not the case's. Prompt reuse is on by
+default, so run the suite twice to compare:
+
+```bash
+dn eval speed <model> --no-prompt-cache
+dn eval speed <model>
+dn eval speed <model> --draft <smaller model of the same family>
+```
+
+With `--draft`, each run's result also counts the drafted and accepted tokens.
+
 ## Not yet
 
 These are tracked as issues:
@@ -242,5 +304,4 @@ These are tracked as issues:
 - earlier sessions in memory cases (with memory, R3);
 - embeddings in LongMemEval's retrieval mode (keyword search only for now);
 - the app's own system prompt in `dn eval parity` (it moves into the shared runtime in R1);
-- speed cases for long prefixes, switching chats, restarts with restored slots and draft
-  models (with R2).
+- a speed case for a restart with restored slots (with the Node's saved slots, R2).

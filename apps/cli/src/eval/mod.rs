@@ -20,6 +20,7 @@
 //! sends nothing anywhere: the model is a local GGUF or the endpoint you name.
 
 mod calibrate;
+mod context;
 mod judge;
 mod judge_memory;
 mod longmemeval;
@@ -64,6 +65,9 @@ enum Suite {
     /// Reference answers for pairwise judging, from Claude or ChatGPT through their APIs
     /// (the owner's keys): each case answered as parity answers it.
     References(references::ReferencesArgs),
+    /// How much of its context a local model uses well: retrieval (needle, multikey) and
+    /// combining facts (multihop, count) at growing lengths (#350).
+    Context(context::ContextArgs),
 }
 
 pub async fn run(a: EvalArgs) -> Result<(), String> {
@@ -74,6 +78,7 @@ pub async fn run(a: EvalArgs) -> Result<(), String> {
         Suite::Judge(a) => judge::run(a).await,
         Suite::Calibrate(a) => calibrate::run(a).await,
         Suite::References(a) => references::run(a).await,
+        Suite::Context(a) => context::run(a).await,
     }
 }
 
@@ -106,6 +111,16 @@ impl ChatModel for Loaded {
             Self::Endpoint(m) => m.chat(req),
         }
     }
+
+    fn count_tokens(
+        &self,
+        req: &dn_core::chat::ChatRequest,
+    ) -> Option<Result<u32, dn_core::CoreError>> {
+        match self {
+            Self::Local(m) => m.count_tokens(req),
+            Self::Endpoint(m) => m.count_tokens(req),
+        }
+    }
 }
 
 impl Loaded {
@@ -128,6 +143,11 @@ pub struct Model {
 }
 
 impl ModelArgs {
+    /// The model as given (a GGUF path or catalogue id; with `--endpoint`, the server's name).
+    pub fn model_name(&self) -> String {
+        self.model.clone()
+    }
+
     /// Loads the model. `min_ctx`: context the suite needs at least (in-process only).
     pub async fn load(&self, min_ctx: Option<u32>) -> Result<Model, String> {
         if let Some(ep) = &self.endpoint {

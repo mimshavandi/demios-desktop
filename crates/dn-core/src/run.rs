@@ -102,6 +102,27 @@ pub struct ContextUse {
     pub compacted: bool,
 }
 
+/// How an answer used a memory item (ADR-0020 §4.1; decision (b) on #346).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryUse {
+    /// Retrieved for this answer and put in its context.
+    Retrieved,
+    /// In the core profile, and the answer cited it (`[M<n>]`).
+    Profile,
+    /// Saved during this run (the person's "remember that …").
+    Saved,
+}
+
+/// A memory item an answer used, for the chips under it (UsedMemories).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct UsedMemory {
+    pub id: Id,
+    pub how: MemoryUse,
+}
+
 /// The typed result of a run (ADR-0020 §8).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -126,6 +147,10 @@ pub struct RunResult {
     /// How the context was used; `None` for a call that didn't go through the assembler.
     #[serde(default)]
     pub context: Option<ContextUse>,
+    /// The memory items the answer used. The meter leaves it empty; the host fills it after
+    /// the run from what it put in the context and the answer's citations (ADR-0020 §4.1).
+    #[serde(default)]
+    pub memories: Vec<UsedMemory>,
 }
 
 /// Measures a run from its stream events.
@@ -189,6 +214,7 @@ impl RunMeter {
             first_token_ms: self.first_token.map(ms),
             dropped: Vec::new(),
             context: None,
+            memories: Vec::new(),
         }
     }
 }

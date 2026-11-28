@@ -11,6 +11,7 @@ A private holdout of about a fifth of the set is kept outside this repo, so resu
 | `prompts/<category>.yaml` | The cases of one category, as a list |
 | `files/<folder>/…` | Sample files that cases attach or put in a project |
 | `tools.yaml` | Mock tools, each with a schema and canned results |
+| `pending/` | Cases waiting for a runner feature, with a note on what they need; the runner doesn't read this folder |
 | `set.yaml` | Settings for the whole set: `today`, the date every case runs on (7 December 2026) |
 
 The categories are `chat`, `writing`, `summarise`, `project`, `tools`, `multistep`, `memory` and `research`.

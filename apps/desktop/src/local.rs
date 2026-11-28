@@ -474,12 +474,22 @@ pub fn detect_compute() -> (Machine, dn_models::compute::Compute) {
 /// estimator splits the model between the GPU and the CPU (MoE experts in RAM, or some of a
 /// dense model's layers on the CPU); then its recommended context, KV type and placement,
 /// which were estimated together (T-INF-20).
+///
+/// Prompt reuse is on, with the smaller of 2 GiB and a tenth of the RAM for other chats'
+/// prompts (ADR-0020 §6, #345).
 pub fn load_options(path: &Path, machine: &Machine) -> LoadOptions {
+    let prompt_cache = dn_inference::PromptCache::for_ram(machine.total_ram);
     let Ok(g) = Gguf::open(path) else {
-        return LoadOptions::default();
+        return LoadOptions {
+            prompt_cache,
+            ..LoadOptions::default()
+        };
     };
     let fp = ModelFootprint::from_gguf(&g);
-    options_for(&dn_models::fit(&fp, machine).recommended, fp.n_layer)
+    LoadOptions {
+        prompt_cache,
+        ..options_for(&dn_models::fit(&fp, machine).recommended, fp.n_layer)
+    }
 }
 
 fn options_for(rec: &dn_models::fit::Estimate, n_layer: u32) -> LoadOptions {
@@ -589,7 +599,16 @@ impl LocalModels {
 
     /// The app's instance: built-in catalogue, shared models dir, this machine. Exact fits
     /// (GGUF header reads) are computed in the background, off the setup thread.
+    ///
+    /// Never in tests (#448): this is the person's real models folder, and "Delete all local
+    /// data" removes it. Tests use [`Self::for_tests`].
     pub fn open() -> Arc<Self> {
+        if cfg!(test) {
+            panic!(
+                "a test opened the real models folder: use LocalModels::for_tests (or \
+                 AppState::open_for_tests, which does)"
+            );
+        }
         let mut lm = Self::new(
             dn_models::download::default_models_dir(),
             Catalog::builtin(),
@@ -611,6 +630,23 @@ impl LocalModels {
             bg.refresh_externals();
         });
         lm
+    }
+
+    /// Like [`Self::open`], but everything inside `root` (a test's own temp folder): its
+    /// models folder, which it owns, and its tool-probe results; no Hugging Face cache.
+    #[cfg(test)]
+    pub fn for_tests(root: &std::path::Path) -> Arc<Self> {
+        let mut lm = Self::new(
+            root.join("models"),
+            Catalog::builtin(),
+            dn_models::detect_machine(),
+        );
+        lm.owns_dir = true;
+        lm.probes = Mutex::new(crate::tool_probe::Store::open(Some(
+            root.join("tool-probes.json"),
+        )));
+        lm.hf_cache = None;
+        Arc::new(lm)
     }
 }
 
@@ -1551,6 +1587,13 @@ impl<B: InferenceBackend> LocalModels<B> {
     /// when the user chose the folder) and resets every row to "not downloaded". A reply still streaming keeps its model until it ends; the
     /// caller cancels replies first.
     pub async fn delete_all(&self) -> std::io::Result<()> {
+        // A second line of defence (#448): even a test that built one by hand on the real
+        // folder can't delete it.
+        if cfg!(test) && self.dir == dn_models::download::default_models_dir() {
+            return Err(std::io::Error::other(
+                "a test tried to delete the real models folder",
+            ));
+        }
         self.pause_all();
         let locks: Vec<_> = lock(&self.model_locks).values().cloned().collect();
         for l in locks {
@@ -1934,7 +1977,10 @@ mod tests {
         let gib = dn_models::fit::GIB;
         assert_eq!(
             load_options(Path::new("/nonexistent.gguf"), &Machine::unified(16 * gib)),
-            LoadOptions::default()
+            LoadOptions {
+                prompt_cache: dn_inference::PromptCache::for_ram(16 * gib),
+                ..LoadOptions::default()
+            }
         );
     }
 
@@ -2680,6 +2726,36 @@ mod tests {
         drop(lm.chat_model("a").await.unwrap());
         drop(lm.chat_model("b").await.unwrap());
         assert_eq!(*lock(&rec.0), ["load a", "unload a", "load b"]);
+    }
+
+    // ---- #448: tests never reach the person's real models folder
+
+    #[test]
+    #[should_panic(expected = "a test opened the real models folder")]
+    fn opening_the_real_models_folder_is_refused_in_tests() {
+        let _ = <LocalModels>::open();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn deleting_the_real_models_folder_is_refused_in_tests() {
+        // Built by hand on the real path: it only reads the folder (scan), never writes.
+        let lm = <LocalModels>::new(
+            dn_models::download::default_models_dir(),
+            Catalog::builtin(),
+            dn_models::detect_machine(),
+        );
+        let e = lm.delete_all().await.unwrap_err();
+        assert!(e.to_string().contains("real models folder"), "{e}");
+    }
+
+    #[test]
+    fn a_test_instance_keeps_everything_in_its_own_folder() {
+        let root = std::env::temp_dir().join(format!("dn-local-for-tests-{}", dn_core::Id::new()));
+        let lm = <LocalModels>::for_tests(&root);
+        assert!(lm.dir().starts_with(&root));
+        assert_ne!(lm.dir(), dn_models::download::default_models_dir());
+        assert!(lm.hf_cache.is_none());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[tokio::test(flavor = "multi_thread")]

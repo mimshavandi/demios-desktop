@@ -57,6 +57,7 @@ DELETE FROM store_conversations WHERE purged_at IS NOT NULL;
 ",
     crate::project::MIGRATION,
     crate::sync_rows::MIGRATION,
+    crate::sync_rows::INCOGNITO_MIGRATION,
 ];
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,6 +68,10 @@ pub struct Conversation {
     pub model: Option<String>,
     /// The project this chat belongs to (T-PRJ-01), if any.
     pub project_id: Option<Id>,
+    /// An incognito chat (ADR-0020 §4.1): set at creation, never changed. It doesn't read or
+    /// add memories, isn't searched or indexed, isn't synced, and is deleted when closed.
+    #[serde(default)]
+    pub incognito: bool,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -218,10 +223,11 @@ fn conversation_from_row(r: &Row<'_>) -> Result<Conversation> {
             .as_deref()
             .map(parse_id)
             .transpose()?,
+        incognito: r.get::<_, i64>(6)? == 1,
     })
 }
 
-const CONVERSATION_COLS: &str = "id, title, model, created_at, updated_at, project_id";
+const CONVERSATION_COLS: &str = "id, title, model, created_at, updated_at, project_id, incognito";
 
 pub fn create_conversation(conn: &Connection, title: &str) -> Result<Conversation> {
     create_conversation_in(conn, title, None)
@@ -233,6 +239,16 @@ pub fn create_conversation_in(
     title: &str,
     project_id: Option<Id>,
 ) -> Result<Conversation> {
+    create_conversation_with(conn, title, project_id, false)
+}
+
+/// Creates a conversation, incognito or not; that can't change afterwards.
+pub fn create_conversation_with(
+    conn: &Connection,
+    title: &str,
+    project_id: Option<Id>,
+    incognito: bool,
+) -> Result<Conversation> {
     let tx = conn.unchecked_transaction()?;
     if let Some(p) = project_id {
         crate::project::get_project(&tx, p)?;
@@ -243,17 +259,20 @@ pub fn create_conversation_in(
         title: title.to_string(),
         model: None,
         project_id,
+        incognito,
         created_at: now,
         updated_at: now,
     };
     tx.execute(
-        "INSERT INTO store_conversations (id, title, model, created_at, updated_at, project_id)
-         VALUES (?1, ?2, NULL, ?3, ?3, ?4)",
+        "INSERT INTO store_conversations
+           (id, title, model, created_at, updated_at, project_id, incognito)
+         VALUES (?1, ?2, NULL, ?3, ?3, ?4, ?5)",
         params![
             c.id.to_string(),
             c.title,
             now,
-            project_id.map(|p| p.to_string())
+            project_id.map(|p| p.to_string()),
+            incognito as i64
         ],
     )?;
     tx.commit()?;
@@ -393,7 +412,7 @@ pub fn purge_deleted(conn: &Connection, before_ms: i64) -> Result<Vec<Id>> {
     tx.execute(
         "INSERT OR REPLACE INTO store_tombstones (id, deleted_at, kind)
          SELECT id, deleted_at, 'conversation' FROM store_conversations
-         WHERE deleted_at IS NOT NULL AND deleted_at <= ?1",
+         WHERE deleted_at IS NOT NULL AND deleted_at <= ?1 AND incognito = 0",
         [before_ms],
     )?;
     tx.execute(
@@ -411,6 +430,27 @@ pub fn purge_deleted(conn: &Connection, before_ms: i64) -> Result<Vec<Id>> {
     if !ids.is_empty() {
         crate::checkpoint(conn);
     }
+    Ok(ids)
+}
+
+/// Deletes every incognito chat for good, with its messages, and leaves no tombstone: they
+/// were never synced, so there's nothing to tell other devices. Run at start, before sync
+/// and indexing, for chats left open when the app quit. Returns their ids, so other crates
+/// drop their rows (artifacts, chat files).
+pub fn purge_incognito(conn: &Connection) -> Result<Vec<Id>> {
+    let tx = conn.unchecked_transaction()?;
+    let ids = {
+        let mut stmt = tx.prepare("SELECT id FROM store_conversations WHERE incognito = 1")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        let mut ids = Vec::new();
+        for row in rows {
+            ids.push(parse_id(&row?)?);
+        }
+        ids
+    };
+    tx.execute("DELETE FROM store_messages WHERE incognito = 1", [])?;
+    tx.execute("DELETE FROM store_conversations WHERE incognito = 1", [])?;
+    tx.commit()?;
     Ok(ids)
 }
 
@@ -477,11 +517,13 @@ pub fn add_message(conn: &Connection, conversation_id: Id, m: NewMessage) -> Res
         created_at: now,
         updated_at: now,
     };
-    tx.execute(
+    let inserted = tx.execute(
+        // `incognito` is copied from the chat (a trigger checks it matches).
         "INSERT INTO store_messages
            (id, conversation_id, role, content, tool_calls, tool_call_id, model, status,
-            finish_reason, error, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, '[]', ?5, ?6, ?7, NULL, NULL, ?8, ?8)",
+            finish_reason, error, created_at, updated_at, incognito)
+         SELECT ?1, ?2, ?3, ?4, '[]', ?5, ?6, ?7, NULL, NULL, ?8, ?8, incognito
+         FROM store_conversations WHERE id = ?2",
         params![
             msg.id.to_string(),
             conversation_id.to_string(),
@@ -493,6 +535,12 @@ pub fn add_message(conn: &Connection, conversation_id: Id, m: NewMessage) -> Res
             now,
         ],
     )?;
+    // The INSERT … SELECT writes nothing for a missing chat: never report that as done.
+    if inserted != 1 {
+        return Err(StoreError::NotFound(format!(
+            "conversation {conversation_id}"
+        )));
+    }
     bump_conversation(&tx, conversation_id, now)?;
     tx.commit()?;
     Ok(msg)

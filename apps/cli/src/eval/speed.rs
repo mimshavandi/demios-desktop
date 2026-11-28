@@ -11,6 +11,13 @@
 //!   prefix can be reused.
 //! - `single`, `cache: warm`: one priming request, then every rep sends that same prompt, so
 //!   a backend that reuses prefixes can. `cached_input_tokens` shows whether it did.
+//! - `next_turn`: every rep is a new chat. Its first turn (a `prompt_tokens` message) isn't
+//!   timed; the second turn (that message, the answer, and a short follow-up) is. That's the
+//!   common case prompt reuse is for. Whether it's cold or warm is the model's setting
+//!   (`--prompt-cache`), not the case's, so run the suite with and without it.
+//! - `switch_back`: every rep starts chat A, then chat B, then times A's second turn. A
+//!   backend that keeps other chats' prefixes (in RAM) reuses A's; one that keeps only the
+//!   last request can't.
 
 use super::{ModelArgs, Report, Turn, eval_config, percentile, turn};
 use crate::bench::{bench_ctx, chat_prompt};
@@ -75,7 +82,7 @@ pub enum Cache {
 }
 
 /// The kinds this runner knows.
-pub const KINDS: &[&str] = &["after_load", "single"];
+pub const KINDS: &[&str] = &["after_load", "single", "next_turn", "switch_back"];
 
 const BUILTIN: &str = include_str!("../../eval/speed.default.json");
 
@@ -136,7 +143,14 @@ impl CaseFile {
     fn ctx(&self) -> u32 {
         self.cases
             .iter()
-            .map(|c| bench_ctx(None, c.prompt_tokens, c.gen_tokens))
+            .map(|c| {
+                // A second turn holds the first answer, the follow-up and its own answer.
+                let n_gen = match c.kind.as_str() {
+                    "next_turn" | "switch_back" => 2 * c.gen_tokens + 32,
+                    _ => c.gen_tokens,
+                };
+                bench_ctx(None, c.prompt_tokens, n_gen)
+            })
             .max()
             .unwrap_or(0)
     }
@@ -226,6 +240,17 @@ fn prompt(c: &Case, variant: u32) -> Vec<ChatMessage> {
     )]
 }
 
+/// The follow-up of a chat's second turn.
+const FOLLOW_UP: &str = "Go on with the story from where you stopped.";
+
+/// A chat's second turn: its first message, the answer to it, and [`FOLLOW_UP`].
+fn second_turn(c: &Case, variant: u32, answer: &str) -> Vec<ChatMessage> {
+    let mut h = prompt(c, variant);
+    h.push(ChatMessage::text(Role::Assistant, answer));
+    h.push(ChatMessage::text(Role::User, FOLLOW_UP));
+    h
+}
+
 /// Runs the cases in order. `variant` numbers keep cold prompts distinct across the run.
 pub async fn run_cases(
     model: &dyn ChatModel,
@@ -243,6 +268,25 @@ pub async fn run_cases(
         let mut reps = Vec::new();
         match (c.kind.as_str(), c.cache) {
             ("after_load", _) => reps.push(rep_of(turn(model, &cfg, prompt(c, next())).await)),
+            ("next_turn", _) => {
+                for _ in 0..c.reps {
+                    let v = next();
+                    let first = turn(model, &cfg, prompt(c, v)).await;
+                    reps.push(rep_of(
+                        turn(model, &cfg, second_turn(c, v, &first.text)).await,
+                    ));
+                }
+            }
+            ("switch_back", _) => {
+                for _ in 0..c.reps {
+                    let (a, b) = (next(), next());
+                    let first = turn(model, &cfg, prompt(c, a)).await;
+                    let _other = turn(model, &cfg, prompt(c, b)).await;
+                    reps.push(rep_of(
+                        turn(model, &cfg, second_turn(c, a, &first.text)).await,
+                    ));
+                }
+            }
             (_, Cache::Cold) => {
                 for _ in 0..c.reps {
                     reps.push(rep_of(turn(model, &cfg, prompt(c, next())).await));
@@ -394,6 +438,36 @@ mod tests {
         assert!(rep.ttft_ms.is_some());
         assert_eq!(r[1].failed, 0);
         assert!(r[1].ttft_ms_p50.is_some() && r[1].ttft_ms_p95 >= r[1].ttft_ms_p50);
+    }
+
+    #[tokio::test]
+    async fn second_turns_continue_their_chat_and_switch_back_returns_to_the_first() {
+        let f = CaseFile::parse(
+            r#"{"format":"dn.speed.v1","cases":[
+                {"name":"next","kind":"next_turn","prompt_tokens":16,"gen_tokens":4,"reps":2},
+                {"name":"back","kind":"switch_back","prompt_tokens":16,"gen_tokens":4,"reps":1}]}"#,
+        )
+        .unwrap();
+        let m = Echo::default();
+        let model_ref = ModelRef::Local {
+            model_id: "echo".into(),
+        };
+        let r = run_cases(&m, &model_ref, &f.cases).await;
+        assert_eq!(
+            r.iter().map(|c| c.reps.len()).collect::<Vec<_>>(),
+            [2, 1],
+            "only second turns are timed"
+        );
+        let sent = m.0.lock().unwrap().clone();
+        // next_turn: (first, second) twice; switch_back: A, B, A's second turn.
+        assert_eq!(sent.len(), 7);
+        let continues = |first: &String, second: &String| {
+            second.starts_with(first.as_str()) && second.contains(FOLLOW_UP)
+        };
+        assert!(continues(&sent[0], &sent[1]) && continues(&sent[2], &sent[3]));
+        assert_ne!(sent[0], sent[2], "every rep is a new chat");
+        assert_ne!(sent[4], sent[5], "chat B differs from chat A");
+        assert!(continues(&sent[4], &sent[6]), "the timed turn is chat A's");
     }
 
     #[test]
