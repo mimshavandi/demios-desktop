@@ -37,6 +37,8 @@ What each case gets for now:
   approves them; any other write call is answered "The user declined this action.";
   a read tool named `calculator` with no canned results is answered by the runner, which does
   the arithmetic (`+ - * /`, parentheses, decimals, `%`);
+  a read tool named `contrast_check` with no canned results is answered with the app's own
+  WCAG contrast function (dn-tools), so design cases are scored on real ratios;
 - no earlier sessions: memory arrives in R3, so memory cases are reported `memory: none` and
   measure the baseline without it.
 
@@ -46,6 +48,9 @@ Two more case fields:
   message box's skill menu does: its instructions join the system prompt, and its
   `allowed-tools` narrows the case's tools by capability id (`data_profile` is
   `data.profile`; a mock tool can name its own with `capability:`).
+- `--local-skills` runs each skill's `SKILL.local.md` (the version for models running on
+  this computer, #365) where it has one; its `allowed-tools` must equal `SKILL.md`'s. The
+  report records which file each case used.
 - `expect.numbers: ["1537.00", "176.3%"]` lists numbers a correct answer states. They're
   checked mechanically at the precision the answer writes them.
 
