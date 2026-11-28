@@ -22,7 +22,7 @@ import type {
   UpdateMode,
 } from "../ipc/types";
 import { App } from "./App";
-import { NODE_TEXT, NODE_TITLE, PROJECT_INSTRUCTIONS_SENT } from "./privacyText";
+import { DATA_FILES_SENT, NODE_TEXT, NODE_TITLE, PROJECT_INSTRUCTIONS_SENT } from "./privacyText";
 import { KEYCHAIN_SLOW_MS, KeychainNotice } from "./SettingsView";
 import { ToastProvider } from "./toast";
 
@@ -978,7 +978,7 @@ describe("App", () => {
     while (!existsSync(join(dir, "docs/user/privacy.md")) && dirname(dir) !== dir) dir = dirname(dir);
     const policy = readFileSync(join(dir, "docs/user/privacy.md"), "utf8");
     // The sentences Settings copies must still be in the policy, word for word.
-    for (const line of [PROJECT_INSTRUCTIONS_SENT, NODE_TEXT]) expect(policy).toContain(line);
+    for (const line of [PROJECT_INSTRUCTIONS_SENT, DATA_FILES_SENT, NODE_TEXT]) expect(policy).toContain(line);
     // Every "Where your data goes" section of the policy has a row in Settings.
     const section = policy.split("## Where your data goes")[1]?.split("\n## ")[0] ?? "";
     expect(section).not.toBe("");
@@ -993,6 +993,7 @@ describe("App", () => {
     const rows = [...list.querySelectorAll(".row-title")].map((t) => t.textContent);
     expect(rows).toEqual(titles);
     expect(list.textContent).toContain(PROJECT_INSTRUCTIONS_SENT);
+    expect(list.textContent).toContain(DATA_FILES_SENT);
     expect(within(list).getByText(NODE_TEXT)).toBeTruthy();
   });
 
