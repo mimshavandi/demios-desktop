@@ -7,7 +7,12 @@
 //! - **needle:** one fact (an access code) at 10–90% depth; asked for it;
 //! - **multikey:** four similar facts; asked for one of them;
 //! - **multihop:** a chain of four assignments (`V3 = V2`, …) spread through the document,
-//!   with two distractor chains; asked for the last variable's value.
+//!   with two distractor chains; asked for the last variable's value;
+//! - **count:** 3–9 delivery lines for one dock spread through the document, among lines for
+//!   two other docks; asked how many arrived at that dock (aggregation).
+//!
+//! Multihop and count are the harder tasks: the report's `effective_tokens_hard` is the
+//! effective length over both of them pooled, with the cases behind each length.
 //!
 //! Each answer is scored by whether it states the expected number. A length counts as
 //! **effective** when the accuracy there, and at every shorter length, is at least
@@ -43,7 +48,7 @@ pub struct ContextArgs {
     /// (five depths), so 20 per length by default.
     #[arg(long, default_value_t = 5)]
     samples: u32,
-    /// Only these tasks (needle, multikey, multihop); default all.
+    /// Only these tasks (needle, multikey, multihop, count); default all.
     #[arg(long, value_delimiter = ',')]
     tasks: Option<Vec<String>>,
     /// Report path (default: eval-context-<time>.json).
@@ -173,7 +178,12 @@ pub enum Task {
     Needle,
     Multikey,
     Multihop,
+    Count,
 }
+
+const ALL_TASKS: [Task; 4] = [Task::Needle, Task::Multikey, Task::Multihop, Task::Count];
+/// The tasks the effective length is based on.
+const HARD_TASKS: [Task; 2] = [Task::Multihop, Task::Count];
 
 /// One test document and what a correct answer states.
 #[derive(Clone, Debug)]
@@ -292,6 +302,39 @@ pub fn build(task: Task, seed: u64, n: usize, depth: Option<f64>) -> Case {
                 expected: asked.1,
             }
         }
+        Task::Count => {
+            // Three docks with different counts, all spread through the document; the first
+            // is asked about.
+            let mut counts: Vec<usize> = Vec::new();
+            while counts.len() < 3 {
+                let k = 3 + (r.next() % 7) as usize;
+                if !counts.contains(&k) {
+                    counts.push(k);
+                }
+            }
+            let docks: Vec<&str> = (0..3)
+                .map(|i| CODE_NAMES[(seed as usize + i * 4) % 12])
+                .collect();
+            let mut inserts = Vec::new();
+            for (dock, k) in docks.iter().zip(&counts) {
+                for _ in 0..*k {
+                    let at = (r.next() % 960) as f64 / 1000.0 + 0.02;
+                    inserts.push((format!("Delivery log: a crate arrived at dock {dock}."), at));
+                }
+            }
+            let doc = compose(&mut r, n, inserts);
+            Case {
+                task,
+                depth: None,
+                document: doc,
+                question: format!(
+                    "Each delivery log line records one crate. How many crates arrived at dock {} \
+                     in total?",
+                    docks[0]
+                ),
+                expected: counts[0].to_string(),
+            }
+        }
     }
 }
 
@@ -331,6 +374,79 @@ pub fn effective(acc: &BTreeMap<u32, f64>) -> Option<u32> {
     best
 }
 
+impl Task {
+    fn name(self) -> String {
+        format!("{self:?}").to_lowercase()
+    }
+}
+
+/// Accuracy at one length, with the number of cases it rests on.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct Stat {
+    pub accuracy: f64,
+    pub cases: usize,
+}
+
+/// Accuracy per length (pooled over `tasks`) for the lengths that have cases of them.
+fn stats(outcomes: &[(u32, Task, bool)], tasks: &[Task]) -> BTreeMap<u32, Stat> {
+    let mut out = BTreeMap::<u32, (usize, usize)>::new();
+    for (len, task, ok) in outcomes {
+        if tasks.contains(task) {
+            let e = out.entry(*len).or_default();
+            e.0 += usize::from(*ok);
+            e.1 += 1;
+        }
+    }
+    out.into_iter()
+        .map(|(l, (right, n))| {
+            (
+                l,
+                Stat {
+                    accuracy: right as f64 / n as f64,
+                    cases: n,
+                },
+            )
+        })
+        .collect()
+}
+
+fn effective_of(s: &BTreeMap<u32, Stat>) -> Option<u32> {
+    effective(&s.iter().map(|(l, st)| (*l, st.accuracy)).collect())
+}
+
+pub struct Summary {
+    pub hard: BTreeMap<u32, Stat>,
+    pub effective_hard: Option<u32>,
+    pub by_task: BTreeMap<String, BTreeMap<u32, Stat>>,
+    pub effective_by_task: BTreeMap<String, Option<u32>>,
+    pub all: BTreeMap<u32, Stat>,
+    pub effective_all: Option<u32>,
+}
+
+/// Per task, the hard tasks pooled, and everything pooled; a task that wasn't run is absent,
+/// never a zero.
+pub fn summarize(outcomes: &[(u32, Task, bool)]) -> Summary {
+    let hard = stats(outcomes, &HARD_TASKS);
+    let all = stats(outcomes, &ALL_TASKS);
+    let mut by_task = BTreeMap::new();
+    let mut effective_by_task = BTreeMap::new();
+    for t in ALL_TASKS {
+        let st = stats(outcomes, &[t]);
+        if !st.is_empty() {
+            effective_by_task.insert(t.name(), effective_of(&st));
+            by_task.insert(t.name(), st);
+        }
+    }
+    Summary {
+        effective_hard: effective_of(&hard),
+        hard,
+        by_task,
+        effective_by_task,
+        effective_all: effective_of(&all),
+        all,
+    }
+}
+
 #[derive(Serialize)]
 struct Item {
     task: Task,
@@ -368,6 +484,16 @@ fn sentences_for(target: u32, per_sentence: f64, overhead: u32) -> usize {
 }
 
 pub async fn run(a: ContextArgs) -> Result<(), String> {
+    if let Some(bad) = a
+        .tasks
+        .iter()
+        .flatten()
+        .find(|t| !ALL_TASKS.iter().any(|k| k.name().eq_ignore_ascii_case(t)))
+    {
+        return Err(format!(
+            "unknown task {bad:?}; the tasks are needle, multikey, multihop and count"
+        ));
+    }
     let path = crate::resolve_model(&a.model.model_name())?;
     let g = dn_models::gguf::Gguf::open(&path).map_err(|e| e.to_string())?;
     let n_ctx_train = dn_models::fit::ModelFootprint::from_gguf(&g).n_ctx_train;
@@ -433,6 +559,12 @@ pub async fn run(a: ContextArgs) -> Result<(), String> {
                 n,
                 None,
             ));
+            cases.push(build(
+                Task::Count,
+                4000 + li as u64 * 100 + u64::from(s),
+                n,
+                None,
+            ));
         }
         let wanted = |t: Task| {
             a.tasks
@@ -466,55 +598,37 @@ pub async fn run(a: ContextArgs) -> Result<(), String> {
             });
         }
     }
-    let mut acc = BTreeMap::<u32, f64>::new();
-    let mut by_task = BTreeMap::<u32, BTreeMap<String, f64>>::new();
-    for &len in &lengths {
-        let at: Vec<&Item> = items.iter().filter(|i| i.target_tokens == len).collect();
-        let rate =
-            |xs: &[&Item]| xs.iter().filter(|i| i.correct).count() as f64 / xs.len().max(1) as f64;
-        acc.insert(len, rate(&at));
-        for task in [Task::Needle, Task::Multikey, Task::Multihop] {
-            let t: Vec<&Item> = at.iter().copied().filter(|i| i.task == task).collect();
-            by_task
-                .entry(len)
-                .or_default()
-                .insert(format!("{task:?}").to_lowercase(), rate(&t));
-        }
-    }
-    let eff = effective(&acc);
-    // Per task too: a task that fails at every length is a task problem, not a context one.
-    let mut eff_by_task = BTreeMap::new();
-    for task in [Task::Needle, Task::Multikey, Task::Multihop] {
-        let name = format!("{task:?}").to_lowercase();
-        let per: BTreeMap<u32, f64> = by_task
-            .iter()
-            .filter_map(|(l, t)| t.get(&name).map(|v| (*l, *v)))
-            .filter(|_| items.iter().any(|i| i.task == task))
-            .collect();
-        if !per.is_empty() {
-            eff_by_task.insert(name, effective(&per));
-        }
-    }
+    let outcomes: Vec<(u32, Task, bool)> = items
+        .iter()
+        .map(|i| (i.target_tokens, i.task, i.correct))
+        .collect();
+    let s = summarize(&outcomes);
+    let eff = s.effective_hard;
     let summary = serde_json::json!({
         "n_ctx_train": n_ctx_train,
         "loaded_ctx": max + HEADROOM,
         "threshold": THRESHOLD,
-        "accuracy": acc,
-        "by_task": by_task,
+        "hard_tasks": HARD_TASKS.map(|t| t.name()),
+        // The effective length: multihop and count pooled, with the cases behind each length.
         "effective_tokens": eff,
-        "effective_tokens_by_task": eff_by_task,
         "effective_share_of_training_context": eff.map(|e| f64::from(e) / f64::from(n_ctx_train)),
+        "hard": s.hard,
+        "by_task": s.by_task,
+        "effective_tokens_by_task": s.effective_by_task,
+        "all_tasks": s.all,
+        "effective_tokens_all_tasks": s.effective_all,
         "tokens_per_filler_sentence": per_sentence,
     });
     let report = Report::new("context", &m, summary, items);
     let out = report.write(a.out)?;
     m.chat.unload().await?;
     println!(
-        "effective context: {} of {n_ctx_train} trained · accuracy {:?} · report: {}",
-        eff.map_or("below the shortest length".into(), |e| format!(
-            "{e} tokens"
-        )),
-        acc,
+        "effective context (multihop and count): {} of {n_ctx_train} trained · report: {}",
+        match (eff, s.hard.is_empty()) {
+            (_, true) => "not measured (multihop and count weren't run)".into(),
+            (None, false) => "below the shortest length".into(),
+            (Some(e), false) => format!("{e} tokens"),
+        },
         out.display()
     );
     Ok(())
@@ -526,11 +640,13 @@ mod tests {
 
     #[test]
     fn documents_are_deterministic_and_hold_their_answer() {
-        for task in [Task::Needle, Task::Multikey, Task::Multihop] {
+        for task in ALL_TASKS {
             let a = build(task, 7, 300, Some(0.3));
             let b = build(task, 7, 300, Some(0.3));
             assert_eq!(a.document, b.document);
-            assert!(a.document.contains(&a.expected), "{task:?}");
+            if task != Task::Count {
+                assert!(a.document.contains(&a.expected), "{task:?}");
+            }
             assert_ne!(a.document, build(task, 8, 300, Some(0.3)).document);
         }
     }
@@ -571,6 +687,59 @@ mod tests {
         }
         assert_eq!(cur, c.expected);
         assert_eq!(notes.len(), 12, "three chains of four");
+    }
+
+    #[test]
+    fn a_count_case_plants_the_asked_number_of_lines_among_other_docks() {
+        for seed in 0..20 {
+            let c = build(Task::Count, seed, 400, None);
+            let dock = c
+                .question
+                .split("dock ")
+                .nth(1)
+                .unwrap()
+                .split(' ')
+                .next()
+                .unwrap();
+            let line = format!("Delivery log: a crate arrived at dock {dock}.");
+            assert_eq!(c.document.matches(&line).count().to_string(), c.expected);
+            let all = c.document.matches("Delivery log:").count();
+            assert!(
+                all > c.expected.parse::<usize>().unwrap(),
+                "distractor docks"
+            );
+            assert!(
+                !c.document.chars().any(|ch| ch.is_ascii_digit()),
+                "no digits to copy"
+            );
+        }
+    }
+
+    #[test]
+    fn the_effective_length_rests_on_the_hard_tasks_with_their_cases() {
+        let mut o = Vec::new();
+        for len in [4096, 8192] {
+            o.extend((0..10).map(|_| (len, Task::Needle, true)));
+            o.extend((0..5).map(|i| (len, Task::Multihop, len == 4096 || i < 2)));
+            o.extend((0..5).map(|_| (len, Task::Count, true)));
+        }
+        let s = summarize(&o);
+        assert_eq!(s.effective_hard, Some(4096));
+        assert_eq!(
+            s.hard[&8192],
+            Stat {
+                accuracy: 0.7,
+                cases: 10
+            }
+        );
+        assert_eq!(
+            s.effective_all,
+            Some(8192),
+            "needle hides the drop when pooled"
+        );
+        assert_eq!(s.by_task["multihop"][&8192].cases, 5);
+        assert!(!s.by_task.contains_key("multikey"), "not run, not zero");
+        assert!(summarize(&[(4096, Task::Needle, true)]).hard.is_empty());
     }
 
     #[test]

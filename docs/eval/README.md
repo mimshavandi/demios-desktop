@@ -126,7 +126,7 @@ For a holdout's answers, pass the same `--holdout`, and `--out` outside any git 
 ## Context: how much of its window a model uses well
 
 ```bash
-dn eval context <model> [--lengths 4096,8192,...] [--samples 5] [--out report.json]
+dn eval context <model> [--lengths 4096,8192,...] [--samples 5] [--tasks multihop,count] [--out report.json]
 ```
 
 Measures how far into its context a local model still finds what it's asked for, so the
@@ -137,13 +137,19 @@ up to its training context. At each length:
 
 - **needle:** one fact (an access code) at five depths, two documents each;
 - **multikey:** four similar facts, asked for one (`--samples` documents);
-- **multihop:** a chain of four notes (`V2 = V1`, …) spread through the document, with two
-  decoy chains, asked for the last one's value (`--samples` documents).
+- **multihop:** a chain of four notes (`KESTREL = 48213`, `JUNIPER = KESTREL`, …) spread
+  through the document, with two decoy chains, asked for the last one's value (`--samples`
+  documents);
+- **count:** 3–9 delivery lines for one dock spread through the document, among lines for
+  two other docks, asked how many arrived there (`--samples` documents).
 
 An answer is right when it states the expected number. A length is **effective** when its
-accuracy, and every shorter length's, is at least 0.85. The report gives accuracy per length
-and task, the effective length and its share of the training context. It loads the model
-with a context just above the longest length, so long lengths need memory and time.
+accuracy, and every shorter length's, is at least 0.85. Finding one fact is easier than
+using a whole document, so the effective length rests on the harder tasks, multihop and count,
+pooled. The report gives, per length, the accuracy and the number of cases behind it for the
+hard tasks, each task and all tasks, the effective length of each, and the effective length's
+share of the training context. `--tasks` runs only some tasks. It loads the model with a
+context just above the longest length, so long lengths need memory and time.
 
 ## Speed
 
