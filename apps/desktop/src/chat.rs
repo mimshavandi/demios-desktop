@@ -297,6 +297,36 @@ fn tool_resolver(state: &AppState) -> CapabilityResolver {
     })
 }
 
+/// Tells the model which data files are attached to this chat (#370), so it can read them
+/// with the data tools. File names are the person's, quoted and kept to one line.
+fn attached_files_note(
+    db: &dn_store::Connection,
+    conversation_id: Id,
+) -> IpcResult<Option<String>> {
+    let names: Vec<String> = crate::chat_files::list(db, conversation_id)?
+        .into_iter()
+        .filter(|f| dn_data::tool::reads(&f.name))
+        .map(|f| {
+            let flat: String = f
+                .name
+                .chars()
+                .map(|c| if c.is_control() { ' ' } else { c })
+                .collect();
+            format!(
+                "\"{}\"",
+                dn_core::untrusted::neutralise(&flat.replace('"', "'"))
+            )
+        })
+        .collect();
+    Ok((!names.is_empty()).then(|| {
+        format!(
+            "Data files attached to this chat: {}. Read their numbers with data_profile and \
+             data_aggregate.",
+            names.join(", ")
+        )
+    }))
+}
+
 /// System prompt + stored conversation, minus the new placeholder and failed empty turns.
 /// The chat's project and skill add their instructions.
 fn history(
@@ -316,6 +346,7 @@ fn history(
         .map(|m| m.text())
         .unwrap_or_default();
     let knowledge = crate::knowledge::context_for(state, db, conversation_id, exclude, &question)?;
+    let attached = attached_files_note(db, conversation_id)?;
     let system: Vec<String> = state
         .agent
         .system_prompt()
@@ -323,6 +354,7 @@ fn history(
         .into_iter()
         .chain(project)
         .chain(knowledge)
+        .chain(attached)
         .chain(skill.map(Skill::system_text))
         .collect();
     if !system.is_empty() {
@@ -364,6 +396,10 @@ fn start(
         .ok()
         .and_then(|db| store::get_conversation(&db, conversation_id).ok())
         .and_then(|c| c.project_id);
+    let has_chat_files = state
+        .db()
+        .ok()
+        .is_some_and(|db| crate::chat_files::has_data_files(&db, conversation_id));
     // Artifacts only through tool calls (ADR-0004): a model without tool calling gets none.
     let contrast = crate::artifacts::contrast_offered(&state, mode, skill.as_deref());
     let tools: Arc<dyn ToolExecutor> = Arc::new(RunTools {
@@ -375,12 +411,14 @@ fn start(
             message_id,
             sink: Arc::clone(&sink),
         }),
-        data: project_id
-            .filter(|_| mode == ArtifactMode::Tools)
-            .map(|project_id| crate::data_tools::DataTools {
+        // In a project chat, or a chat with attached data files (#370).
+        data: (mode == ArtifactMode::Tools && (project_id.is_some() || has_chat_files)).then(
+            || crate::data_tools::DataTools {
                 state: Arc::clone(&state),
                 project_id,
-            }),
+                conversation_id: Some(conversation_id),
+            },
+        ),
     });
     // The chat's skill only narrows: approvals are decided behind this, by the executor.
     let tools = match &skill {
