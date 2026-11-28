@@ -43,6 +43,8 @@ export interface Conversation {
   model: string | null;
   /** The project this chat belongs to, if any. */
   project_id: Id | null;
+  /** Incognito (#346): set at creation, never changed; no memory, search, index or sync. */
+  incognito: boolean;
   created_at: number;
   updated_at: number;
 }
