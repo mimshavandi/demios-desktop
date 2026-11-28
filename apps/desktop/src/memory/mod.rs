@@ -20,6 +20,7 @@
 //! - **Purge.** Forgetting a source deletes every item whose last source it was (ADR-0013 §5,
 //!   #280). Deletes leave tombstones for sync later.
 
+pub mod chats;
 pub mod extract;
 pub mod read;
 mod store;
