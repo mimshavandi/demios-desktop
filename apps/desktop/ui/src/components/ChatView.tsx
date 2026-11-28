@@ -5,6 +5,7 @@ import {
   type ApprovalDecision,
   type ApprovalPrompt,
   type ArtifactType,
+  type ChatFile,
   type Id,
   type ModelCatalog,
   type ProjectSummary,
@@ -17,6 +18,7 @@ import { chatModelsAvailable, describeModel } from "../models";
 import { mod } from "../platform";
 import { canRegenerate, type ChatState, type LiveToolCall } from "../state/chat";
 import { ArtifactCard } from "./ArtifactPane";
+import { AttachButton, FileChips, NotAttached } from "./ChatAttachments";
 import { Sources } from "./Sources";
 import { Markdown } from "./Markdown";
 import { ModelBadge } from "./ModelBadge";
@@ -73,6 +75,24 @@ interface Props {
   /** The chat's project (or, for a new chat, the one it will start in), or `null`. */
   projectId?: Id | null;
   onProject?: (id: Id | null) => void;
+  /** Data files attached to this chat (#370). Absent where chats can't have files. */
+  attachments?: Attachments;
+}
+
+/** What the composer shows for a chat's data files (design: ChatAttachments). */
+export interface Attachments {
+  files: ChatFile[];
+  /** Files the last attach turned away, with the engine's reasons. */
+  skipped: { name: string; reason: string }[];
+  /** The picker is open or the copies are being made. */
+  busy: boolean;
+  /** The chat model's provider, or `null` when it runs on this device. */
+  provider: string | null;
+  /** Read out politely after attaching: "orders.csv attached", "2 files attached". */
+  status: string;
+  onAttach: () => void;
+  onRemove: (f: ChatFile) => void;
+  onDismissSkipped: () => void;
 }
 
 /** One artifact a message created or changed: its latest version from that message. */
@@ -105,6 +125,17 @@ export function ChatView(p: Props) {
   const setDraft = p.onDraft ?? setLocalDraft;
   const [sending, setSending] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
+  const attachRef = useRef<HTMLButtonElement>(null);
+  const removeRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  // After a removal, focus goes to the chip that took its place, or to the paperclip.
+  const [focusAfterRemove, setFocusAfterRemove] = useState<number | null>(null);
+  const fileCount = p.attachments?.files.length ?? 0;
+  useEffect(() => {
+    if (focusAfterRemove === null) return;
+    const next = focusAfterRemove >= 0 ? removeRefs.current[focusAfterRemove] : null;
+    (next ?? attachRef.current)?.focus();
+    setFocusAfterRemove(null);
+  }, [focusAfterRemove, fileCount]);
   const streaming = p.state.streamingId !== null;
   const lastId = p.state.messages[p.state.messages.length - 1]?.id;
 
@@ -287,6 +318,20 @@ export function ChatView(p: Props) {
           void submit();
         }}
       >
+        {p.attachments !== undefined && (
+          <FileChips
+            files={p.attachments.files}
+            provider={p.attachments.provider}
+            removeRef={(i, el) => {
+              removeRefs.current[i] = el;
+            }}
+            onRemove={(f, i) => {
+              p.attachments?.onRemove(f);
+              // The next chip moves into this index; with none left, the paperclip.
+              setFocusAfterRemove(i < fileCount - 1 ? i : -1);
+            }}
+          />
+        )}
         <label htmlFor="composer-input" className="dn-visually-hidden">
           Message
         </label>
@@ -303,6 +348,14 @@ export function ChatView(p: Props) {
           onKeyDown={onKeyDown}
         />
         <div className="composer-bar">
+          {p.attachments !== undefined && (
+            <AttachButton
+              ref={attachRef}
+              disabled={!p.ready}
+              busy={p.attachments.busy}
+              onAttach={p.attachments.onAttach}
+            />
+          )}
           {p.projects !== undefined && p.projects.length > 0 && p.onProject !== undefined && (
             <ProjectPicker projects={p.projects} value={p.projectId ?? null} onChange={p.onProject} />
           )}
@@ -339,7 +392,15 @@ export function ChatView(p: Props) {
             </Button>
           )}
         </div>
+        {p.attachments !== undefined && (
+          <span className="dn-visually-hidden" role="status" aria-live="polite" data-testid="attach-status">
+            {p.attachments.status}
+          </span>
+        )}
       </form>
+      {p.attachments !== undefined && (
+        <NotAttached skipped={p.attachments.skipped} onDismiss={p.attachments.onDismissSkipped} />
+      )}
       <p id="composer-disclosure" className="composer-disclosure">
         {AI_DISCLOSURE}
       </p>

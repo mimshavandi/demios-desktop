@@ -22,6 +22,13 @@ export function describeModel(ref: string | null, catalog: ModelCatalog | null):
   return { local: false, text: `${a} · ${rest.join(":")}` };
 }
 
+/** The provider's name for a model that doesn't run on this device, or `null` for one that does. */
+export function providerName(ref: string | null, catalog: ModelCatalog | null): string | null {
+  const info = describeModel(ref, catalog);
+  if (info === null || info.local) return null;
+  return info.text.split(" · ")[0] ?? null;
+}
+
 /** The model chat will use: the Chat slot's model, and only that (#219: an empty slot is
  * never filled by an automatic pick; the first suitable model fills it once). */
 export function chatModel(catalog: ModelCatalog | null, _devFake: boolean): string | null {
