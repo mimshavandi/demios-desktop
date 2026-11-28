@@ -616,14 +616,14 @@ describe("App", () => {
       return update(s);
     };
     render(<App api={api} />);
-    expect(await screen.findByText(/Demios lets you chat with AI models you choose/)).toBeTruthy();
+    expect(await screen.findByText(/Almend lets you chat with AI models you choose/)).toBeTruthy();
     // The persistent line is part of the composer's description for screen readers.
     const box = screen.getByLabelText("Message");
     expect(box.getAttribute("aria-describedby")).toContain("composer-disclosure");
     expect(document.getElementById("composer-disclosure")?.textContent).toContain("can be wrong");
 
     fireEvent.click(screen.getByRole("button", { name: "Got it" }));
-    await waitFor(() => expect(screen.queryByText(/Demios lets you chat with AI models you choose/)).toBeNull());
+    await waitFor(() => expect(screen.queryByText(/Almend lets you chat with AI models you choose/)).toBeNull());
     expect(document.activeElement).toBe(box);
     expect(saved).toMatchObject({ ai_notice_seen: true });
     // The line by the composer stays.
@@ -818,7 +818,7 @@ describe("App", () => {
     await api.updateSettings({ slots: {}, telemetry_enabled: false, ai_notice_seen: true });
     render(<App api={api} />);
     expect(await screen.findByText("What can I help with?")).toBeTruthy();
-    expect(screen.queryByText(/Demios lets you chat with AI models you choose/)).toBeNull();
+    expect(screen.queryByText(/Almend lets you chat with AI models you choose/)).toBeNull();
     expect(document.getElementById("composer-disclosure")).toBeTruthy();
   });
 
@@ -967,7 +967,7 @@ describe("App", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "General" })).toBeTruthy();
     expect(screen.getByText(/Read-only tools run without asking/)).toBeTruthy();
     // No inert telemetry switch; a plain statement instead (T-STORE-11).
-    expect(await screen.findByText(/Demios collects no usage data/)).toBeTruthy();
+    expect(await screen.findByText(/Almend collects no usage data/)).toBeTruthy();
     expect(screen.queryByRole("switch")).toBeNull();
     expect(screen.getByText("Where your data goes")).toBeTruthy();
   });
@@ -1375,7 +1375,7 @@ describe("Launch update check (#95)", () => {
     };
     render(<App api={api} />);
     const notice = await screen.findByTestId("update-notice");
-    expect(notice.textContent).toContain("Demios 0.2.0 is available.");
+    expect(notice.textContent).toContain("Almend 0.2.0 is available.");
     fireEvent.click(screen.getByRole("button", { name: "View update" }));
     expect(await screen.findByText(/Version 0.2.0 is available/)).toBeTruthy();
     expect(screen.queryByTestId("update-notice")).toBeNull();
@@ -1765,7 +1765,7 @@ describe("No silent fallbacks (#141)", () => {
     render(<App api={api} />);
     fireEvent.click(await screen.findByRole("button", { name: "Got it" }));
     expect(await screen.findByText(/Couldn't save that you've read the notice/)).toBeTruthy();
-    expect(screen.getByText(/Demios lets you chat with AI models you choose/)).toBeTruthy();
+    expect(screen.getByText(/Almend lets you chat with AI models you choose/)).toBeTruthy();
   });
 
   it("shows a model-list error with Retry instead of a stale catalog", async () => {
@@ -1971,7 +1971,7 @@ describe("System keychain state in Settings (#200)", () => {
 
   for (const [state, message] of [
     ["unavailable", NO_KEYCHAIN],
-    ["denied", "Demios wasn't allowed to read your system keychain, so it can't tell which API keys are saved."],
+    ["denied", "Almend wasn't allowed to read your system keychain, so it can't tell which API keys are saved."],
   ] as const) {
     it(`says why keys can't be checked when the keychain is ${state}, never "No key yet"`, async () => {
       const { api } = fakeApi();

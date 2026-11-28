@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Demios doesn't write answers: they come from the model you chose, running on your computer or at a provider you added a key for. Reports help us improve defaults, warnings and documentation.
+        Almend doesn't write answers: they come from the model you chose, running on your computer or at a provider you added a key for. Reports help us improve defaults, warnings and documentation.
 
         This issue is **public**. Nothing from your chat was sent. Include only what you are comfortable sharing, and never keys, tokens or personal data.
   - type: dropdown

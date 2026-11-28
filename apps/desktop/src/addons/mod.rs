@@ -52,10 +52,10 @@ impl NotRunning {
             Self::Incompatible { message } => message.clone(),
             Self::FailedToStart { message } => format!("{name} couldn't start: {message}"),
             Self::Stopped { .. } => {
-                format!("{name} stopped after an error and is off until Demios restarts.")
+                format!("{name} stopped after an error and is off until Almend restarts.")
             }
             Self::DataDeleted => {
-                format!("{name}'s data was deleted. It starts again when Demios restarts.")
+                format!("{name}'s data was deleted. It starts again when Almend restarts.")
             }
         }
     }
@@ -330,7 +330,7 @@ impl Addons {
             .iter()
             .find(|e| e.manifest.id.as_str() == id)
             .map(|e| (e.manifest.clone(), e.grants.clone(), e.loaded()))
-            .ok_or_else(|| format!("There is no add-on `{id}` in this copy of Demios."))
+            .ok_or_else(|| format!("There is no add-on `{id}` in this copy of Almend."))
     }
 
     /// Settings › Add-ons: the list.
@@ -359,7 +359,7 @@ impl Addons {
         let e = entries
             .iter()
             .find(|e| e.manifest.id.as_str() == id)
-            .ok_or_else(|| format!("There is no add-on `{id}` in this copy of Demios."))?;
+            .ok_or_else(|| format!("There is no add-on `{id}` in this copy of Almend."))?;
         let st = store::state(&db, &e.manifest.id).map_err(|e| e.to_string())?;
         drop(db);
         let permissions = e
@@ -714,7 +714,7 @@ pub struct ConsentRequest {
 /// A clear message for a host service this version doesn't offer add-ons yet.
 pub(crate) fn not_offered(caller: &dn_plugin_api::Caller, what: &str) -> PluginError {
     PluginError::unavailable(format!(
-        "{} can't use {what}: this version of Demios doesn't offer it to add-ons yet",
+        "{} can't use {what}: this version of Almend doesn't offer it to add-ons yet",
         caller.plugin_name
     ))
 }

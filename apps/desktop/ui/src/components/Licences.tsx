@@ -84,7 +84,7 @@ export function Licences({ load = loadLicences }: { load?: () => Promise<Licence
       <div className="row">
         <div className="row-main">
           <span className="row-title">Open-source licences</span>
-          <span className="dn-help">Demios is built on open-source software. See each package and its licence.</span>
+          <span className="dn-help">Almend is built on open-source software. See each package and its licence.</span>
         </div>
         <div className="row-actions">
           <Button ref={showRef} icon={<ScrollText {...ICON} aria-hidden="true" />} onClick={() => setOpen(true)}>

@@ -128,14 +128,14 @@ impl ToolError {
                  again; try again in a moment."
             ),
             ToolErrorKind::Unavailable => "Tools are turned off after an internal error, so your \
-                                           tool settings can't be skipped. Restart Demios to use \
+                                           tool settings can't be skipped. Restart Almend to use \
                                            tools again."
                 .to_owned(),
             ToolErrorKind::InFlight => format!("\"{tool}\" is already running this action."),
             ToolErrorKind::Ledger => format!("Couldn't record the result of \"{tool}\"."),
             ToolErrorKind::Cancelled => format!("\"{tool}\" was stopped."),
             ToolErrorKind::Held => {
-                format!("\"{tool}\" waits for your answer in Demios before it runs.")
+                format!("\"{tool}\" waits for your answer in Almend before it runs.")
             }
             ToolErrorKind::OutcomeUnknown => format!(
                 "An earlier \"{tool}\" action may or may not have gone through. Check it and \

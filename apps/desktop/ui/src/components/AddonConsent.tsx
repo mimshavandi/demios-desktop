@@ -112,7 +112,7 @@ export function AddonConsent({
       title={request.first ? `What may ${request.name} do?` : `${request.name} ${request.version} asks for more`}
       description={
         request.first
-          ? `${request.name} is built into this copy of Demios. Choose what it may use. You can change this later in Settings › Add-ons.`
+          ? `${request.name} is built into this copy of Almend. Choose what it may use. You can change this later in Settings › Add-ons.`
           : "What you allowed before stays as it is. Choose whether it may also use this."
       }
       testId="addon-consent"

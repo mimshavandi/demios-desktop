@@ -1,4 +1,4 @@
-//! Settings › Node: pairing this computer with a Demios Node, and the Node's status and
+//! Settings › Node: pairing this computer with a Almend Node, and the Node's status and
 //! devices (ADR-0014 §2; design: NodeSettings and PairDevice in the design system).
 //!
 //! - **This device's keys** live in the system keychain (`device/identity`). If the
@@ -112,7 +112,7 @@ fn direct_address(link: &PairingLink) -> IpcResult<String> {
     link.address.clone().ok_or_else(|| {
         IpcError::new(
             "node_relay_link",
-            "This Node can be reached only through a Relay, and this version of Demios can't \
+            "This Node can be reached only through a Relay, and this version of Almend can't \
              pair through a Relay yet.",
         )
     })
@@ -125,9 +125,9 @@ fn link_problem(e: &SyncError) -> IpcError {
                 .to_owned()
         }
         SyncError::NewerLinkVersion => {
-            "This link is from a newer Demios. Update this app, then pair.".to_owned()
+            "This link is from a newer Almend. Update this app, then pair.".to_owned()
         }
-        SyncError::BadLink(why) => format!("That isn't a Demios pairing link: {why}."),
+        SyncError::BadLink(why) => format!("That isn't a Almend pairing link: {why}."),
         other => other.to_string(),
     };
     IpcError::new("node_link", msg)

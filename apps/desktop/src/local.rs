@@ -109,7 +109,7 @@ pub struct FitView {
 pub enum ModelOrigin {
     /// The built-in catalogue (downloadable from Settings).
     Catalog,
-    /// Downloaded from Hugging Face by Demios or the `dn` CLI (`models_dir/hf/…`, verified).
+    /// Downloaded from Hugging Face by Almend or the `dn` CLI (`models_dir/hf/…`, verified).
     Hub,
     /// Found in the user's own Hugging Face cache; used in place, never changed.
     HfCache,
@@ -336,7 +336,7 @@ fn suffixed(path: &Path, suffix: &str) -> PathBuf {
     PathBuf::from(p)
 }
 
-/// Hub downloads in `models_dir/hf/` (verified; Demios's or the `dn` CLI's), as externals.
+/// Hub downloads in `models_dir/hf/` (verified; Almend's or the `dn` CLI's), as externals.
 /// Id: `hf/<owner>/<name>/<file stem>`.
 pub fn hub_downloads(models_dir: &Path) -> Vec<External> {
     dn_models::cache::list_downloaded(models_dir)
@@ -378,7 +378,7 @@ pub fn cache_models(found: &[dn_models::cache::CachedModel]) -> Vec<External> {
                 &c.revision,
                 c.variant.total_size,
                 String::new(),
-                "From your Hugging Face cache. Demios uses the file where it is and never changes it.",
+                "From your Hugging Face cache. Almend uses the file where it is and never changes it.",
             ),
             path: c.path.clone(),
             origin: ModelOrigin::HfCache,
@@ -820,7 +820,7 @@ impl<B: InferenceBackend> LocalModels<B> {
         }
     }
 
-    /// Re-reads Hub downloads in the models folder (verified, from Demios or the `dn` CLI)
+    /// Re-reads Hub downloads in the models folder (verified, from Almend or the `dn` CLI)
     /// and GGUF models in the Hugging Face cache. A file that's already listed (same repo and
     /// file name) is listed once: a downloaded catalogue model first, then Hub downloads,
     /// then the cache. Blocking.
@@ -1223,7 +1223,7 @@ impl<B: InferenceBackend> LocalModels<B> {
         );
     }
 
-    /// Why `id` can't be removed, in the user's words (#176); `None` when it can. Demios never
+    /// Why `id` can't be removed, in the user's words (#176); `None` when it can. Almend never
     /// deletes files in the user's Hugging Face cache or in a models folder the user chose.
     pub fn remove_blocked(&self, id: &str) -> Option<String> {
         if self
@@ -1231,14 +1231,14 @@ impl<B: InferenceBackend> LocalModels<B> {
             .is_some_and(|x| x.origin == ModelOrigin::HfCache)
         {
             return Some(
-                "This model is in your Hugging Face cache. Demios uses it there but never \
+                "This model is in your Hugging Face cache. Almend uses it there but never \
                  deletes files in it; remove it with the Hugging Face tools."
                     .into(),
             );
         }
         if !self.owns_dir {
             return Some(format!(
-                "This model is in a folder you chose ({}). Demios doesn't delete files there; \
+                "This model is in a folder you chose ({}). Almend doesn't delete files there; \
                  remove it in your file manager.",
                 self.dir.display()
             ));
@@ -1246,7 +1246,7 @@ impl<B: InferenceBackend> LocalModels<B> {
         None
     }
 
-    /// Everything Demios wrote for `e`: the GGUF (every part of a Hub download), its checksum,
+    /// Everything Almend wrote for `e`: the GGUF (every part of a Hub download), its checksum,
     /// partial and lock files, a Hub download's manifest and a stored chat template. Only
     /// paths inside the models folder.
     fn files_of(&self, e: &CatalogEntry) -> Vec<PathBuf> {
@@ -1349,7 +1349,7 @@ impl<B: InferenceBackend> LocalModels<B> {
         if let Some(reason) = self.remove_blocked(id) {
             return Err(CoreError::ModelUnavailable {
                 user_message: reason,
-                developer_message: format!("{id}: removal refused (not Demios's folder)"),
+                developer_message: format!("{id}: removal refused (not Almend's folder)"),
                 recovery: vec![],
             });
         }
@@ -1409,7 +1409,7 @@ impl<B: InferenceBackend> LocalModels<B> {
     }
 
     /// Removes a downloaded model from this computer (#176): stops its download, unloads it
-    /// if nothing is using it, and deletes what Demios wrote for it ([`Self::files_of`]).
+    /// if nothing is using it, and deletes what Almend wrote for it ([`Self::files_of`]).
     /// Refused, with nothing deleted, for models in the Hugging Face cache or a folder the
     /// user chose ([`Self::remove_blocked`]) and for a model a reply is using.
     pub async fn remove(&self, id: &str) -> Result<(), CoreError> {
@@ -1421,7 +1421,7 @@ impl<B: InferenceBackend> LocalModels<B> {
         if let Some(reason) = self.remove_blocked(id) {
             return Err(CoreError::ModelUnavailable {
                 user_message: reason,
-                developer_message: format!("{id}: removal refused (not Demios's folder)"),
+                developer_message: format!("{id}: removal refused (not Almend's folder)"),
                 recovery: vec![],
             });
         }
@@ -2681,7 +2681,7 @@ mod tests {
         assert_eq!(lm.rows()[0].state, DownloadState::NotDownloaded);
     }
 
-    /// A downloaded catalogue model in a folder Demios owns, for the Remove tests (#176).
+    /// A downloaded catalogue model in a folder Almend owns, for the Remove tests (#176).
     fn owned_with_ready(tag: &str) -> (Dir, LocalModels) {
         let dir = Dir(std::env::temp_dir().join(format!("dn-local-{tag}-{}", dn_core::Id::new())));
         std::fs::create_dir_all(&dir.0).unwrap();

@@ -253,7 +253,7 @@ export function ProjectView({
           <div className="row">
             <div className="row-main">
               <span className="dn-help">
-                Deleting the project also deletes its chats and files. You can undo it until Demios restarts.
+                Deleting the project also deletes its chats and files. You can undo it until Almend restarts.
               </span>
             </div>
             <div className="row-actions">
@@ -358,7 +358,7 @@ function ProjectFiles({ api, projectId, onChanged }: { api: Api; projectId: Id; 
         </Button>
       </div>
       <p className="dn-help">
-        Demios keeps a copy on this computer, so moving or changing the original doesn't affect it. Up to 50 MB per
+        Almend keeps a copy on this computer, so moving or changing the original doesn't affect it. Up to 50 MB per
         file.
       </p>
       <BetterSearchOffer api={api} hasFiles={files.kind === "ready" && files.value.length > 0} />

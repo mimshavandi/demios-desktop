@@ -59,7 +59,7 @@ const KIND_ICON = { desktop: Laptop, node: Server, phone: Smartphone } as const;
 type Load = { kind: "loading" } | { kind: "error"; message: string } | { kind: "ready"; view: NodeOverview };
 
 /**
- * Settings › Node (ADR-0014; design: NodeSettings): pair this computer with a Demios Node,
+ * Settings › Node (ADR-0014; design: NodeSettings): pair this computer with a Almend Node,
  * see the Node's status and the devices paired with it, remove a device, or unpair.
  * - The overview is asked of the Node when the page opens and on Retry. When the Node
  *   doesn't answer, the page says since when; it never shows a frozen "Online".
@@ -166,7 +166,7 @@ export function NodeSettings({ api }: { api: Api }) {
               </Button>
             }
           >
-            A Node is Demios running on a machine you own, such as a home PC, a Mac mini or a
+            A Node is Almend running on a machine you own, such as a home PC, a Mac mini or a
             server. It runs your jobs while this app is closed. It keeps your chats, keys and
             memory on that machine, unencrypted, so it can work while this app is closed. Only
             pair one you control.

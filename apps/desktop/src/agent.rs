@@ -78,8 +78,8 @@ impl Agent {
             Some(e) => Err(IpcError::new(
                 "agent_unavailable",
                 format!(
-                    "Demios couldn't load its assistant instructions ({e}), so chats can't start. \
-                     Reinstall Demios, or report a problem."
+                    "Almend couldn't load its assistant instructions ({e}), so chats can't start. \
+                     Reinstall Almend, or report a problem."
                 ),
             )),
         }

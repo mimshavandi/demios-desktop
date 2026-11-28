@@ -305,7 +305,7 @@ export function ChatView(p: Props) {
           ref={p.composerRef}
           value={draft}
           rows={Math.min(8, Math.max(1, draft.split("\n").length))}
-          placeholder={p.ready ? "Message Demios" : choose ? "Choose a model for Chat to start chatting" : "Connect a model to start chatting"}
+          placeholder={p.ready ? "Message Almend" : choose ? "Choose a model for Chat to start chatting" : "Connect a model to start chatting"}
           disabled={!p.ready}
           aria-describedby="composer-hint composer-disclosure"
           onChange={(e) => setDraft(e.target.value)}

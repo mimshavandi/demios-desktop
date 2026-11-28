@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Demios Desktop",
+  "productName": "Almend Desktop",
   "mainBinaryName": "demios-desktop",
   "version": "0.1.0",
   "identifier": "io.demios.app",
@@ -16,7 +16,7 @@
       {
         "label": "main",
         "create": false,
-        "title": "Demios",
+        "title": "Almend",
         "width": 1280,
         "height": 820,
         "minWidth": 720,
@@ -48,7 +48,7 @@
     "copyright": "Copyright © 2026 DigiNote, Inc. Licensed under the PolyForm Shield License 1.0.0.",
     "category": "Productivity",
     "shortDescription": "Chat with AI models on your own computer, or with your own provider API keys.",
-    "longDescription": "Demios Desktop is a source-available app for chatting with AI models. Download a model from the built-in list or from Hugging Face and run it on your computer with llama.cpp, or add an API key for Anthropic, OpenAI or Google Gemini and chat with their models under your own account. Web pages, small apps, diagrams and documents the model makes open next to the chat, sealed off from your computer, with every version kept. Add tool servers (MCP) to give models tools: tools that change something show exactly what they will do and wait for your OK. There is no Demios account and no Demios server: chats and settings stay on your computer, keys stay in your system keychain, and the app collects no usage data. Delete all local data removes everything the app stored, in one step. Answers come from the AI model you chose and can be wrong. Check important facts.",
+    "longDescription": "Almend Desktop is a source-available app for chatting with AI models. Download a model from the built-in list or from Hugging Face and run it on your computer with llama.cpp, or add an API key for Anthropic, OpenAI or Google Gemini and chat with their models under your own account. Web pages, small apps, diagrams and documents the model makes open next to the chat, sealed off from your computer, with every version kept. Add tool servers (MCP) to give models tools: tools that change something show exactly what they will do and wait for your OK. There is no Almend account and no Almend server: chats and settings stay on your computer, keys stay in your system keychain, and the app collects no usage data. Delete all local data removes everything the app stored, in one step. Answers come from the AI model you chose and can be wrong. Check important facts.",
     "homepage": "https://github.com/mimshavandi/demios-desktop",
     "icon": [
       "icons/32x32.png",
@@ -59,6 +59,10 @@
     ],
     "resources": {
       "../../skills/": "skills/"
+    },
+    "linux": {
+      "deb": { "conflicts": ["demios-desktop"], "replaces": ["demios-desktop"] },
+      "rpm": { "obsoletes": ["demios-desktop"] }
     }
   },
   "plugins": {

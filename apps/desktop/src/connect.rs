@@ -156,7 +156,7 @@ pub struct Server {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SignIn {
     /// OAuth in the browser with the vendor; the client registers itself (dynamic client
-    /// registration or a client id metadata document). Demios holds no client secret.
+    /// registration or a client id metadata document). Almend holds no client secret.
     Oauth,
 }
 
@@ -404,11 +404,11 @@ pub fn unavailable(e: &CatalogueError) -> crate::error::IpcError {
     match e {
         CatalogueError::NoKey => crate::error::IpcError::new(
             "catalogue_unavailable",
-            "Connect isn't available in this version of Demios yet. Add tool servers below.",
+            "Connect isn't available in this version of Almend yet. Add tool servers below.",
         ),
         _ => crate::error::IpcError::new(
             "catalogue_unchecked",
-            "The list of services couldn't be checked, so it isn't shown. Reinstall Demios to get a good copy.",
+            "The list of services couldn't be checked, so it isn't shown. Reinstall Almend to get a good copy.",
         ),
     }
 }

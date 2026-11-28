@@ -336,7 +336,7 @@ impl LoopbackRedirect {
                 .unwrap_or("")
                 .to_owned();
             if target.starts_with("/callback") {
-                let body = "<html><body>Demios received the sign-in response. You can close \
+                let body = "<html><body>Almend received the sign-in response. You can close \
                             this window and return to the app.</body></html>";
                 let resp = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\

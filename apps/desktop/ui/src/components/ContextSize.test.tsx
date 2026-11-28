@@ -27,7 +27,7 @@ describe("ContextSize (design ContextSize)", () => {
     const { api } = fake({ tokens: 200000, source: "published" });
     render(<ContextSize api={api} modelRef={REF} name="gpt-new" provider="OpenAI" />);
     expect(
-      await screen.findByText("Reads up to 200,000 tokens at once (from Demios' list of published sizes)."),
+      await screen.findByText("Reads up to 200,000 tokens at once (from Almend' list of published sizes)."),
     ).toBeTruthy();
     expect(screen.queryByLabelText("Context size")).toBeNull();
     cleanup();
@@ -74,7 +74,7 @@ describe("the chat's context size warning", () => {
     const { ContextSizeWarning } = await import("./ChatView");
     const onSet = vi.fn();
     const onRetry = vi.fn();
-    const msg = "Demios doesn't know how much text gpt-new can read at once, so it can't fit this chat to it.";
+    const msg = "Almend doesn't know how much text gpt-new can read at once, so it can't fit this chat to it.";
     const { rerender } = render(
       <ContextSizeWarning modelRef={REF} name="gpt-new" message={msg} saved={false} retry onRetry={onRetry} onSet={onSet} />,
     );

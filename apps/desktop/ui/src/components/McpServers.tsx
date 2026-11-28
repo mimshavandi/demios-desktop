@@ -533,7 +533,7 @@ function ServerForm({
         {localAllowed && (
           <label>
             <input type="radio" name="mcp-kind" checked={kind === "stdio"} onChange={() => setKind("stdio")} disabled={server !== null} />
-            On this computer (a program Demios starts)
+            On this computer (a program Almend starts)
           </label>
         )}
         <label>
@@ -547,7 +547,7 @@ function ServerForm({
           Remote (an HTTPS address)
         </label>
         {!localAllowed && (
-          <p className="dn-help">The Flatpak version of Demios runs in a sandbox and can't start programs on your computer, so only remote (HTTPS) servers work.</p>
+          <p className="dn-help">The Flatpak version of Almend runs in a sandbox and can't start programs on your computer, so only remote (HTTPS) servers work.</p>
         )}
       </fieldset>
 
@@ -557,7 +557,7 @@ function ServerForm({
             label="Command"
             value={command}
             placeholder="e.g. /usr/local/bin/mcp-server-files"
-            help="The program Demios starts. It runs with your permissions, so add only programs you trust."
+            help="The program Almend starts. It runs with your permissions, so add only programs you trust."
             spellCheck={false}
             onChange={(e) => setCommand(e.target.value)}
           />
@@ -601,7 +601,7 @@ function ServerForm({
               <TextField
                 label="Client ID (optional)"
                 value={clientId}
-                help="Only if the server gave you one; otherwise Demios registers itself."
+                help="Only if the server gave you one; otherwise Almend registers itself."
                 spellCheck={false}
                 onChange={(e) => setClientId(e.target.value)}
               />

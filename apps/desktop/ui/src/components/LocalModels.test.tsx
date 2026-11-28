@@ -115,8 +115,8 @@ describe("On this device: Remove and Cancel download (#176)", () => {
     expect(await screen.findByText(/Couldn't remove Qwen3 8B\. Qwen3 8B is answering/)).toBeTruthy();
   });
 
-  it("a model Demios may not delete shows Remove disabled with the reason", async () => {
-    const reason = "This model is in a folder you chose (/models). Demios doesn't delete files there; remove it in your file manager.";
+  it("a model Almend may not delete shows Remove disabled with the reason", async () => {
+    const reason = "This model is in a folder you chose (/models). Almend doesn't delete files there; remove it in your file manager.";
     const r = row({ state: "ready" }, { remove_blocked: reason });
     const { api } = fake(r);
     ui(api, r);

@@ -133,8 +133,8 @@ fn not_available(mode: UpdateMode) -> IpcError {
     IpcError::new(
         "update_not_available",
         match mode {
-            UpdateMode::MicrosoftStore => "The Microsoft Store updates this copy of Demios.",
-            UpdateMode::Flathub => "Flathub updates this copy of Demios.",
+            UpdateMode::MicrosoftStore => "The Microsoft Store updates this copy of Almend.",
+            UpdateMode::Flathub => "Flathub updates this copy of Almend.",
             UpdateMode::NoKey => {
                 "This build has no update key, so it can't check for updates. Download the latest version from GitHub."
             }
@@ -340,7 +340,7 @@ mod imp {
             | E::SignedVersionMismatch { .. }
             | E::MissingSignedVersion => IpcError::new(
                 "update_signature",
-                "The download didn't match the Demios signature, so it wasn't installed. Your version is unchanged.",
+                "The download didn't match the Almend signature, so it wasn't installed. Your version is unchanged.",
             ),
             E::AuthenticationFailed => IpcError::new(
                 "update_cancelled",

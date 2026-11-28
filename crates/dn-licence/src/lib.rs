@@ -131,11 +131,11 @@ struct Envelope {
 /// Why a licence file can't be used. Each message completes "The licence can't be used: …".
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum LicenceError {
-    #[error("it isn't a valid Demios licence file ({0})")]
+    #[error("it isn't a valid Almend licence file ({0})")]
     Damaged(String),
-    #[error("it's in a newer format ({0}). Update Demios to use it")]
+    #[error("it's in a newer format ({0}). Update Almend to use it")]
     NewerFormat(u32),
-    #[error("it was signed with a key this version of Demios doesn't know ({0})")]
+    #[error("it was signed with a key this version of Almend doesn't know ({0})")]
     UnknownKey(String),
     #[error("its signature doesn't match")]
     Signature,
