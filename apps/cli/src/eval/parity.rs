@@ -509,6 +509,17 @@ impl Set {
             if !file.is_file() {
                 continue;
             }
+            // The same size limit as SKILL.md.
+            let len = std::fs::metadata(&file)
+                .map_err(|e| format!("{}: {e}", file.display()))?
+                .len();
+            if len > dn_agent::chat_skill::MAX_FILE_BYTES {
+                return Err(format!(
+                    "{}: larger than {} bytes",
+                    file.display(),
+                    dn_agent::chat_skill::MAX_FILE_BYTES
+                ));
+            }
             let text =
                 std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
             let local = dn_agent::chat_skill::parse(&file, &text, Some(&name))
