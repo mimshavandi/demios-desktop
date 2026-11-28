@@ -102,6 +102,8 @@ pub struct Layout {
     pub key_types: BTreeMap<String, (u32, Option<u32>)>,
     /// Keys whose name or string value, and tensors whose name, weren't valid UTF-8.
     pub bad_utf8: Vec<String>,
+    /// Key → bytes its value takes in the header.
+    pub value_bytes: BTreeMap<String, u64>,
 }
 
 const MAX_STR: u64 = 16 << 20;
@@ -284,7 +286,9 @@ impl Gguf {
             r.last_item = None;
             let key = r.string()?;
             let ty = r.u32()?;
+            let at = r.pos;
             let v = r.value(ty)?;
+            layout.value_bytes.insert(key.clone(), r.pos - at);
             if r.bad_utf8 {
                 layout.bad_utf8.push(key.clone());
             }

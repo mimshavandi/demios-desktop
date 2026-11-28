@@ -31,6 +31,21 @@ pub const RULES: u32 = 1;
 /// The largest `general.alignment` accepted (llama.cpp writes 32).
 pub const MAX_ALIGNMENT: u64 = 64 << 10;
 
+/// The largest value a header key may hold, except [`LARGE_KEYS`]. Real settings are a few
+/// bytes to a few KiB (a licence text); anything bigger is a place to hide a payload.
+pub const MAX_SMALL_VALUE: u64 = 64 << 10;
+
+/// Keys that legitimately hold large values: the vocabulary and the chat template
+/// (also its named variants, `tokenizer.chat_template.<name>`).
+const LARGE_KEYS: &[&str] = &[
+    "tokenizer.ggml.tokens",
+    "tokenizer.ggml.merges",
+    "tokenizer.ggml.scores",
+    "tokenizer.ggml.token_type",
+    "tokenizer.ggml.precompiled_charsmap",
+    "tokenizer.chat_template",
+];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Severity {
@@ -180,7 +195,17 @@ fn tensor_bytes(dims: &[u64], ggml_type: u32) -> Result<u64, String> {
 /// 8 string, 9 array, 10 u64), and for arrays the item type.
 fn expected_type(key: &str, arch: &str) -> Option<&'static [(u32, Option<u32>)]> {
     const U32: &[(u32, Option<u32>)] = &[(4, None)];
-    const INT: &[(u32, Option<u32>)] = &[(4, None), (5, None), (10, None), (11, None)];
+    // Any integer width: llama.cpp writes split.count and split.no as u16.
+    const INT: &[(u32, Option<u32>)] = &[
+        (0, None),
+        (1, None),
+        (2, None),
+        (3, None),
+        (4, None),
+        (5, None),
+        (10, None),
+        (11, None),
+    ];
     const STR: &[(u32, Option<u32>)] = &[(8, None)];
     const STRS: &[(u32, Option<u32>)] = &[(9, Some(8))];
     const F32S: &[(u32, Option<u32>)] = &[(9, Some(6))];
@@ -270,8 +295,9 @@ fn zero_run<F: Read + Seek>(f: &mut F, at: u64, len: u64) -> std::io::Result<Res
 
 /// The structure checks for one GGUF file (one part of a split model).
 pub fn structure(path: &Path) -> std::io::Result<Vec<Finding>> {
-    let mut f = std::io::BufReader::new(std::fs::File::open(path)?);
-    let size = std::fs::metadata(path)?.len();
+    let file = std::fs::File::open(path)?;
+    let size = file.metadata()?.len();
+    let mut f = std::io::BufReader::new(file);
     structure_of(&mut f, size)
 }
 
@@ -293,6 +319,7 @@ pub fn structure_of<F: Read + Seek>(f: &mut F, file_size: u64) -> std::io::Resul
         header_len,
         key_types,
         bad_utf8,
+        value_bytes,
     } = &g.layout;
     let arch = g.arch().to_string();
 
@@ -302,6 +329,19 @@ pub fn structure_of<F: Read + Seek>(f: &mut F, file_size: u64) -> std::io::Resul
             "Some text in the file isn't valid UTF-8.",
             format!("in {k}"),
         ));
+    }
+    for (k, &bytes) in value_bytes {
+        if bytes > MAX_SMALL_VALUE
+            && !LARGE_KEYS
+                .iter()
+                .any(|l| k == l || k.starts_with("tokenizer.chat_template."))
+        {
+            out.push(Finding::blocked(
+                "structure.header_payload",
+                "The file's settings hold a large block of data that the model doesn't use.",
+                format!("{k}: {bytes} bytes"),
+            ));
+        }
     }
     for (k, ty) in key_types {
         if let Some(ok) = expected_type(k, &arch)
@@ -445,23 +485,28 @@ pub fn structure_of_parts(parts: &[PathBuf]) -> std::io::Result<Vec<Finding>> {
     let mut out = Vec::new();
     for (i, p) in parts.iter().enumerate() {
         out.extend(structure(p)?);
-        if parts.len() > 1 {
-            let g = match Gguf::open(p) {
-                Ok(g) => g,
-                Err(_) => continue, // already reported as unreadable
-            };
-            let (no, count) = (g.u64("split.no"), g.u64("split.count"));
-            if no != Some(i as u64) || count != Some(parts.len() as u64) {
-                out.push(Finding::blocked(
-                    "structure.split",
-                    "The parts of the model don't match each other.",
-                    format!(
-                        "{}: part {no:?} of {count:?}, expected {i} of {}",
-                        p.display(),
-                        parts.len()
-                    ),
-                ));
-            }
+        let g = match Gguf::open(p) {
+            Ok(g) => g,
+            Err(_) => continue, // already reported as unreadable
+        };
+        let (no, count) = (g.u64("split.no"), g.u64("split.count"));
+        // A single file must not declare more parts (llama.cpp would find and load them
+        // unchecked); the parts of a split model must each say which they are.
+        let ok = if parts.len() == 1 {
+            count.is_none_or(|c| c <= 1) && no.is_none_or(|n| n == 0)
+        } else {
+            no == Some(i as u64) && count == Some(parts.len() as u64)
+        };
+        if !ok {
+            out.push(Finding::blocked(
+                "structure.split",
+                "The parts of the model don't match each other.",
+                format!(
+                    "{}: part {no:?} of {count:?}, expected {i} of {}",
+                    p.display(),
+                    parts.len()
+                ),
+            ));
         }
     }
     Ok(out)
@@ -521,8 +566,119 @@ const URL_STARTS: &[&str] = &["http://", "https://", "ftp://", "file://", "data:
 /// Invisible or direction-changing characters, which can hide text from a reader.
 fn invisible(c: char) -> bool {
     matches!(c,
-        '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2064}'
-        | '\u{2066}'..='\u{2069}' | '\u{FEFF}' | '\u{E0000}'..='\u{E007F}')
+        '\u{00AD}' | '\u{034F}' | '\u{061C}' | '\u{115F}' | '\u{1160}' | '\u{17B4}' | '\u{17B5}'
+        | '\u{180B}'..='\u{180F}' | '\u{200B}'..='\u{200F}' | '\u{2028}'..='\u{202E}'
+        | '\u{2060}'..='\u{206F}' | '\u{3164}' | '\u{FE00}'..='\u{FE0F}' | '\u{FEFF}'
+        | '\u{FFA0}' | '\u{FFF9}'..='\u{FFFB}' | '\u{1D173}'..='\u{1D17A}'
+        | '\u{E0000}'..='\u{E007F}' | '\u{E0100}'..='\u{E01EF}')
+}
+
+/// `s` with every run of whitespace replaced by one space.
+fn collapse_ws(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut space = false;
+    for c in s.chars() {
+        if c.is_whitespace() {
+            if !space {
+                out.push(' ');
+            }
+            space = true;
+        } else {
+            out.push(c);
+            space = false;
+        }
+    }
+    out
+}
+
+/// The string literals of a template: (start byte, content, end byte), with `\\`, `\'`,
+/// `\"`, `\n` and `\t` unescaped.
+fn literals(t: &str) -> Vec<(usize, String, usize)> {
+    let b = t.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        let q = b[i];
+        if q != b'\'' && q != b'"' {
+            i += 1;
+            continue;
+        }
+        let mut j = i + 1;
+        let mut text = Vec::new();
+        while j < b.len() && b[j] != q {
+            if b[j] == b'\\' && j + 1 < b.len() {
+                text.push(match b[j + 1] {
+                    b'n' => b'\n',
+                    b't' => b'\t',
+                    c => c,
+                });
+                j += 2;
+            } else {
+                text.push(b[j]);
+                j += 1;
+            }
+        }
+        if j >= b.len() {
+            break;
+        }
+        out.push((i, String::from_utf8_lossy(&text).into_owned(), j + 1));
+        i = j + 1;
+    }
+    out
+}
+
+/// Text the template builds at render time from literals alone, which a reader of the
+/// source doesn't see whole: literals joined with `~` or `+` (`'htt' ~ 'ps://'`), and a
+/// literal piped through `reverse`. Joins with variables (`'<|im_start|>' + message.role`)
+/// add nothing here.
+fn assembled_texts(t: &str) -> Vec<String> {
+    let lits = literals(t);
+    let between = |a: usize, b: usize| t.get(a..b).map(str::trim);
+    let mut out = Vec::new();
+    let mut k = 0;
+    while k < lits.len() {
+        let (_, first, first_end) = &lits[k];
+        let mut joined = first.clone();
+        let mut end = *first_end;
+        let mut n = 1;
+        while k + n < lits.len() && matches!(between(end, lits[k + n].0), Some("~" | "+")) {
+            joined.push_str(&lits[k + n].1);
+            end = lits[k + n].2;
+            n += 1;
+        }
+        if n > 1 {
+            out.push(joined);
+        }
+        if let Some(rest) = t[end..].trim_start().strip_prefix('|')
+            && rest.trim_start().starts_with("reverse")
+        {
+            out.push(lits[k + n - 1].1.chars().rev().collect());
+        }
+        k += n;
+    }
+    out
+}
+
+/// A word mixing Latin letters with Cyrillic or Greek ones (`сurl` with a Cyrillic с).
+fn mixed_script_word(t: &str) -> Option<String> {
+    let script = |c: char| match c {
+        'a'..='z' | 'A'..='Z' => 1,
+        '\u{0370}'..='\u{03FF}' => 2,
+        '\u{0400}'..='\u{04FF}' => 3,
+        _ => 0,
+    };
+    t.split(|c: char| !c.is_alphanumeric())
+        .find(|w| {
+            let mut seen = 0u8;
+            for c in w.chars() {
+                let s = script(c);
+                if s > 0 {
+                    seen |= 1 << s;
+                }
+            }
+            seen.count_ones() > 1
+        })
+        .map(str::to_string)
 }
 
 /// The longest run of characters matching `is` in `s`, and where it starts.
@@ -571,10 +727,25 @@ fn excerpt(s: &str, at: usize, len: usize) -> String {
 /// The static scan of a chat template: it reads the text, never renders it.
 pub fn scan_template(t: &str) -> Vec<Finding> {
     let mut out = Vec::new();
-    let lower = t.to_lowercase();
+    // ASCII case only, so byte positions stay those of `t`; lookalike letters from other
+    // scripts are caught by the mixed-script check below. Matching is done on a copy with
+    // every run of whitespace collapsed to one space, so tabs and line breaks inside a
+    // phrase don't hide it.
+    // Text built from literal pieces at render time is scanned too, as if written whole.
+    let mut all = t.to_string();
+    for a in assembled_texts(t) {
+        all.push('\n');
+        all.push_str(&a);
+    }
+    let lower = collapse_ws(&all.to_ascii_lowercase());
+    let shown = collapse_ws(&all);
     let mut hit = |code: &str, reason: &str, needle: &str| {
         if let Some(i) = lower.find(needle) {
-            out.push(Finding::warning(code, reason, excerpt(t, i, needle.len())));
+            out.push(Finding::warning(
+                code,
+                reason,
+                excerpt(&shown, i, needle.len()),
+            ));
         }
     };
     for u in URL_STARTS {
@@ -630,6 +801,13 @@ pub fn scan_template(t: &str) -> Vec<Finding> {
             break;
         }
         rest = &rest[i + 6..];
+    }
+    if let Some(w) = mixed_script_word(t) {
+        out.push(Finding::warning(
+            "template.lookalike",
+            "The chat template mixes letters from different alphabets in one word.",
+            w,
+        ));
     }
     let b64 = |c: char| c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '=' | '-' | '_');
     let (n, at) = longest_run(t, b64);
@@ -690,6 +868,8 @@ pub enum Rehash {
     NoName { sha256: String },
     /// The content doesn't match the name.
     Mismatch { expected: String, actual: String },
+    /// The file links somewhere other than a blob of this cache.
+    Outside { target: PathBuf },
 }
 
 impl Rehash {
@@ -700,15 +880,49 @@ impl Rehash {
                 "The file has changed since it was downloaded.",
                 format!("expected SHA-256 {expected}, found {actual}"),
             )),
-            _ => None,
+            Self::Outside { target } => Some(Finding::blocked(
+                "rehash.outside",
+                "The file points outside the Hugging Face cache.",
+                target.display().to_string(),
+            )),
+            // A plain copy has nothing to compare with here; the later check against the
+            // Hub's listing decides.
+            Self::NoName { .. } => Some(Finding::warning(
+                "rehash.unverified",
+                "The file couldn't be checked against its download.",
+                "the cache holds a plain copy, not a link to a hashed blob",
+            )),
+            Self::Matches { .. } => None,
         }
     }
 }
 
-/// Hashes a model file in the Hugging Face cache and compares it with the name of the blob
-/// it links to (`blobs/<sha256>` for LFS files).
-pub fn rehash_hf_blob(path: &Path, progress: impl FnMut(u64)) -> std::io::Result<Rehash> {
+/// Hashes a model file in the Hugging Face cache `cache` and compares it with the name of
+/// the blob it links to (`models--*/blobs/<sha256>` for LFS files).
+///
+/// This catches a file that was corrupted or changed in place. Someone who can write to the
+/// cache can also add a matching blob and relink the file, so the hash is compared with the
+/// Hub's listing for the pinned commit as well (in the load path).
+pub fn rehash_hf_blob(
+    path: &Path,
+    cache: &Path,
+    progress: impl FnMut(u64),
+) -> std::io::Result<Rehash> {
     let target = std::fs::canonicalize(path)?;
+    let cache = std::fs::canonicalize(cache)?;
+    let in_blobs = target.parent().is_some_and(|d| {
+        d.file_name().is_some_and(|n| n == "blobs")
+            && d.parent().is_some_and(|r| {
+                r.parent() == Some(cache.as_path())
+                    && r.file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|n| n.starts_with("models--"))
+            })
+    });
+    let linked = std::fs::symlink_metadata(path)?.file_type().is_symlink();
+    if linked && !in_blobs {
+        return Ok(Rehash::Outside { target });
+    }
     let expected = target
         .file_name()
         .and_then(|n| n.to_str())
@@ -891,6 +1105,88 @@ mod tests {
     }
 
     #[test]
+    fn split_parts_must_be_declared_and_complete() {
+        use crate::gguf::write::V;
+        // llama.cpp writes split.count and split.no as u16 (type 2); the test builder only
+        // writes u32, which must be accepted too.
+        let mut kv = base();
+        kv.push(("split.no", V::U32(0)));
+        kv.push(("split.count", V::U32(2)));
+        let dir = std::env::temp_dir().join(format!("dn-check-split-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let first = dir.join("m-00001-of-00002.gguf");
+        std::fs::write(&first, model(&kv)).unwrap();
+        // Checking only the first part of a two-part model isn't enough.
+        let f = structure_of_parts(std::slice::from_ref(&first)).unwrap();
+        assert_eq!(codes(&f), ["structure.split"]);
+        let mut kv2 = base();
+        kv2.push(("split.no", V::U32(1)));
+        kv2.push(("split.count", V::U32(2)));
+        let second = dir.join("m-00002-of-00002.gguf");
+        std::fs::write(&second, model(&kv2)).unwrap();
+        assert!(
+            structure_of_parts(&[first.clone(), second.clone()])
+                .unwrap()
+                .is_empty()
+        );
+        // Parts in the wrong order.
+        assert!(!structure_of_parts(&[second, first]).unwrap().is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_large_unused_setting_is_blocked() {
+        let blob = "A".repeat(70 << 10);
+        let mut kv = base();
+        kv.push(("general.notes", V::Str(&blob)));
+        assert_eq!(codes(&check(&model(&kv))), ["structure.header_payload"]);
+        // The vocabulary may be large.
+        let toks: Vec<String> = (0..20_000).map(|i| format!("token{i}")).collect();
+        let toks: Vec<&str> = toks.iter().map(String::as_str).collect();
+        let mut kv = base();
+        kv.push(("tokenizer.ggml.tokens", V::StrArr(&toks)));
+        assert!(check(&model(&kv)).is_empty());
+    }
+
+    #[test]
+    fn the_scan_sees_through_spacing_joins_and_lookalikes() {
+        // A tab instead of a space, line breaks inside a phrase.
+        assert_eq!(
+            codes(&scan_template("{{ 'run curl\t-s x' }}")),
+            ["template.shell"]
+        );
+        assert_eq!(
+            codes(&scan_template("{{ 'please ignore\n\n  previous notes' }}")),
+            ["template.instruction"]
+        );
+        // Text built at render time from literal pieces is scanned whole.
+        assert_eq!(
+            codes(&scan_template("{{ 'htt' ~ 'ps://x' }}")),
+            ["template.url"]
+        );
+        assert_eq!(
+            codes(&scan_template("{{ 'ignore ' + \"previous\" + ' rules' }}")),
+            ["template.instruction"]
+        );
+        assert_eq!(
+            codes(&scan_template("{{ \" lruc\"|reverse }}")),
+            ["template.shell"]
+        );
+        // Joins that build nothing suspicious, and joins with variables, are normal.
+        assert!(scan_template("{{ '<|im_start|>' + 'assistant\\n' }}").is_empty());
+        assert!(scan_template("{{ '<|im_start|>' + message.role + '\\n' }}").is_empty());
+        // A Cyrillic с in "curl"; a variation selector.
+        assert_eq!(
+            codes(&scan_template("{{ 'run \u{0441}url now' }}")),
+            ["template.lookalike"]
+        );
+        assert_eq!(
+            codes(&scan_template("{{ 'a\u{FE0F}b' }}")),
+            ["template.invisible"]
+        );
+    }
+
+    #[test]
     fn real_templates_are_clean() {
         // Shapes of real templates: roles, tool instructions, dates, generation prompts.
         for t in [
@@ -905,29 +1201,45 @@ mod tests {
     #[test]
     fn a_blob_is_compared_with_its_name() {
         let dir = std::env::temp_dir().join(format!("dn-check-{}", std::process::id()));
-        let blobs = dir.join("blobs");
+        let repo = dir.join("models--org--m");
+        let (blobs, snap) = (repo.join("blobs"), repo.join("snapshots").join("abc"));
         std::fs::create_dir_all(&blobs).unwrap();
+        std::fs::create_dir_all(&snap).unwrap();
         let data = b"model bytes";
         let good = sha256_file_bytes(data);
         std::fs::write(blobs.join(&good), data).unwrap();
-        assert_eq!(
-            rehash_hf_blob(&blobs.join(&good), |_| {}).unwrap(),
-            Rehash::Matches {
-                sha256: good.clone()
-            }
-        );
-        // Same name, other content: the cache was tampered with.
-        let wrong = "0".repeat(64);
-        std::fs::write(blobs.join(&wrong), data).unwrap();
-        let r = rehash_hf_blob(&blobs.join(&wrong), |_| {}).unwrap();
-        assert!(matches!(r, Rehash::Mismatch { .. }));
-        assert_eq!(r.finding().unwrap().severity, Severity::Blocked);
-        // A plain copy has no hash in its name.
-        std::fs::write(dir.join("model.gguf"), data).unwrap();
-        assert!(matches!(
-            rehash_hf_blob(&dir.join("model.gguf"), |_| {}).unwrap(),
-            Rehash::NoName { .. }
-        ));
+        #[cfg(unix)]
+        {
+            let link = snap.join("m.gguf");
+            std::os::unix::fs::symlink(blobs.join(&good), &link).unwrap();
+            assert_eq!(
+                rehash_hf_blob(&link, &dir, |_| {}).unwrap(),
+                Rehash::Matches {
+                    sha256: good.clone()
+                }
+            );
+            // Same name, other content: the blob was changed in place.
+            let wrong = "0".repeat(64);
+            std::fs::write(blobs.join(&wrong), data).unwrap();
+            let link2 = snap.join("m2.gguf");
+            std::os::unix::fs::symlink(blobs.join(&wrong), &link2).unwrap();
+            let r = rehash_hf_blob(&link2, &dir, |_| {}).unwrap();
+            assert!(matches!(r, Rehash::Mismatch { .. }));
+            assert_eq!(r.finding().unwrap().severity, Severity::Blocked);
+            // A link to a file outside the cache's blobs.
+            let elsewhere = dir.join("elsewhere.gguf");
+            std::fs::write(&elsewhere, data).unwrap();
+            let link3 = snap.join("m3.gguf");
+            std::os::unix::fs::symlink(&elsewhere, &link3).unwrap();
+            let r = rehash_hf_blob(&link3, &dir, |_| {}).unwrap();
+            assert!(matches!(r, Rehash::Outside { .. }), "{r:?}");
+            assert_eq!(r.finding().unwrap().severity, Severity::Blocked);
+        }
+        // A plain copy has no hash in its name: not verified here.
+        std::fs::write(snap.join("copy.gguf"), data).unwrap();
+        let r = rehash_hf_blob(&snap.join("copy.gguf"), &dir, |_| {}).unwrap();
+        assert!(matches!(r, Rehash::NoName { .. }));
+        assert_eq!(r.finding().unwrap().code, "rehash.unverified");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
