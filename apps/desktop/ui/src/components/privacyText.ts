@@ -8,6 +8,10 @@
 /** "Model providers you add a key for" (privacy.md, approved with #158). */
 export const PROJECT_INSTRUCTIONS_SENT = "In a project's chats, the project's instructions are sent with each message too.";
 
+/** "Model providers you add a key for": what the data tools send (privacy.md, approved with #400). */
+export const DATA_FILES_SENT =
+  "When a project has data files, what Demios computes from them for an answer is sent too: column names and summaries such as counts, totals, averages, smallest and largest values and the most common values, also per group (for example per customer). A narrow question can reveal single entries.";
+
 /** The "Your Demios Node, if you pair one" row's title and text (privacy.md, from #307). */
 export const NODE_TITLE = "Your Demios Node, if you pair one";
 export const NODE_TEXT =
