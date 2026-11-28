@@ -14,6 +14,7 @@
 //! network. Cell text is data from the file; whoever shows a fact sheet to a model renders
 //! it as untrusted content.
 
+pub mod aggregate;
 pub mod csv;
 pub mod profile;
 pub mod table;

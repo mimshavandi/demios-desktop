@@ -1,15 +1,31 @@
-//! The `data_profile` tool in project chats (#366): a fact sheet for one of the project's
-//! CSV or spreadsheet files, computed by dn-data, so the model quotes numbers instead of
-//! calculating them. Read-only; it reads only the local copies of the chat's own project
+//! The data tools in project chats (#366): `data_profile` (a fact sheet for one of the
+//! project's CSV or spreadsheet files) and `data_aggregate` (one computed figure the sheet
+//! doesn't have), both computed by dn-data, so the model quotes numbers instead of
+//! calculating them. Read-only; they read only the local copies of the chat's own project
 //! files, found by their name, never a path.
 
 use crate::state::AppState;
 use dn_agent::ToolOutput;
 use dn_core::Id;
 use dn_core::chat::{ToolCall, ToolSpec};
+use dn_data::tool::{AGGREGATE_CAPABILITY_ID, AGGREGATE_TOOL_NAME};
 use std::sync::Arc;
 
 pub use dn_data::tool::{CAPABILITY_ID, TOOL_NAME};
+
+/// Whether `name` is one of these tools.
+pub fn is_data_tool(name: &str) -> bool {
+    name == TOOL_NAME || name == AGGREGATE_TOOL_NAME
+}
+
+/// The capability id of a data tool, as manifests and skills name it.
+pub fn capability_id(name: &str) -> Option<&'static str> {
+    match name {
+        TOOL_NAME => Some(CAPABILITY_ID),
+        AGGREGATE_TOOL_NAME => Some(AGGREGATE_CAPABILITY_ID),
+        _ => None,
+    }
+}
 
 pub struct DataTools {
     pub state: Arc<AppState>,
@@ -17,19 +33,35 @@ pub struct DataTools {
 }
 
 impl DataTools {
+    /// The tools the assistant's manifest allows.
     pub fn specs(&self) -> Vec<ToolSpec> {
-        if self.state.agent.manifest.allows_tool(CAPABILITY_ID) {
-            vec![dn_data::tool::spec()]
-        } else {
-            Vec::new()
+        let m = &self.state.agent.manifest;
+        let mut v = Vec::new();
+        if m.allows_tool(CAPABILITY_ID) {
+            v.push(dn_data::tool::spec());
         }
+        if m.allows_tool(AGGREGATE_CAPABILITY_ID) {
+            v.push(dn_data::tool::aggregate_spec());
+        }
+        v
+    }
+
+    pub fn offers(&self, name: &str) -> bool {
+        self.specs().iter().any(|s| s.name == name)
     }
 
     /// Runs a call. Every failure is a message the model can act on (a missing file names
     /// the project's data files).
     pub async fn execute(&self, call: &ToolCall) -> ToolOutput {
-        let args = match dn_data::tool::Args::parse(&call.arguments) {
-            Ok(a) => a,
+        let request = match call.name.as_str() {
+            TOOL_NAME => dn_data::tool::Args::parse(&call.arguments).map(Request::Profile),
+            AGGREGATE_TOOL_NAME => {
+                dn_data::tool::AggregateArgs::parse(&call.arguments).map(Request::Aggregate)
+            }
+            other => Err(format!("`{other}` isn't a data tool.")),
+        };
+        let request = match request {
+            Ok(r) => r,
             Err(e) => return ToolOutput::error(e),
         };
         let state = Arc::clone(&self.state);
@@ -37,19 +69,34 @@ impl DataTools {
         // File reading and parsing are blocking, and a malformed workbook could make the
         // parser panic: off the async workers, and a panic is an error, not a crash.
         let r =
-            tauri::async_runtime::spawn_blocking(move || profile(&state, project_id, &args)).await;
+            tauri::async_runtime::spawn_blocking(move || run(&state, project_id, &request)).await;
         match r {
             Ok(Ok(text)) => ToolOutput::text(text),
             Ok(Err(e)) => ToolOutput::error(e),
             Err(e) => {
-                tracing::warn!("data_profile failed: {e}");
+                tracing::warn!("{} failed: {e}", call.name);
                 ToolOutput::error("The file couldn't be read as data.")
             }
         }
     }
 }
 
-fn profile(state: &AppState, project_id: Id, args: &dn_data::tool::Args) -> Result<String, String> {
+enum Request {
+    Profile(dn_data::tool::Args),
+    Aggregate(dn_data::tool::AggregateArgs),
+}
+
+impl Request {
+    fn file(&self) -> &str {
+        match self {
+            Request::Profile(a) => &a.file,
+            Request::Aggregate(a) => &a.file,
+        }
+    }
+}
+
+fn run(state: &AppState, project_id: Id, request: &Request) -> Result<String, String> {
+    let wanted = request.file();
     let files = {
         let db = state.db().map_err(|e| e.message)?;
         dn_store::project::list_files(&db, project_id).map_err(|e| e.to_string())?
@@ -61,24 +108,22 @@ fn profile(state: &AppState, project_id: Id, args: &dn_data::tool::Args) -> Resu
         .collect();
     let Some(file) = files
         .iter()
-        .find(|f| f.name.eq_ignore_ascii_case(args.file.trim()))
+        .find(|f| f.name.eq_ignore_ascii_case(wanted.trim()))
     else {
         return Err(if data_files.is_empty() {
             format!(
-                "This project has no file called \"{}\", and no CSV or spreadsheet files.",
-                args.file
+                "This project has no file called \"{wanted}\", and no CSV or spreadsheet files."
             )
         } else {
             format!(
-                "This project has no file called \"{}\". Its data files: {}.",
-                args.file,
+                "This project has no file called \"{wanted}\". Its data files: {}.",
                 data_files.join(", ")
             )
         });
     };
     if !dn_data::tool::reads(&file.name) {
         return Err(format!(
-            "\"{}\" isn't a CSV or spreadsheet file, so it has no fact sheet.",
+            "\"{}\" isn't a CSV or spreadsheet file, so it has no data to compute with.",
             file.name
         ));
     }
@@ -86,10 +131,22 @@ fn profile(state: &AppState, project_id: Id, args: &dn_data::tool::Args) -> Resu
         .project_files_root()
         .ok_or("Project files aren't available here.")?;
     let bytes = std::fs::read(dn_store::project::file_path(root, file)).map_err(|e| {
-        tracing::warn!("data_profile: a project file's copy can't be read: {e}");
+        tracing::warn!("data tool: a project file's copy can't be read: {e}");
         format!("The copy of \"{}\" can't be read.", file.name)
     })?;
-    dn_data::tool::run(&file.name, &bytes, args.sheet.as_deref()).map(|p| p.text)
+    let (capability, result) = match request {
+        Request::Profile(a) => (
+            CAPABILITY_ID,
+            dn_data::tool::run(&file.name, &bytes, a.sheet.as_deref()),
+        ),
+        Request::Aggregate(a) => (
+            AGGREGATE_CAPABILITY_ID,
+            dn_data::tool::run_aggregate(&file.name, &bytes, a),
+        ),
+    };
+    // Chat doesn't run on dn-runtime yet, which wraps every tool result: wrap it here, once.
+    // (Removed when chat moves onto the runtime, ADR-0020 R1.)
+    result.map(|p| dn_data::tool::wrap(capability, &file.name, &p.text))
 }
 
 #[cfg(test)]
@@ -139,8 +196,8 @@ mod tests {
         };
         assert_eq!(
             tools.specs().len(),
-            1,
-            "the default assistant allows data.profile"
+            2,
+            "the default assistant allows data.profile and data.aggregate"
         );
         rt.block_on(async {
             let out = tools
@@ -170,6 +227,37 @@ mod tests {
                 .execute(&call(serde_json::json!({"file": "../../etc/passwd"})))
                 .await;
             assert!(out.is_error);
+        });
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn data_aggregate_answers_a_filtered_question_wrapped_once() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let (st, project, dir) = state_with(&[(
+            "sales.csv",
+            b"region,revenue\nNorth,10.50\nSouth,4\nNorth,2.25\n",
+        )]);
+        let tools = DataTools {
+            state: st,
+            project_id: project,
+        };
+        assert!(tools.offers(dn_data::tool::AGGREGATE_TOOL_NAME));
+        rt.block_on(async {
+            let out = tools
+                .execute(&ToolCall {
+                    id: "c".into(),
+                    name: AGGREGATE_TOOL_NAME.into(),
+                    arguments: serde_json::json!({"file": "sales.csv", "op": "sum", "measure": "revenue",
+                        "filters": [{"column": "region", "op": "is", "value": "north"}]}),
+                })
+                .await;
+            assert!(!out.is_error, "{:?}", out.content);
+            let dn_core::chat::ContentPart::Text { text } = &out.content[0] else {
+                panic!()
+            };
+            assert!(text.contains("sum of \"revenue\" where \"region\" is \"north\": 12.75"), "{text}");
+            assert_eq!(text.matches("\n<<<SOURCE ").count(), 1, "wrapped once: {text}");
         });
         let _ = std::fs::remove_dir_all(dir);
     }

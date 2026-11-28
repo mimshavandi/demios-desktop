@@ -315,13 +315,16 @@ pub struct Set {
 }
 
 /// The tools the runner itself provides (a case lists them in `tools` like mock tools).
-pub const BUILTIN_TOOLS: &[&str] = &[dn_data::tool::TOOL_NAME];
+pub const BUILTIN_TOOLS: &[&str] = &[dn_data::tool::TOOL_NAME, dn_data::tool::AGGREGATE_TOOL_NAME];
 
 /// The capability id of a tool, as a skill's `allowed-tools` names it: the app's built-in
 /// tools by their capability, a mock tool by its `capability` (or its name).
 pub fn capability_of(set: &Set, tool: &str) -> String {
     if tool == dn_data::tool::TOOL_NAME {
         return dn_data::tool::CAPABILITY_ID.into();
+    }
+    if tool == dn_data::tool::AGGREGATE_TOOL_NAME {
+        return dn_data::tool::AGGREGATE_CAPABILITY_ID.into();
     }
     if let Some(op) = tool.strip_prefix("artifact_") {
         return format!("artifact.{op}");
@@ -660,8 +663,8 @@ pub struct CallRecord {
 /// skill narrows them as in the app.
 pub struct MockTools {
     tools: Vec<MockTool>,
-    /// `data_profile` is offered.
-    data: bool,
+    /// The data tools offered (`data_profile`, `data_aggregate`).
+    data: Vec<&'static str>,
     /// The case's sample files by name (project files, then attachments).
     files: Vec<(String, PathBuf)>,
     approve: Vec<String>,
@@ -692,8 +695,10 @@ impl MockTools {
                 .filter(|n| offered(n))
                 .filter_map(|n| set.tools.get(n).cloned())
                 .collect(),
-            data: case.tools.iter().any(|t| t == dn_data::tool::TOOL_NAME)
-                && offered(dn_data::tool::TOOL_NAME),
+            data: [dn_data::tool::TOOL_NAME, dn_data::tool::AGGREGATE_TOOL_NAME]
+                .into_iter()
+                .filter(|d| case.tools.iter().any(|t| t == d) && offered(d))
+                .collect(),
             files,
             approve: case.approve.clone(),
             calls: Mutex::new(Vec::new()),
@@ -705,16 +710,26 @@ impl MockTools {
         self.sheets.lock().map(|s| s.clone()).unwrap_or_default()
     }
 
-    /// `data_profile` on the case's files, found by name like the app finds project files.
-    fn data_profile(&self, call: &ToolCall) -> (bool, String, bool) {
-        let args = match dn_data::tool::Args::parse(&call.arguments) {
-            Ok(a) => a,
-            Err(e) => return (false, e, true),
+    /// A data tool on the case's files, found by name like the app finds project files,
+    /// and its result wrapped once as untrusted content, like the app does until it runs on
+    /// dn-runtime.
+    fn data_tool(&self, call: &ToolCall) -> (bool, String, bool) {
+        let aggregate = call.name == dn_data::tool::AGGREGATE_TOOL_NAME;
+        let (file, sheet, agg_args) = if aggregate {
+            match dn_data::tool::AggregateArgs::parse(&call.arguments) {
+                Ok(a) => (a.file.clone(), a.sheet.clone(), Some(a)),
+                Err(e) => return (false, e, true),
+            }
+        } else {
+            match dn_data::tool::Args::parse(&call.arguments) {
+                Ok(a) => (a.file, a.sheet, None),
+                Err(e) => return (false, e, true),
+            }
         };
         let Some((name, path)) = self
             .files
             .iter()
-            .find(|(n, _)| n.eq_ignore_ascii_case(args.file.trim()))
+            .find(|(n, _)| n.eq_ignore_ascii_case(file.trim()))
         else {
             let names: Vec<&str> = self
                 .files
@@ -726,7 +741,7 @@ impl MockTools {
                 false,
                 format!(
                     "This project has no file called \"{}\". Its data files: {}.",
-                    args.file,
+                    file,
                     if names.is_empty() {
                         "none".into()
                     } else {
@@ -740,12 +755,22 @@ impl MockTools {
             Ok(b) => b,
             Err(e) => return (false, format!("{name}: {e}"), true),
         };
-        match dn_data::tool::run(name, &bytes, args.sheet.as_deref()) {
+        let (capability, result) = match &agg_args {
+            Some(a) => (
+                dn_data::tool::AGGREGATE_CAPABILITY_ID,
+                dn_data::tool::run_aggregate(name, &bytes, a),
+            ),
+            None => (
+                dn_data::tool::CAPABILITY_ID,
+                dn_data::tool::run(name, &bytes, sheet.as_deref()),
+            ),
+        };
+        match result {
             Ok(p) => {
                 if let Ok(mut s) = self.sheets.lock() {
                     s.extend(p.sheets);
                 }
-                (false, p.text, false)
+                (false, dn_data::tool::wrap(capability, name, &p.text), false)
             }
             Err(e) => (false, e, true),
         }
@@ -756,8 +781,8 @@ impl MockTools {
     }
 
     fn answer(&self, call: &ToolCall) -> (bool, String, bool) {
-        if self.data && call.name == dn_data::tool::TOOL_NAME {
-            return self.data_profile(call);
+        if self.data.contains(&call.name.as_str()) {
+            return self.data_tool(call);
         }
         let Some(t) = self.tools.iter().find(|t| t.name == call.name) else {
             return (
@@ -809,8 +834,12 @@ impl ToolExecutor for MockTools {
                 input_schema: t.input_schema.clone(),
             })
             .collect();
-        if self.data {
-            v.push(dn_data::tool::spec());
+        for d in &self.data {
+            v.push(if *d == dn_data::tool::TOOL_NAME {
+                dn_data::tool::spec()
+            } else {
+                dn_data::tool::aggregate_spec()
+            });
         }
         v
     }

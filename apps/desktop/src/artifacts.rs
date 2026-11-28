@@ -278,8 +278,8 @@ impl ArtifactMode {
 /// Capability id in the agent manifest for an artifact tool name (`artifact_create` →
 /// `artifact.create`).
 pub(crate) fn capability_id(tool: &str) -> Option<String> {
-    if tool == crate::data_tools::TOOL_NAME {
-        return Some(crate::data_tools::CAPABILITY_ID.into());
+    if let Some(c) = crate::data_tools::capability_id(tool) {
+        return Some(c.into());
     }
     tool.strip_prefix("artifact_")
         .map(|op| format!("artifact.{op}"))
@@ -334,7 +334,7 @@ impl ToolExecutor for RunTools {
             v.extend(a.specs());
         }
         if let Some(d) = &self.data {
-            v.retain(|s| s.name != crate::data_tools::TOOL_NAME);
+            v.retain(|s| !crate::data_tools::is_data_tool(&s.name));
             v.extend(d.specs());
         }
         v
@@ -346,8 +346,8 @@ impl ToolExecutor for RunTools {
         ctx: &'a ToolContext,
     ) -> BoxFuture<'a, Result<ToolOutput, CoreError>> {
         Box::pin(async move {
-            if call.name == crate::data_tools::TOOL_NAME
-                && let Some(d) = self.data.as_ref().filter(|d| !d.specs().is_empty())
+            if crate::data_tools::is_data_tool(&call.name)
+                && let Some(d) = self.data.as_ref().filter(|d| d.offers(&call.name))
             {
                 return Ok(d.execute(call).await);
             }
@@ -519,6 +519,10 @@ mod tests {
         assert_eq!(
             capability_id("data_profile").as_deref(),
             Some("data.profile")
+        );
+        assert_eq!(
+            capability_id("data_aggregate").as_deref(),
+            Some("data.aggregate")
         );
     }
 }

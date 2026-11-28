@@ -49,9 +49,10 @@ Two more case fields:
 - `expect.numbers: ["1537.00", "176.3%"]` lists numbers a correct answer states. They're
   checked mechanically at the precision the answer writes them.
 
-`data_profile` is built into the runner, like the calculator: a case lists it in `tools`,
-and it reads the case's project files and attachments by name and returns dn-data's fact
-sheet, exactly as the app does for a project's files. When it ran, the report also checks
+`data_profile` and `data_aggregate` are built into the runner, like the calculator: a case
+lists them in `tools`, and they read the case's project files and attachments by name and
+return dn-data's fact sheet, or one computed figure (a filtered or grouped sum, mean,
+median, minimum, maximum or count), exactly as the app does for a project's files. When it ran, the report also checks
 that every number in the answer traces to a fact sheet (`data_check`).
 
 The report keeps every answer, its tool calls and its run result. It checks

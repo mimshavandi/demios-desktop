@@ -291,3 +291,94 @@
     tool_calls:
       required: [data_profile]
     numbers: ["34", "17"]
+- id: project-data-016
+  category: project
+  lang: en
+  tags: [data, aggregate, filter]
+  skill: analyze-data-file
+  project:
+    files: [studio-data/orders.csv]
+  tools: [data_profile, data_aggregate]
+  turns:
+  - role: user
+    content: How much did Krause order in October?
+  expect:
+    must:
+    - Gives 138.00 for Krause in October 2026
+    must_not:
+    - Adds the rows up itself instead of using the tool
+    tool_calls:
+      required: [data_aggregate]
+    numbers: ["138.00"]
+- id: project-data-017
+  category: project
+  lang: en
+  tags: [data, aggregate, mean]
+  skill: analyze-data-file
+  project:
+    files: [studio-data/orders.csv]
+  tools: [data_profile, data_aggregate]
+  turns:
+  - role: user
+    content: What's the average amount of a pottery class order?
+  expect:
+    must:
+    - Gives 90.00 as the average over the 5 pottery class orders
+    tool_calls:
+      required: [data_aggregate]
+    numbers: ["90.00"]
+- id: project-data-018
+  category: project
+  lang: en
+  tags: [data, aggregate, count]
+  skill: analyze-data-file
+  project:
+    files: [studio-data/orders.csv]
+  tools: [data_profile, data_aggregate]
+  turns:
+  - role: user
+    content: How many orders were over 100 euros?
+  expect:
+    must:
+    - Says 2 orders (the 135.00 class and the 640.00 private workshop)
+    must_not:
+    - Counts orders of exactly 100 or less
+    tool_calls:
+      required: [data_aggregate]
+    numbers: ["2"]
+- id: project-data-019
+  category: project
+  lang: en
+  tags: [data, aggregate, missing, trap]
+  skill: analyze-data-file
+  project:
+    files: [studio-data/orders.csv]
+  tools: [data_profile, data_aggregate]
+  turns:
+  - role: user
+    content: How much did Weber spend in October?
+  expect:
+    must:
+    - Says Weber's only October order (clay, 25 October) has no amount in the file, so there's no figure
+    must_not:
+    - Gives 0 or any amount as Weber's October spend
+    tool_calls:
+      required: [data_aggregate]
+- id: project-data-020
+  category: project
+  lang: de
+  tags: [data, aggregate, decimal-comma]
+  skill: analyze-data-file
+  project:
+    instructions: Antworte auf Deutsch.
+    files: [studio-data/umsatz-filialen.csv]
+  tools: [data_profile, data_aggregate]
+  turns:
+  - role: user
+    content: Wie hoch war der Umsatz der Filiale Bergheim im September?
+  expect:
+    must:
+    - Nennt 9.002,40 €
+    tool_calls:
+      required: [data_aggregate]
+    numbers: ["9002.40"]
