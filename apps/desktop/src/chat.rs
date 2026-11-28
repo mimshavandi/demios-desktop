@@ -369,7 +369,12 @@ fn turn_parts(
         .system_prompt()
         .map(str::to_owned)
         .into_iter()
-        .chain(state.agent.answer_rules().map(str::to_owned))
+        .chain(
+            dn_runtime::Policy::chat()
+                .answer_rules
+                .then(|| state.agent.answer_rules().map(str::to_owned))
+                .flatten(),
+        )
         .chain(project)
         .chain(attached)
         .chain(skill.map(Skill::system_text))
