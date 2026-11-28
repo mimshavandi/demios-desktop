@@ -1,7 +1,8 @@
 //! How much a remote model reads at once (ADR-0020 §2.1), per model, never guessed.
 //!
 //! - **Anthropic, OpenAI:** their models APIs don't report it, so a small table of
-//!   published sizes ([`published`]). It's kept current by hand (#352).
+//!   published sizes ([`PUBLISHED`]), each with its source and the date it was checked. It's
+//!   kept current by hand; a release check flags entries older than [`MAX_AGE_DAYS`] (#352).
 //! - **Gemini:** `GET models/{id}`, input plus output limit.
 //! - **OpenAI-compatible servers:** the context the server has the model loaded with:
 //!   - llama.cpp `llama-server`: `GET /props`;
@@ -26,28 +27,142 @@ use std::time::Duration;
 
 const TIMEOUT: Duration = Duration::from_secs(4);
 
-/// Published context sizes, checked against each provider's model documentation on
-/// 2026-11-27. An id matches its entry exactly, or with a date suffix (`-20250929`,
-/// `-2025-04-14`) or `-latest`. A model that isn't here is unknown, not the nearest entry.
-const PUBLISHED: &[(ProviderKind, &str, u32)] = &[
-    // https://docs.anthropic.com/en/docs/about-claude/models/overview
-    (ProviderKind::Anthropic, "claude-opus-4-1", 200_000),
-    (ProviderKind::Anthropic, "claude-opus-4", 200_000),
-    (ProviderKind::Anthropic, "claude-sonnet-4-5", 200_000),
-    (ProviderKind::Anthropic, "claude-sonnet-4", 200_000),
-    (ProviderKind::Anthropic, "claude-haiku-4-5", 200_000),
-    (ProviderKind::Anthropic, "claude-3-7-sonnet", 200_000),
-    (ProviderKind::Anthropic, "claude-3-5-sonnet", 200_000),
-    (ProviderKind::Anthropic, "claude-3-5-haiku", 200_000),
-    // https://platform.openai.com/docs/models
-    (ProviderKind::OpenAi, "gpt-4.1", 1_047_576),
-    (ProviderKind::OpenAi, "gpt-4.1-mini", 1_047_576),
-    (ProviderKind::OpenAi, "gpt-4.1-nano", 1_047_576),
-    (ProviderKind::OpenAi, "gpt-4o", 128_000),
-    (ProviderKind::OpenAi, "gpt-4o-mini", 128_000),
-    (ProviderKind::OpenAi, "o3", 200_000),
-    (ProviderKind::OpenAi, "o3-mini", 200_000),
-    (ProviderKind::OpenAi, "o4-mini", 200_000),
+/// One published context size: where it's published and when that page was last checked.
+pub struct Published {
+    pub kind: ProviderKind,
+    /// The model id; it also matches the same id with a date suffix or `-latest`.
+    pub id: &'static str,
+    pub tokens: u32,
+    /// The provider's page that states the size (https).
+    pub source: &'static str,
+    /// When the size was last checked against `source` (YYYY-MM-DD).
+    pub checked: &'static str,
+}
+
+/// Entries older than this (in days) are flagged by the release check (#352).
+pub const MAX_AGE_DAYS: i64 = 183;
+
+/// Published context sizes. An id matches its entry exactly, or with a date suffix
+/// (`-20250929`, `-2025-04-14`) or `-latest`. A model that isn't here is unknown, never the
+/// nearest entry.
+///
+/// To update (#352, docs/releasing.md): open each entry's `source`, correct `tokens` if the
+/// page says otherwise, and set `checked` to today; add a model only with the page that
+/// states its size, never by analogy with a sibling. Then run the release check:
+/// `cargo test -p dn-providers --lib published_sizes_are_recent -- --ignored`.
+pub const PUBLISHED: &[Published] = &[
+    Published {
+        kind: ProviderKind::Anthropic,
+        id: "claude-opus-4-1",
+        tokens: 200_000,
+        source: "https://docs.anthropic.com/en/docs/about-claude/models/overview",
+        checked: "2026-11-27",
+    },
+    Published {
+        kind: ProviderKind::Anthropic,
+        id: "claude-opus-4",
+        tokens: 200_000,
+        source: "https://docs.anthropic.com/en/docs/about-claude/models/overview",
+        checked: "2026-11-27",
+    },
+    Published {
+        kind: ProviderKind::Anthropic,
+        id: "claude-sonnet-4-5",
+        tokens: 200_000,
+        source: "https://docs.anthropic.com/en/docs/about-claude/models/overview",
+        checked: "2026-11-27",
+    },
+    Published {
+        kind: ProviderKind::Anthropic,
+        id: "claude-sonnet-4",
+        tokens: 200_000,
+        source: "https://docs.anthropic.com/en/docs/about-claude/models/overview",
+        checked: "2026-11-27",
+    },
+    Published {
+        kind: ProviderKind::Anthropic,
+        id: "claude-haiku-4-5",
+        tokens: 200_000,
+        source: "https://docs.anthropic.com/en/docs/about-claude/models/overview",
+        checked: "2026-11-27",
+    },
+    Published {
+        kind: ProviderKind::Anthropic,
+        id: "claude-3-7-sonnet",
+        tokens: 200_000,
+        source: "https://docs.anthropic.com/en/docs/about-claude/models/overview",
+        checked: "2026-11-27",
+    },
+    Published {
+        kind: ProviderKind::Anthropic,
+        id: "claude-3-5-sonnet",
+        tokens: 200_000,
+        source: "https://docs.anthropic.com/en/docs/about-claude/models/overview",
+        checked: "2026-11-27",
+    },
+    Published {
+        kind: ProviderKind::Anthropic,
+        id: "claude-3-5-haiku",
+        tokens: 200_000,
+        source: "https://docs.anthropic.com/en/docs/about-claude/models/overview",
+        checked: "2026-11-27",
+    },
+    Published {
+        kind: ProviderKind::OpenAi,
+        id: "gpt-4.1",
+        tokens: 1_047_576,
+        source: "https://platform.openai.com/docs/models",
+        checked: "2026-11-27",
+    },
+    Published {
+        kind: ProviderKind::OpenAi,
+        id: "gpt-4.1-mini",
+        tokens: 1_047_576,
+        source: "https://platform.openai.com/docs/models",
+        checked: "2026-11-27",
+    },
+    Published {
+        kind: ProviderKind::OpenAi,
+        id: "gpt-4.1-nano",
+        tokens: 1_047_576,
+        source: "https://platform.openai.com/docs/models",
+        checked: "2026-11-27",
+    },
+    Published {
+        kind: ProviderKind::OpenAi,
+        id: "gpt-4o",
+        tokens: 128_000,
+        source: "https://platform.openai.com/docs/models",
+        checked: "2026-11-27",
+    },
+    Published {
+        kind: ProviderKind::OpenAi,
+        id: "gpt-4o-mini",
+        tokens: 128_000,
+        source: "https://platform.openai.com/docs/models",
+        checked: "2026-11-27",
+    },
+    Published {
+        kind: ProviderKind::OpenAi,
+        id: "o3",
+        tokens: 200_000,
+        source: "https://platform.openai.com/docs/models",
+        checked: "2026-11-27",
+    },
+    Published {
+        kind: ProviderKind::OpenAi,
+        id: "o3-mini",
+        tokens: 200_000,
+        source: "https://platform.openai.com/docs/models",
+        checked: "2026-11-27",
+    },
+    Published {
+        kind: ProviderKind::OpenAi,
+        id: "o4-mini",
+        tokens: 200_000,
+        source: "https://platform.openai.com/docs/models",
+        checked: "2026-11-27",
+    },
 ];
 
 /// Whether `rest` (what follows an entry's id) is a date or `-latest`.
@@ -66,9 +181,9 @@ fn version_suffix(rest: &str) -> bool {
 pub fn published(kind: ProviderKind, model_id: &str) -> Option<u32> {
     PUBLISHED
         .iter()
-        .filter(|(k, id, _)| *k == kind && model_id.starts_with(id))
-        .find(|(_, id, _)| version_suffix(&model_id[id.len()..]))
-        .map(|(_, _, n)| *n)
+        .filter(|p| p.kind == kind && model_id.starts_with(p.id))
+        .find(|p| version_suffix(&model_id[p.id.len()..]))
+        .map(|p| p.tokens)
 }
 
 /// What `inner` knows about `model`'s context, cached once known.
@@ -274,5 +389,76 @@ mod tests {
         }
         // Another provider's table doesn't apply.
         assert_eq!(published(ProviderKind::OpenAiCompatible, "gpt-4o"), None);
+    }
+
+    /// Days since 1970-01-01 for a `YYYY-MM-DD` date (proleptic Gregorian), or `None`.
+    fn days(date: &str) -> Option<i64> {
+        let mut it = date.split('-');
+        let (y, m, d): (i64, i64, i64) = (
+            it.next()?.parse().ok()?,
+            it.next()?.parse().ok()?,
+            it.next()?.parse().ok()?,
+        );
+        if it.next().is_some()
+            || date.len() != 10
+            || !(1..=12).contains(&m)
+            || !(1..=31).contains(&d)
+        {
+            return None;
+        }
+        let y = if m <= 2 { y - 1 } else { y };
+        let era = y.div_euclid(400);
+        let yoe = y - era * 400;
+        let mp = (m + 9) % 12;
+        let doy = (153 * mp + 2) / 5 + d - 1;
+        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+        Some(era * 146_097 + doe - 719_468)
+    }
+
+    fn today() -> i64 {
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("the clock is after 1970")
+            .as_secs();
+        (secs / 86_400) as i64
+    }
+
+    #[test]
+    fn every_published_size_names_its_source_and_a_real_check_date() {
+        assert_eq!(days("1970-01-01"), Some(0));
+        assert_eq!(days("2026-11-27"), Some(20_784));
+        assert_eq!(days("2026-13-01"), None);
+        assert_eq!(days("26-11-27"), None);
+        let mut seen = std::collections::HashSet::new();
+        for p in PUBLISHED {
+            assert!(seen.insert((p.kind, p.id)), "{} appears twice", p.id);
+            assert!(
+                p.source.starts_with("https://"),
+                "{}: source must be https",
+                p.id
+            );
+            assert!(p.tokens > 0, "{}", p.id);
+            let d = days(p.checked).unwrap_or_else(|| panic!("{}: checked {:?}", p.id, p.checked));
+            assert!(d <= today(), "{}: checked in the future", p.id);
+        }
+    }
+
+    /// The release check (docs/releasing.md): fails, naming them, when entries were last
+    /// checked more than [`MAX_AGE_DAYS`] ago. Ignored in normal runs so CI doesn't start
+    /// failing on a date.
+    #[test]
+    #[ignore = "release check: cargo test -p dn-providers --lib published_sizes_are_recent -- --ignored"]
+    fn published_sizes_are_recent() {
+        let now = today();
+        let old: Vec<String> = PUBLISHED
+            .iter()
+            .filter(|p| days(p.checked).is_none_or(|d| now - d > MAX_AGE_DAYS))
+            .map(|p| format!("{} (checked {}, {})", p.id, p.checked, p.source))
+            .collect();
+        assert!(
+            old.is_empty(),
+            "check these context sizes again (older than {MAX_AGE_DAYS} days):\n{}",
+            old.join("\n")
+        );
     }
 }
