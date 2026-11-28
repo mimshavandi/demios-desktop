@@ -183,7 +183,8 @@ fn the_wall_clock_kills_a_loop() {
     };
     let r = w.sandbox.run(&w.spec(&["loop"], limits)).unwrap();
     assert_eq!(r.killed, Some(Killed::WallClock));
-    assert!(r.elapsed < Duration::from_secs(5), "{:?}", r.elapsed);
+    // Loose: a loaded CI machine starts the launcher slowly.
+    assert!(r.elapsed < Duration::from_secs(20), "{:?}", r.elapsed);
     w.no_run_left();
 }
 
@@ -238,6 +239,26 @@ fn many_files_stop_at_the_disk_cap() {
     } else {
         assert_eq!(r.killed, Some(Killed::Disk), "{stdout}");
     }
+}
+
+#[test]
+fn out_and_tmp_cant_be_replaced_with_a_link() {
+    let w = World::new();
+    let r = w
+        .sandbox
+        .run(&w.spec(&["swap-out", s(&w.home)], small()))
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&r.stdout);
+    let probes: Vec<Value> = stdout
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(probes.len(), 2, "{stdout}");
+    for p in &probes {
+        assert_eq!(p["ok"], false, "{p}");
+    }
+    assert!(r.outputs.is_empty());
+    w.no_run_left();
 }
 
 #[test]

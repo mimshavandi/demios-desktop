@@ -4,6 +4,7 @@
 //!
 //! `dn-sandbox-probe probes <home> <data> <skill> <port> [<abstract name>]`: every probe.
 //! `dn-sandbox-probe loop | mem <MB> | flood | disk-one <MB> | disk-many <MB> | noop`: limits.
+//! `dn-sandbox-probe swap-out <target>`: tries to replace `out/` and `tmp/` with links.
 
 use std::io::Write;
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs, UdpSocket};
@@ -223,6 +224,19 @@ fn main() {
     match args.first().map(String::as_str) {
         Some("probes") => probes(rest),
         Some("noop") => {}
+        // Replace out/ (or tmp/) with a link to `target`: the profile must refuse it, and if
+        // it didn't, collecting outputs must refuse to read through it.
+        Some("swap-out") => {
+            let target = rest.first().cloned().unwrap_or_default();
+            for (k, var) in [("out", "DN_RUN_OUT"), ("tmp", "DN_RUN_TMP")] {
+                let dir = env_path(var);
+                let r = std::fs::remove_dir(&dir).and_then(|()| symlink(Path::new(&target), &dir));
+                report(
+                    &format!("write: replace {k}/ with a link"),
+                    r.map(|()| "replaced".into()),
+                );
+            }
+        }
         Some("loop") => loop {
             std::hint::spin_loop();
         },

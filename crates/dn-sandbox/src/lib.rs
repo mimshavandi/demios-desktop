@@ -173,6 +173,10 @@ pub enum Error {
     Input { name: String, reason: String },
     #[error("{0}")]
     Limits(String),
+    /// `out/` isn't the folder the run was given (replaced, for example by a link), so no
+    /// output is read.
+    #[error("the run replaced its output folder, so no output was read")]
+    OutputsReplaced,
     /// The run's process group couldn't be confirmed gone, so its outputs aren't read.
     #[error("the run's processes couldn't be stopped")]
     NotStopped,
@@ -285,7 +289,7 @@ impl Sandbox {
         if let Some(reason) = refusal(exit_code, &stderr) {
             return Err(Error::Refused(reason));
         }
-        let (outputs, skipped) = collect(&folder.output)?;
+        let (outputs, skipped) = collect(&folder.output, folder.output_id)?;
         drop(folder);
         Ok(RunResult {
             exit_code,
@@ -419,6 +423,8 @@ struct RunFolder {
     work: PathBuf,
     output: PathBuf,
     tmp: PathBuf,
+    /// `out/`'s device and inode, to check it's still the same folder when outputs are read.
+    output_id: (u64, u64),
     #[cfg(target_os = "macos")]
     attached: bool,
 }
@@ -439,12 +445,12 @@ impl RunFolder {
                 Err(e) => return Err(io("make the run folder")(e)),
             }
         };
-        #[allow(unused_mut)]
         let mut f = Self {
             input: root.join("in"),
             work: root.join("work"),
             output: root.join("work/out"),
             tmp: root.join("work/tmp"),
+            output_id: (0, 0),
             root,
             #[cfg(target_os = "macos")]
             attached: false,
@@ -461,6 +467,7 @@ impl RunFolder {
         let _ = disk;
         make_private_dir(&f.output).map_err(io("out/"))?;
         make_private_dir(&f.tmp).map_err(io("tmp/"))?;
+        f.output_id = file_id(&f.output).map_err(io("out/"))?;
         Ok(f)
     }
 }
@@ -671,70 +678,104 @@ fn disk_use(dir: &Path) -> u64 {
         .sum()
 }
 
+#[cfg(unix)]
 const MAX_DEPTH: usize = 8;
 
-/// Regular files in `out/`, read without following links.
-fn collect(out: &Path) -> Result<(Vec<Output>, Vec<Skipped>), Error> {
+#[cfg(unix)]
+fn file_id(p: &Path) -> std::io::Result<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    let m = std::fs::symlink_metadata(p)?;
+    Ok((m.dev(), m.ino()))
+}
+
+#[cfg(not(unix))]
+fn file_id(_p: &Path) -> std::io::Result<(u64, u64)> {
+    Ok((0, 0))
+}
+
+/// Regular files in `out/`, read through descriptors: `out/` is opened without following a
+/// link and must be the folder the run was given; every entry is opened relative to its
+/// folder, without following a link.
+#[cfg(unix)]
+fn collect(out: &Path, made: (u64, u64)) -> Result<(Vec<Output>, Vec<Skipped>), Error> {
+    use rustix::fs::{Mode, OFlags, fstat, open};
+    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let dir = open(out, flags, Mode::empty()).map_err(|_| Error::OutputsReplaced)?;
+    let st = fstat(&dir).map_err(|e| io("read out/")(e.into()))?;
+    if (st.st_dev as u64, st.st_ino as u64) != made {
+        return Err(Error::OutputsReplaced);
+    }
     let mut outputs = Vec::new();
     let mut skipped = Vec::new();
-    walk(out, "", 0, &mut outputs, &mut skipped)?;
+    walk(&dir, "", 0, &mut outputs, &mut skipped)?;
     outputs.sort_by(|a, b| a.name.cmp(&b.name));
     Ok((outputs, skipped))
 }
 
+#[cfg(unix)]
 fn walk(
-    dir: &Path,
+    dir: &std::os::fd::OwnedFd,
     prefix: &str,
     depth: usize,
     outputs: &mut Vec<Output>,
     skipped: &mut Vec<Skipped>,
 ) -> Result<(), Error> {
-    for e in std::fs::read_dir(dir).map_err(io("read out/"))? {
-        let e = e.map_err(io("read out/"))?;
-        let name = format!("{prefix}{}", e.file_name().to_string_lossy());
-        let t = e.file_type().map_err(io("read out/"))?;
-        if t.is_dir() {
-            if depth + 1 >= MAX_DEPTH {
-                skipped.push(Skipped {
-                    name,
-                    reason: "folders too deep",
-                });
-            } else {
-                walk(&e.path(), &format!("{name}/"), depth + 1, outputs, skipped)?;
+    use rustix::fs::{AtFlags, Dir, FileType, Mode, OFlags, fstat, openat, statat};
+    let err = |e: rustix::io::Errno| io("read out/")(e.into());
+    for entry in Dir::read_from(dir).map_err(err)? {
+        let entry = entry.map_err(err)?;
+        let raw = entry.file_name();
+        let bytes = raw.to_bytes();
+        if bytes == b"." || bytes == b".." {
+            continue;
+        }
+        let name = format!("{prefix}{}", String::from_utf8_lossy(bytes));
+        let st = statat(dir, raw, AtFlags::SYMLINK_NOFOLLOW).map_err(err)?;
+        match FileType::from_raw_mode(st.st_mode as _) {
+            FileType::Directory if depth + 1 >= MAX_DEPTH => skipped.push(Skipped {
+                name,
+                reason: "folders too deep",
+            }),
+            FileType::Directory => {
+                let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+                let sub = openat(dir, raw, flags, Mode::empty()).map_err(err)?;
+                walk(&sub, &format!("{name}/"), depth + 1, outputs, skipped)?;
             }
-        } else if t.is_file() {
-            let mut f = match open_nofollow(&e.path()) {
-                Ok(f) => f,
-                Err(_) => {
+            FileType::RegularFile => {
+                let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
+                let fd = openat(dir, raw, flags, Mode::empty()).map_err(err)?;
+                if FileType::from_raw_mode(fstat(&fd).map_err(err)?.st_mode as _)
+                    != FileType::RegularFile
+                {
                     skipped.push(Skipped {
                         name,
-                        reason: "couldn't be opened",
+                        reason: "not a regular file",
                     });
                     continue;
                 }
-            };
-            if !f.metadata().map(|m| m.is_file()).unwrap_or(false) {
-                skipped.push(Skipped {
-                    name,
-                    reason: "not a regular file",
-                });
-                continue;
+                let mut bytes = Vec::new();
+                std::fs::File::from(fd)
+                    .read_to_end(&mut bytes)
+                    .map_err(io("read an output"))?;
+                outputs.push(Output { name, bytes });
             }
-            let mut bytes = Vec::new();
-            f.read_to_end(&mut bytes).map_err(io("read an output"))?;
-            outputs.push(Output { name, bytes });
-        } else {
-            skipped.push(Skipped {
+            FileType::Symlink => skipped.push(Skipped {
                 name,
-                reason: if t.is_symlink() {
-                    "a link"
-                } else {
-                    "not a regular file"
-                },
-            });
+                reason: "a link",
+            }),
+            _ => skipped.push(Skipped {
+                name,
+                reason: "not a regular file",
+            }),
         }
     }
     Ok(())
+}
+
+/// No sandbox runs on other OSes yet (`Sandbox::new` refuses), so nothing is collected.
+#[cfg(not(unix))]
+fn collect(_out: &Path, _made: (u64, u64)) -> Result<(Vec<Output>, Vec<Skipped>), Error> {
+    Ok((Vec::new(), Vec::new()))
 }
 
 #[cfg(test)]

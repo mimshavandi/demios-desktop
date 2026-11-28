@@ -80,6 +80,12 @@ pub fn profile(exes: &[PathBuf], reads: &[PathBuf], writes: &[PathBuf]) -> Strin
             "(allow file-write* {})",
             subpaths(writes.iter().map(PathBuf::as_path))
         ),
+        // `subpath` matches the folder itself too: without this, a script could remove out/
+        // and put a link to the home folder in its place (the later rule wins).
+        format!(
+            "(deny file-write* {})",
+            literals(writes.iter().map(PathBuf::as_path))
+        ),
         "(allow file-write-data (literal \"/dev/null\"))".to_owned(),
         format!("(allow process-exec {exes_l})"),
         "(allow sysctl-read)".to_owned(),
@@ -208,6 +214,7 @@ mod tests {
         assert!(p.contains("(subpath \"/a \\\"b\\\"\")"));
         assert!(p.contains("(allow process-exec (literal \"/opt/rt/bin/python3\"))"));
         assert!(p.contains("(allow file-write* (subpath \"/data/runs/run-1/work/out\"))"));
+        assert!(p.contains("(deny file-write* (literal \"/data/runs/run-1/work/out\"))"));
         for never in ["process-fork", "network", "mach-lookup"] {
             assert!(!p.contains(never), "{never} must stay denied");
         }
