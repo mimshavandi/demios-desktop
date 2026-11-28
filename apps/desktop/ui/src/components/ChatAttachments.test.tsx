@@ -1,6 +1,6 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import { COPY_HELP, FileChips, fileSize, middleCut, providerHelp } from "./ChatAttachments";
+import { COPY_HELP, FileChips, MISSING_HELP, fileSize, middleCut, providerHelp } from "./ChatAttachments";
 import { TooltipProvider } from "./primitives";
 
 afterEach(cleanup);
@@ -13,6 +13,7 @@ const file = {
   size: 2_400_000,
   sha256: "0".repeat(64),
   created_at: 0,
+  missing: false,
 };
 
 describe("ChatAttachments", () => {
@@ -31,7 +32,7 @@ describe("ChatAttachments", () => {
     const chips = (provider: string | null) =>
       render(
         <TooltipProvider>
-          <FileChips files={[file]} provider={provider} onRemove={() => {}} removeRef={() => {}} />
+          <FileChips files={[file]} copying={[]} provider={provider} onRemove={() => {}} removeRef={() => {}} />
         </TooltipProvider>,
       );
     chips(null);
@@ -43,5 +44,16 @@ describe("ChatAttachments", () => {
     chips("Anthropic");
     expect(screen.getByText(new RegExp(providerHelp("Anthropic").slice(0, 40)))).toBeTruthy();
     expect(screen.getByText(/A narrow question can show single entries\./)).toBeTruthy();
+  });
+
+  it("a file whose copy is gone warns, and can still be removed", () => {
+    render(
+      <TooltipProvider>
+        <FileChips files={[{ ...file, missing: true }]} copying={[]} provider={null} onRemove={() => {}} removeRef={() => {}} />
+      </TooltipProvider>,
+    );
+    expect(screen.getByRole("img", { name: MISSING_HELP })).toBeTruthy();
+    expect(screen.getByTitle(MISSING_HELP)).toBeTruthy();
+    expect(screen.getByRole("button", { name: `Remove ${file.name}` })).toBeTruthy();
   });
 });

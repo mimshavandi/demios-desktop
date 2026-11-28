@@ -33,6 +33,8 @@ export function useChatFiles({
   const [files, setFiles] = useState<ChatFile[]>([]);
   const [skipped, setSkipped] = useState<{ name: string; reason: string }[]>([]);
   const [busy, setBusy] = useState(false);
+  // Names picked and still being copied: one chip each until the copies are made.
+  const [copying, setCopying] = useState<string[]>([]);
   const [status, setStatus] = useState("");
   const openId = useRef(conversationId);
   openId.current = conversationId;
@@ -66,7 +68,11 @@ export function useChatFiles({
       setBusy(true);
       setSkipped([]);
       try {
-        const r = await api.addChatFiles(conversationId, conversationId === null ? projectId : null);
+        const r = await api.addChatFiles(conversationId, conversationId === null ? projectId : null, (p) => {
+          setCopying(p.names);
+          const [one] = p.names;
+          setStatus(p.names.length === 1 && one !== undefined ? `Adding ${one}` : `Adding ${p.names.length} files`);
+        });
         if (r.cancelled) return;
         if (conversationId === null && r.conversation_id !== null) {
           created.current = r.conversation_id;
@@ -86,6 +92,7 @@ export function useChatFiles({
       } catch (e) {
         toast({ tone: "error", title: `Couldn't attach files. ${errorMessage(e)}` });
       } finally {
+        setCopying([]);
         setBusy(false);
       }
     })();
@@ -132,6 +139,7 @@ export function useChatFiles({
     files,
     skipped,
     busy,
+    copying,
     provider,
     status,
     onAttach,

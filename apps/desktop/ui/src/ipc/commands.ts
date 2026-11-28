@@ -26,6 +26,7 @@ import type {
   AddedFiles,
   AddedChatFiles,
   ChatFile,
+  ChatFilesProgress,
   Project,
   ProjectFile,
   ProjectSummary,
@@ -119,7 +120,10 @@ interface Commands {
   remove_project_file: { args: { projectId: Id; fileId: Id }; ret: null };
   restore_project_file: { args: { projectId: Id; fileId: Id }; ret: null };
   list_chat_files: { args: { conversationId: Id }; ret: ChatFile[] };
-  add_chat_files: { args: { conversationId: Id | null; projectId: Id | null }; ret: AddedChatFiles };
+  add_chat_files: {
+    args: { conversationId: Id | null; projectId: Id | null; onProgress: Channel<ChatFilesProgress> };
+    ret: AddedChatFiles;
+  };
   remove_chat_file: { args: { conversationId: Id; fileId: Id }; ret: null };
   restore_chat_file: { args: { conversationId: Id; fileId: Id }; ret: null };
   rename_conversation: { args: { conversationId: Id; title: string }; ret: null };
@@ -313,10 +317,14 @@ export const api = {
   /**
    * Opens the system file picker (from Rust) and copies the picked data files into the chat.
    * With no chat open, the chat is created (in `projectId`, if given) only once something is
-   * picked, so cancelling leaves nothing behind.
+   * picked, so cancelling leaves nothing behind. `onProgress` gets the picked names once,
+   * before they're copied.
    */
-  addChatFiles: (conversationId: Id | null, projectId: Id | null = null) =>
-    call("add_chat_files", { conversationId, projectId }),
+  addChatFiles: (
+    conversationId: Id | null,
+    projectId: Id | null,
+    onProgress: (p: ChatFilesProgress) => void,
+  ) => call("add_chat_files", { conversationId, projectId, onProgress: channel(onProgress) }),
   /** Removes a chat file for now; `restoreChatFile` brings it back during the Undo. */
   removeChatFile: (conversationId: Id, fileId: Id) => call("remove_chat_file", { conversationId, fileId }),
   restoreChatFile: (conversationId: Id, fileId: Id) => call("restore_chat_file", { conversationId, fileId }),

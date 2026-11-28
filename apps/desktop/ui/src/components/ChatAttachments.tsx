@@ -1,7 +1,7 @@
-import { FileSpreadsheet, Paperclip, X } from "lucide-react";
+import { FileSpreadsheet, Paperclip, TriangleAlert, X } from "lucide-react";
 import { forwardRef } from "react";
 import type { ChatFile } from "../ipc/types";
-import { ICON, IconButton, InlineMessage } from "./primitives";
+import { ICON, IconButton, InlineMessage, Skeleton } from "./primitives";
 
 /**
  * Data files attached to a chat (#370; design: ChatAttachments, approved 2026-11-28).
@@ -23,6 +23,8 @@ export function middleCut(name: string, max = 28): string {
   const tail = Math.ceil(keep / 2);
   return `${name.slice(0, keep - tail)}…${name.slice(name.length - tail)}`;
 }
+
+export const MISSING_HELP = "This file can't be read any more. Remove it and attach it again.";
 
 export const COPY_HELP = "Demios keeps a copy in this chat. Changes to the original file don't show here.";
 
@@ -53,18 +55,21 @@ export const AttachButton = forwardRef<
 /** "Files in this chat": the chips, with the copy (and provider) help under the label. */
 export function FileChips({
   files,
+  copying,
   provider,
   onRemove,
   removeRef,
 }: {
   files: ChatFile[];
+  /** Names still being copied: a chip each, with a Skeleton in place of the size. */
+  copying: string[];
   /** The chat model's provider, or `null` when it runs on this device. */
   provider: string | null;
   onRemove: (f: ChatFile, index: number) => void;
   /** Lets the composer move focus to a chip's remove button after a removal. */
   removeRef: (index: number, el: HTMLButtonElement | null) => void;
 }) {
-  if (files.length === 0) return null;
+  if (files.length === 0 && copying.length === 0) return null;
   return (
     <div className="chat-files" data-testid="chat-files">
       <p className="chat-files-label" id="chat-files-h">
@@ -77,8 +82,12 @@ export function FileChips({
       <ul className="chat-files-list" aria-labelledby="chat-files-h" aria-describedby="chat-files-help">
         {files.map((f, i) => (
           <li key={f.id} className="chat-file">
-            <FileSpreadsheet {...ICON} aria-hidden="true" />
-            <span className="chat-file-name" title={f.name}>
+            {f.missing ? (
+              <TriangleAlert {...ICON} className="chat-file-missing" role="img" aria-label={MISSING_HELP} />
+            ) : (
+              <FileSpreadsheet {...ICON} aria-hidden="true" />
+            )}
+            <span className="chat-file-name" title={f.missing ? MISSING_HELP : f.name}>
               {middleCut(f.name)}
             </span>
             <span className="chat-file-size">{fileSize(f.size)}</span>
@@ -90,6 +99,15 @@ export function FileChips({
             >
               <X {...ICON} aria-hidden="true" />
             </IconButton>
+          </li>
+        ))}
+        {copying.map((name) => (
+          <li key={`copying:${name}`} className="chat-file" aria-busy="true">
+            <FileSpreadsheet {...ICON} aria-hidden="true" />
+            <span className="chat-file-name" title={name}>
+              {middleCut(name)}
+            </span>
+            <Skeleton width="var(--dn-space-8)" />
           </li>
         ))}
       </ul>

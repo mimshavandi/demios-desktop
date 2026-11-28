@@ -739,8 +739,7 @@ export function createMockApi(): Api {
     listChatFiles: async (cid) =>
       chatFiles.filter((f) => f.conversation_id === cid && !f.deleted).map(({ deleted: _d, ...f }) => f),
     // The mock has no file picker: each call "picks" two tables and a PDF.
-    addChatFiles: async (cid, projectId = null) => {
-      await new Promise((r) => setTimeout(r, 400));
+    addChatFiles: async (cid, projectId, onProgress) => {
       let conversationId = cid;
       if (conversationId === null) {
         if (projectId !== null) liveProject(projectId);
@@ -755,6 +754,8 @@ export function createMockApi(): Api {
         { name: "budget-2026.xlsx", size: 2_458 },
         { name: "notes.pdf", size: 81_920 },
       ];
+      onProgress({ conversation_id: conversationId, names: picked.map((x) => x.name) });
+      await new Promise((r) => setTimeout(r, 900));
       const added: ChatFile[] = [];
       const skipped: { name: string; reason: string }[] = [];
       for (const x of picked) {
@@ -774,6 +775,7 @@ export function createMockApi(): Api {
             size: x.size,
             sha256: "0".repeat(64),
             created_at: now(),
+            missing: false,
           };
           chatFiles.push({ ...f, deleted: false });
           added.push(f);

@@ -127,6 +127,8 @@ function fakeApi() {
     pick: [] as { name: string; size: number }[],
     skipped: [] as { name: string; reason: string }[],
     addCalls: [] as [string | null, string | null][],
+    /** When set, the copy waits for it after the picked names are reported. */
+    gate: null as Promise<void> | null,
   };
   const project = {
     failList: false,
@@ -363,7 +365,7 @@ function fakeApi() {
     },
     listChatFiles: async (cid) =>
       chat.files.filter((f) => f.conversation_id === cid && !f.removed).map(({ removed: _r, ...f }) => f),
-    addChatFiles: async (cid, projectId = null) => {
+    addChatFiles: async (cid, projectId, onProgress) => {
       chat.addCalls.push([cid, projectId]);
       if (chat.pick.length === 0 && chat.skipped.length === 0) {
         return { cancelled: true, added: [], skipped: [], conversation_id: null };
@@ -375,6 +377,8 @@ function fakeApi() {
         msgs.set(c.id, []);
         conversationId = c.id;
       }
+      if (chat.pick.length > 0) onProgress({ conversation_id: conversationId, names: chat.pick.map((x) => x.name) });
+      if (chat.gate !== null) await chat.gate;
       const added = chat.pick.map((x) => ({
         id: id(),
         conversation_id: conversationId,
@@ -383,6 +387,7 @@ function fakeApi() {
         size: x.size,
         sha256: "0".repeat(64),
         created_at: n,
+        missing: false,
       }));
       chat.files.push(...added.map((f) => ({ ...f, removed: false })));
       return { cancelled: false, added, skipped: chat.skipped, conversation_id: conversationId };
@@ -1423,12 +1428,36 @@ describe("Data files attached to a chat (#370)", () => {
     expect(screen.getByText(/Demios keeps a copy in this chat/)).toBeTruthy();
     expect(screen.getByText("676 B")).toBeTruthy();
     expect(screen.getByTestId("attach-status").textContent).toBe("orders.csv attached");
+    expect(screen.queryByText("676 B")?.closest("li")?.getAttribute("aria-busy")).toBeNull();
     // The files belong to the chat: the next attach goes into it.
     chat.pick = [{ name: "budget.xlsx", size: 2_458 }];
     fireEvent.click(attach);
     expect(await screen.findByText("budget.xlsx")).toBeTruthy();
     expect(chat.addCalls[2]?.[0]).toBe(convs[0]?.id);
     expect(screen.getByText("orders.csv")).toBeTruthy();
+  });
+
+  it("each picked file shows as a chip while it's copied, then as attached", async () => {
+    const { api, chat } = fakeApi();
+    render(<App api={api} />);
+    let release = () => {};
+    chat.gate = new Promise<void>((r) => {
+      release = r;
+    });
+    chat.pick = [
+      { name: "orders.csv", size: 676 },
+      { name: "budget.xlsx", size: 2_458 },
+    ];
+    fireEvent.click(await screen.findByRole("button", { name: "Attach a data file" }));
+    const copying = await screen.findByText("orders.csv");
+    expect(copying.closest("li")?.getAttribute("aria-busy")).toBe("true");
+    expect(screen.getByText("budget.xlsx").closest("li")?.getAttribute("aria-busy")).toBe("true");
+    expect(screen.getByTestId("attach-status").textContent).toBe("Adding 2 files");
+    expect(screen.queryByText("676 B")).toBeNull();
+    release();
+    expect(await screen.findByText("676 B")).toBeTruthy();
+    expect(screen.getByText("orders.csv").closest("li")?.getAttribute("aria-busy")).toBeNull();
+    expect(screen.getByTestId("attach-status").textContent).toBe("2 files attached");
   });
 
   it("says why files weren't attached: one sentence, or a list for several", async () => {

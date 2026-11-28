@@ -95,6 +95,14 @@ export interface ChatFile {
   size: number;
   sha256: string;
   created_at: number;
+  /** The stored copy is gone: the chip warns, and the file can only be removed. */
+  missing: boolean;
+}
+
+/** Sent once after a real pick, before copying: one chip per file while they're copied. */
+export interface ChatFilesProgress {
+  conversation_id: Id;
+  names: string[];
 }
 
 export interface AddedChatFiles {

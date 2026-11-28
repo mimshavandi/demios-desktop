@@ -86,6 +86,8 @@ export interface Attachments {
   skipped: { name: string; reason: string }[];
   /** The picker is open or the copies are being made. */
   busy: boolean;
+  /** Names picked and still being copied, each shown as a chip until it's attached. */
+  copying: string[];
   /** The chat model's provider, or `null` when it runs on this device. */
   provider: string | null;
   /** Read out politely after attaching: "orders.csv attached", "2 files attached". */
@@ -321,6 +323,7 @@ export function ChatView(p: Props) {
         {p.attachments !== undefined && (
           <FileChips
             files={p.attachments.files}
+            copying={p.attachments.copying}
             provider={p.attachments.provider}
             removeRef={(i, el) => {
               removeRefs.current[i] = el;
