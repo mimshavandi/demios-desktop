@@ -20,15 +20,15 @@ const CHANGELOG = `# Changelog
 `;
 
 const files = {
-  "Demios-Desktop-0.2.0-macos-arm64.app.tar.gz": "",
-  "Demios-Desktop-0.2.0-macos-arm64.app.tar.gz.sig": "sig-mac-arm\n",
-  "Demios-Desktop-0.2.0-macos-x64.app.tar.gz": "",
-  "Demios-Desktop-0.2.0-macos-x64.app.tar.gz.sig": "sig-mac-x64",
-  "Demios-Desktop-0.2.0-windows-x64-setup.exe": "",
-  "Demios-Desktop-0.2.0-windows-x64-setup.exe.sig": "sig-win",
-  "Demios-Desktop-0.2.0-linux-x86_64.AppImage": "",
-  "Demios-Desktop-0.2.0-linux-x86_64.AppImage.sig": "sig-linux",
-  "Demios-Desktop-0.2.0-macos-arm64.dmg": "",
+  "Almend-Desktop-0.2.0-macos-arm64.app.tar.gz": "",
+  "Almend-Desktop-0.2.0-macos-arm64.app.tar.gz.sig": "sig-mac-arm\n",
+  "Almend-Desktop-0.2.0-macos-x64.app.tar.gz": "",
+  "Almend-Desktop-0.2.0-macos-x64.app.tar.gz.sig": "sig-mac-x64",
+  "Almend-Desktop-0.2.0-windows-x64-setup.exe": "",
+  "Almend-Desktop-0.2.0-windows-x64-setup.exe.sig": "sig-win",
+  "Almend-Desktop-0.2.0-linux-x86_64.AppImage": "",
+  "Almend-Desktop-0.2.0-linux-x86_64.AppImage.sig": "sig-linux",
+  "Almend-Desktop-0.2.0-macos-arm64.dmg": "",
   "SHA256SUMS.txt": "",
 };
 
@@ -47,7 +47,7 @@ test("every platform with a signed bundle, with release download URLs", () => {
   assert.equal(m.platforms["darwin-aarch64"].signature, "sig-mac-arm");
   assert.equal(
     m.platforms["windows-x86_64"].url,
-    "https://github.com/o/r/releases/download/v0.2.0/Demios-Desktop-0.2.0-windows-x64-setup.exe",
+    "https://github.com/o/r/releases/download/v0.2.0/Almend-Desktop-0.2.0-windows-x64-setup.exe",
   );
   assert.equal(m.version, "0.2.0");
   assert.equal(m.pub_date, "2027-01-15T10:00:00Z");
@@ -57,30 +57,30 @@ test("--platforms keeps code-signed platforms only and fails for a missing one",
   const m = latestJson({ ...base, platforms: ["linux-x86_64", "windows-x86_64"] });
   assert.deepEqual(Object.keys(m.platforms).sort(), ["linux-x86_64", "windows-x86_64"]);
   const noLinux = { ...files };
-  delete noLinux["Demios-Desktop-0.2.0-linux-x86_64.AppImage"];
+  delete noLinux["Almend-Desktop-0.2.0-linux-x86_64.AppImage"];
   assert.throws(() => latestJson({ ...base, files: noLinux, platforms: ["linux-x86_64"] }), /no update bundle/);
   assert.throws(() => latestJson({ ...base, platforms: ["beos-x86"] }), /unknown platform/);
   assert.throws(() => latestJson({ ...base, platforms: [] }), /no platform/);
 });
 
 test("a bundle without a signature is an error, never an unsigned entry", () => {
-  const f = { ...files, "Demios-Desktop-0.2.0-windows-x64-setup.exe.sig": "  " };
+  const f = { ...files, "Almend-Desktop-0.2.0-windows-x64-setup.exe.sig": "  " };
   assert.throws(() => latestJson({ ...base, files: f }), /windows-x86_64: .* has no \.sig/);
   const g = { ...files };
-  delete g["Demios-Desktop-0.2.0-macos-x64.app.tar.gz.sig"];
+  delete g["Almend-Desktop-0.2.0-macos-x64.app.tar.gz.sig"];
   assert.throws(() => latestJson({ ...base, files: g }), /darwin-x86_64/);
 });
 
 test("bundles of another version are ignored; a bad version is refused", () => {
-  const f = { "Demios-Desktop-0.1.9-linux-x86_64.AppImage": "", "Demios-Desktop-0.1.9-linux-x86_64.AppImage.sig": "s" };
+  const f = { "Almend-Desktop-0.1.9-linux-x86_64.AppImage": "", "Almend-Desktop-0.1.9-linux-x86_64.AppImage.sig": "s" };
   assert.throws(() => latestJson({ ...base, files: f }), /no platform/);
   assert.throws(() => latestJson({ ...base, version: "v0.2" }), /not a version/);
 });
 
 test("exact bundle names only; tag and repo are checked", () => {
   const f = {
-    "Demios-Desktop-0.2.0-rc.1-linux-x86_64.AppImage": "",
-    "Demios-Desktop-0.2.0-rc.1-linux-x86_64.AppImage.sig": "s",
+    "Almend-Desktop-0.2.0-rc.1-linux-x86_64.AppImage": "",
+    "Almend-Desktop-0.2.0-rc.1-linux-x86_64.AppImage.sig": "s",
     "other-0.2.0-linux-x86_64.AppImage": "",
     "other-0.2.0-linux-x86_64.AppImage.sig": "s",
   };

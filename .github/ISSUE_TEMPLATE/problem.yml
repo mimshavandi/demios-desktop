@@ -1,5 +1,5 @@
 name: Report a problem
-description: Something in Demios Desktop doesn't work or looks wrong.
+description: Something in Almend Desktop doesn't work or looks wrong.
 labels: ["bug", "from-app"]
 body:
   - type: markdown

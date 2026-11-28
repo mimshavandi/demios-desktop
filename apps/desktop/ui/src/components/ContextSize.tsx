@@ -1,5 +1,5 @@
 // How much a provider's or server's model reads at once (ADR-0020 §2.1). Design:
-// ContextSize (Design System, approved 2026-11-27). Demios never guesses the size: when
+// ContextSize (Design System, approved 2026-11-27). Almend never guesses the size: when
 // nobody knows it, the person sets it here.
 
 import { TriangleAlert } from "lucide-react";
@@ -113,7 +113,7 @@ export function ContextSize({
       ctx.source === "user"
         ? "you set this"
         : ctx.source === "published"
-          ? "from Demios' list of published sizes"
+          ? "from Almend' list of published sizes"
           : `from ${provider}`;
     return (
       <div ref={box} className="context-size">
@@ -161,7 +161,7 @@ export function ContextSize({
             setError(null);
           }}
           error={error}
-          help="In tokens. Find it in the provider's documentation for this model. Demios uses it to fit long chats into what the model can read."
+          help="In tokens. Find it in the provider's documentation for this model. Almend uses it to fit long chats into what the model can read."
         />
         <span className="context-size-unit" aria-hidden="true">
           tokens

@@ -8,7 +8,7 @@ struct WelcomeView: View {
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 16) {
-                Text("See and answer what your Demios Node is waiting for. Your chats stay on your Node and your computer.")
+                Text("See and answer what your Almend Node is waiting for. Your chats stay on your Node and your computer.")
                     .font(.body)
                 Spacer()
                 Button {
@@ -22,7 +22,7 @@ struct WelcomeView: View {
                     .foregroundStyle(.secondary)
             }
             .padding()
-            .navigationTitle("Demios")
+            .navigationTitle("Almend")
             #if DEBUG
             .onAppear {
                 if DemoPhone.screen == .pair || ProcessInfo.processInfo.arguments.contains("-DemiosPairLink") {

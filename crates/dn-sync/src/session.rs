@@ -162,7 +162,7 @@ fn open_with(
 }
 
 /// Why a minor-0 device behind the Node's log is refused.
-pub const OLD_DEVICE: &str = "update Demios on this device to sync: your Node no longer keeps \
+pub const OLD_DEVICE: &str = "update Almend on this device to sync: your Node no longer keeps \
      the older changes this device lacks, and this version can't start from a snapshot";
 
 /// The Node's side of sync messages from a checked member (after
@@ -1362,7 +1362,7 @@ mod tests {
         match sync(0).answer(late.keys.id(), start(Vector::default()), NOW) {
             Err(SyncError::Refused(reason)) => {
                 assert_eq!(reason, OLD_DEVICE);
-                assert!(reason.starts_with("update Demios on this device"));
+                assert!(reason.starts_with("update Almend on this device"));
             }
             other => panic!("expected a refusal, got {other:?}"),
         }

@@ -210,7 +210,7 @@ fn check_available(exec: &dn_tools::Executor) -> IpcResult<()> {
         return Err(IpcError::new(
             "unavailable",
             "Tools are turned off after an internal error, so your tool settings can't be \
-             skipped. Restart Demios to use tools again.",
+             skipped. Restart Almend to use tools again.",
         ));
     }
     Ok(())

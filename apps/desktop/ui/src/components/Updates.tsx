@@ -18,10 +18,10 @@ type State =
 
 /** What the row says for builds that don't update themselves. */
 const MANAGED: Record<Exclude<UpdateMode, "self_update">, string> = {
-  microsoft_store: "The Microsoft Store keeps this copy of Demios up to date.",
-  flathub: "Flathub keeps this copy of Demios up to date. Update it from your software centre, or with flatpak update.",
-  no_key: "This build has no update key, so it can't check for updates. Get new versions from the Demios releases page on GitHub.",
-  off: "This build doesn't update itself. Get new versions from the Demios releases page on GitHub.",
+  microsoft_store: "The Microsoft Store keeps this copy of Almend up to date.",
+  flathub: "Flathub keeps this copy of Almend up to date. Update it from your software centre, or with flatpak update.",
+  no_key: "This build has no update key, so it can't check for updates. Get new versions from the Almend releases page on GitHub.",
+  off: "This build doesn't update itself. Get new versions from the Almend releases page on GitHub.",
 };
 
 const OFFLINE = "You're offline. Connect to the internet, then check again.";
@@ -177,7 +177,7 @@ export function Updates({
           {state.kind === "checking" && <span className="dn-help">Checking for updates…</span>}
           {state.kind === "up_to_date" && (
             <InlineMessage tone="success">
-              Demios {state.current} is the latest version. Checked at{" "}
+              Almend {state.current} is the latest version. Checked at{" "}
               {state.at.toLocaleTimeString(undefined, { timeStyle: "short" })}.
             </InlineMessage>
           )}
@@ -210,12 +210,12 @@ export function Updates({
               </span>
             }
           >
-            Check for updates when Demios starts? It asks GitHub once per launch.
+            Check for updates when Almend starts? It asks GitHub once per launch.
           </InlineMessage>
         )}
         {launch !== null && !offer && (
           <Switch
-            label="Check for updates when Demios starts"
+            label="Check for updates when Almend starts"
             description="Asks GitHub once per launch and tells you when a new version is out. Nothing downloads until you install it."
             checked={launch.on}
             onCheckedChange={(v) => void saveLaunch(v)}
@@ -276,7 +276,7 @@ export function Updates({
       <ConfirmDialog
         open={confirming && update !== null}
         onOpenChange={setConfirming}
-        title={`Install Demios ${update?.version ?? ""} and restart?`}
+        title={`Install Almend ${update?.version ?? ""} and restart?`}
         confirmLabel="Install and restart"
         cancelLabel="Not now"
         confirmVariant="primary"
@@ -286,7 +286,7 @@ export function Updates({
         returnFocusTo={installRef}
       >
         <p>
-          Demios downloads version {update?.version} from GitHub, checks that it is signed by Demios, installs it and
+          Almend downloads version {update?.version} from GitHub, checks that it is signed by Almend, installs it and
           restarts. If the signature doesn't match, nothing is installed.
         </p>
         <p>An answer that is still being written stops. Your chats, settings and models stay as they are.</p>
@@ -297,7 +297,7 @@ export function Updates({
 
 function InstallProgress({ progress, labelledBy }: { progress: UpdateProgress | null; labelledBy: string }) {
   if (progress?.kind === "installing") {
-    return <span className="dn-help">Installing… Demios restarts when it's done.</span>;
+    return <span className="dn-help">Installing… Almend restarts when it's done.</span>;
   }
   const done = progress?.downloaded ?? 0;
   const total = progress?.total ?? null;

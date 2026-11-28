@@ -77,7 +77,7 @@ pub struct Assembled {
 #[derive(Debug, thiserror::Error)]
 pub enum AssembleError {
     /// Nobody knows the model's context size; the person sets it (design: ContextSize).
-    #[error("Demios doesn't know how much text {model} can read at once")]
+    #[error("Almend doesn't know how much text {model} can read at once")]
     UnknownContext { model: String },
     /// It doesn't fit even with everything droppable left out.
     #[error("this is too long for {model}: {needed} tokens, and it reads {budget} here")]
@@ -95,7 +95,7 @@ impl From<AssembleError> for CoreError {
         match e {
             AssembleError::UnknownContext { model } => CoreError::ModelUnavailable {
                 user_message: format!(
-                    "Demios doesn't know how much text {model} can read at once, so it can't \
+                    "Almend doesn't know how much text {model} can read at once, so it can't \
                      fit this chat to it."
                 ),
                 developer_message: format!("{model}: context size unknown"),

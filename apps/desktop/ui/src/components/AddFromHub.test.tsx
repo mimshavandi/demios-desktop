@@ -376,7 +376,7 @@ describe("LocalModelsCard says where local models run", () => {
         compute={{
           mode: "cpu",
           reason: "no_gpu",
-          description: "Local models run on the processor: no graphics chip Demios can use was found, so replies are slower.",
+          description: "Local models run on the processor: no graphics chip Almend can use was found, so replies are slower.",
         }}
       />,
     );

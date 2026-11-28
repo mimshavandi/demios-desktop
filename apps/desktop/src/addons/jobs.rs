@@ -710,7 +710,7 @@ impl JobHost for AppJobHost {
             let state = self
                 .state
                 .upgrade()
-                .ok_or_else(|| PluginError::unavailable("Demios is closing"))?;
+                .ok_or_else(|| PluginError::unavailable("Almend is closing"))?;
             let found = state
                 .addons
                 .loaded()
@@ -731,7 +731,7 @@ impl JobHost for AppJobHost {
                 None => {
                     state.addons.stop_after_panic(&manifest.id);
                     Err(PluginError::failed(format!(
-                        "{} stopped after an error and is off until Demios restarts.",
+                        "{} stopped after an error and is off until Almend restarts.",
                         manifest.name
                     )))
                 }

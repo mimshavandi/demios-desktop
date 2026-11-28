@@ -57,7 +57,7 @@ impl AppBackend {
     fn app(&self) -> Result<Arc<AppState>, PluginError> {
         self.state
             .upgrade()
-            .ok_or_else(|| PluginError::unavailable("Demios is closing"))
+            .ok_or_else(|| PluginError::unavailable("Almend is closing"))
     }
 
     fn db<T, E: std::fmt::Display>(
@@ -565,7 +565,7 @@ impl dn_tools::InProcessTool for ToolBridge {
                     Err(
                         ToolError::new(id, ToolErrorKind::ToolFailed, "the handler panicked")
                             .with_model_message(format!(
-                                "{} stopped after an error and is off until Demios restarts.",
+                                "{} stopped after an error and is off until Almend restarts.",
                                 self.manifest.name
                             )),
                     )

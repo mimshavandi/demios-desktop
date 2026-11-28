@@ -84,7 +84,7 @@ describe("Updates (T-STORE-08)", () => {
     expect(await screen.findByText("Checking for updates…")).toBeTruthy();
     expect((screen.getByRole("button", { name: /Check for updates/ }) as HTMLButtonElement).disabled).toBe(true);
     await act(async () => resolve({ status: "up_to_date", current: "0.1.0" }));
-    expect(await screen.findByText(/Demios 0.1.0 is the latest version/)).toBeTruthy();
+    expect(await screen.findByText(/Almend 0.1.0 is the latest version/)).toBeTruthy();
     expect(calls).toEqual(["check"]);
   });
 
@@ -117,7 +117,7 @@ describe("Updates (T-STORE-08)", () => {
 
     // "Not now" changes nothing and returns focus.
     fireEvent.click(install);
-    let dialog = await screen.findByRole("alertdialog", { name: "Install Demios 0.2.0 and restart?" });
+    let dialog = await screen.findByRole("alertdialog", { name: "Install Almend 0.2.0 and restart?" });
     expect(dialog.textContent).toContain("checks that it is signed");
     const notNow = within(dialog).getByRole("button", { name: "Not now" });
     expect(document.activeElement).toBe(notNow);
@@ -139,7 +139,7 @@ describe("Updates (T-STORE-08)", () => {
     expect(bar.getAttribute("aria-valuenow")).toBe("10000000");
     expect(bar.getAttribute("aria-valuetext")).toBe("Downloading 10 MB of 40 MB");
     act(() => send({ kind: "installing" }));
-    expect(screen.getByText(/Installing… Demios restarts when it's done/)).toBeTruthy();
+    expect(screen.getByText(/Installing… Almend restarts when it's done/)).toBeTruthy();
   });
 
   it("shows an error and lets the user try again", async () => {
@@ -181,7 +181,7 @@ describe("Updates (T-STORE-08)", () => {
     const { api } = fake(
       async () => available(),
       async () => {
-        throw ipcError("update_signature", "The download didn't match the Demios signature, so it wasn't installed.");
+        throw ipcError("update_signature", "The download didn't match the Almend signature, so it wasn't installed.");
       },
     );
     ui(api);
@@ -192,7 +192,7 @@ describe("Updates (T-STORE-08)", () => {
     await waitFor(() => expect(confirm.disabled).toBe(false), { timeout: 1500 });
     fireEvent.click(confirm);
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("didn't match the Demios signature");
+    expect(alert.textContent).toContain("didn't match the Almend signature");
     expect(screen.getByRole("button", { name: "Install and restart" })).toBeTruthy();
   });
 
@@ -200,13 +200,13 @@ describe("Updates (T-STORE-08)", () => {
     it("is off by default, and asks once after the first manual check", async () => {
       const { api, calls, settings } = fake(async () => ({ status: "up_to_date", current: "0.1.0" }) as const);
       ui(api);
-      const sw = await screen.findByRole("switch", { name: "Check for updates when Demios starts" });
+      const sw = await screen.findByRole("switch", { name: "Check for updates when Almend starts" });
       expect(sw.getAttribute("aria-checked")).toBe("false");
       fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
-      expect(await screen.findByText(/Check for updates when Demios starts\? It asks GitHub once per launch/)).toBeTruthy();
+      expect(await screen.findByText(/Check for updates when Almend starts\? It asks GitHub once per launch/)).toBeTruthy();
       fireEvent.click(screen.getByRole("button", { name: "Turn on" }));
       await waitFor(() =>
-        expect(screen.getByRole("switch", { name: "Check for updates when Demios starts" }).getAttribute("aria-checked")).toBe(
+        expect(screen.getByRole("switch", { name: "Check for updates when Almend starts" }).getAttribute("aria-checked")).toBe(
           "true",
         ),
       );
@@ -267,7 +267,7 @@ describe("Updates (T-STORE-08)", () => {
       expect(screen.queryByRole("switch")).toBeNull();
       fail = false;
       fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-      expect(await screen.findByRole("switch", { name: "Check for updates when Demios starts" })).toBeTruthy();
+      expect(await screen.findByRole("switch", { name: "Check for updates when Almend starts" })).toBeTruthy();
     });
   });
 });

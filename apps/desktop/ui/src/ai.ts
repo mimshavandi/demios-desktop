@@ -11,7 +11,7 @@ export const AI_DISCLOSURE = "Answers come from the AI model you chose and can b
 
 /** Shown once on first run, until the user dismisses it. */
 export const AI_FIRST_RUN_NOTICE =
-  "Demios lets you chat with AI models you choose: one running on this computer, or a provider you add a key for. Their answers can be wrong or made up, so check anything important.";
+  "Almend lets you chat with AI models you choose: one running on this computer, or a provider you add a key for. Their answers can be wrong or made up, so check anything important.";
 
 /** Escapes text for an HTML attribute value. */
 function attr(s: string): string {
@@ -20,7 +20,7 @@ function attr(s: string): string {
 
 /** What the marker names: the model ref (`local:<id>` / `byok:<provider>:<model>`), if known. */
 function generatorText(model: string | null): string {
-  return model === null ? "Demios (AI-generated)" : `Demios (AI-generated with ${model})`;
+  return model === null ? "Almend (AI-generated)" : `Almend (AI-generated with ${model})`;
 }
 
 /**
@@ -41,7 +41,7 @@ export function aiGeneratorComment(model: string | null): string {
 
 /** Front matter for Markdown exports of model-made text. */
 export function aiFrontMatter(model: string | null, createdAtMs: number): string {
-  const lines = ["---", "generator: Demios", "ai_generated: true"];
+  const lines = ["---", "generator: Almend", "ai_generated: true"];
   if (model !== null) lines.push(`model: ${JSON.stringify(model)}`);
   lines.push(`created: ${new Date(createdAtMs).toISOString()}`, "---", "");
   return lines.join("\n");

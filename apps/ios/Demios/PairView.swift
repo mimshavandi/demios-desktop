@@ -72,7 +72,7 @@ struct PairView: View {
     @ViewBuilder private var scan: some View {
         switch camera {
         case .denied, .restricted:
-            Text("Demios can't use the camera. Paste the link instead, or allow the camera in Settings.")
+            Text("Almend can't use the camera. Paste the link instead, or allow the camera in Settings.")
             pasteInstead
         default:
             Scanner { text in

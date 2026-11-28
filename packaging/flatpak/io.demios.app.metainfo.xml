@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- AppStream metainfo for Demios Desktop (T-STORE-06). The texts come from
+<!-- AppStream metainfo for Almend Desktop (T-STORE-06). The texts come from
      docs/store/listing.md; keep both in sync. Validate with:
      appstreamcli validate packaging/flatpak/io.demios.app.metainfo.xml -->
 <component type="desktop-application">
@@ -7,14 +7,14 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>LicenseRef-proprietary=https://polyformproject.org/licenses/shield/1.0.0</project_license>
 
-  <name>Demios Desktop</name>
+  <name>Almend Desktop</name>
   <summary>Chat with local or cloud AI models</summary>
   <developer id="io.demios">
     <name>DigiNote, Inc.</name>
   </developer>
 
   <description>
-    <p>Demios Desktop is an open-source app for chatting with AI models.</p>
+    <p>Almend Desktop is an open-source app for chatting with AI models.</p>
     <ul>
       <li>Run models on your computer. Download a model from the built-in list, or GGUF models from Hugging Face, and chat with them through llama.cpp. The app shows whether it fits in your computer’s memory and its licence before you download it.</li>
       <li>Or bring your own key. Add an API key for Anthropic, OpenAI or Google Gemini and chat with their models under your own account and their terms.</li>

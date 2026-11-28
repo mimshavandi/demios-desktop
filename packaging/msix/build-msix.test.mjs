@@ -42,7 +42,7 @@ test("the placeholder identity builds a test package but not a store one", () =>
   const id = resolveIdentity(placeholders, real, { store: true });
   assert.equal(id.identityName, real.MSIX_IDENTITY_NAME);
   assert.equal(id.publisher, real.MSIX_PUBLISHER);
-  assert.equal(id.displayName, "Demios Desktop");
+  assert.equal(id.displayName, "Almend Desktop");
 });
 
 test("bad identity values are refused", () => {

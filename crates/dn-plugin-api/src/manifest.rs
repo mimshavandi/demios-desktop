@@ -222,14 +222,14 @@ pub fn check_compatible(m: &PluginManifest) -> Result<(), PluginError> {
         return Ok(());
     }
     let fix = if m.api_major > API_MAJOR {
-        "update Demios"
+        "update Almend"
     } else {
         "update the add-on"
     };
     Err(PluginError::new(
         ErrorKind::Incompatible,
         format!(
-            "{} needs add-on interface version {}, and this Demios has version {API_MAJOR}: \
+            "{} needs add-on interface version {}, and this Almend has version {API_MAJOR}: \
              {fix}.",
             m.name, m.api_major
         ),
@@ -293,7 +293,7 @@ mod tests {
         newer.api_major = API_MAJOR + 1;
         let e = check_compatible(&newer).unwrap_err();
         assert_eq!(e.kind, ErrorKind::Incompatible);
-        assert!(e.message.contains("update Demios"), "{}", e.message);
+        assert!(e.message.contains("update Almend"), "{}", e.message);
         let mut older = m();
         older.api_major = API_MAJOR.wrapping_sub(1);
         assert!(

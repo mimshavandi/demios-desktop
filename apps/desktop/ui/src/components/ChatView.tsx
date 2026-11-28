@@ -16,6 +16,7 @@ import { AI_DISCLOSURE, AI_FIRST_RUN_NOTICE } from "../ai";
 import { chatModelsAvailable, describeModel } from "../models";
 import { mod } from "../platform";
 import { canRegenerate, type ChatState, type LiveToolCall } from "../state/chat";
+import { AlmendMark } from "./AlmendLogo";
 import { ArtifactCard } from "./ArtifactPane";
 import { Sources } from "./Sources";
 import { Markdown } from "./Markdown";
@@ -223,6 +224,7 @@ export function ChatView(p: Props) {
           )}
           {empty && (
             <div className="welcome">
+              <AlmendMark size="var(--dn-space-12)" className="welcome-mark" />
               <h1>What can I help with?</h1>
               <div className="welcome-model">
                 <ModelBadge info={p.ready ? describeModel(p.model, p.catalog) : null} />
@@ -305,7 +307,7 @@ export function ChatView(p: Props) {
           ref={p.composerRef}
           value={draft}
           rows={Math.min(8, Math.max(1, draft.split("\n").length))}
-          placeholder={p.ready ? "Message Demios" : choose ? "Choose a model for Chat to start chatting" : "Connect a model to start chatting"}
+          placeholder={p.ready ? "Message Almend" : choose ? "Choose a model for Chat to start chatting" : "Connect a model to start chatting"}
           disabled={!p.ready}
           aria-describedby="composer-hint composer-disclosure"
           onChange={(e) => setDraft(e.target.value)}

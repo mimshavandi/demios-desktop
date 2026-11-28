@@ -150,10 +150,10 @@ pub struct Settings {
     /// The user dismissed the first-run AI notice (T-STORE-09). "Delete all local data"
     /// clears it, so the notice shows again.
     pub ai_notice_seen: bool,
-    /// Check for updates once when Demios starts (#95). Off by default; only self-updating
+    /// Check for updates once when Almend starts (#95). Off by default; only self-updating
     /// direct downloads ever act on it.
     pub check_updates_at_launch: bool,
-    /// The one-time "Check for updates when Demios starts?" question was answered (either
+    /// The one-time "Check for updates when Almend starts?" question was answered (either
     /// way), so it isn't asked again.
     pub launch_check_offered: bool,
     /// MCP servers the tool runtime connects to at startup (secret *ids* only).

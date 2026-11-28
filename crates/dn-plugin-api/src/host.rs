@@ -992,7 +992,7 @@ impl Secrets<'_> {
 }
 
 fn no_held_queue() -> PluginError {
-    PluginError::unavailable("Held calls aren't available in this version of Demios")
+    PluginError::unavailable("Held calls aren't available in this version of Almend")
 }
 
 /// See [`Host::held`].
@@ -1062,7 +1062,7 @@ impl Http<'_> {
             h.backend.hold_http(&h.caller, request).await?;
             return Err(PluginError::new(
                 ErrorKind::Held,
-                format!("The request to {host} waits for your answer in Demios before it is sent"),
+                format!("The request to {host} waits for your answer in Almend before it is sent"),
             ));
         }
         h.backend.http(&h.caller, request).await.map(Untrusted::new)

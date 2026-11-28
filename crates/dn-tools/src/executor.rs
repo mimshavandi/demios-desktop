@@ -1672,7 +1672,7 @@ mod poison_tests {
                 .unwrap_err();
             assert_eq!(e.kind, ToolErrorKind::Unavailable, "{name}");
             assert!(
-                e.user_message().contains("Restart Demios"),
+                e.user_message().contains("Restart Almend"),
                 "{}",
                 e.user_message()
             );

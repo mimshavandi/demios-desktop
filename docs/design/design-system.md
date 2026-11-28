@@ -26,6 +26,20 @@ All values live in `ui/design-tokens/tokens.json`; components use CSS variables 
 | Motion | `fast 120 · base 180 · slow 260`, one easing | Only for state change (open/close, stream cursor). All zero under `prefers-reduced-motion`. |
 | Layout | sidebar 264, chat column max 720, artifact pane min 420, titlebar 40, hit target ≥ 28 (pointer) | |
 
+### Logo
+
+The Almend mark is **Alm**: two soft summits with a meadow line across their foot (an Alm is the shared summer pasture in the Alps, a commons; "Alm" is how Almend begins). The source files are in the Design System's Logos group; the app's copies follow from them.
+
+- **Mark:** one colour, never a gradient, outlined or rotated. The meadow line is a gap, not a second colour: keep it open to the background.
+- **Wordmark:** lowercase "almend" in one even round-ended stroke. It is artwork, not type: never re-set it in a font.
+- **Lockups:** horizontal for headers, stacked for splash and square spaces. The mark's base sits on the wordmark's baseline.
+- **App icon:** white mark on a rounded indigo tile (`accent`); a dark tile where indigo clashes. The platform icon sets are generated from the 1024 × 1024 source (`apps/desktop/icons/source/almend-app-icon-indigo.svg`, `npx tauri icon`); the iOS icon is the same tile full-bleed, without alpha.
+- **Colours:** ink (`text` light) on light grounds, white on dark grounds, indigo only for the app icon tile and a mark on light grounds. In the app the mark and lockup are inline SVG in `currentColor` (`AlmendMark`, `AlmendLockup` in `apps/desktop/ui/src/components/AlmendLogo.tsx`), so they follow `dn-color-text` in both themes.
+- **Clear space:** at least four times the meadow gap on every side; never closer to other marks than the mark's own width.
+- **Minimum size:** mark 16 px (the favicon file below 24 px), wordmark 14 px x-height, horizontal lockup 24 px tall.
+- **Don't:** stretch, recolour outside these three colours, add shadows or glows, put it on busy photos, or pair it with the old Demios name.
+- **In the app:** the mark heads the welcome screen; the horizontal lockup names the app in Settings › About. The titlebar shows the conversation, not the brand.
+
 ## 3. App layout
 
 ```

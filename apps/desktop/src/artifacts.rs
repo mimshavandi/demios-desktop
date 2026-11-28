@@ -115,7 +115,7 @@ pub fn frame_response(req: &Request<Vec<u8>>, in_child: bool) -> Response<Vec<u8
                 "default-src 'none'; sandbox",
             )
             .header("X-Content-Type-Options", "nosniff")
-            .body(b"<!doctype html><p>Artifacts open in the Demios artifact pane.</p>".to_vec())
+            .body(b"<!doctype html><p>Artifacts open in the Almend artifact pane.</p>".to_vec())
             .expect("static response");
     }
     let network = req

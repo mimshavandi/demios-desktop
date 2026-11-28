@@ -46,7 +46,7 @@ pub enum MobileError {
     Link { reason: String },
     /// The Node is reachable only through a Relay, which this version can't use yet.
     #[error(
-        "This Node can be reached only through a Relay, and this version of Demios can't pair \
+        "This Node can be reached only through a Relay, and this version of Almend can't pair \
          through a Relay yet. Pair on the Node's network."
     )]
     RelayOnly,
@@ -114,9 +114,9 @@ fn link_reason(e: &SyncError) -> String {
             "This link has expired or was already used. Make a new one on the Node.".into()
         }
         SyncError::NewerLinkVersion => {
-            "This link is from a newer Demios. Update this app, then pair.".into()
+            "This link is from a newer Almend. Update this app, then pair.".into()
         }
-        SyncError::BadLink(why) => format!("That isn't a Demios pairing link: {why}."),
+        SyncError::BadLink(why) => format!("That isn't a Almend pairing link: {why}."),
         other => other.to_string(),
     }
 }

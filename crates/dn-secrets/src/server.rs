@@ -491,7 +491,7 @@ fn damaged(path: &Path) -> SecretError {
     SecretError::Backend {
         id: "store".into(),
         message: format!(
-            "{} is damaged or isn't a Demios secrets file",
+            "{} is damaged or isn't a Almend secrets file",
             path.display()
         ),
     }

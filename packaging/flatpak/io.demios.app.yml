@@ -1,4 +1,4 @@
-# Flatpak manifest for Demios Desktop (T-STORE-06). How to build it and what a Flathub
+# Flatpak manifest for Almend Desktop (T-STORE-06). How to build it and what a Flathub
 # submission still needs: README.md next to this file.
 #
 # Flathub builds with no network, so every cargo crate and npm package comes from the

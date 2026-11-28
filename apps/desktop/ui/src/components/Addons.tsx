@@ -75,9 +75,9 @@ export function AddonsPage({ api }: { api: Api }) {
 
   const anyJobs = list.kind === "ready" && list.value.some((a) => a.has_jobs);
   return (
-    <section className="card" aria-label="Add-ons in this copy of Demios" aria-busy={list.kind === "loading"}>
+    <section className="card" aria-label="Add-ons in this copy of Almend" aria-busy={list.kind === "loading"}>
       <p className="dn-help">
-        Built into this copy of Demios. They follow the same rules as everything else: tools ask before they change
+        Built into this copy of Almend. They follow the same rules as everything else: tools ask before they change
         things, and Delete all local data removes their data too.
       </p>
       {anyJobs && paused !== null && (
@@ -311,7 +311,7 @@ function AddonPage({ api, id, version, onBack }: { api: Api; id: string; version
       {d.jobs.length > 0 && (
         <section className="card" aria-labelledby="addon-jobs-h">
           <h3 id="addon-jobs-h">Background jobs</h3>
-          <p className="dn-help">Jobs run while Demios is open. They never approve anything on their own.</p>
+          <p className="dn-help">Jobs run while Almend is open. They never approve anything on their own.</p>
           {d.jobs.map((j) => (
             <JobRow
               key={j.id}
@@ -489,7 +489,7 @@ function JobRow({
               </>
             }
           >
-            {job.name} missed {job.question.missed} run{job.question.missed === 1 ? "" : "s"} while Demios was closed.
+            {job.name} missed {job.question.missed} run{job.question.missed === 1 ? "" : "s"} while Almend was closed.
             Run it now?
           </InlineMessage>
         )}

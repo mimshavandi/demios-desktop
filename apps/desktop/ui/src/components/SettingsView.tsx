@@ -1,6 +1,7 @@
 import { Blocks, Boxes, Cpu, ExternalLink, KeyRound, Server, SlidersHorizontal, Sparkles, Trash2, Wrench } from "lucide-react";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { Api } from "../ipc/commands";
+import { AlmendLockup } from "./AlmendLogo";
 import {
   errorMessage,
   type AddModelLink,
@@ -535,7 +536,7 @@ export function KeychainNotice({
   };
   const message =
     status.state === "checking"
-      ? "Your system keychain is locked or not answering, so Demios can't tell which API keys are saved. If it asked for a password, answer it, then choose Retry."
+      ? "Your system keychain is locked or not answering, so Almend can't tell which API keys are saved. If it asked for a password, answer it, then choose Retry."
       : status.message;
   return (
     <InlineMessage
@@ -829,7 +830,10 @@ function GeneralPage({
         <h2 id="about-h">About</h2>
         <div className="row">
           <div className="row-main">
-            <span className="row-title">Demios Desktop {info?.version ?? ""}</span>
+            <span className="row-title about-brand">
+              <AlmendLockup height="var(--dn-space-6)" />
+              <span>Desktop {info?.version ?? ""}</span>
+            </span>
             {(info?.channel != null || info?.commit != null) && (
               <span className="dn-help">
                 {[info.channel === "preview" ? "Preview build (unsigned)" : info.channel, info.commit && `commit ${info.commit}`]
@@ -838,7 +842,7 @@ function GeneralPage({
               </span>
             )}
             <span className="dn-help">
-              Answers come from the AI model you choose, on this computer or from a provider you add a key for. Demios
+              Answers come from the AI model you choose, on this computer or from a provider you add a key for. Almend
               doesn't check them: they can be wrong or made up, so verify anything important.
             </span>
           </div>
@@ -850,7 +854,7 @@ function GeneralPage({
 
       <section className="card" aria-labelledby="privacy-h">
         <h2 id="privacy-h">Privacy</h2>
-        <p className="dn-help">Demios collects no usage data. There is no Demios account and no Demios server.</p>
+        <p className="dn-help">Almend collects no usage data. There is no Almend account and no Almend server.</p>
         <h3 id="data-flow-h" className="card-subhead">
           Where your data goes
         </h3>
@@ -889,7 +893,7 @@ function GeneralPage({
             <li>
               <span className="row-title">GitHub, for updates</span>
               <span className="dn-help">
-                When you select Check for updates, once when Demios starts if you turned that on, and the download after
+                When you select Check for updates, once when Almend starts if you turned that on, and the download after
                 you confirm an update. Nothing else is sent.
               </span>
             </li>
@@ -913,16 +917,16 @@ function GeneralPage({
             <Button icon={<ExternalLink {...ICON} aria-hidden="true" />} onClick={() => void openPage(PRIVACY_URL)}>
               Privacy policy
             </Button>
-            <span className="dn-help">What Demios does with your data, on demios.io.</span>
+            <span className="dn-help">What Almend does with your data, on demios.io.</span>
           </li>
           <li>
             <Button icon={<ExternalLink {...ICON} aria-hidden="true" />} onClick={() => void openPage(ACCESSIBILITY_URL)}>
               Accessibility statement
             </Button>
-            <span className="dn-help">How accessible Demios is and how to report a barrier, on demios.io.</span>
+            <span className="dn-help">How accessible Almend is and how to report a barrier, on demios.io.</span>
           </li>
         </ul>
-        <p className="dn-help">Demios asks before it opens a page in your browser.</p>
+        <p className="dn-help">Almend asks before it opens a page in your browser.</p>
         <Licences />
       </section>
 
@@ -931,7 +935,7 @@ function GeneralPage({
         <div className="row">
           <div className="row-main">
             <span className="dn-help">
-              Chats, projects, settings, tool history, downloaded models, and the keys and sign-ins Demios saved in your
+              Chats, projects, settings, tool history, downloaded models, and the keys and sign-ins Almend saved in your
               keychain. You can't undo this.
             </span>
           </div>
