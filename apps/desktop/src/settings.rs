@@ -436,6 +436,9 @@ mod tests {
         stored
             .reviewed_tools
             .insert("work".into(), [("write".into(), "fp".into())].into());
+        stored
+            .context_sizes
+            .insert("byok:openai:gpt-new".into(), 128_000);
         // What the UI sends: its own fields only, or an edited copy of the stored ones.
         let mut from_ui = Settings {
             ai_notice_seen: true,
@@ -449,6 +452,7 @@ mod tests {
         assert_eq!(from_ui.mcp_servers, stored.mcp_servers);
         assert_eq!(from_ui.tool_overrides, stored.tool_overrides);
         assert_eq!(from_ui.reviewed_tools, stored.reviewed_tools);
+        assert_eq!(from_ui.context_sizes, stored.context_sizes);
     }
 
     #[test]

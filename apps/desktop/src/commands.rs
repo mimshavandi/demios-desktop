@@ -1461,3 +1461,76 @@ pub async fn node_sync_now(state: AppStateRef<'_>) -> IpcResult<crate::node::Nod
 pub async fn node_forget(state: AppStateRef<'_>) -> IpcResult<crate::node::NodeOverview> {
     crate::node::forget(state.inner()).await
 }
+
+/// How much a model reads at once, and who said so (ADR-0020 §2.1, design ContextSize).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ModelContext {
+    pub tokens: Option<u32>,
+    pub source: Option<dn_core::chat::LimitSource>,
+}
+
+/// A provider's or server's model: local models report the size they were loaded with,
+/// and asking would load the weights.
+fn remote_ref(model_ref: &str) -> IpcResult<dn_core::model::ModelRef> {
+    let m: dn_core::model::ModelRef = model_ref
+        .parse()
+        .map_err(|_| IpcError::invalid(format!("`{model_ref}` isn't a model.")))?;
+    match m {
+        dn_core::model::ModelRef::Byok { .. } | dn_core::model::ModelRef::Remote { .. } => Ok(m),
+        _ => Err(IpcError::invalid(
+            "Only a provider's or server's model has a context size to set.",
+        )),
+    }
+}
+
+/// What Demios knows about `model`'s size: from the provider or server, its table of
+/// published sizes, or the person. Blocking: may read a key and ask the provider.
+fn model_context_of(s: &AppState, model: &dn_core::model::ModelRef) -> IpcResult<ModelContext> {
+    let backend = s
+        .models
+        .get(model, &s.keys)
+        .map_err(crate::agent::model_error)?;
+    let size = s.settings()?.context_sizes.get(&model.to_string()).copied();
+    let sized = dn_runtime::WithUserSize {
+        inner: backend,
+        size,
+    };
+    let l = tauri::async_runtime::block_on(dn_core::chat::ChatModel::limits(&sized, model));
+    Ok(ModelContext {
+        tokens: l.context_tokens,
+        source: l.source,
+    })
+}
+
+#[tauri::command]
+pub async fn model_context(state: AppStateRef<'_>, model_ref: String) -> IpcResult<ModelContext> {
+    let model = remote_ref(&model_ref)?;
+    blocking(&state, move |s| model_context_of(s, &model)).await
+}
+
+/// Sets (or with `None` clears) the context size of a model nobody else knows the size of.
+#[tauri::command]
+pub async fn set_model_context_size(
+    state: AppStateRef<'_>,
+    model_ref: String,
+    tokens: Option<u32>,
+) -> IpcResult<ModelContext> {
+    let model = remote_ref(&model_ref)?;
+    if let Some(n) = tokens
+        && !dn_runtime::USER_SIZE.contains(&n)
+    {
+        return Err(IpcError::invalid(
+            "Enter a whole number of tokens, from 1,024 to 10,000,000.",
+        ));
+    }
+    blocking(&state, move |s| {
+        let mut settings = s.settings()?;
+        match tokens {
+            Some(n) => settings.context_sizes.insert(model.to_string(), n),
+            None => settings.context_sizes.remove(&model.to_string()),
+        };
+        s.save_settings(&settings)?;
+        model_context_of(s, &model)
+    })
+    .await
+}

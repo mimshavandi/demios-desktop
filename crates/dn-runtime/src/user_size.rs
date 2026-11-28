@@ -58,13 +58,20 @@ mod tests {
 
     #[test]
     fn the_persons_size_fills_in_only_what_nobody_knows() {
-        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
         let m: ModelRef = "local:x".parse().unwrap();
-        let get = |inner: Arc<dyn ChatModel>, size| {
-            rt.block_on(WithUserSize { inner, size }.limits(&m))
-        };
-        assert_eq!(get(Arc::new(Unknown), Some(128_000)), ModelLimits::known(128_000, LimitSource::User));
+        let get =
+            |inner: Arc<dyn ChatModel>, size| rt.block_on(WithUserSize { inner, size }.limits(&m));
+        assert_eq!(
+            get(Arc::new(Unknown), Some(128_000)),
+            ModelLimits::known(128_000, LimitSource::User)
+        );
         assert_eq!(get(Arc::new(Unknown), None), ModelLimits::default());
-        assert_eq!(get(Arc::new(Known), Some(8_000)), ModelLimits::known(200_000, LimitSource::Published));
+        assert_eq!(
+            get(Arc::new(Known), Some(8_000)),
+            ModelLimits::known(200_000, LimitSource::Published)
+        );
     }
 }

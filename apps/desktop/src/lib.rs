@@ -321,6 +321,8 @@ pub fn run_with_addons(addons: Vec<std::sync::Arc<dyn dn_plugin_api::Plugin>>) {
             commands::stop_generation,
             commands::get_settings,
             commands::update_settings,
+            commands::model_context,
+            commands::set_model_context_size,
             commands::list_models,
             commands::check_keys,
             commands::node_overview,
