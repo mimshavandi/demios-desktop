@@ -12,8 +12,8 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use dn_core::chat::{ChatMessage, ChatRequest, Role, StreamEvent};
 use dn_core::model::{FitStatus, ModelRef};
 use dn_inference::{
-    InferenceBackend, KvCacheQuant, LlamaCppBackend, LoadOptions, LoadedModel, ModelSpec,
-    MoeOffload, OpenAiCompatBackend, next_event,
+    DraftModel, InferenceBackend, KvCacheQuant, LlamaCppBackend, LoadOptions, LoadedModel,
+    ModelSpec, MoeOffload, OpenAiCompatBackend, PromptCache, next_event,
 };
 use dn_models::fit::{GIB, KvType, MemoryKind};
 use dn_models::hub::{
@@ -157,6 +157,22 @@ pub struct LoadArgs {
     /// Load even when the fit estimator says the model won't fit.
     #[arg(long)]
     force: bool,
+    /// Don't reuse prompt prefixes between requests. By default the model keeps the last
+    /// request's tokens, and recent other ones in RAM, so a request that starts like an
+    /// earlier one only reads what's new (ADR-0020 §6).
+    #[arg(long)]
+    no_prompt_cache: bool,
+    /// RAM for other requests' saved prompts, in MiB (default: the smaller of 2048 and a
+    /// tenth of this machine's RAM).
+    #[arg(long, conflicts_with = "no_prompt_cache")]
+    prompt_cache_mib: Option<u64>,
+    /// Speculative decoding: a smaller GGUF of the same family that drafts tokens for the
+    /// model to check (ADR-0020 §6). It must share the model's vocabulary.
+    #[arg(long)]
+    draft: Option<PathBuf>,
+    /// The most tokens the draft model proposes per step (default 8).
+    #[arg(long, requires = "draft")]
+    draft_max: Option<u32>,
 }
 
 impl LoadArgs {
@@ -184,6 +200,18 @@ impl LoadArgs {
                 Some(KvArg::Q4_0) => KvCacheQuant::Q4_0,
             },
             threads: self.threads,
+            prompt_cache: match (self.no_prompt_cache, self.prompt_cache_mib) {
+                (true, _) => PromptCache::off(),
+                (false, Some(mib)) => PromptCache {
+                    enabled: true,
+                    ram_bytes: mib.saturating_mul(1 << 20),
+                },
+                (false, None) => PromptCache::for_ram(dn_models::total_ram()),
+            },
+            draft: self.draft.as_ref().map(|p| DraftModel {
+                path: p.clone(),
+                max_tokens: self.draft_max.unwrap_or(DraftModel::DEFAULT_MAX_TOKENS),
+            }),
             ..Default::default()
         })
     }
@@ -461,6 +489,11 @@ async fn run(a: RunArgs) -> Result<(), String> {
                 info.n_ctx,
                 t0.elapsed().as_secs_f64(),
                 LlamaCppBackend::supports_gpu()
+            );
+            eprintln!(
+                "[dn] prompt reuse: {}; draft model: {}",
+                info.prompt_reuse,
+                info.draft.as_deref().unwrap_or("none")
             );
         }
         let r = ModelRef::Local {
@@ -1308,7 +1341,14 @@ mod tests {
             .auto_options(std::path::Path::new("/nonexistent.gguf"))
             .unwrap();
         assert!(est.is_none());
-        assert_eq!(o, LoadOptions::default());
+        // Prompt reuse isn't a llama.cpp setting: it keeps this machine's default.
+        assert_eq!(
+            o,
+            LoadOptions {
+                prompt_cache: PromptCache::for_ram(dn_models::total_ram()),
+                ..LoadOptions::default()
+            }
+        );
     }
 
     #[test]
