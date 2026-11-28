@@ -60,7 +60,27 @@ async function childState() {
   return r.value;
 }
 
+/** Below 1024 CSS px the artifact pane is a full overlay over the chat (design system §3); CI
+ *  runners' screens vary (#392). As a person would: hide it to reach the message box, show it
+ *  again when it's needed. */
+function paneIsOverlay() {
+  return browser.execute(() => {
+    const p = document.querySelector('[data-testid="artifact-pane"]');
+    return p !== null && getComputedStyle(p).position === "fixed";
+  });
+}
+
+async function setPane(open) {
+  const button = await $(`button[aria-label="${open ? "Show artifacts" : "Hide artifacts"}"]`);
+  if (await button.isExisting()) await button.click();
+  await browser.waitUntil(async () => (await $('[data-testid="artifact-pane"]').isExisting()) === open, {
+    timeout: 10_000,
+    timeoutMsg: `the artifact pane didn't ${open ? "open" : "close"}`,
+  });
+}
+
 async function send(text) {
+  if (await paneIsOverlay()) await setPane(false);
   const box = await byTestId("composer-input");
   await box.waitForEnabled({ timeout: 30_000 });
   await box.click();
@@ -156,6 +176,7 @@ describe("Windows artifact webview (ADR-0012)", () => {
     const before = await invoke("list_conversations");
     await send("Make a probe artifact");
     await lastAnswerDone(2);
+    await setPane(true);
     const issues = await byTestId("artifact-issues");
     await browser.waitUntil(async () => (await browser.execute((e) => e.textContent ?? "", issues)).includes("dn-probe "), {
       timeout: 60_000,

@@ -10,6 +10,7 @@ pub mod agent;
 pub mod artifact_child;
 pub mod artifacts;
 pub mod chat;
+pub mod chat_files;
 pub mod commands;
 pub mod connect;
 pub mod data_tools;
@@ -349,6 +350,9 @@ pub fn run_with_addons(addons: Vec<std::sync::Arc<dyn dn_plugin_api::Plugin>>) {
             commands::watch_local_models,
             commands::download_model,
             knowledge::message_sources,
+            chat_files::list_chat_files,
+            chat_files::add_chat_files,
+            chat_files::remove_chat_file,
             knowledge::knowledge_status,
             knowledge::knowledge_offer,
             artifact_child::artifact_child_open,
