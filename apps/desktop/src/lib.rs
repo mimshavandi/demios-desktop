@@ -24,6 +24,7 @@ pub mod knowledge;
 pub mod links;
 pub mod local;
 pub mod mcp;
+pub mod memory;
 pub mod models;
 pub mod node;
 pub mod node_sync;
