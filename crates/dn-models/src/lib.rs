@@ -8,6 +8,7 @@
 
 pub mod cache;
 pub mod catalog;
+pub mod check;
 pub mod compute;
 pub mod download;
 pub mod fit;
