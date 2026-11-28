@@ -156,6 +156,35 @@ Per source, the report gives:
 
 A reference for a holdout's case must also stay outside any git work tree.
 
+### Calibrating the judge
+
+```bash
+dn eval calibrate labels.yaml --judge evals/judge/judge.yaml --set evals/golden \
+  --out evals/judge/calibration.json
+```
+
+`labels.yaml` (`dn.labels.v1`) lists pairs of answers to a case of the set, each with a
+person's verdict:
+
+```yaml
+format: dn.labels.v1
+pairs:
+- {id: p001, case: chat-001, a: answers/p001-a.md, b: answers/p001-b.md, better: A}  # A, B or tie
+```
+
+The answer files sit next to the labels file. The judge compares each pair as it does with
+references (both orders, a preference only when they agree), and the report
+(`dn.calibration.v1`) gives the exact agreement, **Cohen's κ** over the three verdicts, the
+confusion matrix (person × judge) and how often the order changed the judge's verdict. About
+100 labelled pairs is the target (ADR-0020 §8); the κ a judge needs is the owner's call.
+
+Saved as `calibration.json` next to `judge.yaml`, it's quoted in every `dn eval judge` report
+that uses references, but only if it was made with the same judge model and pairwise prompt
+and is complete. Otherwise the report's `calibration` says why there's none, and the command
+says so on stderr. Calibrate on the public set: a calibration with holdout cases (`--holdout`)
+quotes them, so it and its labels stay outside any git work tree, and `dn eval judge` never
+quotes it.
+
 ## Speed
 
 ```bash
@@ -173,7 +202,7 @@ data (`dn.speed.v1`), so new ones are added to a file.
 
 These are tracked as issues:
 
-- the judge's calibration on human-labelled pairs, and judging LongMemEval answers (#355);
+- the labelled pairs for calibration, and judging LongMemEval answers (#355);
 - generating the reference answers (#407);
 - earlier sessions in memory cases (with memory, R3);
 - embeddings in LongMemEval's retrieval mode (keyword search only for now);
