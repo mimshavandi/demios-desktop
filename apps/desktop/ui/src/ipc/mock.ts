@@ -640,7 +640,7 @@ export function createMockApi(): Api {
       convs.filter((c) => !deleted.has(c.id)).sort((x, y) => y.updated_at - x.updated_at),
     createConversation: async (projectId = null) => {
       if (projectId !== null) liveProject(projectId);
-      const c = { id: id(), title: "New chat", model: null, project_id: projectId, created_at: now(), updated_at: now() };
+      const c = { id: id(), title: "New chat", model: null, project_id: projectId, incognito: false, created_at: now(), updated_at: now() };
       convs.push(c);
       msgs.set(c.id, []);
       return c;

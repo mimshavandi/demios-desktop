@@ -67,6 +67,56 @@ WHEN (SELECT enabled FROM store_sync_state) = 1
 BEGIN INSERT INTO store_sync_log (kind, id, deleted) VALUES ('project', OLD.id, 1); END;
 ";
 
+/// dn-store migration #6 (`store` set): incognito chats (ADR-0020 §4.1, #346; the
+/// IncognitoChat design). The flag is set when a chat is created and copied onto each of its
+/// messages, so every sync trigger reads only its own row: a message deleted by its chat's
+/// cascade still knows it was a normal chat's. Both flags are write-once (enforced here, so
+/// no code path can flip one), a message's flag must match its chat's, and nothing incognito
+/// is ever logged. The sync triggers of migration #5 are recreated with the check.
+pub(crate) const INCOGNITO_MIGRATION: &str = "
+ALTER TABLE store_conversations ADD COLUMN incognito INTEGER NOT NULL DEFAULT 0
+    CHECK (incognito IN (0, 1));
+ALTER TABLE store_messages ADD COLUMN incognito INTEGER NOT NULL DEFAULT 0
+    CHECK (incognito IN (0, 1));
+
+CREATE TRIGGER store_incognito_conversation_fixed BEFORE UPDATE OF incognito ON store_conversations
+WHEN NEW.incognito <> OLD.incognito
+BEGIN SELECT RAISE(ABORT, 'a chat is incognito from its creation, or never'); END;
+CREATE TRIGGER store_incognito_message_fixed BEFORE UPDATE OF incognito ON store_messages
+WHEN NEW.incognito <> OLD.incognito
+BEGIN SELECT RAISE(ABORT, 'a message keeps its chat''s incognito flag'); END;
+CREATE TRIGGER store_incognito_message_matches BEFORE INSERT ON store_messages
+WHEN NEW.incognito <> (SELECT incognito FROM store_conversations WHERE id = NEW.conversation_id)
+BEGIN SELECT RAISE(ABORT, 'a message must have its chat''s incognito flag'); END;
+
+DROP TRIGGER store_sync_conversation_insert;
+DROP TRIGGER store_sync_conversation_update;
+DROP TRIGGER store_sync_conversation_delete;
+DROP TRIGGER store_sync_message_insert;
+DROP TRIGGER store_sync_message_update;
+DROP TRIGGER store_sync_message_delete;
+
+CREATE TRIGGER store_sync_conversation_insert AFTER INSERT ON store_conversations
+WHEN NEW.incognito = 0 AND (SELECT enabled FROM store_sync_state) = 1
+BEGIN INSERT INTO store_sync_log (kind, id, deleted) VALUES ('conversation', NEW.id, 0); END;
+CREATE TRIGGER store_sync_conversation_update AFTER UPDATE ON store_conversations
+WHEN NEW.incognito = 0 AND (SELECT enabled FROM store_sync_state) = 1
+BEGIN INSERT INTO store_sync_log (kind, id, deleted) VALUES ('conversation', NEW.id, 0); END;
+CREATE TRIGGER store_sync_conversation_delete AFTER DELETE ON store_conversations
+WHEN OLD.incognito = 0 AND (SELECT enabled FROM store_sync_state) = 1
+BEGIN INSERT INTO store_sync_log (kind, id, deleted) VALUES ('conversation', OLD.id, 1); END;
+
+CREATE TRIGGER store_sync_message_insert AFTER INSERT ON store_messages
+WHEN NEW.incognito = 0 AND NEW.status <> 'streaming' AND (SELECT enabled FROM store_sync_state) = 1
+BEGIN INSERT INTO store_sync_log (kind, id, deleted) VALUES ('message', NEW.id, 0); END;
+CREATE TRIGGER store_sync_message_update AFTER UPDATE ON store_messages
+WHEN NEW.incognito = 0 AND NEW.status <> 'streaming' AND (SELECT enabled FROM store_sync_state) = 1
+BEGIN INSERT INTO store_sync_log (kind, id, deleted) VALUES ('message', NEW.id, 0); END;
+CREATE TRIGGER store_sync_message_delete AFTER DELETE ON store_messages
+WHEN OLD.incognito = 0 AND OLD.status <> 'streaming' AND (SELECT enabled FROM store_sync_state) = 1
+BEGIN INSERT INTO store_sync_log (kind, id, deleted) VALUES ('message', OLD.id, 1); END;
+";
+
 /// Turns logging on (when this device pairs) and logs what is already here once, parents
 /// first, so the other devices get it. Turning it on again does nothing.
 pub fn enable(conn: &Connection) -> Result<()> {
@@ -78,10 +128,11 @@ pub fn enable(conn: &Connection) -> Result<()> {
             "INSERT INTO store_sync_log (kind, id, deleted)
                  SELECT 'project', id, 0 FROM store_projects ORDER BY created_at, id;
              INSERT INTO store_sync_log (kind, id, deleted)
-                 SELECT 'conversation', id, 0 FROM store_conversations ORDER BY created_at, id;
+                 SELECT 'conversation', id, 0 FROM store_conversations WHERE incognito = 0
+                 ORDER BY created_at, id;
              INSERT INTO store_sync_log (kind, id, deleted)
-                 SELECT 'message', id, 0 FROM store_messages WHERE status <> 'streaming'
-                 ORDER BY created_at, id;",
+                 SELECT 'message', id, 0 FROM store_messages
+                 WHERE status <> 'streaming' AND incognito = 0 ORDER BY created_at, id;",
         )?;
     }
     tx.commit()?;
@@ -194,7 +245,7 @@ pub fn chat(conn: &Connection, id: &str) -> Result<Option<ChatRow>> {
     Ok(conn
         .query_row(
             "SELECT id, title, model, project_id, deleted_at, created_at, updated_at
-             FROM store_conversations WHERE id = ?1",
+             FROM store_conversations WHERE id = ?1 AND incognito = 0",
             [id],
             |r| {
                 Ok(ChatRow {
@@ -352,7 +403,7 @@ pub fn message(conn: &Connection, id: &str) -> Result<Option<MessageRow>> {
         .query_row(
             "SELECT id, conversation_id, role, content, tool_calls, tool_call_id, model, status,
                     finish_reason, error, created_at, updated_at
-             FROM store_messages WHERE id = ?1 AND status <> 'streaming'",
+             FROM store_messages WHERE id = ?1 AND status <> 'streaming' AND incognito = 0",
             [id],
             |r| {
                 Ok(MessageRow {
@@ -453,17 +504,37 @@ mod tests {
 
     #[test]
     fn an_existing_database_migrates_in_place_and_logs_what_it_has() {
-        // A database as the current release left it: every store migration before this one.
+        // A database as the release before sync left it: every store migration before #5
+        // (sync) and #6 (incognito).
         let all = crate::migrations();
-        let before: &'static [&'static str] = &all[..all.len() - 1];
+        let before: &'static [&'static str] = &all[..all.len() - 2];
         let mut conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
         run_migrations(&mut conn, &[MigrationSet::new("store", before)]).unwrap();
-        let p = crate::project::create_project(&conn, "Trip").unwrap();
-        let c = chat::create_conversation_in(&conn, "Plans", Some(p.id)).unwrap();
-        let done = chat::add_message(&conn, c.id, NewMessage::user_text("Hi")).unwrap();
-        let streaming =
-            chat::add_message(&conn, c.id, NewMessage::assistant_placeholder(None)).unwrap();
+        // Rows written as that release wrote them (today's code writes newer columns).
+        let (p, c, done, streaming) = (Id::new(), Id::new(), Id::new(), Id::new());
+        conn.execute(
+            "INSERT INTO store_projects (id, name, created_at, updated_at) VALUES (?1, 'Trip', 1, 1)",
+            [p.to_string()],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO store_conversations (id, title, created_at, updated_at, project_id)
+             VALUES (?1, 'Plans', 2, 2, ?2)",
+            [c.to_string(), p.to_string()],
+        )
+        .unwrap();
+        for (id, role, status, at) in [
+            (done, "user", "complete", 3),
+            (streaming, "assistant", "streaming", 4),
+        ] {
+            conn.execute(
+                "INSERT INTO store_messages (id, conversation_id, role, content, status, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, '[]', ?4, ?5, ?5)",
+                params![id.to_string(), c.to_string(), role, status, at],
+            )
+            .unwrap();
+        }
 
         // Then the new migration runs on it. Nothing is logged until sync is turned on.
         run_migrations(&mut conn, &[MigrationSet::new("store", all)]).unwrap();
@@ -474,21 +545,21 @@ mod tests {
         assert_eq!(
             kinds,
             vec![
-                (Kind::Project, p.id.to_string()),
-                (Kind::Conversation, c.id.to_string()),
-                (Kind::Message, done.id.to_string()),
+                (Kind::Project, p.to_string()),
+                (Kind::Conversation, c.to_string()),
+                (Kind::Message, done.to_string()),
             ],
             "existing rows are logged once, parents first, and the streaming answer isn't"
         );
         // The data itself is unchanged.
-        assert_eq!(chat::get_conversation(&conn, c.id).unwrap().title, "Plans");
-        assert_eq!(chat::list_messages(&conn, c.id).unwrap().len(), 2);
+        assert_eq!(chat::get_conversation(&conn, c).unwrap().title, "Plans");
+        assert_eq!(chat::list_messages(&conn, c).unwrap().len(), 2);
 
         // Finishing the answer logs it; while it streamed, nothing was logged.
         let last = log.last().unwrap().rev;
         chat::finish_message(
             &conn,
-            streaming.id,
+            streaming,
             MessageOutcome {
                 content: vec![],
                 tool_calls: vec![],
@@ -502,7 +573,7 @@ mod tests {
         assert!(
             after
                 .iter()
-                .any(|e| e.kind == Kind::Message && e.id == streaming.id.to_string())
+                .any(|e| e.kind == Kind::Message && e.id == streaming.to_string())
         );
     }
 
@@ -698,5 +769,140 @@ mod tests {
         chat::create_conversation(&conn, "A").unwrap();
         chat::delete_all(&conn).unwrap();
         assert!(log_since(&conn, 0).unwrap().is_empty());
+    }
+
+    // ---- incognito chats (migration #6, #346)
+
+    fn log(conn: &Connection) -> Vec<(Kind, String, bool)> {
+        log_since(conn, 0)
+            .unwrap()
+            .into_iter()
+            .map(|e| (e.kind, e.id, e.deleted))
+            .collect()
+    }
+
+    fn tombstones(conn: &Connection) -> i64 {
+        conn.query_row("SELECT COUNT(*) FROM store_tombstones", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    #[test]
+    fn deleting_a_normal_chat_still_logs_every_message_delete() {
+        let conn = db();
+        let c = chat::create_conversation(&conn, "Plans").unwrap();
+        let a = chat::add_message(&conn, c.id, NewMessage::user_text("a")).unwrap();
+        let b = chat::add_message(&conn, c.id, NewMessage::user_text("b")).unwrap();
+        prune_log(&conn, i64::MAX).unwrap();
+        chat::delete_conversation(&conn, c.id).unwrap();
+        chat::purge_deleted(&conn, i64::MAX).unwrap();
+        let l = log(&conn);
+        for id in [a.id, b.id] {
+            assert!(l.contains(&(Kind::Message, id.to_string(), true)), "{l:?}");
+        }
+        assert!(l.contains(&(Kind::Conversation, c.id.to_string(), true)));
+        assert_eq!(tombstones(&conn), 1);
+        // Deleting the chat row directly cascades to its messages, and they're still logged.
+        let c2 = chat::create_conversation(&conn, "Other").unwrap();
+        let m2 = chat::add_message(&conn, c2.id, NewMessage::user_text("x")).unwrap();
+        prune_log(&conn, i64::MAX).unwrap();
+        conn.execute(
+            "DELETE FROM store_conversations WHERE id = ?1",
+            [c2.id.to_string()],
+        )
+        .unwrap();
+        assert!(log(&conn).contains(&(Kind::Message, m2.id.to_string(), true)));
+    }
+
+    #[test]
+    fn an_incognito_chat_logs_nothing_at_any_step_and_leaves_no_tombstone() {
+        let conn = db();
+        let p = crate::project::create_project(&conn, "Trips").unwrap();
+        prune_log(&conn, i64::MAX).unwrap();
+        let c = chat::create_conversation_with(&conn, "", Some(p.id), true).unwrap();
+        assert!(chat::get_conversation(&conn, c.id).unwrap().incognito);
+        let m = chat::add_message(&conn, c.id, NewMessage::user_text("hi")).unwrap();
+        let a = chat::add_message(&conn, c.id, NewMessage::assistant_placeholder(None)).unwrap();
+        chat::finish_message(
+            &conn,
+            a.id,
+            MessageOutcome {
+                content: vec![],
+                tool_calls: vec![],
+                status: MessageStatus::Complete,
+                finish_reason: None,
+                error: None,
+            },
+        )
+        .unwrap();
+        chat::rename_conversation(&conn, c.id, "x").unwrap();
+        chat::set_conversation_project(&conn, c.id, None).unwrap();
+        chat::set_conversation_project(&conn, c.id, Some(p.id)).unwrap();
+        chat::truncate_from(&conn, c.id, m.id).unwrap();
+        chat::delete_conversation(&conn, c.id).unwrap();
+        chat::purge_deleted(&conn, i64::MAX).unwrap();
+        assert!(log(&conn).is_empty(), "{:?}", log(&conn));
+        assert_eq!(tombstones(&conn), 0);
+        // Leftovers at start go the same way.
+        let left = chat::create_conversation_with(&conn, "", None, true).unwrap();
+        chat::add_message(&conn, left.id, NewMessage::user_text("x")).unwrap();
+        let normal = chat::create_conversation(&conn, "Kept").unwrap();
+        prune_log(&conn, i64::MAX).unwrap();
+        assert_eq!(chat::purge_incognito(&conn).unwrap(), [left.id]);
+        assert!(log(&conn).is_empty());
+        assert_eq!(tombstones(&conn), 0);
+        assert!(chat::get_conversation(&conn, normal.id).is_ok());
+    }
+
+    #[test]
+    fn the_flag_is_write_once_and_messages_must_match_their_chat() {
+        let conn = db();
+        let c = chat::create_conversation(&conn, "Plans").unwrap();
+        let i = chat::create_conversation_with(&conn, "", None, true).unwrap();
+        for id in [c.id, i.id] {
+            let e = conn.execute(
+                "UPDATE store_conversations SET incognito = 1 - incognito WHERE id = ?1",
+                [id.to_string()],
+            );
+            assert!(e.is_err(), "flipping is refused");
+        }
+        let m = chat::add_message(&conn, i.id, NewMessage::user_text("x")).unwrap();
+        assert!(
+            conn.execute(
+                "UPDATE store_messages SET incognito = 0 WHERE id = ?1",
+                [m.id.to_string()]
+            )
+            .is_err()
+        );
+        // A message from another device can't land in an incognito chat.
+        let row = MessageRow {
+            id: Id::new().to_string(),
+            conversation_id: i.id.to_string(),
+            role: "user".into(),
+            content: "[]".into(),
+            tool_calls: "[]".into(),
+            tool_call_id: None,
+            model: None,
+            status: "complete".into(),
+            finish_reason: None,
+            error: None,
+            created_at: 1,
+            updated_at: 1,
+        };
+        assert!(insert_message(&conn, &row).is_err());
+    }
+
+    #[test]
+    fn pairing_and_sync_reads_skip_incognito_chats() {
+        let conn = crate::open_in_memory(&[]).unwrap();
+        let c = chat::create_conversation(&conn, "Plans").unwrap();
+        let m = chat::add_message(&conn, c.id, NewMessage::user_text("a")).unwrap();
+        let i = chat::create_conversation_with(&conn, "", None, true).unwrap();
+        let im = chat::add_message(&conn, i.id, NewMessage::user_text("b")).unwrap();
+        enable(&conn).unwrap();
+        let ids: Vec<String> = log(&conn).into_iter().map(|e| e.1).collect();
+        assert_eq!(ids, [c.id.to_string(), m.id.to_string()]);
+        assert!(chat(&conn, &i.id.to_string()).unwrap().is_none());
+        assert!(message(&conn, &im.id.to_string()).unwrap().is_none());
+        assert!(chat(&conn, &c.id.to_string()).unwrap().is_some());
     }
 }
