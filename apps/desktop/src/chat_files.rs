@@ -53,6 +53,9 @@ pub struct ChatFile {
     pub size: u64,
     pub sha256: String,
     pub created_at: i64,
+    /// Its stored copy is gone, so it can't be read any more (rare). Set by
+    /// `list_chat_files`; the chip shows a warning.
+    pub missing: bool,
 }
 
 /// The chat's folder of copies.
@@ -121,6 +124,7 @@ fn select(
             size: r.get::<_, i64>(4)?.max(0) as u64,
             sha256: r.get(5)?,
             created_at: r.get(6)?,
+            missing: false,
         })
     };
     let rows = match since {
@@ -193,12 +197,36 @@ pub fn add_to(
     conversation_id: Option<Id>,
     project_id: Option<Id>,
     paths: &[PathBuf],
+    on_progress: &dyn Fn(Adding),
 ) -> IpcResult<AddedFiles> {
     let c = match conversation_id {
         Some(c) => c,
         None => state.create_conversation_in(project_id)?.id,
     };
+    // Sent before copying, so the composer shows a chip per file while they're added.
+    on_progress(Adding {
+        conversation_id: c,
+        names: paths.iter().map(|p| display_name(p)).collect(),
+    });
     add(state, c, paths)
+}
+
+/// The chat's files with [`ChatFile::missing`] set from their copies (`list_chat_files`).
+pub fn list_for_ui(state: &AppState, conversation_id: Id) -> IpcResult<Vec<ChatFile>> {
+    let mut files = list(&*state.db()?, conversation_id)?;
+    if let Some(root) = state.chat_files_root() {
+        for f in &mut files {
+            f.missing = !file_path(root, f).is_file();
+        }
+    }
+    Ok(files)
+}
+
+/// The files being added, sent once before copying starts (`add_chat_files`' `onProgress`).
+#[derive(Clone, Debug, Serialize)]
+pub struct Adding {
+    pub conversation_id: Id,
+    pub names: Vec<String>,
 }
 
 /// Copies picked files into the chat, in order; files that aren't data files or are past
@@ -276,6 +304,7 @@ pub fn add(state: &AppState, conversation_id: Id, paths: &[PathBuf]) -> IpcResul
                     size,
                     sha256,
                     created_at: dn_store::now_ms(),
+                    missing: false,
                 };
                 let stored = state.db()?.execute(
                     "INSERT INTO app_chat_files (id, conversation_id, name, media_type, size, sha256, created_at)
@@ -439,7 +468,8 @@ pub async fn list_chat_files(
         if let Some(root) = s.chat_files_root() {
             expire_removed(&db, root, dn_store::now_ms())?;
         }
-        Ok(list(&db, conversation_id)?)
+        drop(db);
+        list_for_ui(s, conversation_id)
     })
     .await
 }
@@ -453,6 +483,7 @@ pub async fn add_chat_files(
     state: AppStateRef<'_>,
     conversation_id: Option<Id>,
     project_id: Option<Id>,
+    on_progress: tauri::ipc::Channel<Adding>,
 ) -> IpcResult<AddedFiles> {
     use tauri_plugin_dialog::DialogExt;
     // A given chat must exist; a new one is only created once something was picked, so a
@@ -491,7 +522,9 @@ pub async fn add_chat_files(
         .filter_map(|p| p.into_path().ok())
         .collect();
     crate::commands::blocking(&state, move |s| {
-        add_to(s, conversation_id, project_id, &paths)
+        add_to(s, conversation_id, project_id, &paths, &|a| {
+            let _ = on_progress.send(a);
+        })
     })
     .await
 }
@@ -734,14 +767,57 @@ mod tests {
     fn files_picked_in_a_new_chat_create_it_in_its_project() {
         let (st, dir) = state();
         let p = dn_store::project::create_project(&st.db().unwrap(), "Trips").unwrap();
-        let out = add_to(&st, None, Some(p.id), &[src(&dir, "a.csv", b"x\n1\n")]).unwrap();
+        let out = add_to(
+            &st,
+            None,
+            Some(p.id),
+            &[src(&dir, "a.csv", b"x\n1\n")],
+            &|_| {},
+        )
+        .unwrap();
         let c = out.conversation_id.unwrap();
         assert_eq!(out.added.len(), 1);
         let conv = dn_store::chat::get_conversation(&st.db().unwrap(), c).unwrap();
         assert_eq!(conv.project_id, Some(p.id));
         // An existing chat is used as given.
-        let again = add_to(&st, Some(c), None, &[src(&dir, "b.csv", b"x\n1\n")]).unwrap();
+        let again = add_to(
+            &st,
+            Some(c),
+            None,
+            &[src(&dir, "b.csv", b"x\n1\n")],
+            &|_| {},
+        )
+        .unwrap();
         assert_eq!(again.conversation_id, Some(c));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_ui_hears_which_files_are_being_added_and_which_copies_are_missing() {
+        let (st, dir) = state();
+        let c = st.create_conversation().unwrap();
+        let heard = std::cell::RefCell::new(Vec::new());
+        let out = add_to(
+            &st,
+            Some(c.id),
+            None,
+            &[src(&dir, "a.csv", b"x\n1\n"), src(&dir, "b.csv", b"y\n2\n")],
+            &|a| heard.borrow_mut().push(a),
+        )
+        .unwrap();
+        let h = heard.into_inner();
+        assert_eq!(h.len(), 1);
+        assert_eq!(
+            (h[0].conversation_id, h[0].names.clone()),
+            (c.id, vec!["a.csv".to_string(), "b.csv".to_string()])
+        );
+        let root = st.chat_files_root().unwrap().to_path_buf();
+        std::fs::remove_file(file_path(&root, &out.added[0])).unwrap();
+        let files = list_for_ui(&st, c.id).unwrap();
+        assert_eq!(
+            files.iter().map(|f| f.missing).collect::<Vec<_>>(),
+            [true, false]
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 }
