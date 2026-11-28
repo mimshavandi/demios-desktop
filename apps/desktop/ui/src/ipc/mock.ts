@@ -754,11 +754,13 @@ export function createMockApi(): Api {
         { name: "budget-2026.xlsx", size: 2_458 },
         { name: "notes.pdf", size: 81_920 },
       ];
-      onProgress({ conversation_id: conversationId, names: picked.map((x) => x.name) });
-      await new Promise((r) => setTimeout(r, 900));
       const added: ChatFile[] = [];
       const skipped: { name: string; reason: string }[] = [];
       for (const x of picked) {
+        onProgress({ conversation_id: conversationId, name: x.name, state: "copying" });
+        await new Promise((r) => setTimeout(r, 400));
+        const refused = x.name.endsWith(".pdf") || here.some((f) => f.name === x.name);
+        onProgress({ conversation_id: conversationId, name: x.name, state: refused ? "skipped" : "attached" });
         if (x.name.endsWith(".pdf")) {
           skipped.push({ name: x.name, reason: "only tables (CSV, TSV, TXT) and spreadsheets can be attached for now." });
         } else if (here.some((f) => f.name === x.name)) {

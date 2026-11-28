@@ -99,10 +99,15 @@ export interface ChatFile {
   missing: boolean;
 }
 
-/** Sent once after a real pick, before copying: one chip per file while they're copied. */
+/**
+ * One file's progress after a real pick, in pick order: `copying`, then `attached` or
+ * `skipped` (its reason is in the result's `skipped`). Nothing is sent for a cancel.
+ */
 export interface ChatFilesProgress {
+  /** The chat the file goes into: the new one, when attaching created it. */
   conversation_id: Id;
-  names: string[];
+  name: string;
+  state: "copying" | "attached" | "skipped";
 }
 
 export interface AddedChatFiles {

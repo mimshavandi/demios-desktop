@@ -69,9 +69,12 @@ export function useChatFiles({
       setSkipped([]);
       try {
         const r = await api.addChatFiles(conversationId, conversationId === null ? projectId : null, (p) => {
-          setCopying(p.names);
-          const [one] = p.names;
-          setStatus(p.names.length === 1 && one !== undefined ? `Adding ${one}` : `Adding ${p.names.length} files`);
+          if (p.state === "copying") {
+            setCopying((names) => [...names, p.name]);
+          } else if (p.state === "skipped") {
+            // Gone at once; why is in the result. An attached file keeps its chip until then.
+            setCopying((names) => names.filter((n) => n !== p.name));
+          }
         });
         if (r.cancelled) return;
         if (conversationId === null && r.conversation_id !== null) {
@@ -141,7 +144,8 @@ export function useChatFiles({
     busy,
     copying,
     provider,
-    status,
+    // While copying, the status names the file in progress: a refused one drops out of it.
+    status: copying.length > 0 ? `Adding ${copying[copying.length - 1] ?? ""}` : status,
     onAttach,
     onRemove,
     onDismissSkipped: () => setSkipped([]),

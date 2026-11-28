@@ -317,8 +317,8 @@ export const api = {
   /**
    * Opens the system file picker (from Rust) and copies the picked data files into the chat.
    * With no chat open, the chat is created (in `projectId`, if given) only once something is
-   * picked, so cancelling leaves nothing behind. `onProgress` gets the picked names once,
-   * before they're copied.
+   * picked, so cancelling leaves nothing behind. `onProgress` follows each picked file:
+   * copying, then attached or skipped.
    */
   addChatFiles: (
     conversationId: Id | null,

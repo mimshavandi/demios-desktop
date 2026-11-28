@@ -377,8 +377,13 @@ function fakeApi() {
         msgs.set(c.id, []);
         conversationId = c.id;
       }
-      if (chat.pick.length > 0) onProgress({ conversation_id: conversationId, names: chat.pick.map((x) => x.name) });
+      for (const x of chat.pick) onProgress({ conversation_id: conversationId, name: x.name, state: "copying" });
+      for (const x of chat.skipped) {
+        onProgress({ conversation_id: conversationId, name: x.name, state: "copying" });
+        onProgress({ conversation_id: conversationId, name: x.name, state: "skipped" });
+      }
       if (chat.gate !== null) await chat.gate;
+      for (const x of chat.pick) onProgress({ conversation_id: conversationId, name: x.name, state: "attached" });
       const added = chat.pick.map((x) => ({
         id: id(),
         conversation_id: conversationId,
@@ -1448,11 +1453,14 @@ describe("Data files attached to a chat (#370)", () => {
       { name: "orders.csv", size: 676 },
       { name: "budget.xlsx", size: 2_458 },
     ];
+    // A refused file's chip goes as soon as it's skipped; its reason comes with the result.
+    chat.skipped = [{ name: "notes.pdf", reason: "only tables (CSV, TSV, TXT) and spreadsheets can be attached for now." }];
     fireEvent.click(await screen.findByRole("button", { name: "Attach a data file" }));
     const copying = await screen.findByText("orders.csv");
+    expect(screen.queryByText("notes.pdf")).toBeNull();
     expect(copying.closest("li")?.getAttribute("aria-busy")).toBe("true");
     expect(screen.getByText("budget.xlsx").closest("li")?.getAttribute("aria-busy")).toBe("true");
-    expect(screen.getByTestId("attach-status").textContent).toBe("Adding 2 files");
+    expect(screen.getByTestId("attach-status").textContent).toBe("Adding budget.xlsx");
     expect(screen.queryByText("676 B")).toBeNull();
     release();
     expect(await screen.findByText("676 B")).toBeTruthy();
