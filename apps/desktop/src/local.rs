@@ -474,12 +474,22 @@ pub fn detect_compute() -> (Machine, dn_models::compute::Compute) {
 /// estimator splits the model between the GPU and the CPU (MoE experts in RAM, or some of a
 /// dense model's layers on the CPU); then its recommended context, KV type and placement,
 /// which were estimated together (T-INF-20).
+///
+/// Prompt reuse is on, with the smaller of 2 GiB and a tenth of the RAM for other chats'
+/// prompts (ADR-0020 §6, #345).
 pub fn load_options(path: &Path, machine: &Machine) -> LoadOptions {
+    let prompt_cache = dn_inference::PromptCache::for_ram(machine.total_ram);
     let Ok(g) = Gguf::open(path) else {
-        return LoadOptions::default();
+        return LoadOptions {
+            prompt_cache,
+            ..LoadOptions::default()
+        };
     };
     let fp = ModelFootprint::from_gguf(&g);
-    options_for(&dn_models::fit(&fp, machine).recommended, fp.n_layer)
+    LoadOptions {
+        prompt_cache,
+        ..options_for(&dn_models::fit(&fp, machine).recommended, fp.n_layer)
+    }
 }
 
 fn options_for(rec: &dn_models::fit::Estimate, n_layer: u32) -> LoadOptions {
@@ -1934,7 +1944,10 @@ mod tests {
         let gib = dn_models::fit::GIB;
         assert_eq!(
             load_options(Path::new("/nonexistent.gguf"), &Machine::unified(16 * gib)),
-            LoadOptions::default()
+            LoadOptions {
+                prompt_cache: dn_inference::PromptCache::for_ram(16 * gib),
+                ..LoadOptions::default()
+            }
         );
     }
 
