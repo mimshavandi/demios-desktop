@@ -106,7 +106,7 @@ fn run(spec: LaunchSpec) -> ! {
         if let Err(e) = dn_sandbox::linux::landlock(&spec) {
             refuse(e);
         }
-        if let Err(e) = dn_sandbox::linux::seccomp() {
+        if let Err(e) = dn_sandbox::linux::seccomp(std::process::id()) {
             refuse(e);
         }
         let mut c = Command::new(&spec.program);

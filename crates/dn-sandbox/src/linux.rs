@@ -161,6 +161,11 @@ mod nr {
     pub const USERFAULTFD: i64 = 323;
     pub const IOCTL: i64 = 16;
     pub const CLONE: i64 = 56;
+    pub const KILL: i64 = 62;
+    pub const RT_SIGQUEUEINFO: i64 = 129;
+    pub const TKILL: i64 = 200;
+    pub const TGKILL: i64 = 234;
+    pub const RT_TGSIGQUEUEINFO: i64 = 297;
     pub const FORK: Option<i64> = Some(57);
     pub const VFORK: Option<i64> = Some(58);
 }
@@ -180,10 +185,19 @@ mod nr {
     pub const USERFAULTFD: i64 = 282;
     pub const IOCTL: i64 = 29;
     pub const CLONE: i64 = 220;
+    pub const KILL: i64 = 129;
+    pub const TKILL: i64 = 130;
+    pub const TGKILL: i64 = 131;
+    pub const RT_SIGQUEUEINFO: i64 = 138;
+    pub const RT_TGSIGQUEUEINFO: i64 = 240;
     pub const FORK: Option<i64> = None;
     pub const VFORK: Option<i64> = None;
 }
 const CLONE3: i64 = 435;
+// The same number on every architecture.
+const PIDFD_SEND_SIGNAL: i64 = 424;
+const PIDFD_OPEN: i64 = 434;
+const PIDFD_GETFD: i64 = 438;
 const IO_URING: [i64; 3] = [425, 426, 427];
 
 const EPERM: u32 = 1;
@@ -207,6 +221,16 @@ fn cond(arg: u8, len: SeccompCmpArgLen, op: SeccompCmpOp, v: u64) -> Result<Secc
     SeccompCondition::new(arg, len, op, v)
         .and_then(|c| SeccompRule::new(vec![c]))
         .map_err(|e| format!("seccomp: {e}"))
+}
+
+/// A rule matching when every condition holds.
+fn all(cs: &[(u8, SeccompCmpOp, u64)]) -> Result<SeccompRule, String> {
+    let conds = cs
+        .iter()
+        .map(|(arg, op, v)| SeccompCondition::new(*arg, SeccompCmpArgLen::Dword, op.clone(), *v))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("seccomp: {e}"))?;
+    SeccompRule::new(conds).map_err(|e| format!("seccomp: {e}"))
 }
 
 fn install(rules: BTreeMap<i64, Vec<SeccompRule>>, action: SeccompAction) -> Result<(), String> {
@@ -260,10 +284,14 @@ fn deny_x32() -> Result<(), String> {
 }
 
 /// Sockets (all but `socketpair`), new processes (threads only), ptrace, namespaces, keys,
-/// BPF, io_uring (it could open sockets past these rules) and terminal injection.
-pub fn seccomp() -> Result<(), String> {
+/// BPF, io_uring (it could open sockets past these rules), terminal injection, and signals to
+/// any process but the run itself. `pid` is the launcher's, which the runtime keeps across
+/// `exec`. Landlock's signal scope needs ABI 6 (kernel 6.12), so on older kernels these rules
+/// are what stops a script from freezing the app's watchdog or killing the person's processes.
+pub fn seccomp(pid: u32) -> Result<(), String> {
     use SeccompCmpArgLen::{Dword, Qword};
-    use SeccompCmpOp::{Eq, MaskedEq};
+    use SeccompCmpOp::{Eq, MaskedEq, Ne};
+    let pid = u64::from(pid);
     deny_x32()?;
     // clone3 passes its flags behind a pointer, where a filter can't read them: ENOSYS makes
     // libc fall back to clone, which the rules below check.
@@ -287,6 +315,7 @@ pub fn seccomp() -> Result<(), String> {
     ]
     .into_iter()
     .chain(IO_URING)
+    .chain([PIDFD_OPEN, PIDFD_SEND_SIGNAL, PIDFD_GETFD])
     .chain(nr::FORK)
     .chain(nr::VFORK)
     .map(|n| (n, vec![]))
@@ -301,5 +330,13 @@ pub fn seccomp() -> Result<(), String> {
         clone.push(cond(0, Qword, MaskedEq(f), f)?);
     }
     rules.insert(nr::CLONE, clone);
+    // Signals: kill, tkill and rt_sigqueueinfo only to this process (or 0, its own group,
+    // which is the run); tgkill and rt_tgsigqueueinfo only within this process.
+    for n in [nr::KILL, nr::TKILL, nr::RT_SIGQUEUEINFO] {
+        rules.insert(n, vec![all(&[(0, Ne, pid), (0, Ne, 0)])?]);
+    }
+    for n in [nr::TGKILL, nr::RT_TGSIGQUEUEINFO] {
+        rules.insert(n, vec![all(&[(0, Ne, pid)])?]);
+    }
     install(rules, SeccompAction::Errno(EPERM))
 }

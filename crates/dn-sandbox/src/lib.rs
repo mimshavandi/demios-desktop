@@ -281,7 +281,7 @@ impl Sandbox {
         let stopped = stop_group(&child);
         let (stdout, stdout_truncated) = out.join().unwrap_or_default();
         let (stderr, stderr_truncated) = err.join().unwrap_or_default();
-        let (status, killed, peak_memory, peak_disk) = watched?;
+        let (status, mut killed, peak_memory, mut peak_disk) = watched?;
         if !stopped {
             return Err(Error::NotStopped);
         }
@@ -289,7 +289,18 @@ impl Sandbox {
         if let Some(reason) = refusal(exit_code, &stderr) {
             return Err(Error::Refused(reason));
         }
-        let (outputs, skipped) = collect(&folder.output, folder.output_id)?;
+        // Once more after the end: a run can fill the disk and exit between two polls.
+        let final_disk = disk_use(&folder.work);
+        peak_disk = peak_disk.max(final_disk);
+        if final_disk > l.disk {
+            killed = Some(Killed::Disk);
+        }
+        // Over the disk limit, nothing is collected.
+        let (outputs, skipped) = if killed == Some(Killed::Disk) {
+            (Vec::new(), Vec::new())
+        } else {
+            collect(&folder.output, folder.output_id, l.disk)?
+        };
         drop(folder);
         Ok(RunResult {
             exit_code,
@@ -665,7 +676,9 @@ fn stop_group(_child: &Child) -> bool {
     true
 }
 
-/// Bytes under `dir`, not following links.
+/// Bytes under `dir`, not following links. A file counts with the larger of its length and
+/// its allocated blocks, so a sparse file counts at its full length (that's what reading it
+/// would cost).
 fn disk_use(dir: &Path) -> u64 {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return 0;
@@ -673,9 +686,31 @@ fn disk_use(dir: &Path) -> u64 {
     rd.flatten()
         .map(|e| match e.file_type() {
             Ok(t) if t.is_dir() => disk_use(&e.path()),
-            _ => e.metadata().map(|m| m.len()).unwrap_or(0),
+            _ => e.metadata().map(|m| file_bytes(&m)).unwrap_or(0),
         })
-        .sum()
+        .fold(0u64, u64::saturating_add)
+}
+
+#[cfg(unix)]
+fn file_bytes(m: &std::fs::Metadata) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    m.len().max(m.blocks().saturating_mul(512))
+}
+
+#[cfg(not(unix))]
+fn file_bytes(m: &std::fs::Metadata) -> u64 {
+    m.len()
+}
+
+/// At most this many entries in `out/` are looked at.
+#[cfg(unix)]
+const MAX_ENTRIES: usize = 1000;
+
+/// What collecting may still read.
+#[cfg(unix)]
+struct Budget {
+    bytes: u64,
+    entries: usize,
 }
 
 #[cfg(unix)]
@@ -697,7 +732,11 @@ fn file_id(_p: &Path) -> std::io::Result<(u64, u64)> {
 /// link and must be the folder the run was given; every entry is opened relative to its
 /// folder, without following a link.
 #[cfg(unix)]
-fn collect(out: &Path, made: (u64, u64)) -> Result<(Vec<Output>, Vec<Skipped>), Error> {
+fn collect(
+    out: &Path,
+    made: (u64, u64),
+    max_bytes: u64,
+) -> Result<(Vec<Output>, Vec<Skipped>), Error> {
     use rustix::fs::{Mode, OFlags, fstat, open};
     let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
     let dir = open(out, flags, Mode::empty()).map_err(|_| Error::OutputsReplaced)?;
@@ -707,7 +746,11 @@ fn collect(out: &Path, made: (u64, u64)) -> Result<(Vec<Output>, Vec<Skipped>), 
     }
     let mut outputs = Vec::new();
     let mut skipped = Vec::new();
-    walk(&dir, "", 0, &mut outputs, &mut skipped)?;
+    let mut budget = Budget {
+        bytes: max_bytes,
+        entries: MAX_ENTRIES,
+    };
+    walk(&dir, "", 0, &mut budget, &mut outputs, &mut skipped)?;
     outputs.sort_by(|a, b| a.name.cmp(&b.name));
     Ok((outputs, skipped))
 }
@@ -717,6 +760,7 @@ fn walk(
     dir: &std::os::fd::OwnedFd,
     prefix: &str,
     depth: usize,
+    budget: &mut Budget,
     outputs: &mut Vec<Output>,
     skipped: &mut Vec<Skipped>,
 ) -> Result<(), Error> {
@@ -730,6 +774,14 @@ fn walk(
             continue;
         }
         let name = format!("{prefix}{}", String::from_utf8_lossy(bytes));
+        if budget.entries == 0 {
+            skipped.push(Skipped {
+                name,
+                reason: "too many files",
+            });
+            return Ok(());
+        }
+        budget.entries -= 1;
         let st = statat(dir, raw, AtFlags::SYMLINK_NOFOLLOW).map_err(err)?;
         match FileType::from_raw_mode(st.st_mode as _) {
             FileType::Directory if depth + 1 >= MAX_DEPTH => skipped.push(Skipped {
@@ -739,24 +791,40 @@ fn walk(
             FileType::Directory => {
                 let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
                 let sub = openat(dir, raw, flags, Mode::empty()).map_err(err)?;
-                walk(&sub, &format!("{name}/"), depth + 1, outputs, skipped)?;
+                walk(
+                    &sub,
+                    &format!("{name}/"),
+                    depth + 1,
+                    budget,
+                    outputs,
+                    skipped,
+                )?;
             }
             FileType::RegularFile => {
                 let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
                 let fd = openat(dir, raw, flags, Mode::empty()).map_err(err)?;
-                if FileType::from_raw_mode(fstat(&fd).map_err(err)?.st_mode as _)
-                    != FileType::RegularFile
-                {
+                let st = fstat(&fd).map_err(err)?;
+                if FileType::from_raw_mode(st.st_mode as _) != FileType::RegularFile {
                     skipped.push(Skipped {
                         name,
                         reason: "not a regular file",
                     });
                     continue;
                 }
+                let size = st.st_size as u64;
+                if size > budget.bytes {
+                    skipped.push(Skipped {
+                        name,
+                        reason: "over the size limit",
+                    });
+                    continue;
+                }
                 let mut bytes = Vec::new();
                 std::fs::File::from(fd)
+                    .take(budget.bytes)
                     .read_to_end(&mut bytes)
                     .map_err(io("read an output"))?;
+                budget.bytes -= bytes.len() as u64;
                 outputs.push(Output { name, bytes });
             }
             FileType::Symlink => skipped.push(Skipped {
@@ -774,7 +842,11 @@ fn walk(
 
 /// No sandbox runs on other OSes yet (`Sandbox::new` refuses), so nothing is collected.
 #[cfg(not(unix))]
-fn collect(_out: &Path, _made: (u64, u64)) -> Result<(Vec<Output>, Vec<Skipped>), Error> {
+fn collect(
+    _out: &Path,
+    _made: (u64, u64),
+    _max_bytes: u64,
+) -> Result<(Vec<Output>, Vec<Skipped>), Error> {
     Ok((Vec::new(), Vec::new()))
 }
 
@@ -803,6 +875,39 @@ mod tests {
         assert_eq!(refusal(Some(REFUSED_EXIT), b"Traceback"), None);
         let sb = refusal(Some(65), b"sandbox-exec: invalid profile\n");
         assert_eq!(sb.is_some(), cfg!(target_os = "macos"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn collecting_stops_at_the_byte_and_entry_budget() {
+        let dir = std::env::temp_dir().join(format!("dn-sandbox-collect-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for n in ["a", "b", "c"] {
+            std::fs::write(dir.join(n), [b'x'; 10]).unwrap();
+        }
+        let id = file_id(&dir).unwrap();
+        let (outputs, skipped) = collect(&dir, id, 25).unwrap();
+        assert_eq!(outputs.len(), 2);
+        assert_eq!(skipped.len(), 1);
+        assert_eq!(skipped[0].reason, "over the size limit");
+        for i in 0..MAX_ENTRIES {
+            std::fs::write(dir.join(format!("f{i}")), b"").unwrap();
+        }
+        let (outputs, skipped) = collect(&dir, id, 1 << 20).unwrap();
+        assert_eq!(outputs.len(), MAX_ENTRIES);
+        assert_eq!(
+            skipped
+                .iter()
+                .filter(|s| s.reason == "too many files")
+                .count(),
+            1
+        );
+        assert!(matches!(
+            collect(&dir, (0, 0), 1),
+            Err(Error::OutputsReplaced)
+        ));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

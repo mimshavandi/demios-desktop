@@ -123,6 +123,12 @@ fn every_probe_is_denied_and_the_allowed_work_succeeds() {
         .map(|l| serde_json::from_str(l).unwrap())
         .collect();
     assert!(probes.len() >= 20, "{stdout}");
+    assert!(
+        probes
+            .iter()
+            .any(|p| p["probe"] == "signal: the app (the parent process)"),
+        "{stdout}"
+    );
     let mut failures = Vec::new();
     for p in &probes {
         let name = p["probe"].as_str().unwrap();
@@ -142,6 +148,7 @@ fn every_probe_is_denied_and_the_allowed_work_succeeds() {
         // processes, the terminal) may fail any way.
         let strict = name.starts_with("read:")
             || name.starts_with("write:")
+            || name.starts_with("signal:")
             || (name.starts_with("net: ") && !name.contains("DNS") && !name.contains("X11"));
         if strict && kind != "PermissionDenied" {
             failures.push(format!("{name}: expected permission denied, got {p}"));
@@ -258,6 +265,16 @@ fn out_and_tmp_cant_be_replaced_with_a_link() {
         assert_eq!(p["ok"], false, "{p}");
     }
     assert!(r.outputs.is_empty());
+    w.no_run_left();
+}
+
+#[test]
+fn sparse_files_and_a_quick_exit_count_against_the_disk_cap() {
+    let w = World::new();
+    let cap = small().disk.to_string();
+    let r = w.sandbox.run(&w.spec(&["sparse", &cap], small())).unwrap();
+    assert_eq!(r.killed, Some(Killed::Disk), "{r:?}");
+    assert!(r.outputs.is_empty(), "nothing is collected over the limit");
     w.no_run_left();
 }
 

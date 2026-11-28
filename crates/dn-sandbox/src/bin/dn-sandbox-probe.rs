@@ -172,6 +172,42 @@ fn probes(args: &[String]) {
                 .map(|o| format!("ran: {:?}", o.status))
         }),
     );
+    #[cfg(unix)]
+    {
+        use rustix::process::{Pid, Signal, getppid, kill_process};
+        // SIGCONT is harmless if it ever got through.
+        report(
+            "signal: the app (the parent process)",
+            getppid()
+                .ok_or_else(|| std::io::Error::other("no parent"))
+                .and_then(|p| kill_process(p, Signal::CONT).map_err(Into::into))
+                .map(|()| "signalled".into()),
+        );
+        report(
+            "signal: process 1",
+            Pid::from_raw(1)
+                .ok_or_else(|| std::io::Error::other("no pid 1"))
+                .and_then(|p| kill_process(p, Signal::CONT).map_err(Into::into))
+                .map(|()| "signalled".into()),
+        );
+        report(
+            "positive: signal itself",
+            kill_process(rustix::process::getpid(), Signal::CONT)
+                .map_err(Into::into)
+                .map(|()| "ok".into()),
+        );
+    }
+    #[cfg(target_os = "linux")]
+    report(
+        "signal: a pidfd for the app",
+        rustix::process::getppid()
+            .ok_or_else(|| std::io::Error::other("no parent"))
+            .and_then(|p| {
+                rustix::process::pidfd_open(p, rustix::process::PidfdFlags::empty())
+                    .map_err(Into::into)
+            })
+            .map(|_| "opened".into()),
+    );
     report(
         "tty: open /dev/tty",
         std::fs::File::open("/dev/tty").map(|_| "opened".into()),
@@ -224,6 +260,20 @@ fn main() {
     match args.first().map(String::as_str) {
         Some("probes") => probes(rest),
         Some("noop") => {}
+        // Files whose length is just under the cap but take no space, then a quick exit:
+        // the final disk check must still see them.
+        Some("sparse") => {
+            let cap: u64 = rest.first().and_then(|a| a.parse().ok()).unwrap_or(1 << 20);
+            let out = env_path("DN_RUN_OUT");
+            for i in 0..50 {
+                let f = std::fs::File::create(out.join(format!("s{i}")));
+                if let Err(e) = f.and_then(|f| f.set_len(cap - 1)) {
+                    println!("stopped after {i}: {e}");
+                    return;
+                }
+            }
+            println!("made 50 sparse files");
+        }
         // Replace out/ (or tmp/) with a link to `target`: the profile must refuse it, and if
         // it didn't, collecting outputs must refuse to read through it.
         Some("swap-out") => {
