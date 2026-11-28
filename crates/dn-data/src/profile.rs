@@ -87,14 +87,14 @@ pub enum FactValue {
 }
 
 impl FactValue {
-    fn number(d: Decimal) -> Self {
+    pub(crate) fn number(d: Decimal) -> Self {
         FactValue::Number {
             text: d.text(),
             value: d.to_f64(),
         }
     }
 
-    fn count(n: u64) -> Self {
+    pub(crate) fn count(n: u64) -> Self {
         FactValue::Number {
             text: n.to_string(),
             value: n as f64,
@@ -124,7 +124,7 @@ impl FactValue {
 
 /// `units / 10^scale / n`, rounded half away from zero to `out_scale` decimals; `None`
 /// if it doesn't fit (then the fact is left out, and the sheet says so).
-fn ratio(units: i128, scale: u32, n: u64, out_scale: u32) -> Option<Decimal> {
+pub(crate) fn ratio(units: i128, scale: u32, n: u64, out_scale: u32) -> Option<Decimal> {
     let n = i128::from(n.max(1));
     let shift = 10i128.checked_pow(out_scale)?;
     // units * 10^out / 10^scale / n, done as one rounding division.
@@ -202,23 +202,23 @@ pub struct FactSheet {
 }
 
 /// A column's values, typed.
-enum Typed {
+pub(crate) enum Typed {
     Numbers(Vec<Option<Decimal>>),
     Dates(Vec<Option<Date>>),
     Other,
 }
 
-struct Col<'a> {
-    name: &'a str,
-    profile: ColumnProfile,
-    typed: Typed,
+pub(crate) struct Col<'a> {
+    pub(crate) name: &'a str,
+    pub(crate) profile: ColumnProfile,
+    pub(crate) typed: Typed,
     /// Display text per row (`None` when missing or an error).
-    texts: Vec<Option<String>>,
+    pub(crate) texts: Vec<Option<String>>,
 }
 
 /// An error cell, or a number that isn't finite (whatever produced it): counted apart,
 /// never computed with and never dropped silently.
-fn is_error(c: &Cell) -> bool {
+pub(crate) fn is_error(c: &Cell) -> bool {
     match c {
         Cell::Error(_) => true,
         Cell::Number(v) => !v.is_finite(),
@@ -226,7 +226,7 @@ fn is_error(c: &Cell) -> bool {
     }
 }
 
-fn is_missing(c: &Cell) -> bool {
+pub(crate) fn is_missing(c: &Cell) -> bool {
     match c {
         Cell::Empty => true,
         Cell::Text(t) => {
@@ -237,7 +237,7 @@ fn is_missing(c: &Cell) -> bool {
     }
 }
 
-fn column<'a>(table: &'a Table, i: usize, prefer_comma: bool) -> Col<'a> {
+pub(crate) fn column<'a>(table: &'a Table, i: usize, prefer_comma: bool) -> Col<'a> {
     let cells: Vec<&Cell> = table.rows.iter().map(|r| &r[i]).collect();
     let present: Vec<&Cell> = cells
         .iter()
@@ -406,7 +406,7 @@ impl Facts {
 /// paragraph separator and control character becomes a space), with `"`, `\`, `[` and `]`
 /// escaped, so cell text can't end its quotes, start a line that looks like a fact or hold
 /// a fact id.
-fn q(name: &str) -> String {
+pub(crate) fn q(name: &str) -> String {
     let flat: String = name
         .chars()
         .map(|c| {
@@ -427,21 +427,21 @@ fn q(name: &str) -> String {
 }
 
 /// Linear-interpolation quantile of sorted values.
-fn quantile(sorted: &[f64], p: f64) -> f64 {
+pub(crate) fn quantile(sorted: &[f64], p: f64) -> f64 {
     let pos = p * (sorted.len() - 1) as f64;
     let lo = pos.floor() as usize;
     let hi = pos.ceil() as usize;
     sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo as f64)
 }
 
-fn rounded(v: f64, scale: u32) -> Decimal {
+pub(crate) fn rounded(v: f64, scale: u32) -> Decimal {
     Decimal::from_f64(v)
         .and_then(|d| d.rescale(scale))
         .unwrap_or(Decimal { units: 0, scale })
 }
 
 /// The decimals a number column is shown with: the most any of its values has.
-fn column_scale(values: &[Option<Decimal>]) -> u32 {
+pub(crate) fn column_scale(values: &[Option<Decimal>]) -> u32 {
     values
         .iter()
         .flatten()
@@ -452,7 +452,7 @@ fn column_scale(values: &[Option<Decimal>]) -> u32 {
 }
 
 /// Exact sum of decimals at the largest scale among them; `None` if it doesn't fit.
-fn exact_sum(values: &[Decimal]) -> (Option<Decimal>, u32) {
+pub(crate) fn exact_sum(values: &[Decimal]) -> (Option<Decimal>, u32) {
     let scale = values
         .iter()
         .map(|d| d.scale)
@@ -536,7 +536,7 @@ fn number_facts(f: &mut Facts, name: &str, values: &[Decimal]) {
 }
 
 /// Month buckets (`2026-03`) when the dates span at most three years, else years.
-fn period_of(d: Date, monthly: bool) -> String {
+pub(crate) fn period_of(d: Date, monthly: bool) -> String {
     if monthly {
         format!("{:04}-{:02}", d.year, d.month)
     } else {
