@@ -133,7 +133,15 @@ pub fn add(state: &AppState, conversation_id: Id, paths: &[PathBuf]) -> IpcResul
             ));
             continue;
         }
-        let count = list(&*state.db()?, conversation_id)?.len() as u64;
+        let existing = list(&*state.db()?, conversation_id)?;
+        // One file per name, so the data tools never have to pick between two silently.
+        if existing.iter().any(|f| f.name.eq_ignore_ascii_case(&name)) {
+            out.skipped.push(skip(
+                "A file with this name is already attached to this chat. Remove it first, or rename the new one.",
+            ));
+            continue;
+        }
+        let count = existing.len() as u64;
         if count >= MAX_FILES {
             out.skipped
                 .push(skip(&format!("A chat holds at most {MAX_FILES} files.")));
@@ -374,6 +382,21 @@ mod tests {
         delete_all(&st.db().unwrap(), Some(&root)).unwrap();
         assert!(list(&st.db().unwrap(), a.id).unwrap().is_empty());
         assert!(!root.exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_second_file_with_the_same_name_is_refused() {
+        let (st, dir) = state();
+        let conv = st.create_conversation().unwrap();
+        let a = src(&dir, "Sales.csv", b"a\n1\n");
+        add(&st, conv.id, &[a]).unwrap();
+        let other = dir.join("other");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(other.join("sales.CSV"), b"a\n2\n").unwrap();
+        let r = add(&st, conv.id, &[other.join("sales.CSV")]).unwrap();
+        assert!(r.added.is_empty());
+        assert!(r.skipped[0].reason.contains("already attached"));
         let _ = std::fs::remove_dir_all(dir);
     }
 

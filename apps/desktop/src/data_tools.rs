@@ -136,6 +136,16 @@ fn candidates(
     Ok(out)
 }
 
+/// A file name (or the model's guess at one) for a message outside the untrusted block:
+/// one line, `"` swapped, delimiters neutralised.
+fn shown(name: &str) -> String {
+    let flat: String = name
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    dn_core::untrusted::neutralise(&flat.replace('"', "'"))
+}
+
 fn run(
     state: &AppState,
     project_id: Option<Id>,
@@ -143,11 +153,12 @@ fn run(
     request: &Request,
 ) -> Result<String, String> {
     let wanted = request.file();
+    let shown_wanted = shown(wanted);
     let files = candidates(state, project_id, conversation_id)?;
-    let data_files: Vec<&str> = files
+    let data_files: Vec<String> = files
         .iter()
         .filter(|f| dn_data::tool::reads(&f.name))
-        .map(|f| f.name.as_str())
+        .map(|f| shown(&f.name))
         .collect();
     let matching: Vec<&Candidate> = files
         .iter()
@@ -155,10 +166,12 @@ fn run(
         .collect();
     let Some(file) = matching.first().copied() else {
         return Err(if data_files.is_empty() {
-            format!("This chat has no file called \"{wanted}\", and no CSV or spreadsheet files.")
+            format!(
+                "This chat has no file called \"{shown_wanted}\", and no CSV or spreadsheet files."
+            )
         } else {
             format!(
-                "This chat has no file called \"{wanted}\". Its data files: {}.",
+                "This chat has no file called \"{shown_wanted}\". Its data files: {}.",
                 data_files.join(", ")
             )
         });
@@ -166,19 +179,19 @@ fn run(
     if !dn_data::tool::reads(&file.name) {
         return Err(format!(
             "\"{}\" isn't a CSV or spreadsheet file, so it has no data to compute with.",
-            file.name
+            shown(&file.name)
         ));
     }
     // Said, not chosen silently: an attached file comes before a project file of the same name.
     let note = (matching.len() > 1 && file.attached).then(|| {
         format!(
             "Note: this is the \"{}\" attached to this chat; the project also has a file with that name.\n",
-            file.name
+            shown(&file.name)
         )
     });
     let bytes = std::fs::read(&file.path).map_err(|e| {
         tracing::warn!("data tool: a file's copy can't be read: {e}");
-        format!("The copy of \"{}\" can't be read.", file.name)
+        format!("The copy of \"{}\" can't be read.", shown(&file.name))
     })?;
     let (capability, result) = match request {
         Request::Profile(a) => (
