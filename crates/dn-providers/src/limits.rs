@@ -9,8 +9,8 @@
 //!   - LM Studio: `GET /api/v0/models/{id}`, `loaded_context_length`;
 //!   - vLLM: `GET /v1/models`, `max_model_len`;
 //!   - Ollama: `GET /api/ps` for a loaded model; before the first load, the `num_ctx` its
-//!     Modelfile sets (`POST /api/show`), which the OpenAI-compatible endpoint loads it with
-//!     (#360). Without one it's unknown: the server default isn't exposed, and `/v1` can't
+//!     Modelfile sets (`POST /api/show`), which the OpenAI-compatible endpoint loads it with,
+//!     capped at the trained context (`model_info`) as Ollama caps it at load (#360). Without one it's unknown: the server default isn't exposed, and `/v1` can't
 //!     set `num_ctx`, so nothing is sent to force it.
 //!
 //!   A model's *maximum* isn't used: a server silently cuts what doesn't fit the context it
@@ -290,7 +290,13 @@ async fn server(inner: &Inner, model_id: &str) -> Option<ModelLimits> {
                         rb = rb.bearer_auth(k);
                     }
                     let v = json(rb).await?;
-                    ollama_num_ctx(v["parameters"].as_str()?)?
+                    let set = ollama_num_ctx(v["parameters"].as_str()?)?;
+                    // Ollama caps a num_ctx above the trained context at load
+                    // (llm/server.go), so never report more than the model takes.
+                    match ollama_trained_ctx(&v["model_info"]) {
+                        Some(trained) => set.min(trained),
+                        None => set,
+                    }
                 }
             }
         }
@@ -305,6 +311,16 @@ pub(crate) fn ollama_num_ctx(parameters: &str) -> Option<u64> {
         let mut it = l.split_whitespace();
         (it.next()? == "num_ctx").then(|| it.next()?.parse().ok())?
     })
+}
+
+/// The trained context in an Ollama model's `model_info` (`<arch>.context_length`), if any.
+pub(crate) fn ollama_trained_ctx(model_info: &Value) -> Option<u64> {
+    model_info
+        .as_object()?
+        .iter()
+        .find(|(k, _)| k.ends_with(".context_length"))?
+        .1
+        .as_u64()
 }
 
 /// `base` with `segments` appended, each escaped as one path segment (a model id can hold
@@ -341,6 +357,17 @@ mod tests {
         assert_eq!(ollama_num_ctx("num_keep 24\nstop \"x\""), None);
         assert_eq!(ollama_num_ctx("num_ctx_extra 9\nnum_ctx big"), None);
         assert_eq!(ollama_num_ctx(""), None);
+    }
+
+    #[test]
+    fn ollama_trained_ctx_reads_the_arch_key() {
+        let v = serde_json::json!({"general.architecture": "qwen3", "qwen3.context_length": 40960});
+        assert_eq!(ollama_trained_ctx(&v), Some(40960));
+        assert_eq!(
+            ollama_trained_ctx(&serde_json::json!({"general.architecture": "x"})),
+            None
+        );
+        assert_eq!(ollama_trained_ctx(&serde_json::Value::Null), None);
     }
 
     #[test]

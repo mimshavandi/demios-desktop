@@ -123,6 +123,32 @@ async fn an_ollama_model_not_yet_loaded_uses_its_modelfile_num_ctx_and_nothing_e
     assert_eq!(reqs[1].method, "POST");
     assert_eq!(reqs[1].body["model"], "qwen3:8b");
 
+    // A num_ctx above the trained context: Ollama caps it at load, so the trained context.
+    let srv = serve(vec![
+        json(serde_json::json!({"models": []})),
+        json(serde_json::json!({
+            "parameters": "num_ctx 131072",
+            "model_info": {"general.architecture": "qwen3", "qwen3.context_length": 40960}
+        })),
+    ])
+    .await;
+    let a = build(server(&srv.base, ServerFamily::Ollama)).unwrap();
+    assert_eq!(
+        a.limits(&m).await,
+        ModelLimits::known(40960, LimitSource::Provider)
+    );
+    // No trained context in model_info: the Modelfile's value alone.
+    let srv = serve(vec![
+        json(serde_json::json!({"models": []})),
+        json(serde_json::json!({"parameters": "num_ctx 8192", "model_info": {}})),
+    ])
+    .await;
+    let a = build(server(&srv.base, ServerFamily::Ollama)).unwrap();
+    assert_eq!(
+        a.limits(&m).await,
+        ModelLimits::known(8192, LimitSource::Provider)
+    );
+
     // No num_ctx: unknown, never the model's maximum (model_info) or a guessed default, and
     // not cached, so a later load is found.
     let srv = serve(vec![
