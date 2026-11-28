@@ -423,7 +423,9 @@ pub(crate) fn q(name: &str) -> String {
         .replace('"', "\\\"")
         .replace('[', "\\[")
         .replace(']', "\\]");
-    format!("\"{escaped}\"")
+    // And no run of `<` or `>` that could pass for an untrusted-content delimiter, since
+    // these names also appear in messages outside a block.
+    format!("\"{}\"", dn_core::untrusted::neutralise(&escaped))
 }
 
 /// Linear-interpolation quantile of sorted values.
@@ -434,10 +436,16 @@ pub(crate) fn quantile(sorted: &[f64], p: f64) -> f64 {
     sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo as f64)
 }
 
-pub(crate) fn rounded(v: f64, scale: u32) -> Decimal {
-    Decimal::from_f64(v)
-        .and_then(|d| d.rescale(scale))
-        .unwrap_or(Decimal { units: 0, scale })
+/// `v` to `scale` decimals; `None` if it can't be shown exactly (then the fact is left out
+/// and listed, never shown as 0).
+pub(crate) fn rounded(v: f64, scale: u32) -> Option<Decimal> {
+    Decimal::from_f64(v).and_then(|d| d.rescale(scale))
+}
+
+/// Names from the file (columns, sheets) listed in a message for the model, each quoted
+/// like a fact line ([`q`] neutralises delimiters too).
+pub(crate) fn listed<'a>(names: impl IntoIterator<Item = &'a str>) -> String {
+    names.into_iter().map(q).collect::<Vec<_>>().join(", ")
 }
 
 /// The decimals a number column is shown with: the most any of its values has.
@@ -461,8 +469,8 @@ pub(crate) fn exact_sum(values: &[Decimal]) -> (Option<Decimal>, u32) {
         .min(MAX_SCALE);
     let units = values
         .iter()
-        .filter_map(|d| d.rescale(scale))
-        .try_fold(0i128, |a, d| a.checked_add(d.units));
+        .map(|d| d.rescale(scale))
+        .try_fold(0i128, |a, d| a.checked_add(d?.units));
     (units.map(|units| Decimal { units, scale }), scale)
 }
 
@@ -506,24 +514,24 @@ fn number_facts(f: &mut Facts, name: &str, values: &[Decimal]) {
         quantile(&sorted, 0.5),
         quantile(&sorted, 0.75),
     );
-    f.push(
+    f.push_or_skip(
         format!("{col} median"),
-        FactValue::number(rounded(med, shown)),
+        rounded(med, shown).map(FactValue::number),
     );
-    f.push(
+    f.push_or_skip(
         format!("{col} lower quartile (Q1)"),
-        FactValue::number(rounded(q1, shown)),
+        rounded(q1, shown).map(FactValue::number),
     );
-    f.push(
+    f.push_or_skip(
         format!("{col} upper quartile (Q3)"),
-        FactValue::number(rounded(q3, shown)),
+        rounded(q3, shown).map(FactValue::number),
     );
     if n > 1 {
         let mean = sorted.iter().sum::<f64>() / n as f64;
         let var = sorted.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (n - 1) as f64;
-        f.push(
+        f.push_or_skip(
             format!("{col} standard deviation (sample)"),
-            FactValue::number(rounded(var.sqrt(), shown)),
+            rounded(var.sqrt(), shown).map(FactValue::number),
         );
     }
     let iqr = q3 - q1;

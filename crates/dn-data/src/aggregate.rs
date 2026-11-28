@@ -108,8 +108,8 @@ pub fn aggregate(table: &Table, source: &str, query: &Query) -> Result<FactSheet
             .position(|c| c.name.eq_ignore_ascii_case(name.trim()))
             .ok_or_else(|| {
                 format!(
-                    "There's no column \"{name}\". The columns are: {}.",
-                    table.header.join(", ")
+                    "There's no such column. The columns are: {}.",
+                    crate::profile::listed(table.header.iter().map(String::as_str))
                 )
             })
     };
@@ -394,7 +394,7 @@ fn result(op: Op, vals: &[Decimal], scale: u32) -> Option<FactValue> {
         Op::Median => {
             let mut sorted: Vec<f64> = vals.iter().map(|d| d.to_f64()).collect();
             sorted.sort_by(f64::total_cmp);
-            Some(num(rounded(quantile(&sorted, 0.5), shown)))
+            rounded(quantile(&sorted, 0.5), shown).map(num)
         }
     }
 }
@@ -515,7 +515,7 @@ mod tests {
         let err = |j| aggregate(&t, "sales.csv", &query(j)).unwrap_err();
         assert!(
             err(serde_json::json!({"op": "sum", "measure": "Profit"}))
-                .contains("The columns are: Date, Region")
+                .contains("The columns are: \"Date\", \"Region\"")
         );
         assert!(
             err(serde_json::json!({"op": "sum", "measure": "Region"}))

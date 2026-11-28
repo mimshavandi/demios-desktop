@@ -176,7 +176,7 @@ fn tables(name: &str, bytes: &[u8], sheet: Option<&str>) -> Result<Vec<Table>, S
                 } else {
                     format!(
                         "{name} has no sheet called \"{want}\". Its sheets: {}.",
-                        names.join(", ")
+                        crate::profile::listed(names.iter().map(String::as_str))
                     )
                 })
             } else {
@@ -218,7 +218,7 @@ pub fn run_aggregate(name: &str, bytes: &[u8], args: &AggregateArgs) -> Result<P
         let names: Vec<String> = tables.iter().filter_map(|t| t.sheet.clone()).collect();
         return Err(format!(
             "{name} has more than one sheet ({}): say which with `sheet`.",
-            names.join(", ")
+            crate::profile::listed(names.iter().map(String::as_str))
         ));
     }
     let table = tables.remove(0);
@@ -282,7 +282,7 @@ mod tests {
         assert!(
             run("orders.xlsx", &xlsx, Some("Nope"))
                 .unwrap_err()
-                .contains("Its sheets: Orders")
+                .contains("Its sheets: \"Orders\"")
         );
         let a = AggregateArgs::parse(
             &serde_json::json!({"file": "orders.xlsx", "op": "sum", "measure": "Amount"}),
