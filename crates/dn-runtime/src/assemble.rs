@@ -51,8 +51,11 @@ pub struct Parts {
     pub turns: Vec<ChatMessage>,
     /// Items retrieved for this turn, best first (dropped from the end).
     pub retrieved: Vec<Item>,
-    /// The new input (a user message), or `None` when a step continues after tool results.
+    /// The new input (a user message).
     pub input: Option<ChatMessage>,
+    /// What this run added after the input so far (the model's tool calls and their results),
+    /// in order. Tool results are quoted like those in `turns`.
+    pub continuation: Vec<ChatMessage>,
     /// The one-line task recap with the date and other changing values.
     pub recap: Option<String>,
 }
@@ -149,7 +152,8 @@ fn render(parts: &Parts, template: &ChatRequest) -> (ChatRequest, usize) {
             ),
         ));
     }
-    messages.extend(quote_tool_results(&parts.turns));
+    let names = tool_names(parts.turns.iter().chain(&parts.continuation));
+    messages.extend(quote_tool_results(&parts.turns, &names));
     let stable_through = messages.len();
     if let Some(input) = &parts.input {
         let mut m = input.clone();
@@ -166,6 +170,7 @@ fn render(parts: &Parts, template: &ChatRequest) -> (ChatRequest, usize) {
         m.content = content;
         messages.push(m);
     }
+    messages.extend(quote_tool_results(&parts.continuation, &names));
     let mut tools = parts.tools.clone();
     tools.sort_by(|a, b| a.name.cmp(&b.name));
     let req = ChatRequest {
@@ -176,14 +181,22 @@ fn render(parts: &Parts, template: &ChatRequest) -> (ChatRequest, usize) {
     (req, stable_through)
 }
 
+/// Tool call id → tool name, from the assistant messages' calls.
+fn tool_names<'a>(
+    messages: impl Iterator<Item = &'a ChatMessage>,
+) -> std::collections::HashMap<String, String> {
+    messages
+        .flat_map(|m| m.tool_calls.iter())
+        .map(|c| (c.id.clone(), c.name.clone()))
+        .collect()
+}
+
 /// The turns with each tool result's text in an untrusted block. Tool output (MCP servers,
 /// the web, files) is someone else's text (ADR-0020 §2.4).
-fn quote_tool_results(turns: &[ChatMessage]) -> Vec<ChatMessage> {
-    let names: std::collections::HashMap<&str, &str> = turns
-        .iter()
-        .flat_map(|m| m.tool_calls.iter())
-        .map(|c| (c.id.as_str(), c.name.as_str()))
-        .collect();
+fn quote_tool_results(
+    turns: &[ChatMessage],
+    names: &std::collections::HashMap<String, String>,
+) -> Vec<ChatMessage> {
     turns
         .iter()
         .map(|m| {
@@ -191,7 +204,7 @@ fn quote_tool_results(turns: &[ChatMessage]) -> Vec<ChatMessage> {
                 return m.clone();
             }
             let id = m.tool_call_id.clone().unwrap_or_default();
-            let name = names.get(id.as_str()).copied().unwrap_or("unknown");
+            let name = names.get(&id).map_or("unknown", String::as_str);
             let source = SourceRef::new(format!("tool:{name}")).attr("call", id.clone());
             let mut q = m.clone();
             q.content = m

@@ -195,6 +195,9 @@ pub struct AppState {
     pub skills: crate::skills::Library,
     /// What the agent loop may call (the manifest-filtered dn-tools executor in the app).
     pub tools: Arc<dyn ToolExecutor>,
+    /// Token estimates for models that can't count, calibrated per provider for the app's
+    /// lifetime (ADR-0020 §2.1).
+    pub estimator: Arc<dn_runtime::Estimator>,
     /// The dn-tools executor itself, for outcome-unknown resolution. `None` in tests.
     pub executor: Option<Arc<dn_tools::Executor>>,
     approvals: Mutex<HashMap<Id, ApprovalRequest>>,
@@ -332,6 +335,7 @@ impl AppState {
             agent: Agent::empty(),
             skills: Default::default(),
             tools: Arc::new(NoTools),
+            estimator: Default::default(),
             executor: None,
             approvals: Mutex::new(HashMap::new()),
             approval_sink: Mutex::new(None),

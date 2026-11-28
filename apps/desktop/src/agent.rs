@@ -15,6 +15,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub const AGENT_ID: &str = "assistant.default";
+/// The shared rules for answering from sources and citing them (#364).
+const ANSWER_RULES: &str = "answer.rules";
 
 /// The app's chat slot maps to this agent slot.
 const CHAT_SLOT: &str = "primary";
@@ -41,6 +43,8 @@ pub fn skills_dir(resource_dir: Option<&Path>) -> Option<PathBuf> {
 pub struct Agent {
     pub manifest: AgentManifest,
     system_prompt: Option<String>,
+    /// The shared rules for answering from sources (`answer.rules`, #364), in every chat.
+    answer_rules: Option<String>,
     load_error: Option<String>,
 }
 
@@ -91,15 +95,20 @@ impl Agent {
                 .collect::<Vec<_>>()
                 .join("; ")
         })?;
-        let vars: HashMap<&str, String> =
-            HashMap::from([("user_name", "the user".to_string()), ("today", today())]);
+        // No date here: it goes in each turn's recap (ADR-0020 §2.3, prompt v2).
+        let vars: HashMap<&str, String> = HashMap::from([("user_name", "the user".to_string())]);
         let system_prompt = registry
             .load_prompt(&manifest.prompt)
             .and_then(|p| p.render(&vars))
             .map_err(|e| e.to_string())?;
+        let answer_rules = registry
+            .load_prompt(ANSWER_RULES)
+            .and_then(|p| p.render(&HashMap::<&str, String>::new()))
+            .map_err(|e| e.to_string())?;
         Ok(Self {
             manifest,
             system_prompt: Some(system_prompt),
+            answer_rules: Some(answer_rules),
             load_error: None,
         })
     }
@@ -126,11 +135,17 @@ impl Agent {
                 policies: serde_json::from_value(serde_json::json!({})).expect("default policies"),
             },
             system_prompt: None,
+            answer_rules: None,
         }
     }
 
     pub fn system_prompt(&self) -> Option<&str> {
         self.system_prompt.as_deref()
+    }
+
+    /// The shared answer and citation rules, for every chat turn.
+    pub fn answer_rules(&self) -> Option<&str> {
+        self.answer_rules.as_deref()
     }
 
     fn chat_slot(&self) -> ModelSlot {
@@ -265,7 +280,8 @@ impl ToolExecutor for ManifestTools {
 }
 
 /// Today's date as `YYYY-MM-DD` (UTC), without a date crate.
-fn today() -> String {
+/// Today's date (UTC), `YYYY-MM-DD`, for a turn's recap.
+pub(crate) fn today() -> String {
     let days = dn_store::now_ms() / 86_400_000;
     // Howard Hinnant's civil-from-days.
     let z = days + 719_468;

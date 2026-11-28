@@ -184,7 +184,7 @@ pub fn send(
         if let Some(s) = &skill {
             crate::skills::record_answer_skill(&db, conversation_id, assistant.id, s)?;
         }
-        let history = history(state, &db, conversation_id, assistant.id, skill.as_deref())?;
+        let history = turn_parts(state, &db, conversation_id, assistant.id, skill.as_deref())?;
         (user, assistant, title, history, skill)
     };
     let label = skill.as_ref().map(|s| s.skill.label());
@@ -239,7 +239,7 @@ pub fn regenerate(
         if let Some(s) = &skill {
             crate::skills::record_answer_skill(&db, conversation_id, assistant.id, s)?;
         }
-        let history = history(state, &db, conversation_id, assistant.id, skill.as_deref())?;
+        let history = turn_parts(state, &db, conversation_id, assistant.id, skill.as_deref())?;
         (assistant, history, skill)
     };
     let label = skill.as_ref().map(|s| s.skill.label());
@@ -327,16 +327,26 @@ fn attached_files_note(
     }))
 }
 
-/// System prompt + stored conversation, minus the new placeholder and failed empty turns.
-/// The chat's project and skill add their instructions.
-fn history(
+/// What one turn sends (ADR-0020 §2): the slots the assembler fills around the stored
+/// conversation, and that conversation with the new input last.
+pub(crate) struct TurnInput {
+    pub parts: dn_runtime::Parts,
+    /// The stored conversation, minus the new placeholder and failed empty turns.
+    pub history: Vec<ChatMessage>,
+    /// How many of `history` come before the input (the input is the last user message).
+    pub turns: usize,
+}
+
+/// The turn's slots: the agent prompt, the shared answer rules, the chat's project
+/// instructions, attached data files and skill (system); the question's project excerpts
+/// (retrieved); and the date (recap). Blocking.
+fn turn_parts(
     state: &AppState,
     db: &dn_store::Connection,
     conversation_id: Id,
     exclude: Id,
     skill: Option<&Skill>,
-) -> IpcResult<Vec<ChatMessage>> {
-    let mut out = vec![];
+) -> IpcResult<TurnInput> {
     let project = crate::projects::instructions_for(db, conversation_id)?;
     let messages = store::list_messages(db, conversation_id)?;
     let question = messages
@@ -345,29 +355,38 @@ fn history(
         .find(|m| m.role == Role::User)
         .map(|m| m.text())
         .unwrap_or_default();
-    let knowledge = crate::knowledge::context_for(state, db, conversation_id, exclude, &question)?;
+    let retrieved = crate::knowledge::context_for(state, db, conversation_id, exclude, &question)?;
     let attached = attached_files_note(db, conversation_id)?;
     let system: Vec<String> = state
         .agent
         .system_prompt()
         .map(str::to_owned)
         .into_iter()
+        .chain(state.agent.answer_rules().map(str::to_owned))
         .chain(project)
-        .chain(knowledge)
         .chain(attached)
         .chain(skill.map(Skill::system_text))
         .collect();
-    if !system.is_empty() {
-        out.push(ChatMessage::text(Role::System, system.join("\n\n")));
-    }
-    out.extend(
-        messages
-            .into_iter()
-            .filter(|m| m.id != exclude)
-            .filter(|m| m.status == MessageStatus::Complete || !m.content.is_empty())
-            .map(|m| m.to_chat_message()),
-    );
-    Ok(out)
+    let history: Vec<ChatMessage> = messages
+        .into_iter()
+        .filter(|m| m.id != exclude)
+        .filter(|m| m.status == MessageStatus::Complete || !m.content.is_empty())
+        .map(|m| m.to_chat_message())
+        .collect();
+    let turns = match history.last() {
+        Some(m) if m.role == Role::User => history.len() - 1,
+        _ => history.len(),
+    };
+    Ok(TurnInput {
+        parts: dn_runtime::Parts {
+            system,
+            retrieved,
+            recap: Some(format!("Today is {}.", crate::agent::today())),
+            ..Default::default()
+        },
+        history,
+        turns,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -378,7 +397,7 @@ fn start(
     backend: Arc<dyn ChatModel>,
     mode: ArtifactMode,
     assistant: &StoredMessage,
-    history: Vec<ChatMessage>,
+    history: TurnInput,
     skill: Option<Arc<Skill>>,
     sink: impl EventSink,
 ) {
@@ -425,9 +444,19 @@ fn start(
         Some(s) => crate::skills::narrow(tools, s, tool_resolver(&state)),
         None => tools,
     };
+    // Every step of the run goes through the context assembler (ADR-0020 §2).
+    let builder = dn_runtime::TurnBuilder::new(
+        Arc::clone(&backend),
+        dn_runtime::Policy::chat(),
+        history.parts,
+        history.turns,
+        Arc::clone(&state.estimator),
+        &model,
+    );
+    let history = history.history;
     tauri::async_runtime::spawn(async move {
         let (result, failed_calls, run_result) = run(
-            &*backend, &*tools, &cfg, history, &cancel, &state, message_id, &*sink,
+            &*backend, &*tools, &cfg, history, &builder, &cancel, &state, message_id, &*sink,
         )
         .await;
         let st = Arc::clone(&state);
@@ -472,6 +501,7 @@ async fn run(
     tools: &dyn ToolExecutor,
     cfg: &LoopConfig,
     history: Vec<ChatMessage>,
+    builder: &dyn dn_agent::RequestBuilder,
     cancel: &CancelToken,
     state: &AppState,
     message_id: Id,
@@ -489,7 +519,8 @@ async fn run(
         dn_agent::observe_event(&mut meter, &ev);
         on_agent_event(ev, state, message_id, sink, &mut failed)
     };
-    let result = dn_agent::run_loop(model, tools, cfg, history, cancel, &mut on_event).await;
+    let result =
+        dn_agent::run_loop_with(model, tools, cfg, history, builder, cancel, &mut on_event).await;
     let run = match &result {
         Ok(o) => o.result.clone(),
         Err(_) => meter.finish(StopReason::Failed),
@@ -916,6 +947,15 @@ mod tests {
             }
         }
         impl ChatModel for Breaks {
+            fn limits<'a>(
+                &'a self,
+                _model: &'a dn_core::model::ModelRef,
+            ) -> dn_core::chat::BoxFuture<'a, dn_core::chat::ModelLimits> {
+                // A fake: a known size, so the context assembler can fit the turn (ADR-0020 §2).
+                Box::pin(async {
+                    dn_core::chat::ModelLimits::known(32_768, dn_core::chat::LimitSource::Provider)
+                })
+            }
             fn chat(&self, _: dn_core::chat::ChatRequest) -> dn_core::chat::EventStream {
                 Box::pin(Items(
                     vec![
@@ -1119,6 +1159,17 @@ mod tests {
     struct ToolThenAnswer;
 
     impl ChatModel for ToolThenAnswer {
+        fn limits<'a>(
+            &'a self,
+
+            _model: &'a dn_core::model::ModelRef,
+        ) -> dn_core::chat::BoxFuture<'a, dn_core::chat::ModelLimits> {
+            // A fake: a known size, so the context assembler can fit the turn (ADR-0020 §2).
+
+            Box::pin(async {
+                dn_core::chat::ModelLimits::known(32_768, dn_core::chat::LimitSource::Provider)
+            })
+        }
         fn chat(&self, req: dn_core::chat::ChatRequest) -> dn_core::chat::EventStream {
             use dn_core::chat::{StreamEvent, ToolCall};
             let has_result = req.messages.iter().any(|m| m.role == Role::Tool);
@@ -1411,6 +1462,17 @@ mod tests {
     }
 
     impl ChatModel for Recorder {
+        fn limits<'a>(
+            &'a self,
+
+            _model: &'a dn_core::model::ModelRef,
+        ) -> dn_core::chat::BoxFuture<'a, dn_core::chat::ModelLimits> {
+            // A fake: a known size, so the context assembler can fit the turn (ADR-0020 §2).
+
+            Box::pin(async {
+                dn_core::chat::ModelLimits::known(32_768, dn_core::chat::LimitSource::Provider)
+            })
+        }
         fn chat(&self, req: dn_core::chat::ChatRequest) -> dn_core::chat::EventStream {
             use dn_core::chat::{StreamEvent, ToolCall};
             let answered = req.messages.iter().any(|m| m.role == Role::Tool);
@@ -1472,6 +1534,39 @@ mod tests {
         let reqs = rec.requests.lock().unwrap();
         assert!(system_text(&reqs[0]).contains("Answer in British English."));
         assert!(!system_text(&reqs[1]).contains("British"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_turn_goes_through_the_assembler_and_its_run_keeps_the_context_use() {
+        let rec = Arc::new(Recorder::default());
+        let st = artifact_state("local:scripted", rec.clone(), true);
+        let conv = st.create_conversation().unwrap();
+        let (started, _) = turn(&st, conv.id, "hi").await;
+        {
+            let reqs = rec.requests.lock().unwrap();
+            let last = reqs[0].messages.last().unwrap();
+            assert_eq!(last.role, Role::User);
+            let texts: Vec<String> = last
+                .content
+                .iter()
+                .filter_map(|p| match p {
+                    dn_core::chat::ContentPart::Text { text } => Some(text.clone()),
+                    _ => None,
+                })
+                .collect();
+            // The input as typed, then the date in the recap (ADR-0020 §2.3).
+            assert_eq!(texts[0], "hi");
+            assert!(texts[1].starts_with("Today is "), "{texts:?}");
+        }
+        // The stored message keeps only what was typed.
+        let db = st.db().unwrap();
+        let stored = store::list_messages(&db, conv.id).unwrap();
+        assert_eq!(stored[0].text(), "hi");
+        let run = crate::runs::for_message(&db, started.assistant_message.id)
+            .unwrap()
+            .expect("the run is stored");
+        let c = run.context.expect("the assembler's context use is stored");
+        assert!(c.used_tokens > 0 && c.used_tokens <= c.budget_tokens);
     }
 
     #[tokio::test(flavor = "multi_thread")]

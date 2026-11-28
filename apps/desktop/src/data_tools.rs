@@ -193,25 +193,13 @@ fn run(
         tracing::warn!("data tool: a file's copy can't be read: {e}");
         format!("The copy of \"{}\" can't be read.", shown(&file.name))
     })?;
-    let (capability, result) = match request {
-        Request::Profile(a) => (
-            CAPABILITY_ID,
-            dn_data::tool::run(&file.name, &bytes, a.sheet.as_deref()),
-        ),
-        Request::Aggregate(a) => (
-            AGGREGATE_CAPABILITY_ID,
-            dn_data::tool::run_aggregate(&file.name, &bytes, a),
-        ),
+    let result = match request {
+        Request::Profile(a) => dn_data::tool::run(&file.name, &bytes, a.sheet.as_deref()),
+        Request::Aggregate(a) => dn_data::tool::run_aggregate(&file.name, &bytes, a),
     };
-    // Chat doesn't run on dn-runtime yet, which wraps every tool result: wrap it here, once.
-    // (Removed when chat moves onto the runtime, ADR-0020 R1.)
-    result.map(|p| {
-        format!(
-            "{}{}",
-            note.unwrap_or_default(),
-            dn_data::tool::wrap(capability, &file.name, &p.text)
-        )
-    })
+    // Plain text: dn-runtime quotes every tool result as untrusted when it builds the prompt
+    // (ADR-0020 §2.4), so it isn't wrapped twice.
+    result.map(|p| format!("{}{}", note.unwrap_or_default(), p.text))
 }
 
 #[cfg(test)]
@@ -274,7 +262,8 @@ mod tests {
                 panic!()
             };
             assert!(text.contains("\"revenue\" sum: 14.50"), "{text}");
-            assert!(text.contains("<<<SOURCE tool:data.profile file=\"sales.csv\""));
+            // Plain text: the runtime quotes tool results when it builds the prompt.
+            assert!(!text.contains("<<<SOURCE"), "{text}");
 
             let out = tools
                 .execute(&call(serde_json::json!({"file": "missing.csv"})))
@@ -298,7 +287,7 @@ mod tests {
     }
 
     #[test]
-    fn data_aggregate_answers_a_filtered_question_wrapped_once() {
+    fn data_aggregate_answers_a_filtered_question() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let (st, project, dir) = state_with(&[(
             "sales.csv",
@@ -324,7 +313,7 @@ mod tests {
                 panic!()
             };
             assert!(text.contains("sum of \"revenue\" where \"region\" is \"north\": 12.75"), "{text}");
-            assert_eq!(text.matches("\n<<<SOURCE ").count(), 1, "wrapped once: {text}");
+            assert!(!text.contains("<<<SOURCE"), "not wrapped here: {text}");
         });
         let _ = std::fs::remove_dir_all(dir);
     }
