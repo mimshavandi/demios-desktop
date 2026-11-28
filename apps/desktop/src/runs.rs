@@ -115,6 +115,8 @@ pub fn for_message(conn: &Connection, message_id: Id) -> Result<Option<RunResult
                 wall_ms: row.get::<_, i64>(11)?.max(0) as u64,
                 first_token_ms: row.get::<_, Option<i64>>(12)?.map(|t| t.max(0) as u64),
                 dropped: serde_json::from_str(&dropped).map_err(|e| bad_column(13, e))?,
+                // Stored from ADR-0020 R1 PR 4, when chat runs through dn-runtime.
+                context: None,
             })
         },
     )
