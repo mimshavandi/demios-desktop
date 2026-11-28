@@ -1048,15 +1048,17 @@ mod tests {
         }
         assert!(stop(&st, conv.id));
         wait_idle(&st, conv.id).await;
-        let db = st.db().unwrap();
-        let msgs = store::list_messages(&db, conv.id).unwrap();
-        assert_eq!(msgs[1].status, MessageStatus::Cancelled);
-        let full = FakeChatModel::reply_for(&crate::fake::test_support::request("stop me"));
-        assert!(msgs[1].text().len() < full.len());
-        let run = crate::runs::for_message(&db, msgs[1].id)
-            .unwrap()
-            .expect("a run record");
-        assert_eq!(run.stop, StopReason::Cancelled);
+        {
+            let db = st.db().unwrap();
+            let msgs = store::list_messages(&db, conv.id).unwrap();
+            assert_eq!(msgs[1].status, MessageStatus::Cancelled);
+            let full = FakeChatModel::reply_for(&crate::fake::test_support::request("stop me"));
+            assert!(msgs[1].text().len() < full.len());
+            let run = crate::runs::for_message(&db, msgs[1].id)
+                .unwrap()
+                .expect("a run record");
+            assert_eq!(run.stop, StopReason::Cancelled);
+        }
         // The Done event is sent after the row is stored and the busy flag is released, so
         // wait for it rather than assume it's there (flaky on CI otherwise).
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
