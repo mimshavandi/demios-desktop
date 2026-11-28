@@ -10,6 +10,8 @@ Chat skills move to the open Agent Skills format (ADR-0020 §7): a `SKILL.md` an
 - slide decks with PPTX export (Python with python-pptx, Node for HTML-to-slide layout, LibreOffice to render previews);
 - spreadsheet and PDF skills (Python; LibreOffice for recalculation and conversion).
 
+The owner decided (2026-11-28) that the built-in skills reuse these open Python and Node skills, run in the sandbox this ADR describes, rather than being rewritten now. Rust tools for them come later, with a bigger team; that is the point to revisit this decision ([#405](https://github.com/mimshavandi/demios-desktop/issues/405)).
+
 Today nothing in Demios runs code from a skill. The only programs the app starts are local MCP tool servers, which the person adds and approves at launch (ADR-0006), and which run with the person's own rights. That's acceptable for a server the person chose to install. It isn't for a script that a model decides to run with arguments a prompt injection may have shaped, on files that may come from anyone.
 
 Running skill scripts needs four decisions:
