@@ -52,7 +52,7 @@ jobs:
           echo "DEMIOS_BUILD_COMMIT=$short" >> "$GITHUB_ENV"
           echo "short=$short" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "name=Demios-Desktop-$version-preview-$short-macos-arm64" >> "$GITHUB_OUTPUT"
+          echo "name=Almend-Desktop-$version-preview-$short-macos-arm64" >> "$GITHUB_OUTPUT"
       - name: npm ci
         working-directory: apps/desktop
         run: npm ci
@@ -103,7 +103,7 @@ jobs:
       - name: Summary
         run: |
           {
-            echo "## Demios Desktop ${{ steps.info.outputs.version }} preview (unsigned)"
+            echo "## Almend Desktop ${{ steps.info.outputs.version }} preview (unsigned)"
             echo
             echo "- Commit: \`${GITHUB_SHA}\` (About shows \`${{ steps.info.outputs.short }}\`)"
             echo "- Version: ${{ steps.info.outputs.version }}, macOS arm64 (Apple silicon), release build with local inference (llama.cpp + Metal)"
@@ -116,9 +116,9 @@ jobs:
             echo "### Opening an unsigned app"
             echo "This build is not signed or notarized, so macOS blocks it the first time."
             echo
-            echo "1. Unzip the artifact, open the .dmg and drag **Demios Desktop** to Applications (or unzip the .app.zip)."
+            echo "1. Unzip the artifact, open the .dmg and drag **Almend Desktop** to Applications (or unzip the .app.zip)."
             echo "2. In Finder, **right-click (Control-click) the app › Open**, then **Open** in the dialog. On macOS 15 and later, if there is no Open button: try to open it once, then go to **System Settings › Privacy & Security** and click **Open Anyway**."
-            echo "3. Or, in Terminal: \`xattr -dr com.apple.quarantine \"/Applications/Demios Desktop.app\"\`"
+            echo "3. Or, in Terminal: \`xattr -dr com.apple.quarantine \"/Applications/Almend Desktop.app\"\`"
             echo
             echo "Checklist: apps/desktop/e2e/README.md, \"Preview builds (unsigned)\" (#51)."
             echo

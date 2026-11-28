@@ -11,7 +11,7 @@
 //   bundle fails the run.
 // - The notes are the version's section of CHANGELOG.md (docs/releasing.md), as written.
 //
-// Bundle names (see .github/workflows/release.yml): Demios-Desktop-<version>-<os>-<arch>.<ext>
+// Bundle names (see .github/workflows/release.yml): Almend-Desktop-<version>-<os>-<arch>.<ext>
 //   macos-arm64.app.tar.gz → darwin-aarch64, macos-x64.app.tar.gz → darwin-x86_64,
 //   windows-x64-setup.exe → windows-x86_64, linux-x86_64.AppImage → linux-x86_64.
 
@@ -52,7 +52,7 @@ export function latestJson({ version, tag, repo, notes, pubDate, files, platform
   const out = { version, notes, pub_date: pubDate, platforms: {} };
   for (const p of PLATFORMS) {
     // The exact name only: a stale `…-0.2.0-rc.1-…` or a renamed copy is never picked up.
-    const bundle = names.find((n) => n === `Demios-Desktop-${version}${p.suffix}`);
+    const bundle = names.find((n) => n === `Almend-Desktop-${version}${p.suffix}`);
     const wanted = platforms === undefined ? bundle !== undefined : platforms.includes(p.platform);
     if (!wanted) continue;
     if (bundle === undefined) throw new Error(`${p.platform}: no update bundle (*${p.suffix})`);

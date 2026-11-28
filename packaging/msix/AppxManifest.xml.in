@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  MSIX manifest template for Demios Desktop (T-STORE-04, issue #56).
+  MSIX manifest template for Almend Desktop (T-STORE-04, issue #56).
   build-msix.mjs fills every {{…}} value; the identity values come from identity.json or the
   MSIX_* environment variables (packaging/msix/README.md). Don't put real Partner Center values
   in this file.

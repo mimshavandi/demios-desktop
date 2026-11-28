@@ -58,7 +58,7 @@ jobs:
           {
             echo "version=$version"
             echo "short=$short"
-            echo "prefix=Demios-Desktop-$version-preview"
+            echo "prefix=Almend-Desktop-$version-preview"
             echo "tag=v$version-preview.$short"
           } >> "$GITHUB_OUTPUT"
 
@@ -160,12 +160,12 @@ jobs:
           install_app() {
             mnt="$(mktemp -d)"
             hdiutil attach -nobrowse -readonly -mountpoint "$mnt" "out/$NAME.dmg" > /dev/null
-            rm -rf "/Applications/Demios Desktop.app"
-            cp -R "$mnt/Demios Desktop.app" /Applications/
+            rm -rf "/Applications/Almend Desktop.app"
+            cp -R "$mnt/Almend Desktop.app" /Applications/
             hdiutil detach "$mnt" > /dev/null
           }
           launch() {
-            "/Applications/Demios Desktop.app/Contents/MacOS/demios-desktop" > "app-$1.log" 2>&1 &
+            "/Applications/Almend Desktop.app/Contents/MacOS/demios-desktop" > "app-$1.log" 2>&1 &
             pid=$!
             ok=""
             for i in $(seq 1 30); do
@@ -328,7 +328,7 @@ jobs:
           trap { $log + "FAILED: $_" | Set-Content out/smoke-windows.txt; break }
           # NSIS, per-user, silent.
           Start-Process -Wait -FilePath $setup -ArgumentList '/S'
-          $exe = Find-Exe (Join-Path $env:LOCALAPPDATA 'Demios Desktop')
+          $exe = Find-Exe (Join-Path $env:LOCALAPPDATA 'Almend Desktop')
           if (-not $exe) { throw 'NSIS install: demios-desktop.exe not found' }
           $log += "nsis: installed to $exe"
           # The Vulkan loader the exe links against sits next to it (Windows loads an exe's
@@ -527,7 +527,7 @@ jobs:
           sha256sum -- * > SHA256SUMS.txt
           cat SHA256SUMS.txt
           {
-            echo "## Demios Desktop ${{ needs.meta.outputs.version }} preview installers (unsigned)"
+            echo "## Almend Desktop ${{ needs.meta.outputs.version }} preview installers (unsigned)"
             echo
             echo "Commit \`$GITHUB_SHA\` (About shows \`${{ needs.meta.outputs.short }}\`). Artifact: **${{ needs.meta.outputs.prefix }}-${{ needs.meta.outputs.short }}**, kept 14 days."
             echo
@@ -580,5 +580,5 @@ jobs:
             .github/release-preview/notes.md > notes.md
           gh release create "$TAG" release/dist/* \
             --prerelease --latest=false --target "$GITHUB_SHA" \
-            --title "Demios Desktop $VERSION (Preview, unsigned)" \
+            --title "Almend Desktop $VERSION (Preview, unsigned)" \
             --notes-file notes.md

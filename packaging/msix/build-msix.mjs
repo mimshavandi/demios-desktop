@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Builds a Microsoft Store (MSIX) package of Demios Desktop (T-STORE-04, issue #56).
+// Builds a Microsoft Store (MSIX) package of Almend Desktop (T-STORE-04, issue #56).
 //
 // Tauri 2 bundles MSI and NSIS but not MSIX, so this script:
 //   1. builds the release app without an installer (`tauri build --no-bundle`),
