@@ -517,7 +517,7 @@ pub fn add_message(conn: &Connection, conversation_id: Id, m: NewMessage) -> Res
         created_at: now,
         updated_at: now,
     };
-    tx.execute(
+    let inserted = tx.execute(
         // `incognito` is copied from the chat (a trigger checks it matches).
         "INSERT INTO store_messages
            (id, conversation_id, role, content, tool_calls, tool_call_id, model, status,
@@ -535,6 +535,12 @@ pub fn add_message(conn: &Connection, conversation_id: Id, m: NewMessage) -> Res
             now,
         ],
     )?;
+    // The INSERT … SELECT writes nothing for a missing chat: never report that as done.
+    if inserted != 1 {
+        return Err(StoreError::NotFound(format!(
+            "conversation {conversation_id}"
+        )));
+    }
     bump_conversation(&tx, conversation_id, now)?;
     tx.commit()?;
     Ok(msg)

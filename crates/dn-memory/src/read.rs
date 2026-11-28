@@ -136,7 +136,7 @@ pub fn retrieve(
         .map(|p| p.labels.iter().map(|(_, id)| id.as_str()).collect())
         .unwrap_or_default();
     let allowed: Vec<Item> = in_scope(conn, scopes)?;
-    let hits = store::search_ranked(conn, input, 4 * k)?;
+    let hits = store::search_ranked_in(conn, input, scopes, k + in_profile.len())?;
     let first = profile.map_or(0, |p| p.labels.len());
     let mut out = Vec::new();
     for id in hits {
@@ -184,8 +184,9 @@ pub fn cited(answer: &str, known: &[&str]) -> (String, Vec<String>) {
     (text, found)
 }
 
-fn id_of(s: &str) -> Option<Id> {
-    serde_json::from_value(serde_json::Value::String(s.to_owned())).ok()
+fn id_of(s: &str) -> Result<Id> {
+    serde_json::from_value(serde_json::Value::String(s.to_owned()))
+        .map_err(|_| store::MemoryError::Invalid(format!("memory id {s:?} isn't an id")))
 }
 
 /// What the answer used: every retrieved item, and profile items it cited.
@@ -193,29 +194,25 @@ pub fn used(
     profile: Option<&Profile>,
     retrieved: &[Retrieved],
     cited: &[String],
-) -> Vec<UsedMemory> {
+) -> Result<Vec<UsedMemory>> {
     let mut out = Vec::new();
     for r in retrieved {
-        if let Some(id) = id_of(&r.item.id) {
-            out.push(UsedMemory {
-                id,
-                how: MemoryUse::Retrieved,
-            });
-        }
+        out.push(UsedMemory {
+            id: id_of(&r.item.id)?,
+            how: MemoryUse::Retrieved,
+        });
     }
     if let Some(p) = profile {
         for (label, item) in &p.labels {
-            if cited.contains(label)
-                && let Some(id) = id_of(item)
-            {
+            if cited.contains(label) {
                 out.push(UsedMemory {
-                    id,
+                    id: id_of(item)?,
                     how: MemoryUse::Profile,
                 });
             }
         }
     }
-    out
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -419,11 +416,39 @@ mod tests {
             .unwrap()
             .unwrap();
         let r = retrieve(&c, &[Scope::Account], "review", Some(&p), 3).unwrap();
-        let u = used(Some(&p), &r, &["M1".into()]);
+        let u = used(Some(&p), &r, &["M1".into()]).unwrap();
         let ids: Vec<(String, MemoryUse)> = u.iter().map(|m| (m.id.to_string(), m.how)).collect();
         assert_eq!(
             ids,
             [(x.id, MemoryUse::Retrieved), (a.id, MemoryUse::Profile)]
         );
+    }
+
+    #[test]
+    fn out_of_scope_matches_dont_crowd_out_in_scope_ones() {
+        let c = db();
+        for i in 0..12 {
+            store::add_user(
+                &c,
+                Scope::Project("other".into()),
+                Kind::Fact,
+                "trip",
+                &format!("Lisbon note {i}"),
+                None,
+            )
+            .unwrap();
+        }
+        let mine = store::add_user(
+            &c,
+            Scope::Account,
+            Kind::Fact,
+            "trip",
+            "Lisbon in May",
+            None,
+        )
+        .unwrap();
+        let r = retrieve(&c, &[Scope::Account], "Lisbon", None, 1).unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].item.id, mine.id);
     }
 }
