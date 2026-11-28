@@ -60,7 +60,7 @@ pub fn media_type(name: &str) -> &'static str {
 
 /// A display name from a picked path: its last component, without control or bidi
 /// characters, at most [`FILE_NAME_MAX`] characters.
-fn display_name(src: &Path) -> String {
+pub(crate) fn display_name(src: &Path) -> String {
     let raw = src
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -134,6 +134,29 @@ pub fn import(
     src: &Path,
 ) -> Result<ProjectFile, ImportError> {
     project::get_project(conn, project_id).map_err(ImportError::Store)?;
+    let dir = project::project_dir(root, project_id);
+    let (id, size, sha256) = copy_in(&dir, src)?;
+    let fin = dir.join(id.to_string());
+    let name = display_name(src);
+    let new = NewProjectFile {
+        id,
+        media_type: media_type(&name).into(),
+        name,
+        size,
+        sha256,
+        source_path: Some(src.display().to_string()),
+    };
+    project::add_file(conn, project_id, new, MAX_FILES).map_err(|e| {
+        let _ = std::fs::remove_file(&fin);
+        ImportError::Store(e)
+    })
+}
+
+/// Copies `src` into `dir` (created `0700`) under a new id, checking the opened handle, at
+/// most [`MAX_FILE_BYTES`]: written to `<id>.part` and renamed when complete, so a crash
+/// never leaves a half file under a real id. Returns the id, size and SHA-256. Shared by
+/// project files and chat files (#370).
+pub(crate) fn copy_in(dir: &Path, src: &Path) -> Result<(Id, u64, String), ImportError> {
     let mut input = std::fs::File::open(src).map_err(ImportError::Unreadable)?;
     // Check the opened handle, not the path, so the file can't be swapped in between.
     let meta = input.metadata().map_err(ImportError::Unreadable)?;
@@ -143,8 +166,7 @@ pub fn import(
     if meta.len() > MAX_FILE_BYTES {
         return Err(ImportError::TooLarge);
     }
-    let dir = project::project_dir(root, project_id);
-    private_dir(&dir).map_err(ImportError::Unreadable)?;
+    private_dir(dir).map_err(ImportError::Unreadable)?;
     let id = Id::new();
     let part = dir.join(format!("{id}.part"));
     let fin = dir.join(id.to_string());
@@ -171,26 +193,13 @@ pub fn import(
         std::fs::rename(&part, &fin).map_err(ImportError::Unreadable)?;
         Ok((total, hex(&hash.finalize())))
     })();
-    let (size, sha256) = match copied {
-        Ok(v) => v,
+    match copied {
+        Ok((size, sha256)) => Ok((id, size, sha256)),
         Err(e) => {
             let _ = std::fs::remove_file(&part);
-            return Err(e);
+            Err(e)
         }
-    };
-    let name = display_name(src);
-    let new = NewProjectFile {
-        id,
-        media_type: media_type(&name).into(),
-        name,
-        size,
-        sha256,
-        source_path: Some(src.display().to_string()),
-    };
-    project::add_file(conn, project_id, new, MAX_FILES).map_err(|e| {
-        let _ = std::fs::remove_file(&fin);
-        ImportError::Store(e)
-    })
+    }
 }
 
 /// Deletes the local copies of purged files and the folders of purged projects.

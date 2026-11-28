@@ -112,6 +112,10 @@ const COMMANDS: &[&str] = &[
     "launch_update_check",
     // Knowledge search (knowledge.rs, #116): what an answer was given.
     "message_sources",
+    // Files attached to a chat (chat_files.rs, #370).
+    "list_chat_files",
+    "add_chat_files",
+    "remove_chat_file",
     // The embedding-model offer (#171).
     "knowledge_status",
     "knowledge_offer",

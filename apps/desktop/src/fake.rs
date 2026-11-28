@@ -88,6 +88,14 @@ impl FakeChatModel {
     /// What the fake does for `req`: a tool call (artifacts, when the tool is offered) or
     /// the canned text reply.
     pub fn plan(req: &ChatRequest) -> (String, Option<ToolCall>) {
+        /// A tool result as the runtime quotes it (`<<<SOURCE tool:… ` … `SOURCE>>>`, ADR-0020
+        /// §2.4): the tool's own text inside, as a model reads it.
+        fn unquote(t: &str) -> &str {
+            t.strip_prefix(dn_core::untrusted::OPEN)
+                .and_then(|r| r.split_once('\n'))
+                .and_then(|(_, body)| body.strip_suffix(dn_core::untrusted::CLOSE))
+                .map_or(t, |b| b.strip_suffix('\n').unwrap_or(b))
+        }
         let offered = |name: &str| req.tools.iter().any(|t| t.name == name);
         let last = req.messages.last();
         if let Some(m) = last.filter(|m| m.role == Role::Tool) {
@@ -113,7 +121,7 @@ impl FakeChatModel {
             // The id comes from the latest successful artifact tool result in the history.
             let id = req.messages.iter().rev().find_map(|m| {
                 (m.role == Role::Tool)
-                    .then(|| serde_json::from_str::<serde_json::Value>(&text_of(m)).ok())
+                    .then(|| serde_json::from_str::<serde_json::Value>(unquote(&text_of(m))).ok())
                     .flatten()
                     .and_then(|v| v.get("id").and_then(|i| i.as_str()).map(String::from))
             });
@@ -192,6 +200,15 @@ impl FakeChatModel {
 }
 
 impl ChatModel for FakeChatModel {
+    fn limits<'a>(
+        &'a self,
+        _model: &'a dn_core::model::ModelRef,
+    ) -> dn_core::chat::BoxFuture<'a, dn_core::chat::ModelLimits> {
+        // A fake: a known size, so the context assembler can fit the turn (ADR-0020 §2).
+        Box::pin(async {
+            dn_core::chat::ModelLimits::known(32_768, dn_core::chat::LimitSource::Provider)
+        })
+    }
     fn chat(&self, req: ChatRequest) -> EventStream {
         let (reply, tool_call) = Self::plan(&req);
         let mut chunks: VecDeque<String> = VecDeque::new();

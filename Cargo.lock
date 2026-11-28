@@ -1330,6 +1330,7 @@ dependencies = [
  "dn-models",
  "dn-plugin-api",
  "dn-providers",
+ "dn-runtime",
  "dn-secrets",
  "dn-store",
  "dn-sync",
@@ -1674,6 +1675,7 @@ dependencies = [
 name = "dn-runtime"
 version = "0.1.0"
 dependencies = [
+ "dn-agent",
  "dn-core",
  "serde_json",
  "thiserror 2.0.21",

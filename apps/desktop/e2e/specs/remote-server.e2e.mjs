@@ -24,7 +24,8 @@ function sse(res, chunks, finish) {
   res.end(out);
 }
 
-/** A mock Ollama: `/v1/models`, `/api/version`, `/api/show`, streaming chat with a tool call. */
+/** A mock Ollama: `/v1/models`, `/api/version`, `/api/show`, `/api/ps` (the model is loaded,
+ * so Demios knows its context size, ADR-0020 §2.1), streaming chat with a tool call. */
 function mockServer() {
   const chats = [];
   const server = http.createServer((req, res) => {
@@ -38,6 +39,9 @@ function mockServer() {
       } else if (req.method === "GET" && req.url === "/api/version") {
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify({ version: "0.12.0" }));
+      } else if (req.method === "GET" && req.url === "/api/ps") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ models: [{ name: "mock-chat", model: "mock-chat", context_length: 8192 }] }));
       } else if (req.method === "POST" && req.url === "/api/show") {
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify({ capabilities: ["completion", "tools"] }));
