@@ -104,26 +104,35 @@ pub struct Layout {
     pub bad_utf8: Vec<String>,
     /// Key → bytes its value takes in the header.
     pub value_bytes: BTreeMap<String, u64>,
+    /// Keys written more than once (llama.cpp refuses such a file; the map keeps the last).
+    pub duplicate_keys: Vec<String>,
     /// SHA-256 over the tokenizer as written ([`TOKENIZER_KEYS`], each key's name, type and
     /// raw value bytes, in key order). Two files with the same fingerprint split text into
     /// the same token ids. `None` for a file without a vocabulary.
     pub tokenizer_sha256: Option<String>,
 }
 
-/// The keys that decide how text becomes token ids, for [`Layout::tokenizer_sha256`]. Scores
-/// are left out: they only rank merges for some tokenizer types and converters round them
-/// differently.
+/// The keys that decide how text becomes token ids, for [`Layout::tokenizer_sha256`]:
+/// the vocabulary and its merges, token types and scores (which segment text for SPM
+/// tokenizers), the special token ids, and the flags that change how text is split.
 pub const TOKENIZER_KEYS: &[&str] = &[
     "tokenizer.ggml.model",
     "tokenizer.ggml.pre",
     "tokenizer.ggml.tokens",
     "tokenizer.ggml.merges",
     "tokenizer.ggml.token_type",
+    "tokenizer.ggml.scores",
+    "tokenizer.ggml.precompiled_charsmap",
     "tokenizer.ggml.bos_token_id",
     "tokenizer.ggml.eos_token_id",
     "tokenizer.ggml.eot_token_id",
+    "tokenizer.ggml.eom_token_id",
     "tokenizer.ggml.padding_token_id",
     "tokenizer.ggml.unknown_token_id",
+    "tokenizer.ggml.add_bos_token",
+    "tokenizer.ggml.add_eos_token",
+    "tokenizer.ggml.add_space_prefix",
+    "tokenizer.ggml.remove_extra_whitespaces",
 ];
 
 const MAX_STR: u64 = 16 << 20;
@@ -318,7 +327,9 @@ impl Gguf {
                 layout.bad_utf8.push(key.clone());
             }
             layout.key_types.insert(key.clone(), (ty, r.last_item));
-            metadata.insert(key, v);
+            if metadata.insert(key.clone(), v).is_some() {
+                layout.duplicate_keys.push(key);
+            }
             budget(r.pos)?;
         }
         // The count comes from the file: cap the pre-allocation, let real entries grow it.

