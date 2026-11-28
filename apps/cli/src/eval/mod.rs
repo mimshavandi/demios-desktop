@@ -10,9 +10,13 @@
 //! - `speed`: time to first token, tokens per second, p50/p95, cold and warm, from a list of
 //!   cases (format `dn.speed.v1`).
 //!
-//! Every run writes one JSON report (schema `dn.eval.v1`), never anything else, and sends
-//! nothing anywhere: the model is a local GGUF or the endpoint you name.
+//! - `judge`: scores a parity answers report with the fixed judge named in `judge.yaml`
+//!   (#355); a separate step, and the only one that sends anything (to the judge).
+//!
+//! Every answering run writes one JSON report (schema `dn.eval.v1`), never anything else, and
+//! sends nothing anywhere: the model is a local GGUF or the endpoint you name.
 
+mod judge;
 mod longmemeval;
 mod parity;
 mod speed;
@@ -45,6 +49,9 @@ enum Suite {
     Longmemeval(longmemeval::LongMemEvalArgs),
     /// Time to first token and tokens per second, p50/p95, cold and warm.
     Speed(speed::SpeedArgs),
+    /// Judge a parity answers report with the fixed judge (`judge.yaml`): checks each
+    /// case's must / must_not. The only step that sends anything, to the judge's endpoint.
+    Judge(judge::JudgeArgs),
 }
 
 pub async fn run(a: EvalArgs) -> Result<(), String> {
@@ -52,6 +59,7 @@ pub async fn run(a: EvalArgs) -> Result<(), String> {
         Suite::Parity(a) => parity::run(a).await,
         Suite::Longmemeval(a) => longmemeval::run(a).await,
         Suite::Speed(a) => speed::run(a).await,
+        Suite::Judge(a) => judge::run(a).await,
     }
 }
 
