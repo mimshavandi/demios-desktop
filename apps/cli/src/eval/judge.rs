@@ -115,22 +115,25 @@ fn read_prompt(judge_yaml: &Path, name: &str) -> Result<(String, String), String
     Ok((text, sha))
 }
 
-/// Whether a plain-`http` endpoint's host is this machine (`localhost`, `127.x`, `::1`).
-fn loopback_http(endpoint: &str) -> bool {
-    let rest = endpoint.get(7..).unwrap_or("");
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    let host_port = authority.rsplit('@').next().unwrap_or("");
-    let host = if let Some(v6) = host_port.strip_prefix('[') {
-        v6.split(']').next().unwrap_or("")
-    } else {
-        host_port.split(':').next().unwrap_or("")
+/// Whether a key may go to `endpoint`: `https`, or plain `http` to this machine
+/// (`localhost`, `127.x`, `::1`). Parsed as the HTTP client parses it (the `url` crate), so a
+/// URL can't look local here and go elsewhere there.
+fn safe_for_key(endpoint: &str) -> bool {
+    let Ok(u) = url::Url::parse(endpoint.trim()) else {
+        return false;
     };
-    let host = host.to_ascii_lowercase();
-    host == "localhost"
-        || host == "::1"
-        || host
-            .parse::<std::net::Ipv4Addr>()
-            .is_ok_and(|a| a.is_loopback())
+    match u.scheme() {
+        "https" => true,
+        "http" => match u.host() {
+            Some(url::Host::Domain(d)) => d.eq_ignore_ascii_case("localhost"),
+            Some(url::Host::Ipv4(a)) => a.is_loopback(),
+            Some(url::Host::Ipv6(a)) => {
+                a.is_loopback() || a.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback())
+            }
+            None => false,
+        },
+        _ => false,
+    }
 }
 
 impl Judge {
@@ -145,16 +148,10 @@ impl Judge {
                 path.display()
             ));
         }
-        let ep = file.endpoint.trim();
-        if file.api_key_env.is_some()
-            && ep
-                .get(..7)
-                .is_some_and(|p| p.eq_ignore_ascii_case("http://"))
-            && !loopback_http(ep)
-        {
+        if file.api_key_env.is_some() && !safe_for_key(&file.endpoint) {
             return Err(format!(
-                "{}: the endpoint is plain http and not on this machine; the key and the cases \
-                 would go out unencrypted: use https",
+                "{}: with a key, the endpoint must be https (or plain http on this machine); \
+                 the key and the cases must not go out unencrypted",
                 path.display()
             ));
         }
@@ -993,7 +990,7 @@ pub async fn run(a: JudgeArgs) -> Result<(), String> {
                     a.judge.display()
                 ));
             }
-            if answers.holdout() && in_git_work_tree(dir) {
+            if answers.holdout() && in_git_work_tree(&dir.join("x")) {
                 return Err(format!(
                     "the references {} are inside a git work tree: a holdout's references stay \
                      outside any repository",
@@ -1378,6 +1375,11 @@ mod tests {
         assert!(read("http://localhost:8080/v1", true).is_ok());
         assert!(read("http://127.0.0.1:8080/v1", true).is_ok());
         assert!(read("http://[::1]:8080/v1", true).is_ok());
+        assert!(read("http://evil.test\\@localhost/v1", true).is_err());
+        assert!(read("http:evil.test/v1", true).is_err());
+        assert!(read("ftp://localhost/v1", true).is_err());
+        assert!(read("http://LOCALHOST:8080/v1", true).is_ok());
+        assert!(read("http://[::ffff:127.0.0.1]:8080/v1", true).is_ok());
         assert!(
             read("http://judge.example.test/v1", false).is_ok(),
             "no key to leak"
