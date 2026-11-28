@@ -16,6 +16,7 @@
 //! Every answering run writes one JSON report (schema `dn.eval.v1`), never anything else, and
 //! sends nothing anywhere: the model is a local GGUF or the endpoint you name.
 
+mod context;
 mod judge;
 mod longmemeval;
 mod parity;
@@ -52,6 +53,9 @@ enum Suite {
     /// Judge a parity answers report with the fixed judge (`judge.yaml`): checks each
     /// case's must / must_not. The only step that sends anything, to the judge's endpoint.
     Judge(judge::JudgeArgs),
+    /// How much of its context a local model uses well: needle, multikey and multihop recall
+    /// at growing lengths (#350).
+    Context(context::ContextArgs),
 }
 
 pub async fn run(a: EvalArgs) -> Result<(), String> {
@@ -60,6 +64,7 @@ pub async fn run(a: EvalArgs) -> Result<(), String> {
         Suite::Longmemeval(a) => longmemeval::run(a).await,
         Suite::Speed(a) => speed::run(a).await,
         Suite::Judge(a) => judge::run(a).await,
+        Suite::Context(a) => context::run(a).await,
     }
 }
 
@@ -92,6 +97,16 @@ impl ChatModel for Loaded {
             Self::Endpoint(m) => m.chat(req),
         }
     }
+
+    fn count_tokens(
+        &self,
+        req: &dn_core::chat::ChatRequest,
+    ) -> Option<Result<u32, dn_core::CoreError>> {
+        match self {
+            Self::Local(m) => m.count_tokens(req),
+            Self::Endpoint(m) => m.count_tokens(req),
+        }
+    }
 }
 
 impl Loaded {
@@ -114,6 +129,11 @@ pub struct Model {
 }
 
 impl ModelArgs {
+    /// The model as given (a GGUF path or catalogue id; with `--endpoint`, the server's name).
+    pub fn model_name(&self) -> String {
+        self.model.clone()
+    }
+
     /// Loads the model. `min_ctx`: context the suite needs at least (in-process only).
     pub async fn load(&self, min_ctx: Option<u32>) -> Result<Model, String> {
         if let Some(ep) = &self.endpoint {

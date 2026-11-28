@@ -123,6 +123,28 @@ match the answers report's.
 
 For a holdout's answers, pass the same `--holdout`, and `--out` outside any git work tree.
 
+## Context: how much of its window a model uses well
+
+```bash
+dn eval context <model> [--lengths 4096,8192,...] [--samples 5] [--out report.json]
+```
+
+Measures how far into its context a local model still finds what it's asked for, so the
+assembler's effective-context default (60% of the loaded context until measured, #350) can be
+set per model. The documents are synthetic and generated in the runner, the same every run,
+so there's nothing to download. Lengths are counted with the model's own tokenizer, from 4k
+up to its training context. At each length:
+
+- **needle:** one fact (an access code) at five depths, two documents each;
+- **multikey:** four similar facts, asked for one (`--samples` documents);
+- **multihop:** a chain of four notes (`V2 = V1`, …) spread through the document, with two
+  decoy chains, asked for the last one's value (`--samples` documents).
+
+An answer is right when it states the expected number. A length is **effective** when its
+accuracy, and every shorter length's, is at least 0.85. The report gives accuracy per length
+and task, the effective length and its share of the training context. It loads the model
+with a context just above the longest length, so long lengths need memory and time.
+
 ## Speed
 
 ```bash
