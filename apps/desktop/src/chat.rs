@@ -456,9 +456,18 @@ fn start(
         Some(s) => crate::skills::narrow(tools, s, tool_resolver(&state)),
         None => tools,
     };
+    // A size the person set answers for a model nobody else knows (design ContextSize).
+    let user_size = state
+        .settings()
+        .ok()
+        .and_then(|s| s.context_sizes.get(&model.to_string()).copied());
+    let sized: Arc<dyn ChatModel> = Arc::new(dn_runtime::WithUserSize {
+        inner: Arc::clone(&backend),
+        size: user_size,
+    });
     // Every step of the run goes through the context assembler (ADR-0020 §2).
     let builder = dn_runtime::TurnBuilder::new(
-        Arc::clone(&backend),
+        sized,
         dn_runtime::Policy::chat(),
         history.parts,
         history.turns,
@@ -1546,6 +1555,55 @@ mod tests {
         let reqs = rec.requests.lock().unwrap();
         assert!(system_text(&reqs[0]).contains("Answer in British English."));
         assert!(!system_text(&reqs[1]).contains("British"));
+    }
+
+    /// A model whose size nobody knows: [`Recorder`]'s answers, no `limits`.
+    struct NoSize(Arc<Recorder>);
+    impl ChatModel for NoSize {
+        fn chat(&self, req: dn_core::chat::ChatRequest) -> dn_core::chat::EventStream {
+            self.0.chat(req)
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_unknown_context_size_asks_the_person_and_their_size_is_used() {
+        let rec = Arc::new(Recorder::default());
+        let st = artifact_state("local:scripted", Arc::new(NoSize(rec.clone())), true);
+        let conv = st.create_conversation().unwrap();
+        let (_, evs) = turn(&st, conv.id, "hi").await;
+        let Some(ChatEvent::Error {
+            recovery, message, ..
+        }) = evs.last()
+        else {
+            panic!("{evs:?}")
+        };
+        assert!(
+            message.contains("doesn't know how much text local:scripted"),
+            "{message}"
+        );
+        assert_eq!(
+            recovery,
+            &[RecoveryAction::SetContextSize {
+                model_ref: "local:scripted".into()
+            }]
+        );
+        assert!(rec.requests.lock().unwrap().is_empty(), "nothing was sent");
+        // The person sets a size: the next turn goes through with it.
+        let mut settings = st.settings().unwrap();
+        settings
+            .context_sizes
+            .insert("local:scripted".into(), 32_768);
+        st.save_settings(&settings).unwrap();
+        let (started, evs) = turn(&st, conv.id, "hi again").await;
+        assert!(
+            matches!(evs.last(), Some(ChatEvent::Done { .. })),
+            "{evs:?}"
+        );
+        let db = st.db().unwrap();
+        let run = crate::runs::for_message(&db, started.assistant_message.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(run.context.unwrap().budget_tokens, 32_768 - 4_096);
     }
 
     #[tokio::test(flavor = "multi_thread")]

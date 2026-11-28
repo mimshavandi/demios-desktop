@@ -171,6 +171,10 @@ pub struct Settings {
     /// ([`RemoteServer::key_id`]). Managed by the server commands.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub remote_servers: Vec<RemoteServer>,
+    /// Context sizes the person set (model ref → tokens) for models whose provider doesn't
+    /// report one and that aren't in the published table (ADR-0020 §2.1, design ContextSize).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub context_sizes: BTreeMap<String, u32>,
 }
 
 /// An OpenAI-compatible server (Ollama, LM Studio, llama.cpp, vLLM, a hosted gateway). Its
@@ -253,13 +257,15 @@ impl Settings {
         Ok(())
     }
 
-    /// Takes the parts other commands manage (MCP servers, tool choices and reviews) from
+    /// Takes the parts other commands manage (MCP servers, tool choices and reviews, context
+    /// sizes) from
     /// `stored`, so saving the rest of the settings can't change or drop them.
     pub fn keep_managed(&mut self, stored: Settings) {
         self.mcp_servers = stored.mcp_servers;
         self.tool_overrides = stored.tool_overrides;
         self.reviewed_tools = stored.reviewed_tools;
         self.remote_servers = stored.remote_servers;
+        self.context_sizes = stored.context_sizes;
     }
 
     pub fn slot(&self, slot_id: &str) -> Option<ModelRef> {
@@ -430,6 +436,9 @@ mod tests {
         stored
             .reviewed_tools
             .insert("work".into(), [("write".into(), "fp".into())].into());
+        stored
+            .context_sizes
+            .insert("byok:openai:gpt-new".into(), 128_000);
         // What the UI sends: its own fields only, or an edited copy of the stored ones.
         let mut from_ui = Settings {
             ai_notice_seen: true,
@@ -443,6 +452,7 @@ mod tests {
         assert_eq!(from_ui.mcp_servers, stored.mcp_servers);
         assert_eq!(from_ui.tool_overrides, stored.tool_overrides);
         assert_eq!(from_ui.reviewed_tools, stored.reviewed_tools);
+        assert_eq!(from_ui.context_sizes, stored.context_sizes);
     }
 
     #[test]

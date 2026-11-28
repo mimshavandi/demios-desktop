@@ -414,6 +414,9 @@ function fakeApi() {
     removeRemoteServer: async () => catalog(),
     restoreRemoteServer: async () => catalog(),
     checkRemoteServer: async () => ({ state: "connected", models: 0 }) as const,
+    modelContext: async () => ({ tokens: 200000, source: "published" }) as const,
+    setModelContextSize: async (_ref: string, tokens: number | null) =>
+      ({ tokens, source: tokens === null ? null : "user" }) as const,
     setRemoteModelTools: async () => catalog(),
     deleteProviderKey: async () => catalog(),
     restoreProviderKey: async () => catalog(),

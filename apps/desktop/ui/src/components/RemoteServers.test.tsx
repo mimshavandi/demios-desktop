@@ -69,6 +69,7 @@ function fake(statuses: RemoteServerStatus[] = [{ state: "connected", models: 4 
       if (removed !== null) servers = [removed];
       return catalog();
     },
+    modelContext: async () => ({ tokens: 32768, source: "provider" }) as const,
     checkRemoteServer: async (id: string) => {
       calls.push(["check", id]);
       return queue.length > 1 ? queue.shift()! : queue[0]!;
