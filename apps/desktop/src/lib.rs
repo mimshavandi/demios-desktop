@@ -355,6 +355,7 @@ pub fn run_with_addons(addons: Vec<std::sync::Arc<dyn dn_plugin_api::Plugin>>) {
             chat_files::list_chat_files,
             chat_files::add_chat_files,
             chat_files::remove_chat_file,
+            chat_files::restore_chat_file,
             knowledge::knowledge_status,
             knowledge::knowledge_offer,
             artifact_child::artifact_child_open,
