@@ -326,6 +326,8 @@ export function createMockApi(): Api {
   const removedMcp = new Map<string, { server: McpServerView; at: number }>();
   const removals = new Map<string, { slots: [string, string][]; timer: number }>();
   let settings: Settings = { slots: {}, telemetry_enabled: false };
+  // Context sizes the person set (design ContextSize).
+  const contextSizes: Record<string, number> = {};
   let nodeView: NodeOverview = noNode();
   let joinLink = "";
   const timers = new Map<string, number>();
@@ -802,6 +804,19 @@ export function createMockApi(): Api {
       return false;
     },
     getSettings: async () => settings,
+    modelContext: async (ref) => {
+      const set = contextSizes[ref];
+      if (set !== undefined) return { tokens: set, source: "user" };
+      if (ref.startsWith("byok:anthropic:")) return { tokens: 200000, source: "published" };
+      return { tokens: null, source: null };
+    },
+    setModelContextSize: async (ref, tokens) => {
+      if (tokens === null) delete contextSizes[ref];
+      else if (tokens < 1024 || tokens > 10_000_000)
+        throw { code: "invalid_input", message: "Enter a whole number of tokens, from 1,024 to 10,000,000.", recovery: [] };
+      else contextSizes[ref] = tokens;
+      return contextSizes[ref] !== undefined ? { tokens: contextSizes[ref], source: "user" } : { tokens: null, source: null };
+    },
     updateSettings: async (s) => {
       settings = s;
       return s;

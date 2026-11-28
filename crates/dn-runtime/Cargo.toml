@@ -1,0 +1,21 @@
+[package]
+name = "dn-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The agent runtime around dn-agent's loop: the context assembler that every model call goes through (ADR-0020)"
+
+[dependencies]
+dn-agent.workspace = true
+dn-core.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[lints]
+workspace = true

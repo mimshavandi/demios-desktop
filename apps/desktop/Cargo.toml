@@ -51,6 +51,7 @@ dn-core.workspace = true
 dn-store.workspace = true
 dn-secrets.workspace = true
 dn-agent.workspace = true
+dn-data.workspace = true
 dn-providers = { path = "../../crates/dn-providers", version = "0.1.0" }
 dn-tools = { path = "../../crates/dn-tools", version = "0.1.0" }
 dn-artifacts = { path = "../../crates/dn-artifacts", version = "0.1.0" }
@@ -58,6 +59,8 @@ dn-inference = { path = "../../crates/dn-inference", version = "0.1.0" }
 dn-knowledge = { path = "../../crates/dn-knowledge", version = "0.1.0" }
 dn-models = { path = "../../crates/dn-models", version = "0.1.0" }
 # Settings › Node: this computer's device keys, pairing and the paired channel (ADR-0014).
+# The context assembler every chat turn goes through (ADR-0020).
+dn-runtime.workspace = true
 dn-sync.workspace = true
 # This computer's name on the Node's device list.
 sysinfo.workspace = true

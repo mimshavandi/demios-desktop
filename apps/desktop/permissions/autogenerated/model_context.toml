@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-model-context"
+description = "Enables the model_context command without any pre-configured scope."
+commands.allow = ["model_context"]
+
+[[permission]]
+identifier = "deny-model-context"
+description = "Denies the model_context command without any pre-configured scope."
+commands.deny = ["model_context"]

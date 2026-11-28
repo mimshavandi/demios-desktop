@@ -313,6 +313,13 @@ pub enum Message {
     RemoveDevice {
         id: String,
     },
+    /// A paired device asks for the held calls waiting for a person (ADR-0014 §6;
+    /// read-only for now, ADR-0019).
+    HeldRequest,
+    /// The held calls waiting, oldest first.
+    Held {
+        items: Vec<HeldItem>,
+    },
     /// The request was done.
     Done,
     /// A device starts a sync round: how much of the membership chain it has, and what it
@@ -371,6 +378,26 @@ pub enum Message {
     Refused {
         reason: String,
     },
+}
+
+/// A held call as a paired device shows it: everything the review needs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HeldItem {
+    pub id: String,
+    /// The add-on's id.
+    pub plugin: String,
+    /// The job's name.
+    pub job: String,
+    /// The capability id, e.g. `plugin.brief.send_mail`.
+    pub tool: String,
+    /// What the call does, in plain words (shown as plain text, never markup).
+    pub summary: String,
+    /// The exact arguments, as stored (JSON text).
+    pub arguments: String,
+    pub arguments_sha256: String,
+    /// Unix seconds, as the Node's job clock keeps them.
+    pub created_at: i64,
+    pub expires_at: Option<i64>,
 }
 
 /// One membership chain entry on the wire (base64).

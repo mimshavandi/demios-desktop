@@ -1025,3 +1025,202 @@
     - 'Korrigiert die Annahme: Spinnen haben acht Beine, Insekten sechs'
     must_not:
     - Übernimmt die falsche Annahme
+- id: chat-057
+  category: chat
+  lang: en
+  tags:
+  - skill
+  - design-review
+  - contrast
+  - attach
+  skill: design-review
+  attach:
+  - design/signup-card.html
+  tools:
+  - contrast_check
+  turns:
+  - role: user
+    content: Can you review this sign-up card before we ship it?
+  expect:
+    must:
+    - Calls contrast_check for the grey body text, the button text and the input border, and quotes its
+      results
+    - 'Flags the grey text #9a9a9a on white (2.81:1) and the white button text on #4f9cf9 (2.81:1) as
+      failing AA 4.5:1, with a darker colour as the fix'
+    - Flags the 16 × 16 px checkbox as below the 24 × 24 px minimum
+    - 'Flags at least two content problems: lorem ipsum, the vague "Submit" label, or placeholders used
+      instead of visible labels'
+    - Lists issues worst first, each with the element and a concrete fix
+    must_not:
+    - States a contrast ratio that the contrast_check tool did not return
+    - Calls the button text large text
+    tool_calls:
+      required:
+      - contrast_check
+- id: chat-058
+  category: chat
+  lang: en
+  tags:
+  - skill
+  - design-review
+  - layout
+  - type
+  skill: design-review
+  attach:
+  - design/pricing.html
+  tools:
+  - contrast_check
+  turns:
+  - role: user
+    content: review the pricing section, focus on layout and type
+  expect:
+    must:
+    - Says the three cards have different heights (380, 420, 395 px) and the Studio card is pushed down
+      27 px, so they do not line up
+    - Says the 13 px gap is off a 4 or 8 px scale
+    - Says there are too many text sizes (about nine) and suggests 3 to 5
+    - Notes the 1.2 line height on the feature list is tight for body text
+    must_not:
+    - Ignores the layout and type focus the user asked for
+    - States a contrast ratio that the contrast_check tool did not return
+- id: chat-059
+  category: chat
+  lang: en
+  tags:
+  - skill
+  - design-review
+  - contrast
+  - boundary
+  skill: design-review
+  tools:
+  - contrast_check
+  turns:
+  - role: user
+    content: 'Quick one: our caption text is #777777 on white, 14px regular. My colleague says #767676
+      is the same. Do either pass AA?'
+  expect:
+    must:
+    - Calls contrast_check for both colours
+    - 'Says #777777 on white fails AA for normal text (4.47:1) and #767676 passes (4.54:1)'
+    - Answers the question first
+    must_not:
+    - Says both pass or both fail
+    - States a contrast ratio that the contrast_check tool did not return
+    tool_calls:
+      required:
+      - contrast_check
+- id: chat-060
+  category: chat
+  lang: en
+  tags:
+  - skill
+  - design-review
+  - contrast
+  - large-text
+  skill: design-review
+  tools:
+  - contrast_check
+  turns:
+  - role: user
+    content: 'Heading is 28px regular, colour #6b7280 on a #f3f4f6 panel. Body text under it uses the
+      same colour at 15px. OK for AA?'
+  expect:
+    must:
+    - Calls contrast_check, giving the text size
+    - 'Says the ratio is 4.39:1: the 28 px heading passes as large text (3:1) but the 15 px body text
+      fails (needs 4.5:1)'
+    - Suggests a darker body colour
+    must_not:
+    - Treats both the same
+    - States a contrast ratio that the contrast_check tool did not return
+    tool_calls:
+      required:
+      - contrast_check
+- id: chat-061
+  category: chat
+  lang: en
+  tags:
+  - skill
+  - design-review
+  - contrast
+  - no-tool
+  skill: design-review
+  attach:
+  - design/signup-card.html
+  turns:
+  - role: user
+    content: what's the contrast like on this card?
+  expect:
+    must:
+    - 'Lists the colour pairs that need checking (for example #9a9a9a on white, white on #4f9cf9, the
+      #d1d5db input border)'
+    - Says it can't measure the ratios here, rather than estimating them
+    must_not:
+    - States any contrast ratio number, such as 2.8:1 or "about 3:1"
+- id: chat-062
+  category: chat
+  lang: en
+  tags:
+  - skill
+  - design-review
+  - badge
+  - contrast
+  skill: design-review
+  attach:
+  - design/pricing.html
+  tools:
+  - contrast_check
+  turns:
+  - role: user
+    content: Is the BEST VALUE badge readable?
+  expect:
+    must:
+    - 'Calls contrast_check for white on #f59e0b'
+    - 'Says it fails: 2.14:1 for 12 px bold text, which needs 4.5:1'
+    - 'Offers a fix with values, for example dark text #1f2937 on the same amber (6.83:1, from the tool)
+      or a darker background'
+    must_not:
+    - States a contrast ratio that the contrast_check tool did not return
+    tool_calls:
+      required:
+      - contrast_check
+- id: chat-063
+  category: chat
+  lang: en
+  tags:
+  - skill
+  - design-review
+  - touch
+  - false-premise
+  skill: design-review
+  turns:
+  - role: user
+    content: Our mobile app uses 20x20px icon buttons in the toolbar. Since WCAG only needs 16px that's
+      fine right?
+  expect:
+    must:
+    - 'Corrects the premise: WCAG 2.2 AA (2.5.8) asks for at least 24 × 24 px targets, with exceptions
+      for enough spacing'
+    - Recommends 44 × 44 px for touch
+    - Suggests a concrete fix such as enlarging the hit area to 44 × 44 px while keeping the 20 px icon
+    must_not:
+    - Agrees that 16 px is the WCAG minimum
+- id: chat-064
+  category: chat
+  lang: de
+  tags:
+  - skill
+  - design-review
+  - colour-only
+  skill: design-review
+  turns:
+  - role: user
+    content: Im Formular zeigen wir Fehler nur dadurch, dass der Rahmen rot wird. Reicht das?
+  expect:
+    must:
+    - Antwortet auf Deutsch
+    - Sagt, dass Farbe allein nicht reicht (WCAG 1.4.1), und schlägt einen Fehlertext und/oder ein Symbol
+      neben dem Feld vor
+    - Empfiehlt, im Fehlertext zu sagen, wie man den Fehler behebt
+    must_not:
+    - Sagt, ein roter Rahmen allein genügt

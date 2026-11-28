@@ -184,7 +184,7 @@ pub fn send(
         if let Some(s) = &skill {
             crate::skills::record_answer_skill(&db, conversation_id, assistant.id, s)?;
         }
-        let history = history(state, &db, conversation_id, assistant.id, skill.as_deref())?;
+        let history = turn_parts(state, &db, conversation_id, assistant.id, skill.as_deref())?;
         (user, assistant, title, history, skill)
     };
     let label = skill.as_ref().map(|s| s.skill.label());
@@ -239,7 +239,7 @@ pub fn regenerate(
         if let Some(s) = &skill {
             crate::skills::record_answer_skill(&db, conversation_id, assistant.id, s)?;
         }
-        let history = history(state, &db, conversation_id, assistant.id, skill.as_deref())?;
+        let history = turn_parts(state, &db, conversation_id, assistant.id, skill.as_deref())?;
         (assistant, history, skill)
     };
     let label = skill.as_ref().map(|s| s.skill.label());
@@ -297,16 +297,63 @@ fn tool_resolver(state: &AppState) -> CapabilityResolver {
     })
 }
 
-/// System prompt + stored conversation, minus the new placeholder and failed empty turns.
-/// The chat's project and skill add their instructions.
-fn history(
+/// Tells the model which data files are attached to this chat (#370), so it can read them
+/// with the data tools. File names are the person's, quoted and kept to one line.
+fn attached_files_note(
+    db: &dn_store::Connection,
+    conversation_id: Id,
+) -> IpcResult<Option<String>> {
+    let names: Vec<String> = crate::chat_files::list(db, conversation_id)?
+        .into_iter()
+        .filter(|f| dn_data::tool::reads(&f.name))
+        .map(|f| {
+            let flat: String = f
+                .name
+                .chars()
+                .map(|c| {
+                    // One line: no control characters, line or paragraph separators.
+                    if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') {
+                        ' '
+                    } else {
+                        c
+                    }
+                })
+                .collect();
+            format!(
+                "\"{}\"",
+                dn_core::untrusted::neutralise(&flat.replace('"', "'"))
+            )
+        })
+        .collect();
+    Ok((!names.is_empty()).then(|| {
+        format!(
+            "Data files attached to this chat: {}. Read their numbers with data_profile and \
+             data_aggregate.",
+            names.join(", ")
+        )
+    }))
+}
+
+/// What one turn sends (ADR-0020 §2): the slots the assembler fills around the stored
+/// conversation, and that conversation with the new input last.
+pub(crate) struct TurnInput {
+    pub parts: dn_runtime::Parts,
+    /// The stored conversation, minus the new placeholder and failed empty turns.
+    pub history: Vec<ChatMessage>,
+    /// How many of `history` come before the input (the input is the last user message).
+    pub turns: usize,
+}
+
+/// The turn's slots: the agent prompt, the shared answer rules, the chat's project
+/// instructions, attached data files and skill (system); the question's project excerpts
+/// (retrieved); and the date (recap). Blocking.
+fn turn_parts(
     state: &AppState,
     db: &dn_store::Connection,
     conversation_id: Id,
     exclude: Id,
     skill: Option<&Skill>,
-) -> IpcResult<Vec<ChatMessage>> {
-    let mut out = vec![];
+) -> IpcResult<TurnInput> {
     let project = crate::projects::instructions_for(db, conversation_id)?;
     let messages = store::list_messages(db, conversation_id)?;
     let question = messages
@@ -315,27 +362,43 @@ fn history(
         .find(|m| m.role == Role::User)
         .map(|m| m.text())
         .unwrap_or_default();
-    let knowledge = crate::knowledge::context_for(state, db, conversation_id, exclude, &question)?;
+    let retrieved = crate::knowledge::context_for(state, db, conversation_id, exclude, &question)?;
+    let attached = attached_files_note(db, conversation_id)?;
     let system: Vec<String> = state
         .agent
         .system_prompt()
         .map(str::to_owned)
         .into_iter()
+        .chain(
+            dn_runtime::Policy::chat()
+                .answer_rules
+                .then(|| state.agent.answer_rules().map(str::to_owned))
+                .flatten(),
+        )
         .chain(project)
-        .chain(knowledge)
+        .chain(attached)
         .chain(skill.map(Skill::system_text))
         .collect();
-    if !system.is_empty() {
-        out.push(ChatMessage::text(Role::System, system.join("\n\n")));
-    }
-    out.extend(
-        messages
-            .into_iter()
-            .filter(|m| m.id != exclude)
-            .filter(|m| m.status == MessageStatus::Complete || !m.content.is_empty())
-            .map(|m| m.to_chat_message()),
-    );
-    Ok(out)
+    let history: Vec<ChatMessage> = messages
+        .into_iter()
+        .filter(|m| m.id != exclude)
+        .filter(|m| m.status == MessageStatus::Complete || !m.content.is_empty())
+        .map(|m| m.to_chat_message())
+        .collect();
+    let turns = match history.last() {
+        Some(m) if m.role == Role::User => history.len() - 1,
+        _ => history.len(),
+    };
+    Ok(TurnInput {
+        parts: dn_runtime::Parts {
+            system,
+            retrieved,
+            recap: Some(format!("Today is {}.", crate::agent::today())),
+            ..Default::default()
+        },
+        history,
+        turns,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -346,7 +409,7 @@ fn start(
     backend: Arc<dyn ChatModel>,
     mode: ArtifactMode,
     assistant: &StoredMessage,
-    history: Vec<ChatMessage>,
+    history: TurnInput,
     skill: Option<Arc<Skill>>,
     sink: impl EventSink,
 ) {
@@ -358,24 +421,63 @@ fn start(
     let message_id = assistant.id;
     let model_ref = model.to_string();
     let sink: Arc<dyn EventSink> = Arc::new(sink);
+    // The chat's project, for the data tool (the callers have released the database).
+    let project_id = state
+        .db()
+        .ok()
+        .and_then(|db| store::get_conversation(&db, conversation_id).ok())
+        .and_then(|c| c.project_id);
+    let has_chat_files = state
+        .db()
+        .ok()
+        .is_some_and(|db| crate::chat_files::has_data_files(&db, conversation_id));
     // Artifacts only through tool calls (ADR-0004): a model without tool calling gets none.
+    let contrast = crate::artifacts::contrast_offered(&state, mode, skill.as_deref());
     let tools: Arc<dyn ToolExecutor> = Arc::new(RunTools {
         base: Arc::clone(&state.tools),
+        contrast,
         artifacts: (mode == ArtifactMode::Tools).then(|| ArtifactTools {
             state: Arc::clone(&state),
             conversation_id,
             message_id,
             sink: Arc::clone(&sink),
         }),
+        // In a project chat, or a chat with attached data files (#370).
+        data: (mode == ArtifactMode::Tools && (project_id.is_some() || has_chat_files)).then(
+            || crate::data_tools::DataTools {
+                state: Arc::clone(&state),
+                project_id,
+                conversation_id: Some(conversation_id),
+            },
+        ),
     });
     // The chat's skill only narrows: approvals are decided behind this, by the executor.
     let tools = match &skill {
         Some(s) => crate::skills::narrow(tools, s, tool_resolver(&state)),
         None => tools,
     };
+    // A size the person set answers for a model nobody else knows (design ContextSize).
+    let user_size = state
+        .settings()
+        .ok()
+        .and_then(|s| s.context_sizes.get(&model.to_string()).copied());
+    let sized: Arc<dyn ChatModel> = Arc::new(dn_runtime::WithUserSize {
+        inner: Arc::clone(&backend),
+        size: user_size,
+    });
+    // Every step of the run goes through the context assembler (ADR-0020 §2).
+    let builder = dn_runtime::TurnBuilder::new(
+        sized,
+        dn_runtime::Policy::chat(),
+        history.parts,
+        history.turns,
+        Arc::clone(&state.estimator),
+        &model,
+    );
+    let history = history.history;
     tauri::async_runtime::spawn(async move {
         let (result, failed_calls, run_result) = run(
-            &*backend, &*tools, &cfg, history, &cancel, &state, message_id, &*sink,
+            &*backend, &*tools, &cfg, history, &builder, &cancel, &state, message_id, &*sink,
         )
         .await;
         let st = Arc::clone(&state);
@@ -420,6 +522,7 @@ async fn run(
     tools: &dyn ToolExecutor,
     cfg: &LoopConfig,
     history: Vec<ChatMessage>,
+    builder: &dyn dn_agent::RequestBuilder,
     cancel: &CancelToken,
     state: &AppState,
     message_id: Id,
@@ -437,7 +540,8 @@ async fn run(
         dn_agent::observe_event(&mut meter, &ev);
         on_agent_event(ev, state, message_id, sink, &mut failed)
     };
-    let result = dn_agent::run_loop(model, tools, cfg, history, cancel, &mut on_event).await;
+    let result =
+        dn_agent::run_loop_with(model, tools, cfg, history, builder, cancel, &mut on_event).await;
     let run = match &result {
         Ok(o) => o.result.clone(),
         Err(_) => meter.finish(StopReason::Failed),
@@ -864,6 +968,15 @@ mod tests {
             }
         }
         impl ChatModel for Breaks {
+            fn limits<'a>(
+                &'a self,
+                _model: &'a dn_core::model::ModelRef,
+            ) -> dn_core::chat::BoxFuture<'a, dn_core::chat::ModelLimits> {
+                // A fake: a known size, so the context assembler can fit the turn (ADR-0020 §2).
+                Box::pin(async {
+                    dn_core::chat::ModelLimits::known(32_768, dn_core::chat::LimitSource::Provider)
+                })
+            }
             fn chat(&self, _: dn_core::chat::ChatRequest) -> dn_core::chat::EventStream {
                 Box::pin(Items(
                     vec![
@@ -1067,6 +1180,17 @@ mod tests {
     struct ToolThenAnswer;
 
     impl ChatModel for ToolThenAnswer {
+        fn limits<'a>(
+            &'a self,
+
+            _model: &'a dn_core::model::ModelRef,
+        ) -> dn_core::chat::BoxFuture<'a, dn_core::chat::ModelLimits> {
+            // A fake: a known size, so the context assembler can fit the turn (ADR-0020 §2).
+
+            Box::pin(async {
+                dn_core::chat::ModelLimits::known(32_768, dn_core::chat::LimitSource::Provider)
+            })
+        }
         fn chat(&self, req: dn_core::chat::ChatRequest) -> dn_core::chat::EventStream {
             use dn_core::chat::{StreamEvent, ToolCall};
             let has_result = req.messages.iter().any(|m| m.role == Role::Tool);
@@ -1359,6 +1483,17 @@ mod tests {
     }
 
     impl ChatModel for Recorder {
+        fn limits<'a>(
+            &'a self,
+
+            _model: &'a dn_core::model::ModelRef,
+        ) -> dn_core::chat::BoxFuture<'a, dn_core::chat::ModelLimits> {
+            // A fake: a known size, so the context assembler can fit the turn (ADR-0020 §2).
+
+            Box::pin(async {
+                dn_core::chat::ModelLimits::known(32_768, dn_core::chat::LimitSource::Provider)
+            })
+        }
         fn chat(&self, req: dn_core::chat::ChatRequest) -> dn_core::chat::EventStream {
             use dn_core::chat::{StreamEvent, ToolCall};
             let answered = req.messages.iter().any(|m| m.role == Role::Tool);
@@ -1420,6 +1555,90 @@ mod tests {
         let reqs = rec.requests.lock().unwrap();
         assert!(system_text(&reqs[0]).contains("Answer in British English."));
         assert!(!system_text(&reqs[1]).contains("British"));
+    }
+
+    /// A model whose size nobody knows: [`Recorder`]'s answers, no `limits`.
+    struct NoSize(Arc<Recorder>);
+    impl ChatModel for NoSize {
+        fn chat(&self, req: dn_core::chat::ChatRequest) -> dn_core::chat::EventStream {
+            self.0.chat(req)
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_unknown_context_size_asks_the_person_and_their_size_is_used() {
+        let rec = Arc::new(Recorder::default());
+        let st = artifact_state("local:scripted", Arc::new(NoSize(rec.clone())), true);
+        let conv = st.create_conversation().unwrap();
+        let (_, evs) = turn(&st, conv.id, "hi").await;
+        let Some(ChatEvent::Error {
+            recovery, message, ..
+        }) = evs.last()
+        else {
+            panic!("{evs:?}")
+        };
+        assert!(
+            message.contains("doesn't know how much text local:scripted"),
+            "{message}"
+        );
+        assert_eq!(
+            recovery,
+            &[RecoveryAction::SetContextSize {
+                model_ref: "local:scripted".into()
+            }]
+        );
+        assert!(rec.requests.lock().unwrap().is_empty(), "nothing was sent");
+        // The person sets a size: the next turn goes through with it.
+        let mut settings = st.settings().unwrap();
+        settings
+            .context_sizes
+            .insert("local:scripted".into(), 32_768);
+        st.save_settings(&settings).unwrap();
+        let (started, evs) = turn(&st, conv.id, "hi again").await;
+        assert!(
+            matches!(evs.last(), Some(ChatEvent::Done { .. })),
+            "{evs:?}"
+        );
+        let db = st.db().unwrap();
+        let run = crate::runs::for_message(&db, started.assistant_message.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(run.context.unwrap().budget_tokens, 32_768 - 4_096);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_turn_goes_through_the_assembler_and_its_run_keeps_the_context_use() {
+        let rec = Arc::new(Recorder::default());
+        let st = artifact_state("local:scripted", rec.clone(), true);
+        let conv = st.create_conversation().unwrap();
+        let (started, _) = turn(&st, conv.id, "hi").await;
+        {
+            let reqs = rec.requests.lock().unwrap();
+            let last = reqs[0].messages.last().unwrap();
+            assert_eq!(last.role, Role::User);
+            let texts: Vec<String> = last
+                .content
+                .iter()
+                .filter_map(|p| match p {
+                    dn_core::chat::ContentPart::Text { text } => Some(text.clone()),
+                    _ => None,
+                })
+                .collect();
+            // The input as typed, then the date in the recap (ADR-0020 §2.3).
+            assert_eq!(texts[0], "hi");
+            assert!(texts[1].starts_with("\n\nToday is "), "{texts:?}");
+            // Joined as a provider joins them, the input and the recap stay apart.
+            assert!(texts.concat().starts_with("hi\n\nToday is "), "{texts:?}");
+        }
+        // The stored message keeps only what was typed.
+        let db = st.db().unwrap();
+        let stored = store::list_messages(&db, conv.id).unwrap();
+        assert_eq!(stored[0].text(), "hi");
+        let run = crate::runs::for_message(&db, started.assistant_message.id)
+            .unwrap()
+            .expect("the run is stored");
+        let c = run.context.expect("the assembler's context use is stored");
+        assert!(c.used_tokens > 0 && c.used_tokens <= c.budget_tokens);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1487,6 +1706,77 @@ mod tests {
         assert!(system_text(&reqs[0]).contains("Answer in bullet points."));
         // The listed tool ran.
         assert_eq!(crate::artifacts::list(&st, conv).unwrap().len(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn contrast_check_is_offered_only_to_a_skill_that_names_it() {
+        let rec = Arc::new(Recorder::default());
+        let (st, conv) = skill_state(rec.clone(), true, &["contrast.check"]);
+        turn(&st, conv, "check my colours").await;
+        let names: Vec<String> = rec.requests.lock().unwrap()[0]
+            .tools
+            .iter()
+            .map(|t| t.name.clone())
+            .collect();
+        assert_eq!(names, ["contrast_check"]);
+
+        // A skill that doesn't name it, and a chat without a skill, don't get it.
+        let rec = Arc::new(Recorder::default());
+        let (st, conv) = skill_state(rec.clone(), true, &["artifact.*"]);
+        turn(&st, conv, "hi").await;
+        crate::skills::set_chat_skill(&st.db().unwrap(), conv, None).unwrap();
+        turn(&st, conv, "hi").await;
+        for req in rec.requests.lock().unwrap().iter() {
+            assert!(req.tools.iter().all(|t| t.name != "contrast_check"));
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn contrast_check_runs_in_code() {
+        use dn_agent::ToolExecutor;
+        let tools = RunTools {
+            base: Arc::new(Calc(false)),
+            artifacts: None,
+            contrast: true,
+            data: None,
+        };
+        let ctx = dn_agent::ToolContext {
+            agent_id: "assistant.default".into(),
+            caller: "chat.reply".into(),
+            conversation_id: None,
+            run_id: Id::new(),
+            step: 0,
+            cancel: Default::default(),
+            allowed_tools: vec![],
+        };
+        let call = |args: serde_json::Value| dn_core::chat::ToolCall {
+            id: "c1".into(),
+            name: "contrast_check".into(),
+            arguments: args,
+        };
+        let out = tools
+            .execute(
+                &call(serde_json::json!({"foreground": "#777777", "background": "white"})),
+                &ctx,
+            )
+            .await
+            .unwrap();
+        assert!(!out.is_error);
+        let text = match &out.content[..] {
+            [dn_core::chat::ContentPart::Text { text }] => text.clone(),
+            other => panic!("{other:?}"),
+        };
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(v["ratio"], 4.47);
+        assert_eq!(v["aa_normal_text"], false);
+        let bad = tools
+            .execute(
+                &call(serde_json::json!({"foreground": "#zzz", "background": "#fff"})),
+                &ctx,
+            )
+            .await
+            .unwrap();
+        assert!(bad.is_error);
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -13,7 +13,8 @@ type Result<T> = dn_store::Result<T>;
 
 /// App-owned table.
 pub fn migrations() -> &'static [&'static str] {
-    &["CREATE TABLE app_runs (
+    &[
+        "CREATE TABLE app_runs (
         run_id                TEXT    PRIMARY KEY NOT NULL,
         conversation_id       TEXT,
         message_id            TEXT,
@@ -33,7 +34,11 @@ pub fn migrations() -> &'static [&'static str] {
         created_at            INTEGER NOT NULL
     );
     CREATE INDEX app_runs_conversation ON app_runs (conversation_id);
-    CREATE INDEX app_runs_message ON app_runs (message_id);"]
+    CREATE INDEX app_runs_message ON app_runs (message_id);",
+        // How the context assembler used the model's context (ADR-0020 §2), as JSON; NULL for
+        // runs that didn't go through it.
+        "ALTER TABLE app_runs ADD COLUMN context TEXT;",
+    ]
 }
 
 fn stop_name(s: StopReason) -> String {
@@ -59,8 +64,8 @@ pub fn record(
     conn.execute(
         "INSERT INTO app_runs (run_id, conversation_id, message_id, caller, model, stop, steps,
              input_tokens, output_tokens, cached_input_tokens, cache_write_tokens, draft_tokens,
-             draft_accepted_tokens, wall_ms, first_token_ms, dropped, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+             draft_accepted_tokens, wall_ms, first_token_ms, dropped, created_at, context)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
         params![
             r.run_id.to_string(),
             conversation_id.map(|i| i.to_string()),
@@ -80,6 +85,10 @@ pub fn record(
                 .map(|t| i64::try_from(t).unwrap_or(i64::MAX)),
             serde_json::to_string(&r.dropped).map_err(to_sql)?,
             dn_store::now_ms(),
+            r.context
+                .map(|c| serde_json::to_string(&c))
+                .transpose()
+                .map_err(to_sql)?,
         ],
     )?;
     Ok(())
@@ -90,7 +99,7 @@ pub fn for_message(conn: &Connection, message_id: Id) -> Result<Option<RunResult
     conn.query_row(
         "SELECT run_id, caller, model, stop, steps, input_tokens, output_tokens,
              cached_input_tokens, cache_write_tokens, draft_tokens, draft_accepted_tokens,
-             wall_ms, first_token_ms, dropped
+             wall_ms, first_token_ms, dropped, context
          FROM app_runs WHERE message_id = ?1 ORDER BY created_at DESC LIMIT 1",
         [message_id.to_string()],
         |row| {
@@ -98,6 +107,7 @@ pub fn for_message(conn: &Connection, message_id: Id) -> Result<Option<RunResult
                 Ok(serde_json::Value::String(row.get(i)?))
             };
             let dropped: String = row.get(13)?;
+            let context: Option<String> = row.get(14)?;
             Ok(RunResult {
                 run_id: de(text(0)?, 0)?,
                 caller: row.get(1)?,
@@ -115,6 +125,10 @@ pub fn for_message(conn: &Connection, message_id: Id) -> Result<Option<RunResult
                 wall_ms: row.get::<_, i64>(11)?.max(0) as u64,
                 first_token_ms: row.get::<_, Option<i64>>(12)?.map(|t| t.max(0) as u64),
                 dropped: serde_json::from_str(&dropped).map_err(|e| bad_column(13, e))?,
+                context: context
+                    .map(|c| serde_json::from_str(&c))
+                    .transpose()
+                    .map_err(|e| bad_column(14, e))?,
             })
         },
     )
@@ -198,6 +212,12 @@ mod tests {
             tokens: 80,
             action: DropAction::Dropped,
         }];
+        r.context = Some(dn_core::run::ContextUse {
+            budget_tokens: 4915,
+            used_tokens: 3100,
+            counted_by: dn_core::run::TokenCount::ModelTokenizer,
+            compacted: false,
+        });
         r
     }
 

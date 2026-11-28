@@ -7,7 +7,7 @@ use dn_core::chat::{
     StreamEvent, ToolCall, Usage,
 };
 use dn_core::model::ModelRef;
-use dn_core::run::{RunMeter, RunResult, StopReason};
+use dn_core::run::{ContextUse, Dropped, RunMeter, RunResult, StopReason};
 use dn_core::{CoreError, RecoveryAction};
 use tracing::Instrument;
 
@@ -121,6 +121,55 @@ pub fn observe_event(meter: &mut RunMeter, ev: &AgentEvent) {
     }
 }
 
+/// One step's request, as a [`RequestBuilder`] put it together.
+#[derive(Clone, Debug)]
+pub struct Built {
+    pub request: ChatRequest,
+    /// How the context was used (ADR-0020 §2); `None` when nothing measured it.
+    pub context: Option<ContextUse>,
+    /// What was left out to fit.
+    pub dropped: Vec<Dropped>,
+}
+
+/// Builds each step's request from the run's messages: the context assembler hooks in here
+/// (ADR-0020 §2), so tool results added during a run are budgeted too.
+pub trait RequestBuilder: Send + Sync {
+    /// The request for one step. `messages` is the history passed to the run plus what the
+    /// run added so far; `base` has every other field set and no messages.
+    fn build<'a>(
+        &'a self,
+        messages: &'a [ChatMessage],
+        base: ChatRequest,
+    ) -> dn_core::chat::BoxFuture<'a, Result<Built, CoreError>>;
+
+    /// The input tokens the model reported for the last request built (to calibrate
+    /// estimates).
+    fn reported(&self, _input_tokens: u32) {}
+}
+
+/// Sends the messages as they are (callers that build their own prompt).
+pub struct PassThrough;
+
+impl RequestBuilder for PassThrough {
+    fn build<'a>(
+        &'a self,
+        messages: &'a [ChatMessage],
+        base: ChatRequest,
+    ) -> dn_core::chat::BoxFuture<'a, Result<Built, CoreError>> {
+        let request = ChatRequest {
+            messages: messages.to_vec(),
+            ..base
+        };
+        Box::pin(async move {
+            Ok(Built {
+                request,
+                context: None,
+                dropped: Vec::new(),
+            })
+        })
+    }
+}
+
 /// Runs the loop. `history` is the conversation so far (system prompt included).
 /// Returns `Err` only for failures that end the run (model errors, `Err` from a tool);
 /// cancellation is a normal outcome (`StopReason::Cancelled`) so partial work can be kept.
@@ -129,6 +178,20 @@ pub async fn run_loop(
     tools: &dyn ToolExecutor,
     cfg: &LoopConfig,
     history: Vec<ChatMessage>,
+    cancel: &CancelToken,
+    on_event: &mut (dyn FnMut(AgentEvent) + Send),
+) -> Result<RunOutcome, CoreError> {
+    run_loop_with(model, tools, cfg, history, &PassThrough, cancel, on_event).await
+}
+
+/// [`run_loop`] with each step's request put together by `builder` (the context assembler,
+/// ADR-0020 §2). The run result carries the last step's context use and drops.
+pub async fn run_loop_with(
+    model: &dyn ChatModel,
+    tools: &dyn ToolExecutor,
+    cfg: &LoopConfig,
+    history: Vec<ChatMessage>,
+    builder: &dyn RequestBuilder,
     cancel: &CancelToken,
     on_event: &mut (dyn FnMut(AgentEvent) + Send),
 ) -> Result<RunOutcome, CoreError> {
@@ -145,8 +208,16 @@ pub async fn run_loop(
     let start = messages.len();
     let mut meter = RunMeter::start(run_id, cfg.caller.clone(), cfg.model.clone());
     let mut final_text = String::new();
-    let outcome = |messages: Vec<ChatMessage>, meter: RunMeter, stop, final_text| {
-        let result = meter.finish(stop);
+    // The last step's context use and drops, for the run result.
+    let mut last: (Option<ContextUse>, Vec<Dropped>) = (None, Vec::new());
+    let outcome = |messages: Vec<ChatMessage>,
+                   meter: RunMeter,
+                   stop,
+                   final_text,
+                   last: &(Option<ContextUse>, Vec<Dropped>)| {
+        let mut result = meter.finish(stop);
+        result.context = last.0;
+        result.dropped = last.1.clone();
         tracing::info!(
             run_id = %result.run_id,
             caller = %result.caller,
@@ -169,13 +240,19 @@ pub async fn run_loop(
 
     for step in 0..cfg.max_steps {
         if cancel.is_cancelled() {
-            return Ok(outcome(messages, meter, StopReason::Cancelled, final_text));
+            return Ok(outcome(
+                messages,
+                meter,
+                StopReason::Cancelled,
+                final_text,
+                &last,
+            ));
         }
         meter.step();
         on_event(AgentEvent::StepStarted { step });
-        let req = ChatRequest {
+        let base = ChatRequest {
             model: cfg.model.clone(),
-            messages: messages.clone(),
+            messages: Vec::new(),
             tools: specs.clone(),
             max_tokens: cfg.max_tokens,
             temperature: cfg.temperature,
@@ -183,6 +260,9 @@ pub async fn run_loop(
             reasoning: cfg.reasoning,
             caller: cfg.caller.clone(),
         };
+        let built = builder.build(&messages, base).await?;
+        last = (built.context, built.dropped);
+        let req = built.request;
         // Names, counts and timings only: never message or tool content (traces stay local,
         // but they're still not the place for what the user wrote).
         let call_span = tracing::info_span!(
@@ -239,6 +319,7 @@ pub async fn run_loop(
                     got_done = true;
                     call_span.record("finish", tracing::field::debug(finish_reason));
                     call_span.record("input_tokens", u.input_tokens);
+                    builder.reported(u.input_tokens);
                     call_span.record("output_tokens", u.output_tokens);
                     on_event(AgentEvent::StepFinished {
                         step,
@@ -254,7 +335,7 @@ pub async fn run_loop(
             if !text.is_empty() {
                 messages.push(ChatMessage::text(Role::Assistant, text.clone()));
             }
-            return Ok(outcome(messages, meter, StopReason::Cancelled, text));
+            return Ok(outcome(messages, meter, StopReason::Cancelled, text, &last));
         }
         if !got_done {
             // A `ChatModel` must end every stream with `Done`; anything else is a cut-off.
@@ -308,7 +389,7 @@ pub async fn run_loop(
             } else {
                 StopReason::Completed
             };
-            return Ok(outcome(messages, meter, stop, final_text));
+            return Ok(outcome(messages, meter, stop, final_text, &last));
         }
         let ctx = ToolContext {
             agent_id: cfg.agent_id.clone(),
@@ -357,7 +438,13 @@ pub async fn run_loop(
                             &ToolOutput::error("Cancelled by the user."),
                         ));
                     }
-                    return Ok(outcome(messages, meter, StopReason::Cancelled, final_text));
+                    return Ok(outcome(
+                        messages,
+                        meter,
+                        StopReason::Cancelled,
+                        final_text,
+                        &last,
+                    ));
                 }
                 Err(e) => return Err(e),
             };
@@ -369,7 +456,13 @@ pub async fn run_loop(
             });
         }
     }
-    Ok(outcome(messages, meter, StopReason::StepLimit, final_text))
+    Ok(outcome(
+        messages,
+        meter,
+        StopReason::StepLimit,
+        final_text,
+        &last,
+    ))
 }
 
 fn tool_message(call: &ToolCall, out: &ToolOutput) -> ChatMessage {
