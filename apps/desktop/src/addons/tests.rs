@@ -285,7 +285,7 @@ fn overlapping_ids_incompatible_versions_and_failing_registers_are_not_loaded() 
             summary_of(&st, "old")
                 .reason
                 .unwrap()
-                .contains("update Demios")
+                .contains("update Almend")
         );
         assert_eq!(summary_of(&st, "good").state, "running");
         let exec = st.executor.clone().unwrap();
@@ -311,7 +311,7 @@ fn turning_an_add_on_off_takes_its_tools_away_and_a_panic_stops_it_until_restart
         assert!(e.to_string().contains("panicked"), "{e}");
         let s = summary_of(&st, "wild");
         assert_eq!(s.state, "not_running");
-        assert!(s.reason.unwrap().contains("until Demios restarts"));
+        assert!(s.reason.unwrap().contains("until Almend restarts"));
         assert!(exec.resolve("plugin.wild.look").is_none());
     });
 }

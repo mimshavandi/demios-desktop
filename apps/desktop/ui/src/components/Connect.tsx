@@ -157,7 +157,7 @@ export function ConnectCard({
     <>
       <h2 id="connect-h">Connect</h2>
       {loadError === null && (
-        <p className="dn-help">Services that run their own tool server, reviewed by Demios. Connecting adds it to your tool servers.</p>
+        <p className="dn-help">Services that run their own tool server, reviewed by Almend. Connecting adds it to your tool servers.</p>
       )}
     </>
   );
@@ -230,7 +230,7 @@ export function ConnectCard({
                   No longer reviewed
                 </Badge>
               </span>
-              <span className="dn-help">Demios no longer reviews this server. It keeps working; remove it if you'd rather not use it.</span>
+              <span className="dn-help">Almend no longer reviews this server. It keeps working; remove it if you'd rather not use it.</span>
               {error !== undefined && <InlineMessage tone="error">{error}</InlineMessage>}
             </>
           );
@@ -347,7 +347,7 @@ export function ConnectCard({
                   <code>{e.url}</code>
                 </dd>
                 <dt>Sign-in</dt>
-                <dd>In your browser, with {e.vendor}. Demios holds no secret for this server.</dd>
+                <dd>In your browser, with {e.vendor}. Almend holds no secret for this server.</dd>
                 <dt>Your data</dt>
                 <dd>{e.data}</dd>
                 <dt>Asks for</dt>

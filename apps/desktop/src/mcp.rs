@@ -101,7 +101,7 @@ pub struct ServerInput {
 }
 
 /// Why a local server can't be added or started in this build (shown to the user).
-pub const LOCAL_SERVERS_UNAVAILABLE: &str = "The Flatpak version of Demios runs in a sandbox, \
+pub const LOCAL_SERVERS_UNAVAILABLE: &str = "The Flatpak version of Almend runs in a sandbox, \
      so it can't start programs on your computer. Add a remote (HTTPS) server instead.";
 
 /// Whether this build may start local (stdio) servers. Flatpak builds can't run host
@@ -218,7 +218,7 @@ impl LaunchRequest {
     /// so nothing hides. Secret values are never shown.
     pub fn dialog_text(&self) -> String {
         let mut t = format!(
-            "Demios is about to start this program for the tool server \"{}\":\n\n{:?}",
+            "Almend is about to start this program for the tool server \"{}\":\n\n{:?}",
             self.server_name, self.command
         );
         for a in &self.args {

@@ -92,7 +92,7 @@ pub enum KeychainStatus {
 const UNAVAILABLE: &str =
     "No system keychain found. Install GNOME Keyring or KWallet to save API keys.";
 #[cfg(not(target_os = "linux"))]
-const UNAVAILABLE: &str = "Your system keychain isn't available, so Demios can't tell which API keys are saved. Try again.";
+const UNAVAILABLE: &str = "Your system keychain isn't available, so Almend can't tell which API keys are saved. Try again.";
 
 impl KeychainStatus {
     pub(crate) fn from_error(e: &SecretError) -> Self {
@@ -101,13 +101,13 @@ impl KeychainStatus {
                 message: UNAVAILABLE.into(),
             },
             SecretError::Denied(_) => Self::Denied {
-                message: "Demios wasn't allowed to read your system keychain, so it can't tell which API keys are saved. Allow access, then try again.".into(),
+                message: "Almend wasn't allowed to read your system keychain, so it can't tell which API keys are saved. Allow access, then try again.".into(),
             },
             e => {
                 // SecretError never contains secret values.
                 tracing::warn!("keychain check failed: {e}");
                 Self::Failed {
-                    message: "Couldn't read your system keychain, so Demios can't tell which API keys are saved. Try again.".into(),
+                    message: "Couldn't read your system keychain, so Almend can't tell which API keys are saved. Try again.".into(),
                 }
             }
         }
@@ -242,7 +242,7 @@ pub async fn answer(mut rx: Pending) -> Arc<KeyCheck> {
             return Arc::new(KeyCheck {
                 states: HashMap::new(),
                 status: KeychainStatus::Failed {
-                    message: "Couldn't read your system keychain, so Demios can't tell which API keys are saved. Try again.".into(),
+                    message: "Couldn't read your system keychain, so Almend can't tell which API keys are saved. Try again.".into(),
                 },
             });
         }

@@ -333,7 +333,7 @@ function RepoDetail({
           </span>
           {view.fit_unknown && (
             <InlineMessage tone="warning">
-              Demios couldn't read this model's details, so it can't tell whether it fits this computer.
+              Almend couldn't read this model's details, so it can't tell whether it fits this computer.
             </InlineMessage>
           )}
           {view.license.warning !== null && (
@@ -341,7 +341,7 @@ function RepoDetail({
           )}
           {view.gated && <HfToken api={api} onSaved={() => void load()} />}
           {view.variants.length === 0 ? (
-            <p className="dn-help">This repo has no GGUF files Demios can run.</p>
+            <p className="dn-help">This repo has no GGUF files Almend can run.</p>
           ) : (
             <ul className="hub-variants" aria-label="Versions">
               {[...view.variants]
@@ -376,7 +376,7 @@ function RepoDetail({
                         )}
                       </span>
                       {!v.verifiable && (
-                        <span className="dn-help">No published checksum, so Demios won't download it.</span>
+                        <span className="dn-help">No published checksum, so Almend won't download it.</span>
                       )}
                     </div>
                     <div className="row-actions local-actions">

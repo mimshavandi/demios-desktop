@@ -739,7 +739,7 @@ pub const LOCAL_REMOVE_UNDO: std::time::Duration = std::time::Duration::from_sec
 /// Removes a downloaded model with Undo (#176). At once: the model is no longer offered or
 /// loaded, and every task it was the model for is emptied (the task then asks for a choice
 /// instead of quietly using another model). When the undo window ends, its files are deleted
-/// (everything Demios wrote for it, nothing else). Refused, with a user message and nothing
+/// (everything Almend wrote for it, nothing else). Refused, with a user message and nothing
 /// changed, for Hugging Face cache models and a folder the user chose (the row's
 /// `remove_blocked` says why). Row updates arrive through `watch_local_models`.
 #[tauri::command]
@@ -1048,7 +1048,7 @@ pub async fn sign_in_mcp_server(
             tracing::warn!("refusing to open a non-https sign-in URL for `{}`", cfg.id);
             return Err(IpcError::new(
                 "sign_in",
-                "The server's sign-in page isn't a secure (https) address, so Demios didn't open it.",
+                "The server's sign-in page isn't a secure (https) address, so Almend didn't open it.",
             ));
         }
         app.opener().open_url(url, None::<&str>).map_err(|e| {
@@ -1483,7 +1483,7 @@ fn remote_ref(model_ref: &str) -> IpcResult<dn_core::model::ModelRef> {
     }
 }
 
-/// What Demios knows about `model`'s size: from the provider or server, its table of
+/// What Almend knows about `model`'s size: from the provider or server, its table of
 /// published sizes, or the person. Blocking: may read a key and ask the provider.
 fn model_context_of(s: &AppState, model: &dn_core::model::ModelRef) -> IpcResult<ModelContext> {
     let backend = s

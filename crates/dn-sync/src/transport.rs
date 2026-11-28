@@ -554,7 +554,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Channel<S> {
             return Err(SyncError::Protocol("expected hello"));
         };
         if protocol != PROTOCOL {
-            return Err(SyncError::Protocol("not a Demios Node connection"));
+            return Err(SyncError::Protocol("not a Almend Node connection"));
         }
         if major != PROTOCOL_MAJOR {
             return Err(SyncError::VersionMismatch(VersionMismatch {

@@ -67,10 +67,10 @@ impl Compute {
             ),
             Compute::Cpu {
                 reason: CpuReason::NoGpu,
-            } => "Local models run on the processor: no graphics chip Demios can use was found, so replies are slower.".into(),
+            } => "Local models run on the processor: no graphics chip Almend can use was found, so replies are slower.".into(),
             Compute::Cpu {
                 reason: CpuReason::NoGpuSupport,
-            } => "Local models run on the processor: this build of Demios has no graphics-chip support, so replies are slower.".into(),
+            } => "Local models run on the processor: this build of Almend has no graphics-chip support, so replies are slower.".into(),
         }
     }
 

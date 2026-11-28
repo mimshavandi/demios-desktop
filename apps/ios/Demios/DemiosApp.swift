@@ -46,7 +46,7 @@ struct PrivacyCover: View {
     var body: some View {
         ZStack {
             Color(uiColor: .systemBackground).ignoresSafeArea()
-            Text("Demios").font(.largeTitle.bold())
+            Text("Almend").font(.largeTitle.bold())
         }
         .accessibilityHidden(true)
     }
@@ -59,7 +59,7 @@ struct OpenFailedView: View {
 
     var body: some View {
         ContentUnavailableView {
-            Label("Demios", systemImage: "exclamationmark.octagon")
+            Label("Almend", systemImage: "exclamationmark.octagon")
         } description: {
             Text(message)
         } actions: {

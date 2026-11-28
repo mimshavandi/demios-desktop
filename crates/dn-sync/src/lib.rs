@@ -64,7 +64,7 @@ pub enum SyncError {
     Crypto(&'static str),
     #[error("this isn't a valid pairing link: {0}")]
     BadLink(&'static str),
-    #[error("this pairing link is for a newer version of Demios; update this app")]
+    #[error("this pairing link is for a newer version of Almend; update this app")]
     NewerLinkVersion,
     #[error("this pairing code has expired or was already used")]
     OfferClosed,

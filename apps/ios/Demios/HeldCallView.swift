@@ -29,7 +29,7 @@ struct HeldCallView: View {
                     .accessibilityElement(children: .combine)
                 }
             } footer: {
-                Text("To answer, open Demios on your computer. Approving from this phone with Face ID comes next.")
+                Text("To answer, open Almend on your computer. Approving from this phone with Face ID comes next.")
                     .padding(.top, 8)
             }
         }

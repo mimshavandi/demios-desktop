@@ -26,21 +26,21 @@ pub fn check_link(raw: &str) -> Result<Url, Refused> {
     // dialog shows. A link with either isn't what it looks like.
     if raw.chars().any(|c| c.is_control() || is_bidi_control(c)) {
         return Err(Refused(
-            "This link has hidden characters in it, so Demios won't open it.",
+            "This link has hidden characters in it, so Almend won't open it.",
         ));
     }
-    let u = Url::parse(raw).map_err(|_| Refused("This isn't a web address Demios can open."))?;
+    let u = Url::parse(raw).map_err(|_| Refused("This isn't a web address Almend can open."))?;
     if !matches!(u.scheme(), "http" | "https") {
         return Err(Refused(
             "Only web links (http and https) open from answers.",
         ));
     }
     if u.host_str().is_none_or(str::is_empty) {
-        return Err(Refused("This isn't a web address Demios can open."));
+        return Err(Refused("This isn't a web address Almend can open."));
     }
     if !u.username().is_empty() || u.password().is_some() {
         return Err(Refused(
-            "This link has a user name or password in it, so Demios won't open it.",
+            "This link has a user name or password in it, so Almend won't open it.",
         ));
     }
     Ok(u)

@@ -17,7 +17,7 @@ const CHOICES: { value: Exclude<ToolChoice, "default">; label: string }[] = [
 const RISK_TEXT: Partial<Record<RiskTier, { label: string; harm: string }>> = {
   external_write: {
     label: "acts outside the app",
-    harm: "It can send or change things outside Demios, such as messages, issues or files on a service.",
+    harm: "It can send or change things outside Almend, such as messages, issues or files on a service.",
   },
   destructive: {
     label: "can delete or overwrite",

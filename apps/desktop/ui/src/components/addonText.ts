@@ -105,7 +105,7 @@ export function runText(r: JobRun): string {
         : `Last ran ${timeText(r.started_at)}`;
     case "skipped":
       return r.not_fresh
-        ? `Skipped ${timeText(r.scheduled_for)}: it was no longer useful by the time Demios was open`
+        ? `Skipped ${timeText(r.scheduled_for)}: it was no longer useful by the time Almend was open`
         : `Skipped ${timeText(r.scheduled_for)}`;
     case "failed":
       return `Last run failed at ${timeText(r.started_at)}${r.error === null ? "" : `: ${r.error}`}`;
@@ -114,6 +114,6 @@ export function runText(r: JobRun): string {
     case "cancelled":
       return `Last run at ${timeText(r.started_at)} was stopped`;
     case "interrupted":
-      return `Last run at ${timeText(r.started_at)} was interrupted when Demios closed`;
+      return `Last run at ${timeText(r.started_at)} was interrupted when Almend closed`;
   }
 }

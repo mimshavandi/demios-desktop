@@ -15,7 +15,7 @@ const entry = (over: Partial<ConnectEntryView> = {}): ConnectEntryView => ({
   url: "https://mcp.northwind.example/mcp",
   scopes: ["read", "write"],
   terms_url: "https://northwind.example/terms",
-  data: "Goes between Northwind and this app; Demios's servers never see it.",
+  data: "Goes between Northwind and this app; Almend's servers never see it.",
   review_date: "2026-11-26",
   review_source: "https://northwind.example/docs/mcp",
   reviewed: true,
@@ -84,7 +84,7 @@ describe("ConnectCard", () => {
     fireEvent.click(details);
     expect(details.getAttribute("aria-expanded")).toBe("true");
     expect(screen.getByText("https://mcp.northwind.example/mcp")).toBeTruthy();
-    expect(screen.getByText(/Demios's servers never see it/)).toBeTruthy();
+    expect(screen.getByText(/Almend's servers never see it/)).toBeTruthy();
     expect(screen.getByText("read · write")).toBeTruthy();
     expect(screen.getByText(/Reads ask once per chat; anything that creates, changes or deletes asks every time/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Northwind's terms" }));
@@ -170,7 +170,7 @@ describe("ConnectCard", () => {
   });
 
   it("a catalogue that can't be checked shows no list at all", async () => {
-    const msg = "The list of services couldn't be checked, so it isn't shown. Reinstall Demios to get a good copy.";
+    const msg = "The list of services couldn't be checked, so it isn't shown. Reinstall Almend to get a good copy.";
     const { api } = fake({ error: msg });
     ui(api);
     expect((await screen.findByRole("alert")).textContent).toContain(msg);

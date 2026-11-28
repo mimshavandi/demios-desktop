@@ -367,7 +367,7 @@ pub async fn resolve_link(
     link: &dn_models::link::AddModelLink,
 ) -> IpcResult<RepoView> {
     let link = crate::deeplink::revalidate(link)
-        .map_err(|_| IpcError::invalid("That link isn't a valid Demios model link."))?;
+        .map_err(|_| IpcError::invalid("That link isn't a valid Almend model link."))?;
     let plan = link
         .resolve(hub, &local.machine())
         .await

@@ -112,12 +112,12 @@ impl From<HubError> for CoreError {
                 vec![RecoveryAction::AddProviderKey],
             ),
             HubError::NoGguf(_) => (
-                "This repo has no GGUF files Demios can run.".to_string(),
+                "This repo has no GGUF files Almend can run.".to_string(),
                 vec![],
             ),
             HubError::NoChatTemplate(_) => (
                 format!(
-                    "{}, so Demios can't chat with it. Pick another version or model.",
+                    "{}, so Almend can't chat with it. Pick another version or model.",
                     crate::template::NO_TEMPLATE_MESSAGE
                 ),
                 vec![],

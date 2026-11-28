@@ -68,7 +68,7 @@ function readPref(key: string, fallback: boolean): boolean {
 
 // Below this width the artifact pane covers the whole window instead of sitting beside the
 // chat (the `max-width: 1023px` rule in styles.css). There it opens only when asked or when an
-// artifact arrives, never at launch, so Demios doesn't start behind an empty pane.
+// artifact arrives, never at launch, so Almend doesn't start behind an empty pane.
 const ARTIFACT_OVERLAY_QUERY = "(max-width: 1023px)";
 
 function artifactPaneAtLaunch(): boolean {
@@ -225,7 +225,7 @@ function Shell({ api }: { api: Api }) {
     void api
       .addLinkDone()
       .catch((e: unknown) =>
-        toast({ tone: "error", title: `Couldn't close the link. Restart Demios before opening another one. ${errorMessage(e)}` }),
+        toast({ tone: "error", title: `Couldn't close the link. Restart Almend before opening another one. ${errorMessage(e)}` }),
       );
   }, [api, toast]);
 
@@ -955,7 +955,7 @@ function Shell({ api }: { api: Api }) {
                 </Button>
               }
             >
-              Demios couldn't load its assistant instructions, so chats can't start. Reinstall Demios, or report a
+              Almend couldn't load its assistant instructions, so chats can't start. Reinstall Almend, or report a
               problem. ({info.agent_error})
             </InlineMessage>
           </div>
@@ -1011,7 +1011,7 @@ function Shell({ api }: { api: Api }) {
                 </span>
               }
             >
-              Demios {launchUpdate.version} is available.
+              Almend {launchUpdate.version} is available.
             </InlineMessage>
           </div>
         )}

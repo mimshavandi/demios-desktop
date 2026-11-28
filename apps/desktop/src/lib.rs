@@ -1,4 +1,4 @@
-//! Demios Desktop shell (ADR-0002, T-SHELL-01..03). The Rust side owns all state and
+//! Almend Desktop shell (ADR-0002, T-SHELL-01..03). The Rust side owns all state and
 //! logic; the web UI in `ui/` only renders and calls the typed commands in [`commands`].
 
 // build.rs only sets `fake_model` for debug builds; make that impossible to undo by accident.
@@ -376,7 +376,7 @@ pub fn run_with_addons(addons: Vec<std::sync::Arc<dyn dn_plugin_api::Plugin>>) {
             updates::launch_update_check,
         ])
         .build(tauri::generate_context!())
-        .expect("error while building Demios Desktop")
+        .expect("error while building Almend Desktop")
         .run(|app, event| {
             // Tauri exits without dropping managed state: stop MCP servers (and their
             // process trees) explicitly, with a bound so a stuck server can't hang quit.

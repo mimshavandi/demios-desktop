@@ -279,7 +279,7 @@ export function createMockApi(): Api {
     url: url!,
     scopes: [],
     terms_url: `https://${id}.example/terms`,
-    data: `Goes between ${vendor} and this app; Demios's servers never see it.`,
+    data: `Goes between ${vendor} and this app; Almend's servers never see it.`,
     review_date: "2026-11-26",
     review_source: `https://${id}.example/docs/mcp`,
     reviewed: true,
@@ -827,7 +827,7 @@ export function createMockApi(): Api {
     nodeJoinBegin: async (link) => {
       await new Promise((r) => setTimeout(r, 300));
       if (!link.startsWith("demios://pair?"))
-        throw { code: "node_link", message: "That isn't a Demios pairing link: it doesn't start with demios://pair." };
+        throw { code: "node_link", message: "That isn't a Almend pairing link: it doesn't start with demios://pair." };
       joinLink = link;
       return { numbers: ["4821", "0937", "5512"], address: "192.168.1.20:7443" };
     },

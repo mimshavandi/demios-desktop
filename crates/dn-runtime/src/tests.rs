@@ -77,7 +77,7 @@ fn tool(name: &str) -> ToolSpec {
 
 fn parts() -> Parts {
     Parts {
-        system: vec!["You are Demios.".into(), "Project: Launch.".into()],
+        system: vec!["You are Almend.".into(), "Project: Launch.".into()],
         tools: vec![tool("web_search"), tool("files_read")],
         skills: Some("Skills: write-email.".into()),
         profile: Some("Prefers short answers.".into()),
@@ -126,7 +126,7 @@ fn the_slots_go_in_their_fixed_order() {
     assert_eq!(m[0].role, Role::System);
     let system = &texts(&m[0])[0];
     let order = [
-        "You are Demios.",
+        "You are Almend.",
         "Project: Launch.",
         "Skills:",
         "Prefers short",
@@ -193,7 +193,7 @@ fn an_unknown_context_size_fails_and_is_never_guessed() {
     };
     assert_eq!(
         user_message,
-        "Demios doesn't know how much text local:qwen3-8b can read at once, so it can't fit \
+        "Almend doesn't know how much text local:qwen3-8b can read at once, so it can't fit \
          this chat to it."
     );
 }
@@ -368,7 +368,7 @@ fn a_runs_steps_are_assembled_and_each_step_extends_the_last() {
 fn with_tools_the_system_message_says_what_the_blocks_are() {
     let mut p = parts();
     p.knowledge.clear();
-    p.system = vec!["You are Demios.".into()];
+    p.system = vec!["You are Almend.".into()];
     let a = run(&local(8192), &Policy::chat(), p.clone()).unwrap();
     assert!(texts(&a.request.messages[0])[0].contains(dn_core::untrusted::NOTICE));
     p.tools.clear();
