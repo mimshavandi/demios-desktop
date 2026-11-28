@@ -169,7 +169,7 @@ impl Judge {
     }
 
     /// The key, from the variable `judge.yaml` names; an error when it's named and unset.
-    fn key(&self) -> Result<Option<String>, String> {
+    pub fn key(&self) -> Result<Option<String>, String> {
         match &self.file.api_key_env {
             Some(v) => std::env::var(v)
                 .map(Some)
@@ -688,47 +688,70 @@ pub async fn judge_pair(
         p.outcome = Outcome::NoAnswer;
         return p;
     }
-    let first = render_pair(context, &answer.text, reference);
-    let second = render_pair(context, reference, &answer.text);
-    let o1 = ask_pair(
+    let c = compare(
         model,
         judge_ref,
         system,
-        &first,
-        "answer",
-        &mut p.judge_runs,
+        context,
+        (&answer.text, "answer"),
+        (reference, "reference"),
     )
     .await;
-    let o2 = ask_pair(
-        model,
-        judge_ref,
-        system,
-        &second,
-        "reference",
-        &mut p.judge_runs,
-    )
-    .await;
-    // Whom each order preferred: Some(true) Demios, Some(false) the reference, None a tie.
-    let side = |o: &Order, demios_is_a: bool| {
+    p.outcome = match c.verdict {
+        Some(Some(true)) => Outcome::Win,
+        Some(Some(false)) => Outcome::Loss,
+        Some(None) => Outcome::Tie,
+        None => Outcome::JudgeError,
+    };
+    p.orders_disagree = c.orders_disagree;
+    p.orders = c.orders;
+    p.judge_runs = c.runs;
+    p
+}
+
+/// Two texts compared in both orders.
+pub struct Comparison {
+    /// `Some(Some(true))`: the first text is better in both orders; `Some(Some(false))`: the
+    /// second is; `Some(None)`: a tie or the orders disagreed; `None`: a judge error.
+    pub verdict: Option<Option<bool>>,
+    pub orders_disagree: bool,
+    pub orders: Vec<Order>,
+    pub runs: Vec<dn_core::run::RunResult>,
+}
+
+/// Compares `x` and `y` (each with the name the report gives it) in both orders: `x` as A,
+/// then `y` as A. A preference counts only when both orders agree.
+pub async fn compare(
+    model: &dyn ChatModel,
+    judge_ref: &ModelRef,
+    system: &str,
+    context: &str,
+    x: (&str, &'static str),
+    y: (&str, &'static str),
+) -> Comparison {
+    let mut runs = Vec::new();
+    let first = render_pair(context, x.0, y.0);
+    let second = render_pair(context, y.0, x.0);
+    let o1 = ask_pair(model, judge_ref, system, &first, x.1, &mut runs).await;
+    let o2 = ask_pair(model, judge_ref, system, &second, y.1, &mut runs).await;
+    // Whom each order preferred: Some(true) x, Some(false) y, None a tie.
+    let side = |o: &Order, x_is_a: bool| {
         o.better.map(|b| match b {
-            Better::A => Some(demios_is_a),
-            Better::B => Some(!demios_is_a),
+            Better::A => Some(x_is_a),
+            Better::B => Some(!x_is_a),
             Better::Tie => None,
         })
     };
-    p.outcome = match (side(&o1, true), side(&o2, false)) {
-        (Some(x), Some(y)) => {
-            p.orders_disagree = x != y;
-            match (x, y) {
-                (Some(true), Some(true)) => Outcome::Win,
-                (Some(false), Some(false)) => Outcome::Loss,
-                _ => Outcome::Tie,
-            }
-        }
-        _ => Outcome::JudgeError,
+    let (verdict, orders_disagree) = match (side(&o1, true), side(&o2, false)) {
+        (Some(a), Some(b)) => (Some(if a == b { a } else { None }), a != b),
+        _ => (None, false),
     };
-    p.orders = vec![o1, o2];
-    p
+    Comparison {
+        verdict,
+        orders_disagree,
+        orders: vec![o1, o2],
+        runs,
+    }
 }
 
 /// The win rate at equal length (as AlpacaEval's length-controlled win rate): a logistic
@@ -871,6 +894,10 @@ struct JudgeReport<'a> {
     /// The reference sources used, with each source's `meta.json` if it has one.
     #[serde(skip_serializing_if = "Option::is_none")]
     references: Option<serde_json::Value>,
+    /// With references: the judge's calibration (`calibration.json` next to `judge.yaml`,
+    /// same model and pairwise prompt), or why there's none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    calibration: Option<serde_json::Value>,
     summary: serde_json::Value,
     items: &'a [Judged],
 }
@@ -1065,6 +1092,15 @@ pub async fn run(a: JudgeArgs) -> Result<(), String> {
     model.unload().await.map_err(|e| e.to_string())?;
 
     let summary = summary(&items);
+    let calibration = refs
+        .as_ref()
+        .map(|_| match super::calibrate::for_judge(&a.judge, &judge) {
+            Ok(c) => c,
+            Err(why) => {
+                eprintln!("[eval judge] the pairwise judge isn't calibrated: {why}");
+                serde_json::json!({ "none": why })
+            }
+        });
     let unix_time = crate::bench::now();
     let report = JudgeReport {
         schema: "dn.judge.v1",
@@ -1085,6 +1121,7 @@ pub async fn run(a: JudgeArgs) -> Result<(), String> {
             "checks": if refs.is_some() { vec!["criteria", "pairwise"] } else { vec!["criteria"] },
         }),
         references: refs.as_ref().map(|r| r.meta.clone()),
+        calibration,
         summary: summary.clone(),
         items: &items,
     };
