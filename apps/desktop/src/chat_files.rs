@@ -109,7 +109,8 @@ fn select(
 ) -> dn_store::Result<Vec<ChatFile>> {
     let mut stmt = conn.prepare(&format!(
         "SELECT id, conversation_id, name, media_type, size, sha256, created_at
-         FROM app_chat_files WHERE conversation_id = ?1 AND {filter} ORDER BY created_at, id"
+         FROM app_chat_files WHERE conversation_id = ?1 AND {filter}
+         ORDER BY removed_at IS NOT NULL, created_at, id"
     ))?;
     let row = |r: &rusqlite::Row<'_>| {
         Ok(ChatFile {
@@ -633,14 +634,21 @@ mod tests {
             removed_names(&st.db().unwrap(), c.id).unwrap(),
             ["sales.csv"]
         );
-        // A new file with the same name can be attached once the old one is removed.
-        assert_eq!(
-            add(&st, c.id, &[src(&dir, "sales.csv", b"x\n1\n")])
-                .unwrap()
-                .added
-                .len(),
-            1
-        );
+        // A new file with the same name can be attached once the old one is removed, and it
+        // comes first for the data tools, even while the old one is still in its Undo time.
+        let new = add(&st, c.id, &[src(&dir, "sales.csv", b"x\n1\n")])
+            .unwrap()
+            .added
+            .remove(0);
+        st.db()
+            .unwrap()
+            .execute(
+                "UPDATE app_chat_files SET removed_at = ?1 WHERE id = ?2",
+                rusqlite::params![dn_store::now_ms(), f.id.to_string()],
+            )
+            .unwrap();
+        let r = readable(&st.db().unwrap(), c.id, dn_store::now_ms()).unwrap();
+        assert_eq!((r.len(), r[0].id), (2, new.id));
         let _ = std::fs::remove_dir_all(dir);
     }
 
