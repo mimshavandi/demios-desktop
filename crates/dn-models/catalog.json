@@ -34,7 +34,8 @@
       "notes": "Good default for 8 GB machines.",
       "tool_support": "supported",
       "template_sha256": "5816fce10444e03c2e9ee1ef8a4a1ea61ae7e69e438613f3b17b69d0426223a4",
-      "tokenizer_sha256": "643ce0bbba3e5b48805da095a094bf8248f2b3ae4b49e9fd1aa4aaf4928d4918"
+      "tokenizer_sha256": "643ce0bbba3e5b48805da095a094bf8248f2b3ae4b49e9fd1aa4aaf4928d4918",
+      "effective_context": {"tokens": 131072, "measured": "2026-11-28", "source": "dn eval context, retrieval (#350)"}
     },
     {
       "id": "qwen3-4b-q4_k_m",
@@ -102,7 +103,8 @@
       "notes": "Well-known 8B baseline for benchmarks.",
       "tool_support": "supported",
       "template_sha256": "e10ca381b1ccc5cf9db52e371f3b6651576caee0a630b452e2816b2d404d4b65",
-      "tokenizer_sha256": "643ce0bbba3e5b48805da095a094bf8248f2b3ae4b49e9fd1aa4aaf4928d4918"
+      "tokenizer_sha256": "643ce0bbba3e5b48805da095a094bf8248f2b3ae4b49e9fd1aa4aaf4928d4918",
+      "effective_context": {"tokens": 131072, "measured": "2026-11-28", "source": "dn eval context, retrieval (#350)"}
     },
     {
       "id": "qwen3-8b-q4_k_m",
@@ -120,7 +122,8 @@
       "notes": "Default for 16 GB machines.",
       "tool_support": "supported",
       "template_sha256": "57f1fd00f0013a2be96aa79b857391f27e23df5b5f847072b524c897e24d0361",
-      "tokenizer_sha256": "4b8d202831da68d69b14f27c6219de991454d7d613831b0f0a6c21ed95bb2804"
+      "tokenizer_sha256": "4b8d202831da68d69b14f27c6219de991454d7d613831b0f0a6c21ed95bb2804",
+      "effective_context": {"tokens": 40960, "measured": "2026-11-28", "source": "dn eval context, retrieval (#350)"}
     },
     {
       "id": "gpt-oss-20b-q4_k_m",
@@ -154,7 +157,8 @@
       "notes": "Dense; 32 GB machines.",
       "tool_support": "unknown",
       "template_sha256": "d99c0a28fd4eebd7ba2cc0309651f6d7c5486024989bc42f6bb4cc558d553689",
-      "tokenizer_sha256": "96cd5a706d44ccee5674bbab4223efde2130914404dbdc4644a74afc0d773f4b"
+      "tokenizer_sha256": "96cd5a706d44ccee5674bbab4223efde2130914404dbdc4644a74afc0d773f4b",
+      "effective_context": {"tokens": 32768, "measured": "2026-11-28", "source": "dn eval context, retrieval (#350)"}
     },
     {
       "id": "gemma-4-26b-a4b-it-q4_k_m",

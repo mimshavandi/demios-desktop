@@ -448,6 +448,7 @@ fn external_entry(
     let variant = id.rsplit('/').next().unwrap_or("").to_string();
     CatalogEntry {
         recommended: None,
+        effective_context: None,
         quant: dn_models::hub::quant_label(&variant).unwrap_or_default(),
         id,
         name,
@@ -778,6 +779,12 @@ impl<B: InferenceBackend> LocalModels<B> {
     }
 
     /// A catalogue entry or an external model.
+    /// The catalogue's own entry for `id`; never an external model (#350: a measurement
+    /// belongs to the catalogue model, not to any copy of its weights).
+    pub fn catalog_entry(&self, id: &str) -> Option<CatalogEntry> {
+        self.catalog.get(id).cloned()
+    }
+
     pub fn find(&self, id: &str) -> Option<CatalogEntry> {
         self.catalog
             .get(id)
@@ -1963,6 +1970,7 @@ mod tests {
     fn entry(id: &str, size: u64, sha: &str) -> CatalogEntry {
         CatalogEntry {
             recommended: None,
+            effective_context: None,
             id: id.into(),
             name: format!("Model {id}"),
             repo: "org/repo".into(),
