@@ -100,7 +100,7 @@ For testing real models before releases are signed (#51). The `preview` workflow
 
 - **Run it:** Actions › preview › Run workflow (on any branch), or push a tag `preview-*`. From a terminal: `gh workflow run preview --ref <branch>`.
 - **Get it:** the run's Artifacts list has `Demios-Desktop-<version>-preview-<sha>-macos-arm64` (a `.dmg` and an `.app.zip`), or use `gh run download <run-id>`. The run summary lists the commit, version and sizes. Settings › General › About shows "Preview build (unsigned), commit <sha>".
-- **Open it:** macOS blocks unsigned apps the first time. Right-click (Control-click) the app › **Open** › **Open**. On macOS 15 and later, if there is no Open button, try to open the app once, then use **System Settings › Privacy & Security › Open Anyway**. Or run `xattr -dr com.apple.quarantine "/Applications/Demios Desktop.app"`.
+- **Open it:** macOS blocks unsigned apps the first time. Right-click (Control-click) the app › **Open** › **Open**. On macOS 15 and later, if there is no Open button, try to open the app once, then use **System Settings › Privacy & Security › Open Anyway**. Or run `xattr -dr com.apple.quarantine "/Applications/Almend Desktop.app"`.
 - **Expected:** `codesign -dv` reports an ad-hoc signature (or none), and `spctl -a -vv` reports *rejected*. Keychain prompts name the app as unsigned, and you'll be asked again after each new build.
 
 ### Preview installers for all OSes (`release-preview`)
@@ -118,7 +118,7 @@ The `updater` feature is off. Each installer is smoke-tested on its own OS:
 The workflow artifact holds every installer, `SHA256SUMS.txt` and the smoke logs.
 
 - **Dry run:** start the workflow with `publish` off, or push a `release-preview-check-*` tag; neither ever publishes.
-- **Publishing:** the `publish` job runs only from `main` with `publish: true`. It creates a GitHub pre-release, "Demios Desktop <version> (Preview, unsigned)", with notes from `.github/release-preview/notes.md`.
+- **Publishing:** the `publish` job runs only from `main` with `publish: true`. It creates a GitHub pre-release, "Almend Desktop <version> (Preview, unsigned)", with notes from `.github/release-preview/notes.md`.
 
 Real-model checklist (#51), on the preview build:
 - [ ] Models › download a small model from the built-in list. Pause and resume three times: it resumes from where it stopped and ends **Ready** (checksum verified).

@@ -30,7 +30,7 @@ use std::sync::Arc;
 #[command(
     name = "dn",
     version,
-    about = "Demios desktop: run, size, benchmark and download models"
+    about = "Almend desktop: run, size, benchmark and download models"
 )]
 struct Cli {
     #[command(subcommand)]
