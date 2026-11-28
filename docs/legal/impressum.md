@@ -1,6 +1,6 @@
 # Legal notice (Impressum)
 
-Information under § 5 of the German Digital Services Act (Digitale-Dienste-Gesetz, DDG). It applies to the website demios.io and to the Demios Desktop app.
+Information under § 5 of the German Digital Services Act (Digitale-Dienste-Gesetz, DDG). It applies to the website demios.io and to the Almend Desktop app.
 
 ## Provider
 
@@ -14,7 +14,7 @@ Represented by: Mahdi Shavandi
 
 ## Contact
 
-Email: mahdi@demios.io. We reply within 72 hours.
+Email: hello@almend.ai. We reply within 72 hours.
 A telephone or postal contact is available on request.
 
 ## Register

@@ -1,25 +1,25 @@
-# Demios Desktop privacy policy
+# Almend Desktop privacy policy
 
 Last updated: set on publication
 
 ## Who we are
 
-Demios Desktop ("the app") is a source-available desktop app licensed under the PolyForm Shield License 1.0.0 (earlier versions under Apache-2.0). It is published by **DigiNote, Inc.**, which is responsible for this policy and is the controller for the processing described in [Data protection (GDPR)](#data-protection-gdpr). DigiNote, Inc. is also the provider of the app under the EU AI Act. App id: `io.demios.app`.
+Almend Desktop ("the app") is a source-available desktop app licensed under the PolyForm Shield License 1.0.0 (earlier versions under Apache-2.0). It is published by **DigiNote, Inc.**, which is responsible for this policy and is the controller for the processing described in [Data protection (GDPR)](#data-protection-gdpr). DigiNote, Inc. is also the provider of the app under the EU AI Act. App id: `io.demios.app`.
 
 DigiNote, Inc.
 Niederkasseler Kirchweg 85
 40547 Düsseldorf
 Germany
 
-Email: mahdi@demios.io
+Email: hello@almend.ai
 
-Data protection contact: mahdi@demios.io. No data protection officer is designated. None is required: fewer than 20 people regularly process personal data for us (§ 38(1) BDSG), and our core activities don't involve large-scale monitoring or special categories of data (Art. 37(1) GDPR).
+Data protection contact: hello@almend.ai. No data protection officer is designated. None is required: fewer than 20 people regularly process personal data for us (§ 38(1) BDSG), and our core activities don't involve large-scale monitoring or special categories of data (Art. 37(1) GDPR).
 
 This policy covers the app and the website at demios.io.
 
 ## The short version
 
-- **We collect nothing.** The app has no account, no analytics, no crash reporting and no Demios server. Nothing you do in the app is sent to us.
+- **We collect nothing.** The app has no account, no analytics, no crash reporting and no Almend server. Nothing you do in the app is sent to us.
 - Your chats, settings and tool history stay on your computer.
 - Your API keys and tokens are kept in your operating system's keychain.
 - When you choose an online AI provider, a model download, a tool server or, in builds with updates turned on, an update, the app connects **directly** to that service for you. That service's own terms and privacy policy apply.
@@ -86,13 +86,13 @@ If you use a **model on this device** instead, the conversation is processed on 
 
 ### Hugging Face (model downloads)
 
-When you search for a model or download one, the app connects directly to Hugging Face (`huggingface.co`). Hugging Face sees your IP address, your search text, the files you ask for, and standard request headers, including the app's name and version. No Demios account is needed. Before you download, the app shows the model's licence and a link to its model card. Your chats are never sent to Hugging Face. [Hugging Face privacy policy](https://huggingface.co/privacy).
+When you search for a model or download one, the app connects directly to Hugging Face (`huggingface.co`). Hugging Face sees your IP address, your search text, the files you ask for, and standard request headers, including the app's name and version. No Almend account is needed. Before you download, the app shows the model's licence and a link to its model card. Your chats are never sent to Hugging Face. [Hugging Face privacy policy](https://huggingface.co/privacy).
 
 Some models need your Hugging Face token. If you save one, it is kept in your system keychain and sent only to Hugging Face. If you set a mirror with `HF_ENDPOINT`, the app and the `dn` tool use it instead, and the token goes to the mirror only if you opt in.
 
 ### Updates (copies downloaded from GitHub)
 
-No build available today checks for updates. Preview builds and builds from source have updates turned off, and **Settings → General → About** says so. Builds with updates turned on, from the first signed release downloaded from GitHub or demios.io, work as described here. Such a copy checks for a new version when you select **Check for updates** in **Settings → General → About**, and also once each time the app starts if you turn on **Check for updates when Demios starts** there (it's off unless you do). The app then asks GitHub (`github.com`, which sends it on to `release-assets.githubusercontent.com`) for a small file that names the newest version. The address is the same for everyone and carries nothing about you or your copy. GitHub sees your IP address and standard request headers. If a newer version exists, the app shows its release notes, and downloads it from GitHub only after you select **Install and restart**. Nothing else is sent. Demios isn't offered in any app store yet. If it is later, store copies will be updated by their store and won't contact GitHub for updates. [GitHub privacy statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement).
+No build available today checks for updates. Preview builds and builds from source have updates turned off, and **Settings → General → About** says so. Builds with updates turned on, from the first signed release downloaded from GitHub or demios.io, work as described here. Such a copy checks for a new version when you select **Check for updates** in **Settings → General → About**, and also once each time the app starts if you turn on **Check for updates when Demios starts** there (it's off unless you do). The app then asks GitHub (`github.com`, which sends it on to `release-assets.githubusercontent.com`) for a small file that names the newest version. The address is the same for everyone and carries nothing about you or your copy. GitHub sees your IP address and standard request headers. If a newer version exists, the app shows its release notes, and downloads it from GitHub only after you select **Install and restart**. Nothing else is sent. Almend isn't offered in any app store yet. If it is later, store copies will be updated by their store and won't contact GitHub for updates. [GitHub privacy statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement).
 
 ### Tool servers (MCP)
 
@@ -129,7 +129,7 @@ Because your data is on your own computer, you control it:
 - **Delete a project or a project file:** on the project's page, select **Delete project**, or the remove button next to a file. You can undo this for 10 seconds. At the next start of the app, the project with its chats, or the file, is removed for good, including the file copies and their passages in the search index.
 - **Remove a tool server:** go to **Settings → Tools** and select **Remove** in the server's **More actions** menu. Its settings, the secrets and sign-in saved for it in your keychain, its tool choices and the "Allow in this chat" approvals for its tools are deleted straight away and held in memory for a few seconds, so you can undo. Chats that used its tools keep their history.
 - **Remove an API key:** go to **Settings → Models → Provider keys** and select **Remove key**. The key is removed from the keychain straight away and held in memory for a few seconds, so you can undo.
-- **Delete everything:** go to **Settings → General** and select **Delete all local data**. After a confirmation that lists what will go, it deletes the database (every chat, including recently deleted ones and their deletion records, every artifact, every project with its instructions, the skill chosen for each chat, the project search index and answer sources, your settings and tool history), the copies of files you added to projects, downloaded models, the keys, tokens and sign-ins Demios saved in your keychain (including your Hugging Face token), and the app window's own storage. This can't be undone. Delete all doesn't remove skills you wrote yourself in the skills folder; delete that folder to remove them.
+- **Delete everything:** go to **Settings → General** and select **Delete all local data**. After a confirmation that lists what will go, it deletes the database (every chat, including recently deleted ones and their deletion records, every artifact, every project with its instructions, the skill chosen for each chat, the project search index and answer sources, your settings and tool history), the copies of files you added to projects, downloaded models, the keys, tokens and sign-ins Almend saved in your keychain (including your Hugging Face token), and the app window's own storage. This can't be undone. Delete all doesn't remove skills you wrote yourself in the skills folder; delete that folder to remove them.
 - **Uninstalling** removes the app but not your data folder, your models or your keychain entries. Use **Delete all local data** first, or delete them yourself.
 - **Data held by providers, Hugging Face, tool servers or GitHub** is controlled by them. Use their tools or contact them.
 
@@ -139,7 +139,7 @@ This section gives the information required by Articles 13 and 14 of the EU Gene
 
 ### Controller
 
-DigiNote, Inc., at the address in [Who we are](#who-we-are). Email: mahdi@demios.io. No data protection officer is designated. None is required: fewer than 20 people regularly process personal data for us (§ 38(1) BDSG), and our core activities don't involve large-scale monitoring or special categories of data (Art. 37(1) GDPR). For data protection questions, write to mahdi@demios.io.
+DigiNote, Inc., at the address in [Who we are](#who-we-are). Email: hello@almend.ai. No data protection officer is designated. None is required: fewer than 20 people regularly process personal data for us (§ 38(1) BDSG), and our core activities don't involve large-scale monitoring or special categories of data (Art. 37(1) GDPR). For data protection questions, write to hello@almend.ai.
 
 ### What we process, why, and on what legal basis
 
@@ -194,7 +194,7 @@ You have the right:
 - to receive it in a common machine-readable format (Art. 20),
 - **to object** at any time, for reasons arising from your particular situation, to processing based on our legitimate interest (Art. 21). We then stop, unless we have compelling legitimate grounds or need it for legal claims.
 
-To use these rights, email mahdi@demios.io. Because the data in the app never reaches us, we can't see, copy or delete it for you; you can delete it yourself in the app. For data held by a service you chose, contact that service.
+To use these rights, email hello@almend.ai. Because the data in the app never reaches us, we can't see, copy or delete it for you; you can delete it yourself in the app. For data held by a service you chose, contact that service.
 
 ### Your right to complain
 
@@ -212,7 +212,7 @@ If the app starts sending any data to us (for example optional crash reports), w
 
 ## Contact
 
-DigiNote, Inc. · Niederkasseler Kirchweg 85, 40547 Düsseldorf, Germany · mahdi@demios.io · [GitHub issues](https://github.com/mimshavandi/demios-desktop/issues)
+DigiNote, Inc. · Niederkasseler Kirchweg 85, 40547 Düsseldorf, Germany · hello@almend.ai · [GitHub issues](https://github.com/mimshavandi/demios-desktop/issues)
 
 Legal notice (Impressum): https://demios.io/impressum
 

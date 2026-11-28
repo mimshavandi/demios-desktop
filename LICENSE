@@ -1,8 +1,8 @@
-Demios Desktop, the `dn` command-line tool, the Demios Node and the crates in this
+Almend Desktop, the `dn` command-line tool, the Almend Node and the crates in this
 repository are licensed under the PolyForm Shield License 1.0.0, below.
 
 Required Notice: Copyright 2026 DigiNote, Inc. (https://demios.io)
-Licensor Line of Business: Demios: AI desktop, agent and assistant software, and the related hosted services (sync, relay, sharing, forms and push) (https://demios.io)
+Licensor Line of Business: Almend: AI desktop, agent and assistant software, and the related hosted services (sync, relay, sharing, forms and push) (https://demios.io)
 
 Versions published before this licence change, up to and including the release
 v0.1.0-preview.8cd482c (commit 8cd482c), were published under the Apache License 2.0
