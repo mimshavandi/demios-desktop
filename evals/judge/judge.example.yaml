@@ -8,3 +8,4 @@ endpoint: ""                       # an OpenAI-compatible base URL
 api_key_env: DN_JUDGE_KEY          # the variable holding the key; never the key itself
 prompt: criteria-v1.md             # next to this file; its SHA-256 goes into every report
 pairwise_prompt: pairwise-v1.md    # for --references (pairwise against reference answers)
+longmemeval_prompt: longmemeval-v1.md  # for LongMemEval reports

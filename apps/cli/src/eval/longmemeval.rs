@@ -192,7 +192,9 @@ struct Item {
     question_id: String,
     question_type: String,
     abstention: bool,
-    /// The expected answer (LongMemEval's judge compares).
+    /// The question, for the judge.
+    question: String,
+    /// The expected answer (the judge compares).
     answer: serde_json::Value,
     #[serde(flatten)]
     turn: Turn,
@@ -253,6 +255,7 @@ pub async fn run(a: LongMemEvalArgs) -> Result<(), String> {
             question_id: inst.question_id.clone(),
             question_type: inst.question_type.clone(),
             abstention: inst.is_abstention(),
+            question: inst.question.clone(),
             answer: inst.answer.clone(),
             turn: t,
             retrieved_sessions: retrieved,
