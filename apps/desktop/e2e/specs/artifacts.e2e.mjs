@@ -55,7 +55,31 @@ function spyServer() {
   return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve({ server, hits, port: server.address().port })));
 }
 
+/** Below 1024 CSS px the artifact pane is a full overlay over the chat (design system §3),
+ *  which is what a person on a small screen sees. CI runners' screens vary (#392: one couldn't
+ *  hold the 1280×820 window, so the window was clamped and the narrow layout was used). */
+function paneIsOverlay() {
+  return browser.execute(() => {
+    const p = document.querySelector('[data-testid="artifact-pane"]');
+    return p !== null && getComputedStyle(p).position === "fixed";
+  });
+}
+
+/** Shows or hides the artifact pane with the title bar's button, as a person would. */
+async function setPane(open) {
+  const label = open ? "Show artifacts" : "Hide artifacts";
+  const button = await $(`button[aria-label="${label}"]`);
+  if (await button.isExisting()) await button.click();
+  await browser.waitUntil(
+    async () => (await $('[data-testid="artifact-pane"]').isExisting()) === open,
+    { timeout: 10_000, timeoutMsg: `the artifact pane didn't ${open ? "open" : "close"}` },
+  );
+}
+
+/** Sends a message. With the pane over the chat (narrow window), it's hidden first to reach the
+ *  message box, and the caller shows it again with `setPane(true)` when it needs it. */
 async function send(text) {
+  if (await paneIsOverlay()) await setPane(false);
   const box = await byTestId("composer-input");
   await box.waitForEnabled({ timeout: 30_000, timeoutMsg: "composer stayed disabled (no model?)" });
   await box.click();
@@ -123,6 +147,7 @@ describe("artifacts", () => {
 
   it("Windows: creates, renders (in the artifact webview), updates and restores an artifact", async function () {
     if (!WINDOWS) this.skip();
+    console.log("viewport:", JSON.stringify(await browser.execute(() => [innerWidth, innerHeight, devicePixelRatio])));
     await (await byTestId("new-chat")).waitForExist({ timeout: 60_000 });
     await (await byTestId("new-chat")).click();
     await send("Make an HTML artifact");
@@ -150,6 +175,7 @@ describe("artifacts", () => {
 
     await send("Please update the artifact");
     await lastAnswerDone(2);
+    await setPane(true);
     await browser.waitUntil(async () => /^v2 · model/.test(await versionLabel()), { timeout: 20_000 });
     await frameReady();
     await (await byTestId("version-prev")).click();
@@ -181,6 +207,7 @@ describe("artifacts", () => {
     // 2. Update → v2 (an exact-match patch through artifact_update).
     await send("Please update the artifact");
     await lastAnswerDone(2);
+    await setPane(true);
     await frameHeading("Version two");
     expect(await versionLabel()).toMatch(/^v2 · model/);
 
