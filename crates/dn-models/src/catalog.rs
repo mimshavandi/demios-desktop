@@ -31,6 +31,15 @@ pub struct CatalogEntry {
     /// [`Catalog::recommended_for`] picks it for.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recommended: Option<Recommendation>,
+    /// SHA-256 of the chat template in the pinned file, the original the model check
+    /// compares other copies of this model with (#421). Only the hash is kept here; the
+    /// template itself is the model publisher's, read from the file when it's needed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template_sha256: Option<String>,
+    /// Fingerprint of the pinned file's tokenizer ([`crate::gguf::Layout::tokenizer_sha256`]).
+    /// A file from this model's repo with another tokenizer is Blocked (#421).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokenizer_sha256: Option<String>,
     /// How much of its context the model was measured to use well (#350, `dn eval context`:
     /// retrieval at at least 0.85 at every tested length). The chat input budget uses up to
     /// this much of the loaded context instead of the 60% default; `None`: not measured.
@@ -163,6 +172,25 @@ mod tests {
     use std::collections::HashSet;
 
     #[test]
+    fn every_model_has_its_check_references() {
+        let hex = |s: &str| s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit());
+        for m in Catalog::builtin().models {
+            assert!(
+                m.tokenizer_sha256.as_deref().is_some_and(hex),
+                "{}: tokenizer_sha256 (run print_check_references)",
+                m.id
+            );
+            if m.capabilities.contains(&Capability::Chat) {
+                assert!(
+                    m.template_sha256.as_deref().is_some_and(hex),
+                    "{}: template_sha256 (run print_check_references)",
+                    m.id
+                );
+            }
+        }
+    }
+
+    #[test]
     fn builtin_catalog_is_well_formed() {
         let c = Catalog::builtin();
         assert!(c.models.len() >= 10);
@@ -230,6 +258,43 @@ mod tests {
     /// Every chat model in the catalogue carries its own chat template in the GGUF, so it
     /// renders with its own template (T-INF-23). Reads each file's header from the Hub with
     /// range requests (a few MB per model).
+    /// The model check's references (#421): each pinned file's chat template and tokenizer
+    /// fingerprint, read from its header on the Hub. Prints them as JSON, and with
+    /// `DN_TEMPLATES_OUT=<dir>` saves each template as `<sha256>.jinja`.
+    #[tokio::test]
+    #[ignore = "network: reads GGUF headers from huggingface.co"]
+    async fn print_check_references() {
+        use sha2::{Digest, Sha256};
+        let hub = crate::hub::HubClient::new(crate::hub::HubConfig::from_env()).unwrap();
+        for m in Catalog::builtin().models {
+            let file = crate::hub::RepoFile {
+                path: m.file.clone(),
+                size: m.size,
+                sha256: Some(m.sha256.clone()),
+            };
+            let g = hub.gguf_header(&m.repo, &m.revision, &file).await.unwrap();
+            let tpl = g.chat_template().map(|t| {
+                let h: String = Sha256::digest(t.as_bytes())
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect();
+                if let Some(dir) = std::env::var_os("DN_TEMPLATES_OUT") {
+                    std::fs::write(std::path::Path::new(&dir).join(format!("{h}.jinja")), t)
+                        .unwrap();
+                }
+                h
+            });
+            println!(
+                "{}",
+                serde_json::json!({
+                    "id": m.id,
+                    "template_sha256": tpl,
+                    "tokenizer_sha256": g.layout.tokenizer_sha256,
+                })
+            );
+        }
+    }
+
     #[tokio::test]
     #[ignore = "network: reads GGUF headers from huggingface.co"]
     async fn every_chat_model_has_a_chat_template() {

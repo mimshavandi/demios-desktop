@@ -104,7 +104,36 @@ pub struct Layout {
     pub bad_utf8: Vec<String>,
     /// Key → bytes its value takes in the header.
     pub value_bytes: BTreeMap<String, u64>,
+    /// Keys written more than once (llama.cpp refuses such a file; the map keeps the last).
+    pub duplicate_keys: Vec<String>,
+    /// SHA-256 over the tokenizer as written ([`TOKENIZER_KEYS`], each key's name, type and
+    /// raw value bytes, in key order). Two files with the same fingerprint split text into
+    /// the same token ids. `None` for a file without a vocabulary.
+    pub tokenizer_sha256: Option<String>,
 }
+
+/// The keys that decide how text becomes token ids, for [`Layout::tokenizer_sha256`]:
+/// the vocabulary and its merges, token types and scores (which segment text for SPM
+/// tokenizers), the special token ids, and the flags that change how text is split.
+pub const TOKENIZER_KEYS: &[&str] = &[
+    "tokenizer.ggml.model",
+    "tokenizer.ggml.pre",
+    "tokenizer.ggml.tokens",
+    "tokenizer.ggml.merges",
+    "tokenizer.ggml.token_type",
+    "tokenizer.ggml.scores",
+    "tokenizer.ggml.precompiled_charsmap",
+    "tokenizer.ggml.bos_token_id",
+    "tokenizer.ggml.eos_token_id",
+    "tokenizer.ggml.eot_token_id",
+    "tokenizer.ggml.eom_token_id",
+    "tokenizer.ggml.padding_token_id",
+    "tokenizer.ggml.unknown_token_id",
+    "tokenizer.ggml.add_bos_token",
+    "tokenizer.ggml.add_eos_token",
+    "tokenizer.ggml.add_space_prefix",
+    "tokenizer.ggml.remove_extra_whitespaces",
+];
 
 const MAX_STR: u64 = 16 << 20;
 const MAX_ITEMS: u64 = 1 << 26;
@@ -256,6 +285,8 @@ impl Gguf {
             bad_utf8: false,
         };
         let mut layout = Layout::default();
+        // Where each tokenizer value is, to fingerprint it once the header is read.
+        let mut spans: Vec<(String, u32, u64, u64)> = Vec::new();
         if &r.bytes::<4>()? != b"GGUF" {
             return Err(GgufError::BadMagic);
         }
@@ -289,11 +320,16 @@ impl Gguf {
             let at = r.pos;
             let v = r.value(ty)?;
             layout.value_bytes.insert(key.clone(), r.pos - at);
+            if TOKENIZER_KEYS.contains(&key.as_str()) {
+                spans.push((key.clone(), ty, at, r.pos));
+            }
             if r.bad_utf8 {
                 layout.bad_utf8.push(key.clone());
             }
             layout.key_types.insert(key.clone(), (ty, r.last_item));
-            metadata.insert(key, v);
+            if metadata.insert(key.clone(), v).is_some() {
+                layout.duplicate_keys.push(key);
+            }
             budget(r.pos)?;
         }
         // The count comes from the file: cap the pre-allocation, let real entries grow it.
@@ -321,6 +357,27 @@ impl Gguf {
             budget(r.pos)?;
         }
         layout.header_len = r.pos;
+        if spans.iter().any(|s| s.0 == "tokenizer.ggml.tokens") {
+            use sha2::{Digest, Sha256};
+            spans.sort();
+            let mut h = Sha256::new();
+            let mut buf = vec![0u8; 1 << 16];
+            for (key, ty, from, to) in &spans {
+                h.update((key.len() as u64).to_le_bytes());
+                h.update(key.as_bytes());
+                h.update(ty.to_le_bytes());
+                r.inner.seek(SeekFrom::Start(*from))?;
+                let mut left = to - from;
+                while left > 0 {
+                    let n = left.min(buf.len() as u64) as usize;
+                    r.inner.read_exact(&mut buf[..n])?;
+                    h.update(&buf[..n]);
+                    left -= n as u64;
+                }
+            }
+            layout.tokenizer_sha256 =
+                Some(h.finalize().iter().map(|b| format!("{b:02x}")).collect());
+        }
         let align = metadata
             .get("general.alignment")
             .and_then(MetaValue::as_u64)

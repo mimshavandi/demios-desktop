@@ -174,13 +174,13 @@ impl ModelArgs {
             });
         }
         let path = crate::resolve_model(&self.model)?;
-        let checked = self.load.check(&path)?;
+        let checked = self.load.check(&path).await?;
         let load = match (min_ctx, self.load.ctx()) {
             (Some(min), None) => self.load.with_ctx(min),
             _ => self.load.clone(),
         };
-        let (opts, _) = load.auto_options(&path)?;
-        checked.confirm()?;
+        let (mut opts, _) = load.auto_options(&path)?;
+        opts.chat_template = checked.confirm()?;
         let t0 = Instant::now();
         let chat = LoadedModel::load(
             Arc::new(LlamaCppBackend::new()),
