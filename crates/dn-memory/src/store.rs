@@ -572,6 +572,18 @@ fn fts_words(text: &str) -> Option<String> {
     (!words.is_empty()).then(|| words.join(" OR "))
 }
 
+/// Item ids matching any word of `text`, best match first (BM25), at most `limit`.
+pub fn search_ranked(conn: &Connection, text: &str, limit: usize) -> Result<Vec<String>> {
+    let Some(m) = fts_words(text) else {
+        return Ok(Vec::new());
+    };
+    let ids = conn
+        .prepare("SELECT item_id FROM memory_fts WHERE memory_fts MATCH ?1 ORDER BY bm25(memory_fts) LIMIT ?2")?
+        .query_map(params![m, limit as i64], |r| r.get(0))?
+        .collect::<rusqlite::Result<Vec<String>>>()?;
+    Ok(ids)
+}
+
 /// The list, newest change first.
 pub fn list(conn: &Connection, f: &Filter) -> Result<Vec<Item>> {
     let mut sql = format!("SELECT {COLS} FROM memory_items WHERE status = ?1");
