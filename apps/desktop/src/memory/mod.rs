@@ -3,8 +3,9 @@
 //!
 //! Self-contained so it can become its own crate (`dn-memory`, pending the owner's OK): it
 //! uses only `dn-core`, `rusqlite`, `serde` and `serde_json`, and owns its `memory_*` tables
-//! through [`migrations`]. Nothing here talks to a model or the network; extraction (PR 2),
-//! the core profile and retrieval (PR 3) build on this API.
+//! through [`migrations`]. The store talks to no model; [`extract`] (PR 2) runs the
+//! background passes with a model passed in, and the core profile and retrieval (PR 3) build
+//! on the same API.
 //!
 //! Rules enforced here, not left to callers:
 //! - **Trust.** 3 user-stated, 2 user-confirmed, 1 from the person's own content, 0 from
@@ -19,6 +20,7 @@
 //! - **Purge.** Forgetting a source deletes every item whose last source it was (ADR-0013 §5,
 //!   #280). Deletes leave tombstones for sync later.
 
+pub mod extract;
 mod store;
 
 pub use store::*;
