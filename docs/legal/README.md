@@ -8,4 +8,4 @@ Each document is published at a stable URL and linked from the app and from demi
 | [Accessibility statement](accessibility.md) | https://demios.io/accessibility | Final text |
 | [Legal notice (Impressum)](impressum.md) | https://demios.io/impressum | Final text, pending the owner's approval |
 
-Publisher and controller: DigiNote, Inc., Niederkasseler Kirchweg 85, 40547 Düsseldorf, Germany. Contact: mahdi@demios.io.
+Publisher and controller: DigiNote, Inc., Niederkasseler Kirchweg 85, 40547 Düsseldorf, Germany. Contact: hello@almend.ai.

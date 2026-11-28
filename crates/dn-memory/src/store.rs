@@ -572,6 +572,46 @@ fn fts_words(text: &str) -> Option<String> {
     (!words.is_empty()).then(|| words.join(" OR "))
 }
 
+/// Item ids matching any word of `text`, best match first (BM25), at most `limit`.
+pub fn search_ranked(conn: &Connection, text: &str, limit: usize) -> Result<Vec<String>> {
+    search_ranked_in(conn, text, &[], limit)
+}
+
+/// [`search_ranked`] over active, current items in `scopes` only (all scopes when empty),
+/// so the limit counts only items the caller may use.
+pub fn search_ranked_in(
+    conn: &Connection,
+    text: &str,
+    scopes: &[Scope],
+    limit: usize,
+) -> Result<Vec<String>> {
+    let Some(m) = fts_words(text) else {
+        return Ok(Vec::new());
+    };
+    let mut sql = String::from(
+        "SELECT f.item_id FROM memory_fts f JOIN memory_items i ON i.id = f.item_id \
+         WHERE memory_fts MATCH ?1 AND i.status = 'active' AND i.valid_to IS NULL",
+    );
+    let mut args: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(m)];
+    if !scopes.is_empty() {
+        let marks: Vec<String> = scopes
+            .iter()
+            .map(|sc| {
+                args.push(Box::new(sc.to_string()));
+                format!("?{}", args.len())
+            })
+            .collect();
+        sql.push_str(&format!(" AND i.scope IN ({})", marks.join(", ")));
+    }
+    args.push(Box::new(limit as i64));
+    sql.push_str(&format!(" ORDER BY bm25(memory_fts) LIMIT ?{}", args.len()));
+    let ids = conn
+        .prepare(&sql)?
+        .query_map(rusqlite::params_from_iter(args.iter()), |r| r.get(0))?
+        .collect::<rusqlite::Result<Vec<String>>>()?;
+    Ok(ids)
+}
+
 /// The list, newest change first.
 pub fn list(conn: &Connection, f: &Filter) -> Result<Vec<Item>> {
     let mut sql = format!("SELECT {COLS} FROM memory_items WHERE status = ?1");

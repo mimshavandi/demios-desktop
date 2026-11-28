@@ -129,6 +129,8 @@ pub fn for_message(conn: &Connection, message_id: Id) -> Result<Option<RunResult
                     .map(|c| serde_json::from_str(&c))
                     .transpose()
                     .map_err(|e| bad_column(14, e))?,
+                // Kept per message in memory_used (the memory store), not here.
+                memories: Vec::new(),
             })
         },
     )
