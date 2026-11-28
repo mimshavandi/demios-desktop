@@ -21,6 +21,7 @@
 //!   #280). Deletes leave tombstones for sync later.
 
 pub mod extract;
+pub mod read;
 mod store;
 
 pub use store::*;

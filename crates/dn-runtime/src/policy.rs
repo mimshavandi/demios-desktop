@@ -73,6 +73,18 @@ impl Policy {
         }
     }
 
+    /// The most the core profile (memory, ADR-0020 §4.1) may take, in
+    /// [`crate::estimate::units`]: a measure that's the same for every model, so switching
+    /// models doesn't rebuild the profile and break the cached prefix. The memory store
+    /// builds the profile to fit, whole items only; the assembler's real budget check still
+    /// drops it whole when the prompt doesn't fit. Units, not tokens.
+    pub fn profile_cap(&self) -> f64 {
+        match self.surface {
+            "chat.reply" => 1_500.0,
+            _ => 0.0,
+        }
+    }
+
     /// Where `slot` stands in the drop order (`None`: never dropped).
     pub fn drop_rank(&self, slot: Slot) -> Option<usize> {
         self.droppable.iter().position(|s| *s == slot)
@@ -110,5 +122,16 @@ mod tests {
             assert_eq!(p.drop_rank(s), None, "{s:?}");
         }
         assert!(p.drop_rank(Slot::Retrieved) < p.drop_rank(Slot::Knowledge));
+    }
+}
+
+#[cfg(test)]
+mod profile_cap_tests {
+    use super::Policy;
+
+    #[test]
+    fn chat_has_a_profile_budget_and_raw_none() {
+        assert_eq!(Policy::chat().profile_cap(), 1_500.0);
+        assert_eq!(Policy::raw().profile_cap(), 0.0);
     }
 }

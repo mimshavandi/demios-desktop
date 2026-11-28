@@ -117,6 +117,8 @@ pub fn for_message(conn: &Connection, message_id: Id) -> Result<Option<RunResult
                 dropped: serde_json::from_str(&dropped).map_err(|e| bad_column(13, e))?,
                 // Stored from ADR-0020 R1 PR 4, when chat runs through dn-runtime.
                 context: None,
+                // Kept per message in memory_used (the memory store), not here.
+                memories: Vec::new(),
             })
         },
     )
