@@ -17,13 +17,14 @@
 pub mod csv;
 pub mod profile;
 pub mod table;
+pub mod tool;
 pub mod trace;
 pub mod value;
 pub mod workbook;
 
 pub use profile::{ColumnProfile, ColumnType, Fact, FactSheet, FactValue, Options, profile};
 pub use table::{Cell, Limits, Table};
-pub use trace::{Untraced, untraced_numbers};
+pub use trace::{Untraced, mentions, untraced_numbers};
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum DataError {

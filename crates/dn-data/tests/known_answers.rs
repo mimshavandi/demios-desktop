@@ -374,3 +374,89 @@ fn cell_text_cant_hold_a_fact_id() {
     let unescaped = line.matches("[F").count() - line.matches("\\[F").count();
     assert_eq!(unescaped, 1, "only the line's own id: {line}");
 }
+
+/// The golden set's data files (evals/golden/files/studio-data): their answers were
+/// computed separately (Python, exact decimals) and must match what dn-data says, since the
+/// eval cases expect those numbers.
+#[test]
+fn the_golden_sets_data_files_have_their_known_answers() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../evals/golden/files/studio-data");
+    let load = |name: &str| -> Vec<FactSheet> {
+        let bytes = std::fs::read(dir.join(name)).unwrap();
+        read(name, &bytes, &Limits::default())
+            .unwrap()
+            .iter()
+            .map(|t| profile(t, name, &Options::default()))
+            .collect()
+    };
+    let o = &load("orders.csv")[0];
+    assert_eq!(v(o, "rows scanned"), "17");
+    assert_eq!(
+        v(o, "exact duplicate rows (repeats of an earlier row)"),
+        "1"
+    );
+    assert_eq!(v(o, "\"Amount\" missing values"), "1");
+    assert_eq!(v(o, "\"Amount\" sum"), "1537.00");
+    assert_eq!(v(o, "\"Amount\" mean"), "96.0625");
+    assert_eq!(v(o, "\"Amount\" median"), "52.5000");
+    assert_eq!(
+        v(
+            o,
+            "\"Amount\" values outside the IQR fences (1.5 × IQR; a flag, not an error)"
+        ),
+        "1"
+    );
+    assert_eq!(v(o, "\"Qty\" sum"), "34");
+    assert_eq!(
+        v(o, "\"Amount\" where \"Customer\" is \"Hofmann\": sum"),
+        "922.00"
+    );
+    assert_eq!(
+        v(o, "\"Amount\" where \"Customer\" is \"Lange\": sum"),
+        "107.50"
+    );
+    let by = "\"Amount\" by month of \"Date\"";
+    assert_eq!(v(o, &format!("{by}: sum in 2026-09")), "316.50");
+    assert_eq!(v(o, &format!("{by}: sum in 2026-11")), "874.50");
+    assert_eq!(
+        v(
+            o,
+            &format!("{by}: change from 2026-09 to 2026-11 in percent")
+        ),
+        "176.3%"
+    );
+    assert_eq!(v(o, &format!("{by}: highest period")), "2026-11");
+
+    let u = &load("umsatz-filialen.csv")[0];
+    assert_eq!(v(u, "\"Umsatz\" sum"), "102734.80");
+    assert_eq!(v(u, "\"Umsatz\" mean"), "11414.9778");
+    assert_eq!(v(u, "\"Umsatz\" missing values"), "1");
+    assert_eq!(
+        v(u, "\"Umsatz\" where \"Filiale\" is \"Lindenfeld\": sum"),
+        "66751.55"
+    );
+    assert_eq!(
+        v(u, "\"Umsatz\" where \"Filiale\" is \"Bergheim\": sum"),
+        "35983.25"
+    );
+    let by = "\"Umsatz\" by month of \"Monat\"";
+    assert_eq!(v(u, &format!("{by}: sum in 2026-10")), "22755.90");
+    assert_eq!(v(u, &format!("{by}: sum in 2026-11")), "15030.00");
+    assert_eq!(v(u, &format!("{by}: highest period")), "2026-10");
+
+    let b = load("budget-2026.xlsx");
+    let budget = b
+        .iter()
+        .find(|s| s.sheet.as_deref() == Some("Budget"))
+        .unwrap();
+    assert_eq!(v(budget, "\"Planned\" sum"), "18800");
+    assert_eq!(v(budget, "\"Actual\" sum"), "18646.55");
+    assert_eq!(
+        v(budget, "\"Actual\" where \"Category\" is \"Rent\": sum"),
+        "9600.00"
+    );
+    assert_eq!(
+        v(budget, "\"Actual\" where \"Category\" is \"Tools\": sum"),
+        "1240.00"
+    );
+}

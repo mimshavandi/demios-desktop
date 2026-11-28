@@ -12,6 +12,7 @@ pub mod artifacts;
 pub mod chat;
 pub mod commands;
 pub mod connect;
+pub mod data_tools;
 pub mod deeplink;
 pub mod distribution;
 pub mod error;

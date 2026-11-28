@@ -14,6 +14,8 @@ tools:
   - artifact.create
   - artifact.update
   - artifact.rewrite
+  # Fact sheets for a project's CSV and spreadsheet files (#366); read-only.
+  - data.profile
   # Tools of the add-ons built into this copy (ADR-0013). They still ask per their tier.
   - "plugin.*"
 policies:

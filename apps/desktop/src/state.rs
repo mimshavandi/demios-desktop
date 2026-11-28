@@ -376,6 +376,14 @@ impl AppState {
         Self::open_with_keys(path, None, None, Keys::memory())
     }
 
+    /// [`Self::open_for_tests`] with the repository's skills folder, so the default
+    /// assistant's manifest (its allowed tools) is the real one.
+    #[cfg(test)]
+    pub fn open_for_tests_with_agent(path: &std::path::Path) -> dn_store::Result<Arc<Self>> {
+        let skills = crate::agent::skills_dir(None);
+        Self::open_with_keys(path, skills.as_deref(), None, Keys::memory())
+    }
+
     fn open_with_keys(
         path: &std::path::Path,
         skills: Option<&std::path::Path>,

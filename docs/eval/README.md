@@ -40,6 +40,20 @@ What each case gets for now:
 - no earlier sessions: memory arrives in R3, so memory cases are reported `memory: none` and
   measure the baseline without it.
 
+Two more case fields:
+
+- `skill: <name>` turns on a chat skill from `skills/library` (or `--skills <dir>`), as the
+  message box's skill menu does: its instructions join the system prompt, and its
+  `allowed-tools` narrows the case's tools by capability id (`data_profile` is
+  `data.profile`; a mock tool can name its own with `capability:`).
+- `expect.numbers: ["1537.00", "176.3%"]` lists numbers a correct answer states. They're
+  checked mechanically at the precision the answer writes them.
+
+`data_profile` is built into the runner, like the calculator: a case lists it in `tools`,
+and it reads the case's project files and attachments by name and returns dn-data's fact
+sheet, exactly as the app does for a project's files. When it ran, the report also checks
+that every number in the answer traces to a fact sheet (`data_check`).
+
 The report keeps every answer, its tool calls and its run result. It checks
 `tool_calls.required` and `forbidden` itself; `must` and `must_not` are for the judge, which
 comes later.
