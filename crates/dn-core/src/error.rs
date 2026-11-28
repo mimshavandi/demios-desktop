@@ -14,6 +14,9 @@ pub enum RecoveryAction {
     ChooseModelForSlot { agent_id: String, slot_id: String },
     ReconnectServer { server_id: String },
     Retry { after_seconds: Option<u32> },
+    /// Nobody knows how much `model_ref` reads at once; the person sets it in Settings ›
+    /// Models (ADR-0020 §2.1, design ContextSize). Never guessed.
+    SetContextSize { model_ref: String },
 }
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Serialize, Deserialize)]
