@@ -197,18 +197,13 @@ pub fn add_to(
     conversation_id: Option<Id>,
     project_id: Option<Id>,
     paths: &[PathBuf],
-    on_progress: &dyn Fn(Adding),
+    on_progress: &dyn Fn(Progress),
 ) -> IpcResult<AddedFiles> {
     let c = match conversation_id {
         Some(c) => c,
         None => state.create_conversation_in(project_id)?.id,
     };
-    // Sent before copying, so the composer shows a chip per file while they're added.
-    on_progress(Adding {
-        conversation_id: c,
-        names: paths.iter().map(|p| display_name(p)).collect(),
-    });
-    add(state, c, paths)
+    add_with(state, c, paths, on_progress)
 }
 
 /// The chat's files with [`ChatFile::missing`] set from their copies (`list_chat_files`).
@@ -222,16 +217,20 @@ pub fn list_for_ui(state: &AppState, conversation_id: Id) -> IpcResult<Vec<ChatF
     Ok(files)
 }
 
-/// The files being added, sent once before copying starts (`add_chat_files`' `onProgress`).
-#[derive(Clone, Debug, Serialize)]
-pub struct Adding {
-    pub conversation_id: Id,
-    pub names: Vec<String>,
-}
-
 /// Copies picked files into the chat, in order; files that aren't data files or are past
 /// the limits are skipped with a reason.
 pub fn add(state: &AppState, conversation_id: Id, paths: &[PathBuf]) -> IpcResult<AddedFiles> {
+    add_with(state, conversation_id, paths, &|_| {})
+}
+
+/// [`add`], telling `on_progress` about each file as it goes: copying, then attached or
+/// skipped.
+pub fn add_with(
+    state: &AppState,
+    conversation_id: Id,
+    paths: &[PathBuf],
+    on_progress: &dyn Fn(Progress),
+) -> IpcResult<AddedFiles> {
     let root = root(state)?;
     // Fails with "not found" if the chat is gone.
     dn_store::chat::get_conversation(&*state.db()?, conversation_id)?;
@@ -241,8 +240,32 @@ pub fn add(state: &AppState, conversation_id: Id, paths: &[PathBuf]) -> IpcResul
         skipped: vec![],
         conversation_id: Some(conversation_id),
     };
+    // The file in progress, settled (attached or skipped) when the next one starts and at
+    // the end, by whether `out.added` grew.
+    let mut current: Option<(String, usize)> = None;
+    let settle = |current: &mut Option<(String, usize)>, out: &AddedFiles| {
+        if let Some((name, before)) = current.take() {
+            let state = if out.added.len() > before {
+                FileState::Attached
+            } else {
+                FileState::Skipped
+            };
+            on_progress(Progress {
+                conversation_id,
+                name,
+                state,
+            });
+        }
+    };
     for p in paths {
+        settle(&mut current, &out);
         let name = display_name(p);
+        on_progress(Progress {
+            conversation_id,
+            name: name.clone(),
+            state: FileState::Copying,
+        });
+        current = Some((name.clone(), out.added.len()));
         let skip = |reason: &str| SkippedFile {
             name: name.clone(),
             reason: reason.into(),
@@ -341,7 +364,25 @@ pub fn add(state: &AppState, conversation_id: Id, paths: &[PathBuf]) -> IpcResul
             }
         }
     }
+    settle(&mut current, &out);
     Ok(out)
+}
+
+/// Where one file is (`add_chat_files`' `onProgress`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileState {
+    Copying,
+    Attached,
+    Skipped,
+}
+
+/// One file's progress, sent as each file goes.
+#[derive(Clone, Debug, Serialize)]
+pub struct Progress {
+    pub conversation_id: Id,
+    pub name: String,
+    pub state: FileState,
 }
 
 /// A removed file, until [`UNDO_MS`] has passed.
@@ -483,7 +524,7 @@ pub async fn add_chat_files(
     state: AppStateRef<'_>,
     conversation_id: Option<Id>,
     project_id: Option<Id>,
-    on_progress: tauri::ipc::Channel<Adding>,
+    on_progress: tauri::ipc::Channel<Progress>,
 ) -> IpcResult<AddedFiles> {
     use tauri_plugin_dialog::DialogExt;
     // A given chat must exist; a new one is only created once something was picked, so a
@@ -801,15 +842,27 @@ mod tests {
             &st,
             Some(c.id),
             None,
-            &[src(&dir, "a.csv", b"x\n1\n"), src(&dir, "b.csv", b"y\n2\n")],
+            &[
+                src(&dir, "a.csv", b"x\n1\n"),
+                src(&dir, "b.csv", b"y\n2\n"),
+                src(&dir, "notes.pdf", b"%PDF"),
+            ],
             &|a| heard.borrow_mut().push(a),
         )
         .unwrap();
         let h = heard.into_inner();
-        assert_eq!(h.len(), 1);
+        let h: Vec<(String, FileState)> = h.into_iter().map(|p| (p.name, p.state)).collect();
+        let n = |s: &str| s.to_string();
         assert_eq!(
-            (h[0].conversation_id, h[0].names.clone()),
-            (c.id, vec!["a.csv".to_string(), "b.csv".to_string()])
+            h,
+            [
+                (n("a.csv"), FileState::Copying),
+                (n("a.csv"), FileState::Attached),
+                (n("b.csv"), FileState::Copying),
+                (n("b.csv"), FileState::Attached),
+                (n("notes.pdf"), FileState::Copying),
+                (n("notes.pdf"), FileState::Skipped),
+            ]
         );
         let root = st.chat_files_root().unwrap().to_path_buf();
         std::fs::remove_file(file_path(&root, &out.added[0])).unwrap();
