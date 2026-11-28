@@ -15,7 +15,7 @@ Email: hello@almend.ai
 
 Data protection contact: hello@almend.ai. No data protection officer is designated. None is required: fewer than 20 people regularly process personal data for us (§ 38(1) BDSG), and our core activities don't involve large-scale monitoring or special categories of data (Art. 37(1) GDPR).
 
-This policy covers the app and the website at demios.io.
+This policy covers the app and the website at almend.ai.
 
 ## The short version
 
@@ -92,7 +92,7 @@ Some models need your Hugging Face token. If you save one, it is kept in your sy
 
 ### Updates (copies downloaded from GitHub)
 
-No build available today checks for updates. Preview builds and builds from source have updates turned off, and **Settings → General → About** says so. Builds with updates turned on, from the first signed release downloaded from GitHub or demios.io, work as described here. Such a copy checks for a new version when you select **Check for updates** in **Settings → General → About**, and also once each time the app starts if you turn on **Check for updates when Demios starts** there (it's off unless you do). The app then asks GitHub (`github.com`, which sends it on to `release-assets.githubusercontent.com`) for a small file that names the newest version. The address is the same for everyone and carries nothing about you or your copy. GitHub sees your IP address and standard request headers. If a newer version exists, the app shows its release notes, and downloads it from GitHub only after you select **Install and restart**. Nothing else is sent. Almend isn't offered in any app store yet. If it is later, store copies will be updated by their store and won't contact GitHub for updates. [GitHub privacy statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement).
+No build available today checks for updates. Preview builds and builds from source have updates turned off, and **Settings → General → About** says so. Builds with updates turned on, from the first signed release downloaded from GitHub or almend.ai, work as described here. Such a copy checks for a new version when you select **Check for updates** in **Settings → General → About**, and also once each time the app starts if you turn on **Check for updates when Demios starts** there (it's off unless you do). The app then asks GitHub (`github.com`, which sends it on to `release-assets.githubusercontent.com`) for a small file that names the newest version. The address is the same for everyone and carries nothing about you or your copy. GitHub sees your IP address and standard request headers. If a newer version exists, the app shows its release notes, and downloads it from GitHub only after you select **Install and restart**. Nothing else is sent. Almend isn't offered in any app store yet. If it is later, store copies will be updated by their store and won't contact GitHub for updates. [GitHub privacy statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement).
 
 ### Tool servers (MCP)
 
@@ -152,11 +152,19 @@ DigiNote, Inc., at the address in [Who we are](#who-we-are). Email: hello@almend
 | Reporting a problem on GitHub | What you write, the app version and your operating system | Only as a public GitHub issue, which we read as the project's maintainers. | Our legitimate interest in fixing problems in the app (Art. 6(1)(f) GDPR). |
 | Emailing us | Your email address, what you write | **Yes.** | Where your email relates to a contract or a request before one: Art. 6(1)(b). Otherwise our legitimate interest in answering your questions (Art. 6(1)(f)). |
 | Checking for and installing updates (only in builds with updates turned on, from the first signed release; preview builds don't check) | Your IP address and standard request headers | **No.** Your computer asks GitHub directly, only when you select **Check for updates** or **Install and restart**, or once at launch if you turned on **Check for updates when Demios starts**. | None needed: we don't process it. |
-| Visiting demios.io | Your IP address, the page requested, time, browser details | **No.** The site is hosted on GitHub Pages. GitHub processes this data in its server logs to run and secure the service; we receive no access logs. | Our legitimate interest in offering the website and keeping it secure (Art. 6(1)(f)). |
+| Visiting almend.ai | Your IP address and standard request headers; in the access logs: your full IP address, the page you asked for, your browser type, your country, and the response's status, size and time | **Yes, as access logs.** Hostinger hosts the site as our processor and keeps the logs; we can see the last 7 days in Hostinger's control panel. See [This website](#this-website). | Our legitimate interest in offering the website and keeping it secure (Art. 6(1)(f)). This includes our viewing the access logs, which we use only to run and secure the site. |
 
-The website demios.io sets no cookies and uses no analytics or tracking.
+#### This website
 
-**Downloads:** the installers are served by GitHub, not by demios.io. When you download one, your browser connects to `github.com`, which sends it on to `release-assets.githubusercontent.com`. GitHub sees your IP address, the file you ask for, and standard request headers, under [GitHub's privacy statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement). No GitHub account is needed.
+almend.ai sets no cookies and has no analytics, trackers or embedded content. Every file it loads (pages, styles, icons, images and one script) comes from almend.ai itself; nothing is loaded from anyone else. Links to other sites, such as GitHub, only take you there when you select them.
+
+The download counts on the [Get it page](https://almend.ai/download/) come from GitHub's public release statistics. The web server reads them once an hour, not when you visit, and they contain no data about visitors.
+
+The site is hosted by Hostinger International Ltd. (Cyprus), which acts as our processor under its [data processing agreement](https://www.hostinger.com/legal/dpa). The site's server is in Frankfurt, Germany, and Hostinger keeps weekly backups of the site in France. Pages are delivered through Hostinger's content delivery network, which sets no cookies.
+
+Like any web server, Hostinger receives your IP address and standard request headers when you visit. It keeps access logs with your full IP address, the page you asked for, your browser type, your country, and the response's status, size and time. We can see these logs in Hostinger's control panel for the last 7 days, and use them only to run and secure the site. Hostinger doesn't publish how long it keeps them. If data leaves the EU or EEA, the EU Standard Contractual Clauses in Hostinger's data processing agreement apply. See [Hostinger's privacy policy](https://www.hostinger.com/legal/privacy-policy).
+
+**Downloads:** the installers are served by GitHub, not by almend.ai. When you download one, your browser connects to `github.com`, which sends it on to `release-assets.githubusercontent.com`. GitHub sees your IP address, the file you ask for, and standard request headers, under [GitHub's privacy statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement). No GitHub account is needed.
 
 The only script is on the download page. It reads which system your browser reports, to suggest the right installer, and sends nothing anywhere. The page lists every installer without it.
 
@@ -168,20 +176,22 @@ You don't have to give us any personal data. The app works without contacting us
 
 - **Emails:** deleted once the matter is closed. We may keep them for up to 3 years after that, in case of follow-up questions or claims (the standard limitation period, § 195 BGB). Emails that are business letters are kept longer only where commercial or tax law requires it: 6 or 10 years (§ 257 HGB, § 147 AO).
 - **GitHub issues:** they stay public in the repository until you or we delete them. You can edit or delete your own issues and comments on GitHub.
-- **Website server logs:** kept by GitHub under its own rules. We don't receive them.
+- **Website access logs:** kept by Hostinger, our processor. We can see the last 7 days. Hostinger doesn't publish how long it keeps them.
 - **Data on your computer:** until you delete it. See [Your choices and how to delete data](#your-choices-and-how-to-delete-data).
 
 ### Recipients and processors
 
 - **Services you choose in the app** (AI providers, Hugging Face, tool servers) receive data directly from your computer, only when you set them up or start an action. They are not our processors. They act on their own responsibility, under your agreement with them.
-- **GitHub** (GitHub, Inc., USA) hosts the project's repository and issues, and hosts the website demios.io on GitHub Pages. For the website, GitHub processes visitors' IP addresses and request details in its server logs to run and secure the service, under the [GitHub General Privacy Statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement). We receive no access logs.
+- **Hostinger** (Hostinger International Ltd., Cyprus) hosts the website almend.ai as our processor (Art. 28 GDPR), under its [data processing agreement](https://www.hostinger.com/legal/dpa). See [This website](#this-website).
+- **GitHub** (GitHub, Inc., USA) hosts the project's repository and issues, under the [GitHub General Privacy Statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement).
 - **GitHub (release downloads):** GitHub, Inc. serves the app's installers, and updates for builds that have them turned on, from `github.com` and `release-assets.githubusercontent.com`, and processes downloaders' IP addresses and request details, under the same privacy statement.
 - **Our email hosting provider** stores the emails you send us, acting as our processor (Art. 28 GDPR).
 
 ### Transfers outside the EU
 
 - **Services you choose:** Anthropic, OpenAI, Google and Hugging Face are based in or process data in the USA. Your computer sends data to them because you chose them; we don't transfer it.
-- **GitHub:** GitHub, Inc. is in the USA. Data GitHub processes for the website, the repository and downloads is transferred under the European Commission's standard contractual clauses, as described in GitHub's privacy statement.
+- **Hostinger:** the site's server is in Frankfurt, Germany, and its backups are in France. If data leaves the EU or EEA, the EU Standard Contractual Clauses in Hostinger's data processing agreement apply.
+- **GitHub:** GitHub, Inc. is in the USA. Data GitHub processes for the repository and downloads is transferred under the European Commission's standard contractual clauses, as described in GitHub's privacy statement.
 
 ### Your rights
 
@@ -208,12 +218,12 @@ Website: [www.ldi.nrw.de](https://www.ldi.nrw.de)
 
 ## Changes to this policy
 
-If the app starts sending any data to us (for example optional crash reports), we will update this policy **before** that version is released and describe the change in the release notes. Anything like that will be opt-in unless this policy says otherwise. The latest version is always at https://demios.io/privacy, and earlier versions are in the project's public repository.
+If the app starts sending any data to us (for example optional crash reports), we will update this policy **before** that version is released and describe the change in the release notes. Anything like that will be opt-in unless this policy says otherwise. The latest version is always at https://almend.ai/privacy, and earlier versions are in the project's public repository.
 
 ## Contact
 
-DigiNote, Inc. · Niederkasseler Kirchweg 85, 40547 Düsseldorf, Germany · hello@almend.ai · [GitHub issues](https://github.com/mimshavandi/demios-desktop/issues)
+DigiNote, Inc. · Niederkasseler Kirchweg 85, 40547 Düsseldorf, Germany · hello@almend.ai · [GitHub issues](https://github.com/mimshavandi/almend-desktop/issues)
 
-Legal notice (Impressum): https://demios.io/impressum
+Legal notice (Impressum): https://almend.ai/impressum
 
 For security problems, see [SECURITY.md](../../SECURITY.md).

@@ -1,6 +1,6 @@
 # Legal notice (Impressum)
 
-Information under § 5 of the German Digital Services Act (Digitale-Dienste-Gesetz, DDG). It applies to the website demios.io and to the Almend Desktop app.
+Information under § 5 of the German Digital Services Act (Digitale-Dienste-Gesetz, DDG). It applies to the website almend.ai and to the Almend Desktop app.
 
 ## Provider
 
@@ -28,4 +28,4 @@ We are neither willing nor obliged to take part in dispute resolution proceeding
 
 ## Privacy
 
-See the [privacy policy](privacy-policy.md), published at https://demios.io/privacy.
+See the [privacy policy](privacy-policy.md), published at https://almend.ai/privacy.
