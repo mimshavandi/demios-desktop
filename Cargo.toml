@@ -50,6 +50,7 @@ dn-plugin-api = { path = "crates/dn-plugin-api", version = "0.1.0" }
 dn-sync = { path = "crates/dn-sync", version = "0.1.0" }
 dn-jobs = { path = "crates/dn-jobs", version = "0.1.0" }
 dn-agent = { path = "crates/dn-agent", version = "0.1.0" }
+dn-data = { path = "crates/dn-data", version = "0.1.0" }
 dn-secrets = { path = "crates/dn-secrets", version = "0.1.0" }
 process-wrap = { version = "10", default-features = false, features = ["tokio1", "process-group", "job-object"] }
 dn-providers = { path = "crates/dn-providers", version = "0.1.0" }

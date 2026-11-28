@@ -10,6 +10,7 @@ description = "Tabular files (CSV, XLSX, XLS, ODS) to a computed fact sheet that
 
 [dependencies]
 calamine.workspace = true
+dn-core.workspace = true
 encoding_rs.workspace = true
 serde.workspace = true
 serde_json.workspace = true

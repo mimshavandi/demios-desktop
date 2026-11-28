@@ -358,6 +358,12 @@ fn start(
     let message_id = assistant.id;
     let model_ref = model.to_string();
     let sink: Arc<dyn EventSink> = Arc::new(sink);
+    // The chat's project, for the data tool (the callers have released the database).
+    let project_id = state
+        .db()
+        .ok()
+        .and_then(|db| store::get_conversation(&db, conversation_id).ok())
+        .and_then(|c| c.project_id);
     // Artifacts only through tool calls (ADR-0004): a model without tool calling gets none.
     let tools: Arc<dyn ToolExecutor> = Arc::new(RunTools {
         base: Arc::clone(&state.tools),
@@ -367,6 +373,12 @@ fn start(
             message_id,
             sink: Arc::clone(&sink),
         }),
+        data: project_id
+            .filter(|_| mode == ArtifactMode::Tools)
+            .map(|project_id| crate::data_tools::DataTools {
+                state: Arc::clone(&state),
+                project_id,
+            }),
     });
     // The chat's skill only narrows: approvals are decided behind this, by the executor.
     let tools = match &skill {

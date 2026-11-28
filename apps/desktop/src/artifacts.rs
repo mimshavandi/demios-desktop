@@ -278,6 +278,9 @@ impl ArtifactMode {
 /// Capability id in the agent manifest for an artifact tool name (`artifact_create` →
 /// `artifact.create`).
 pub(crate) fn capability_id(tool: &str) -> Option<String> {
+    if tool == crate::data_tools::TOOL_NAME {
+        return Some(crate::data_tools::CAPABILITY_ID.into());
+    }
     tool.strip_prefix("artifact_")
         .map(|op| format!("artifact.{op}"))
 }
@@ -294,11 +297,14 @@ fn changed(message_id: Id, conversation_id: Id, a: &Applied) -> ChatEvent {
 }
 
 /// The run's tools: the manifest-filtered dn-tools executor plus, in [`ArtifactMode::Tools`],
-/// the artifact tools the manifest allows (`artifact.create` / `.update` / `.rewrite`).
+/// the artifact tools the manifest allows (`artifact.create` / `.update` / `.rewrite`) and,
+/// in a project chat, `data_profile` (#366).
 pub struct RunTools {
     pub base: Arc<dyn ToolExecutor>,
     /// `None` in [`ArtifactMode::Unavailable`]: no artifact tools at all.
     pub artifacts: Option<ArtifactTools>,
+    /// `None` outside a project, or for a model without tool calls.
+    pub data: Option<crate::data_tools::DataTools>,
 }
 
 pub struct ArtifactTools {
@@ -327,6 +333,10 @@ impl ToolExecutor for RunTools {
             v.retain(|s| !dn_artifacts::protocol::is_artifact_tool(&s.name));
             v.extend(a.specs());
         }
+        if let Some(d) = &self.data {
+            v.retain(|s| s.name != crate::data_tools::TOOL_NAME);
+            v.extend(d.specs());
+        }
         v
     }
 
@@ -336,6 +346,11 @@ impl ToolExecutor for RunTools {
         ctx: &'a ToolContext,
     ) -> BoxFuture<'a, Result<ToolOutput, CoreError>> {
         Box::pin(async move {
+            if call.name == crate::data_tools::TOOL_NAME
+                && let Some(d) = self.data.as_ref().filter(|d| !d.specs().is_empty())
+            {
+                return Ok(d.execute(call).await);
+            }
             if !dn_artifacts::protocol::is_artifact_tool(&call.name) {
                 return self.base.execute(call, ctx).await;
             }
@@ -501,5 +516,9 @@ mod tests {
             Some("artifact.rewrite")
         );
         assert_eq!(capability_id("calc"), None);
+        assert_eq!(
+            capability_id("data_profile").as_deref(),
+            Some("data.profile")
+        );
     }
 }

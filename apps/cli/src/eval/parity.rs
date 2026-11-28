@@ -69,6 +69,9 @@ pub struct ParityArgs {
     /// Only cases whose id starts with this.
     #[arg(long)]
     only: Option<String>,
+    /// The chat skills a case can turn on with `skill:` (the app's library).
+    #[arg(long, default_value = "skills/library")]
+    skills: PathBuf,
     /// Report path (default: eval-parity-<time>.json; required with --holdout, outside any
     /// git work tree).
     #[arg(long, short)]
@@ -105,6 +108,10 @@ pub struct Case {
     pub expect: Expect,
     #[serde(default)]
     pub max_steps: Option<u32>,
+    /// A chat skill from the library, turned on for the case as in the app: its
+    /// instructions join the system prompt and its `allowed-tools` narrow the tools.
+    #[serde(default)]
+    pub skill: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -139,6 +146,10 @@ pub struct Expect {
     pub must_not: Vec<String>,
     #[serde(default)]
     pub tool_calls: ToolExpect,
+    /// Numbers a correct answer states (`2511.29`, `202.8%`), checked mechanically at the
+    /// precision the answer writes them.
+    #[serde(default)]
+    pub numbers: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -159,6 +170,9 @@ pub struct MockTool {
     pub effect: Effect,
     #[serde(default)]
     pub results: Vec<MockResult>,
+    /// The capability id a skill's `allowed-tools` names it by (default: the name).
+    #[serde(default)]
+    pub capability: Option<String>,
 }
 
 impl MockTool {
@@ -296,6 +310,38 @@ pub struct Set {
     pub tools: HashMap<String, MockTool>,
     /// The set's "today" (`set.yaml`), told to the model in every case.
     pub today: Option<Today>,
+    /// The chat skills cases can turn on, by name.
+    pub skills: HashMap<String, dn_agent::ChatSkill>,
+}
+
+/// The tools the runner itself provides (a case lists them in `tools` like mock tools).
+pub const BUILTIN_TOOLS: &[&str] = &[dn_data::tool::TOOL_NAME];
+
+/// The capability id of a tool, as a skill's `allowed-tools` names it: the app's built-in
+/// tools by their capability, a mock tool by its `capability` (or its name).
+pub fn capability_of(set: &Set, tool: &str) -> String {
+    if tool == dn_data::tool::TOOL_NAME {
+        return dn_data::tool::CAPABILITY_ID.into();
+    }
+    if let Some(op) = tool.strip_prefix("artifact_") {
+        return format!("artifact.{op}");
+    }
+    set.tools
+        .get(tool)
+        .and_then(|t| t.capability.clone())
+        .unwrap_or_else(|| tool.to_string())
+}
+
+/// A skill's `allowed-tools` pattern match, as dn-tools' allowlist does it: exact, or a
+/// prefix ending in `*`.
+fn skill_allows(skill: &dn_agent::ChatSkill, capability: &str) -> bool {
+    skill
+        .allowed_tools
+        .iter()
+        .any(|p| match p.strip_suffix('*') {
+            Some(prefix) => capability.starts_with(prefix),
+            None => p == capability,
+        })
 }
 
 /// `<set>/set.yaml`.
@@ -401,16 +447,25 @@ fn yaml<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, String> {
 }
 
 impl Set {
-    /// Reads `set` and, if given, `holdout`, and checks every rule.
-    pub fn read(set: &Path, holdout: Option<&Path>) -> Result<Self, String> {
+    /// Reads `set` and, if given, `holdout`, and checks every rule. `skills` is the chat
+    /// skill library (read only if a case names a skill).
+    pub fn read(set: &Path, holdout: Option<&Path>, skills: &Path) -> Result<Self, String> {
         let mut out = Set {
             cases: Vec::new(),
             tools: HashMap::new(),
             today: None,
+            skills: HashMap::new(),
         };
         out.add(set, false)?;
         if let Some(h) = holdout {
             out.add(h, true)?;
+        }
+        if out.cases.iter().any(|(c, _)| c.skill.is_some()) {
+            let (found, errors) = dn_agent::chat_skill::load_dir(skills);
+            if let Some(e) = errors.first() {
+                return Err(format!("{}: {e}", skills.display()));
+            }
+            out.skills = found.into_iter().map(|s| (s.name.clone(), s)).collect();
         }
         out.check()?;
         Ok(out)
@@ -520,8 +575,27 @@ impl Set {
                 .chain(&c.approve)
                 .chain(&c.expect.tool_calls.required)
             {
-                if !self.tools.contains_key(name) {
+                if !self.tools.contains_key(name) && !BUILTIN_TOOLS.contains(&name.as_str()) {
                     return fail(format!("tool `{name}` isn't in tools.yaml"));
+                }
+            }
+            if let Some(name) = &c.skill {
+                let Some(skill) = self.skills.get(name) else {
+                    return fail(format!("there's no skill called `{name}` in the library"));
+                };
+                for t in &c.expect.tool_calls.required {
+                    if !skill_allows(skill, &capability_of(self, t)) {
+                        return fail(format!(
+                            "requires `{t}`, which the skill `{name}` doesn't allow"
+                        ));
+                    }
+                }
+            }
+            for n in &c.expect.numbers {
+                if expected_number(n).is_none() {
+                    return fail(format!(
+                        "`{n}` in expect.numbers isn't a number like 12.5 or 12.5%"
+                    ));
                 }
             }
             for name in &c.approve {
@@ -581,23 +655,99 @@ pub struct CallRecord {
     pub result: String,
 }
 
-/// The case's tools, answering from `tools.yaml`.
+/// The case's tools: mock tools answering from `tools.yaml`, and the runner's built-ins
+/// (`data_profile` reads the case's sample files, as the app reads project files). A case's
+/// skill narrows them as in the app.
 pub struct MockTools {
     tools: Vec<MockTool>,
+    /// `data_profile` is offered.
+    data: bool,
+    /// The case's sample files by name (project files, then attachments).
+    files: Vec<(String, PathBuf)>,
     approve: Vec<String>,
     calls: Mutex<Vec<CallRecord>>,
+    /// Fact sheets `data_profile` returned, for tracing the answer's numbers.
+    sheets: Mutex<Vec<dn_data::FactSheet>>,
 }
 
 impl MockTools {
-    pub fn new(set: &Set, case: &Case) -> Self {
+    pub fn new(set: &Set, case: &Case, root: &SetRoot) -> Self {
+        let skill = case.skill.as_ref().and_then(|n| set.skills.get(n));
+        let offered = |name: &str| skill.is_none_or(|s| skill_allows(s, &capability_of(set, name)));
+        let files = case
+            .project
+            .iter()
+            .flat_map(|p| &p.files)
+            .chain(&case.attach)
+            .filter_map(|rel| {
+                let path = sample_file(&root.dir, rel).ok()?;
+                let name = Path::new(rel).file_name()?.to_string_lossy().into_owned();
+                Some((name, path))
+            })
+            .collect();
         Self {
             tools: case
                 .tools
                 .iter()
+                .filter(|n| offered(n))
                 .filter_map(|n| set.tools.get(n).cloned())
                 .collect(),
+            data: case.tools.iter().any(|t| t == dn_data::tool::TOOL_NAME)
+                && offered(dn_data::tool::TOOL_NAME),
+            files,
             approve: case.approve.clone(),
             calls: Mutex::new(Vec::new()),
+            sheets: Mutex::new(Vec::new()),
+        }
+    }
+
+    pub fn sheets(&self) -> Vec<dn_data::FactSheet> {
+        self.sheets.lock().map(|s| s.clone()).unwrap_or_default()
+    }
+
+    /// `data_profile` on the case's files, found by name like the app finds project files.
+    fn data_profile(&self, call: &ToolCall) -> (bool, String, bool) {
+        let args = match dn_data::tool::Args::parse(&call.arguments) {
+            Ok(a) => a,
+            Err(e) => return (false, e, true),
+        };
+        let Some((name, path)) = self
+            .files
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(args.file.trim()))
+        else {
+            let names: Vec<&str> = self
+                .files
+                .iter()
+                .map(|(n, _)| n.as_str())
+                .filter(|n| dn_data::tool::reads(n))
+                .collect();
+            return (
+                false,
+                format!(
+                    "This project has no file called \"{}\". Its data files: {}.",
+                    args.file,
+                    if names.is_empty() {
+                        "none".into()
+                    } else {
+                        names.join(", ")
+                    }
+                ),
+                true,
+            );
+        };
+        let bytes = match std::fs::read(path) {
+            Ok(b) => b,
+            Err(e) => return (false, format!("{name}: {e}"), true),
+        };
+        match dn_data::tool::run(name, &bytes, args.sheet.as_deref()) {
+            Ok(p) => {
+                if let Ok(mut s) = self.sheets.lock() {
+                    s.extend(p.sheets);
+                }
+                (false, p.text, false)
+            }
+            Err(e) => (false, e, true),
         }
     }
 
@@ -606,6 +756,9 @@ impl MockTools {
     }
 
     fn answer(&self, call: &ToolCall) -> (bool, String, bool) {
+        if self.data && call.name == dn_data::tool::TOOL_NAME {
+            return self.data_profile(call);
+        }
         let Some(t) = self.tools.iter().find(|t| t.name == call.name) else {
             return (
                 false,
@@ -647,14 +800,19 @@ impl MockTools {
 
 impl ToolExecutor for MockTools {
     fn tools(&self) -> Vec<ToolSpec> {
-        self.tools
+        let mut v: Vec<ToolSpec> = self
+            .tools
             .iter()
             .map(|t| ToolSpec {
                 name: t.name.clone(),
                 description: t.description.clone(),
                 input_schema: t.input_schema.clone(),
             })
-            .collect()
+            .collect();
+        if self.data {
+            v.push(dn_data::tool::spec());
+        }
+        v
     }
 
     fn execute<'a>(
@@ -683,11 +841,8 @@ impl ToolExecutor for MockTools {
 
 /// The prompt for a case: system (stand-in + project instructions + files as quoted
 /// excerpts) and this session's turns. Earlier sessions aren't included before memory (R3).
-pub fn history(
-    root: &SetRoot,
-    case: &Case,
-    today: Option<Today>,
-) -> Result<Vec<ChatMessage>, String> {
+pub fn history(set: &Set, root: &SetRoot, case: &Case) -> Result<Vec<ChatMessage>, String> {
+    let today = set.today;
     let mut system = STAND_IN_SYSTEM.to_string();
     if let Some(t) = today {
         system.push_str(&format!("\n\nToday is {}.", t.long()));
@@ -695,6 +850,15 @@ pub fn history(
     if let Some(i) = case.project.as_ref().and_then(|p| p.instructions.as_ref()) {
         system.push_str("\n\nProject instructions:\n");
         system.push_str(i);
+    }
+    if let Some(skill) = case.skill.as_ref().and_then(|n| set.skills.get(n)) {
+        // The app's wording (apps/desktop/src/skills.rs, `system_text`).
+        system.push_str(&format!(
+            "\n\nThe user chose the skill \"{}\" for this chat. Follow these instructions for \
+             the rest of the chat:\n\n{}",
+            skill.label(),
+            skill.instructions
+        ));
     }
     let paths = case
         .project
@@ -704,7 +868,12 @@ pub fn history(
     let mut hits = Vec::new();
     for (i, rel) in paths.enumerate() {
         let path = sample_file(&root.dir, rel)?;
-        let text = std::fs::read_to_string(&path).map_err(|e| format!("{rel}: {e}"))?;
+        let bytes = std::fs::read(&path).map_err(|e| format!("{rel}: {e}"))?;
+        // Like the app's project search, only text files are quoted; a spreadsheet is read
+        // by `data_profile`.
+        let Ok(text) = String::from_utf8(bytes) else {
+            continue;
+        };
         hits.push(dn_knowledge::Hit {
             chunk_id: i as i64,
             source_id: "case".into(),
@@ -769,6 +938,58 @@ pub fn check_tools(expect: &ToolExpect, calls: &[CallRecord]) -> ToolCheck {
     }
 }
 
+/// The answer's numbers against the fact sheets and the case's known numbers.
+#[derive(Debug, Serialize, PartialEq)]
+pub struct DataCheck {
+    pub passed: bool,
+    /// Numbers in the answer that no fact sheet has (only when a sheet was fetched).
+    pub untraced: Vec<String>,
+    /// `expect.numbers` the answer doesn't state.
+    pub missing_numbers: Vec<String>,
+}
+
+/// `12.5` or `12.5%` → (value, percent).
+fn expected_number(s: &str) -> Option<(f64, bool)> {
+    let t = s.trim();
+    let (t, percent) = match t.strip_suffix('%') {
+        Some(r) => (r.trim(), true),
+        None => (t, false),
+    };
+    let v: f64 = t.parse().ok()?;
+    v.is_finite().then_some((v, percent))
+}
+
+/// `None` when there's nothing to check: no known numbers and no fact sheet fetched.
+pub fn check_data(
+    answer: &str,
+    expect: &Expect,
+    sheets: &[dn_data::FactSheet],
+) -> Option<DataCheck> {
+    if expect.numbers.is_empty() && sheets.is_empty() {
+        return None;
+    }
+    let refs: Vec<&dn_data::FactSheet> = sheets.iter().collect();
+    let untraced: Vec<String> = if sheets.is_empty() {
+        Vec::new()
+    } else {
+        dn_data::untraced_numbers(answer, &refs)
+            .into_iter()
+            .map(|u| u.text)
+            .collect()
+    };
+    let missing_numbers: Vec<String> = expect
+        .numbers
+        .iter()
+        .filter(|n| expected_number(n).is_none_or(|(v, p)| !dn_data::mentions(answer, v, p)))
+        .cloned()
+        .collect();
+    Some(DataCheck {
+        passed: untraced.is_empty() && missing_numbers.is_empty(),
+        untraced,
+        missing_numbers,
+    })
+}
+
 #[derive(Serialize)]
 struct Item {
     id: String,
@@ -778,8 +999,13 @@ struct Item {
     /// `none` for a case with earlier sessions: they aren't given before memory exists (R3).
     #[serde(skip_serializing_if = "Option::is_none")]
     memory: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    skill: Option<String>,
     tool_calls: Vec<CallRecord>,
     tool_check: ToolCheck,
+    /// Numbers: traced to the fact sheets, and the known ones stated.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data_check: Option<DataCheck>,
     expect: Expect,
     #[serde(flatten)]
     turn: Turn,
@@ -804,7 +1030,7 @@ pub async fn run(a: ParityArgs) -> Result<(), String> {
             }
         }
     }
-    let set = Set::read(&a.set, a.holdout.as_deref())?;
+    let set = Set::read(&a.set, a.holdout.as_deref(), &a.skills)?;
     let cases: Vec<&(Case, SetRoot)> = set
         .cases
         .iter()
@@ -816,10 +1042,11 @@ pub async fn run(a: ParityArgs) -> Result<(), String> {
     for (i, (case, root)) in cases.into_iter().enumerate() {
         let mut cfg = eval_config("eval.parity", &m.model_ref, Some(a.max_tokens));
         cfg.max_steps = case.max_steps.unwrap_or(DEFAULT_MAX_STEPS);
-        let tools = MockTools::new(&set, case);
-        let t = turn_with(&m.chat, &tools, &cfg, history(root, case, set.today)?).await;
+        let tools = MockTools::new(&set, case, root);
+        let t = turn_with(&m.chat, &tools, &cfg, history(&set, root, case)?).await;
         let calls = tools.calls();
         let check = check_tools(&case.expect.tool_calls, &calls);
+        let data_check = check_data(&t.text, &case.expect, &tools.sheets());
         eprintln!(
             "[eval parity] {}/{n} {}: {:?}, {} steps, {} tool calls{}",
             i + 1,
@@ -839,14 +1066,20 @@ pub async fn run(a: ParityArgs) -> Result<(), String> {
             lang: case.lang.clone(),
             tags: case.tags.clone(),
             memory: (!case.sessions.is_empty()).then_some("none"),
+            skill: case.skill.clone(),
             tool_calls: calls,
             tool_check: check,
+            data_check,
             expect: case.expect.clone(),
             turn: t,
         });
     }
     let failed = items.iter().filter(|i| i.turn.error.is_some()).count();
     let tool_failed = items.iter().filter(|i| !i.tool_check.passed).count();
+    let data_failed = items
+        .iter()
+        .filter(|i| i.data_check.as_ref().is_some_and(|d| !d.passed))
+        .count();
     let mut by_category = BTreeMap::<&str, usize>::new();
     for i in &items {
         *by_category.entry(i.category.as_str()).or_default() += 1;
@@ -858,6 +1091,7 @@ pub async fn run(a: ParityArgs) -> Result<(), String> {
         "cases": items.len(),
         "failed": failed,
         "tool_checks_failed": tool_failed,
+        "data_checks_failed": data_failed,
         "by_category": by_category,
         "judged": false,
     });
@@ -865,7 +1099,7 @@ pub async fn run(a: ParityArgs) -> Result<(), String> {
     let path = report.write(a.out)?;
     m.chat.unload().await?;
     println!(
-        "{n} cases, {failed} failed, {tool_failed} tool checks failed · report: {}",
+        "{n} cases, {failed} failed, {tool_failed} tool checks failed, {data_failed} number checks failed · report: {}",
         path.display()
     );
     Ok(())
@@ -874,6 +1108,10 @@ pub async fn run(a: ParityArgs) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn library() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../skills/library")
+    }
 
     fn example() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("eval/parity-example")
@@ -889,13 +1127,13 @@ mod tests {
 
     #[test]
     fn the_example_set_reads_and_renders_files_as_quoted_excerpts() {
-        let set = Set::read(&example(), None).unwrap();
+        let set = Set::read(&example(), None, &library()).unwrap();
         let (case, root) = set
             .cases
             .iter()
             .find(|(c, _)| c.id == "summarise-001")
             .unwrap();
-        let h = history(root, case, set.today).unwrap();
+        let h = history(&set, root, case).unwrap();
         let ContentPart::Text { text: system } = &h[0].content[0] else {
             panic!()
         };
@@ -910,9 +1148,9 @@ mod tests {
 
     #[test]
     fn mock_tools_match_arguments_and_decline_unapproved_writes() {
-        let set = Set::read(&example(), None).unwrap();
-        let (case, _) = set.cases.iter().find(|(c, _)| c.id == "tools-001").unwrap();
-        let tools = MockTools::new(&set, case);
+        let set = Set::read(&example(), None, &library()).unwrap();
+        let (case, root) = set.cases.iter().find(|(c, _)| c.id == "tools-001").unwrap();
+        let tools = MockTools::new(&set, case, root);
         assert_eq!(tools.tools().len(), 2);
         let (_, hit, _) = tools.answer(&call(
             "web_search",
@@ -1006,7 +1244,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_case_runs_through_the_loop_with_mock_tools_and_records_its_calls() {
-        let set = Set::read(&example(), None).unwrap();
+        let set = Set::read(&example(), None, &library()).unwrap();
         let (case, root) = set.cases.iter().find(|(c, _)| c.id == "tools-001").unwrap();
         let model = Scripted(Mutex::new(0));
         let model_ref = dn_core::model::ModelRef::Local {
@@ -1014,14 +1252,8 @@ mod tests {
         };
         let mut cfg = eval_config("eval.parity", &model_ref, Some(64));
         cfg.max_steps = DEFAULT_MAX_STEPS;
-        let tools = MockTools::new(&set, case);
-        let t = turn_with(
-            &model,
-            &tools,
-            &cfg,
-            history(root, case, set.today).unwrap(),
-        )
-        .await;
+        let tools = MockTools::new(&set, case, root);
+        let t = turn_with(&model, &tools, &cfg, history(&set, root, case).unwrap()).await;
         assert_eq!(t.text, "About 8,000–14,000 euros.");
         assert_eq!((t.result.steps, t.result.usage.input_tokens), (3, 30));
         let calls = tools.calls();
@@ -1059,14 +1291,160 @@ mod tests {
         );
         assert!(Today::parse("2026-02-29").is_err());
         assert!(Today::parse("7.12.2026").is_err());
-        let set = Set::read(&example(), None).unwrap();
+        let set = Set::read(&example(), None, &library()).unwrap();
         assert_eq!(set.today, Some(t));
         let (case, root) = &set.cases[0];
-        let h = history(root, case, set.today).unwrap();
+        let h = history(&set, root, case).unwrap();
         let ContentPart::Text { text } = &h[0].content[0] else {
             panic!()
         };
         assert!(text.contains("Today is Monday, 7 December 2026."));
+    }
+
+    /// Calls `data_profile` on orders.csv, then gives `answer`; records what it was sent.
+    struct DataAnalyst {
+        answer: &'static str,
+        step: Mutex<u32>,
+        requests: Mutex<Vec<dn_core::chat::ChatRequest>>,
+    }
+    impl dn_core::chat::ChatModel for DataAnalyst {
+        fn chat(&self, req: dn_core::chat::ChatRequest) -> dn_core::chat::EventStream {
+            use dn_core::chat::{FinishReason, StreamEvent, Usage};
+            self.requests.lock().unwrap().push(req);
+            let mut n = self.step.lock().unwrap();
+            *n += 1;
+            let done = |f| {
+                Ok(StreamEvent::Done {
+                    finish_reason: f,
+                    usage: Usage::default(),
+                })
+            };
+            let evs = if *n == 1 {
+                vec![
+                    Ok(StreamEvent::ToolCall {
+                        call: call("data_profile", serde_json::json!({"file": "orders.csv"})),
+                    }),
+                    done(FinishReason::ToolCalls),
+                ]
+            } else {
+                vec![
+                    Ok(StreamEvent::TextDelta {
+                        text: self.answer.into(),
+                    }),
+                    done(FinishReason::Stop),
+                ]
+            };
+            Box::pin(Items(evs.into()))
+        }
+    }
+
+    async fn run_data_case(
+        id: &str,
+        answer: &'static str,
+    ) -> (Turn, Option<DataCheck>, Vec<dn_core::chat::ChatRequest>) {
+        let golden = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../evals/golden");
+        let set = Set::read(&golden, None, &library()).unwrap();
+        let (case, root) = set.cases.iter().find(|(c, _)| c.id == id).unwrap();
+        let model = DataAnalyst {
+            answer,
+            step: Mutex::new(0),
+            requests: Mutex::new(Vec::new()),
+        };
+        let model_ref = dn_core::model::ModelRef::Local {
+            model_id: "scripted".into(),
+        };
+        let mut cfg = eval_config("eval.parity", &model_ref, Some(64));
+        cfg.max_steps = DEFAULT_MAX_STEPS;
+        let tools = MockTools::new(&set, case, root);
+        let t = turn_with(&model, &tools, &cfg, history(&set, root, case).unwrap()).await;
+        let check = check_data(&t.text, &case.expect, &tools.sheets());
+        let reqs = model.requests.lock().unwrap().clone();
+        (t, check, reqs)
+    }
+
+    #[tokio::test]
+    async fn a_data_case_runs_the_real_tool_with_the_skill_and_checks_the_numbers() {
+        let (t, check, reqs) = run_data_case(
+            "project-data-001",
+            "The total is 1537.00 [F48]; one order has no amount, so it isn't counted.",
+        )
+        .await;
+        assert!(t.error.is_none(), "{:?}", t.error);
+        let check = check.unwrap();
+        assert!(check.passed, "{check:?}");
+        // The skill's instructions are in the system prompt, and its tools were offered.
+        let system = format!("{:?}", reqs[0].messages[0].content);
+        assert!(
+            system.contains("The user chose the skill \\\"Analyze data file\\\""),
+            "{system}"
+        );
+        assert!(reqs[0].tools.iter().any(|t| t.name == "data_profile"));
+        // The fact sheet reached the model as an untrusted block.
+        let tool_result = format!("{:?}", reqs[1].messages.last().unwrap().content);
+        assert!(
+            tool_result.contains("<<<SOURCE tool:data.profile file=\\\"orders.csv\\\""),
+            "{tool_result}"
+        );
+        assert!(tool_result.contains("\\\"Amount\\\" sum: 1537.00"));
+    }
+
+    #[tokio::test]
+    async fn an_invented_number_or_a_missing_known_answer_fails_the_check() {
+        let (_, check, _) = run_data_case(
+            "project-data-001",
+            "The total is about 1600, roughly 1537.00 before the refund of 63.",
+        )
+        .await;
+        let check = check.unwrap();
+        assert!(!check.passed);
+        assert_eq!(check.untraced, ["1600", "63"]);
+        let (_, check, _) = run_data_case("project-data-001", "The total is in the sheet.").await;
+        assert_eq!(check.unwrap().missing_numbers, ["1537.00"]);
+    }
+
+    #[test]
+    fn a_skill_narrows_the_tools_and_an_unknown_skill_is_refused() {
+        let dir = std::env::temp_dir().join(format!("dn-parity-skill-{}", dn_core::Id::new()));
+        std::fs::create_dir_all(dir.join("prompts")).unwrap();
+        std::fs::create_dir_all(dir.join("files")).unwrap();
+        std::fs::write(
+            dir.join("tools.yaml"),
+            "- {name: send_email, description: Send., input_schema: {type: object}, effect: write}\n",
+        )
+        .unwrap();
+        let write = |yaml: &str| std::fs::write(dir.join("prompts/chat.yaml"), yaml).unwrap();
+        // summarize allows no tools: what the case offers is narrowed away.
+        write(
+            "- {id: c, category: chat, lang: en, skill: summarize, tools: [send_email, data_profile], turns: [{role: user, content: hi}]}",
+        );
+        let set = Set::read(&dir, None, &library()).unwrap();
+        let (case, root) = &set.cases[0];
+        assert!(MockTools::new(&set, case, root).tools().is_empty());
+        write(
+            "- {id: c, category: chat, lang: en, skill: no-such-skill, turns: [{role: user, content: hi}]}",
+        );
+        assert!(
+            Set::read(&dir, None, &library())
+                .unwrap_err()
+                .contains("no skill called")
+        );
+        write(
+            "- {id: c, category: chat, lang: en, skill: summarize, tools: [send_email], turns: [{role: user, content: hi}], expect: {tool_calls: {required: [send_email]}}}",
+        );
+        assert!(
+            Set::read(&dir, None, &library())
+                .unwrap_err()
+                .contains("doesn't allow")
+        );
+        write(
+            "- {id: c, category: chat, lang: en, turns: [{role: user, content: hi}], expect: {numbers: [twelve]}}",
+        );
+        assert!(
+            Set::read(&dir, None, &library())
+                .unwrap_err()
+                .contains("isn't a number")
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
@@ -1075,10 +1453,10 @@ mod tests {
         std::fs::create_dir_all(dir.join("prompts")).unwrap();
         std::fs::create_dir_all(dir.join("files")).unwrap();
         let write = |yaml: &str| std::fs::write(dir.join("prompts/chat.yaml"), yaml).unwrap();
-        let err = || Set::read(&dir, None).unwrap_err();
+        let err = || Set::read(&dir, None, &library()).unwrap_err();
         let ok = "- {id: chat-001, category: chat, lang: en, turns: [{role: user, content: hi}]}";
         write(ok);
-        assert!(Set::read(&dir, None).is_ok());
+        assert!(Set::read(&dir, None, &library()).is_ok());
         write(&format!("{ok}\n{ok}"));
         assert!(err().contains("appears twice"));
         write("- {id: h-001, category: chat, lang: en, turns: [{role: user, content: hi}]}");

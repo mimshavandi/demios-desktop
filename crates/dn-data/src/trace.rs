@@ -221,6 +221,14 @@ fn matches(w: &Written, value: f64) -> bool {
     })
 }
 
+/// Whether `answer` writes `value` (at the precision the answer shows; as a percentage when
+/// `percent`). For checking known answers in evals.
+pub fn mentions(answer: &str, value: f64, percent: bool) -> bool {
+    scan(answer)
+        .iter()
+        .any(|w| (w.percent || !percent) && matches(w, value))
+}
+
 /// The numbers in `answer` that no fact of `sheets` has.
 pub fn untraced_numbers(answer: &str, sheets: &[&FactSheet]) -> Vec<Untraced> {
     let mut numbers = Vec::new();
@@ -320,6 +328,15 @@ mod tests {
             ["12.4", "12,350"]
         );
         assert_eq!(texts("Up 7% since March.", &s), ["7"]);
+    }
+
+    #[test]
+    fn mentions_finds_a_known_answer_at_the_precision_written() {
+        assert!(mentions("Revenue was 2,511.29 in total.", 2511.29, false));
+        assert!(mentions("About 2,511 in total.", 2511.29, false));
+        assert!(!mentions("About 2,600 in total.", 2511.29, false));
+        assert!(mentions("Up 202.8% on January.", 202.8, true));
+        assert!(!mentions("Up 202.8 on January.", 202.8, true));
     }
 
     #[test]

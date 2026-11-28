@@ -14,6 +14,7 @@ vulkan = ["dn-inference/vulkan"]
 [dependencies]
 dn-core.workspace = true
 dn-agent.workspace = true
+dn-data.workspace = true
 tracing-subscriber.workspace = true
 dn-knowledge = { path = "../../crates/dn-knowledge", version = "0.1.0" }
 dn-inference = { workspace = true, features = ["llamacpp"] }
