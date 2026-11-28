@@ -58,18 +58,24 @@ pub struct CacheStats {
 }
 
 /// Starts the worker for `l`. It runs until every sender is dropped.
-pub(super) fn spawn(l: Arc<Loaded>) -> Result<std::sync::mpsc::Sender<Job>> {
+pub(super) fn spawn(
+    l: Arc<Loaded>,
+) -> Result<(std::sync::mpsc::Sender<Job>, std::thread::JoinHandle<()>)> {
     let (tx, rx) = std::sync::mpsc::channel::<Job>();
-    std::thread::Builder::new()
+    let thread = std::thread::Builder::new()
         .name("dn-llamacpp-model".into())
         .spawn(move || {
-            let mut w = Worker::new(&l);
-            while let Ok(job) = rx.recv() {
-                w.run(job);
+            super::WORKERS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            {
+                let mut w = Worker::new(&l);
+                while let Ok(job) = rx.recv() {
+                    w.run(job);
+                }
             }
+            super::WORKERS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
         })
         .map_err(|e| InferenceError::Runtime(e.to_string()))?;
-    Ok(tx)
+    Ok((tx, thread))
 }
 
 /// What the live sequence holds (`seq 0`).

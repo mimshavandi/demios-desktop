@@ -335,3 +335,26 @@ async fn counted_tokens_match_what_the_model_reads() {
         assert_eq!(Some(counted), read);
     }
 }
+
+/// Unloading, or dropping the backend, waits until the model's worker has freed its
+/// context. A context still alive at process exit makes llama.cpp's Metal teardown abort.
+///
+/// `live_workers()` counts every worker in the process, so this test is only meaningful
+/// run on its own (`--test-threads=1`, as these model tests are run).
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs DN_TEST_GGUF"]
+async fn unloading_frees_the_context_before_it_returns() {
+    let m = model().await;
+    let _ = run(&m, req("Say hi.", vec![])).await;
+    assert_eq!(dn_inference::llamacpp::live_workers(), 1);
+    m.unload().await.unwrap();
+    assert_eq!(dn_inference::llamacpp::live_workers(), 0, "unload waited");
+    let m = model().await;
+    let _ = run(&m, req("Say hi.", vec![])).await;
+    drop(m);
+    assert_eq!(
+        dn_inference::llamacpp::live_workers(),
+        0,
+        "dropping the backend waited"
+    );
+}
