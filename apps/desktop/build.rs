@@ -59,6 +59,8 @@ const COMMANDS: &[&str] = &[
     "stop_generation",
     "get_settings",
     "update_settings",
+    "model_context",
+    "set_model_context_size",
     "list_models",
     "check_keys",
     "node_overview",

@@ -10,6 +10,7 @@ import {
   type RemoteServerView,
 } from "../ipc/types";
 import { Badge, Button, EmptyState, ICON, InlineMessage, Switch, TextField } from "./primitives";
+import { ContextSize } from "./ContextSize";
 import { SetDefault } from "./SetDefault";
 import { useToast } from "./toast";
 
@@ -189,7 +190,7 @@ export function RemoteServersCard({
             </InlineMessage>
           )}
           {s.models.map((m) => (
-            <ModelRow key={m.id} model={m} onTools={(on) => void setTools(s, m, on)} />
+            <ModelRow key={m.id} api={api} server={s.name} model={m} onTools={(on) => void setTools(s, m, on)} />
           ))}
         </div>
       ))}
@@ -231,7 +232,18 @@ function StatusBadge({
   );
 }
 
-function ModelRow({ model: m, onTools }: { model: RemoteModelView; onTools: (on: boolean) => void }) {
+function ModelRow({
+  api,
+  server,
+  model: m,
+  onTools,
+}: {
+  api: Api;
+  server: string;
+  model: RemoteModelView;
+  onTools: (on: boolean) => void;
+}) {
+  const size = m.embedding ? null : <ContextSize api={api} modelRef={m.model_ref} name={m.id} provider={server} />;
   if (!m.embedding && !m.tool_support_reported) {
     return (
       <div className="row" data-testid="remote-model" data-model={m.id}>
@@ -242,6 +254,7 @@ function ModelRow({ model: m, onTools }: { model: RemoteModelView; onTools: (on:
             checked={m.tool_support === "supported"}
             onCheckedChange={onTools}
           />
+          {size}
         </div>
         <span className="row-actions">
           <SetDefault modelRef={m.model_ref} name={m.id} />
@@ -253,6 +266,7 @@ function ModelRow({ model: m, onTools }: { model: RemoteModelView; onTools: (on:
     <div className="row" data-testid="remote-model" data-model={m.id}>
       <div className="row-main">
         <span className="row-title">{m.id}</span>
+        {size}
       </div>
       {m.embedding ? (
         <Badge tone="neutral">Embeddings</Badge>

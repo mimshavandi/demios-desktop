@@ -472,6 +472,12 @@ export interface RemoteServerView {
   models: RemoteModelView[];
 }
 
+/** How much a model reads at once, and who said so (ADR-0020 §2.1, design ContextSize). */
+export interface ModelContext {
+  tokens: number | null;
+  source: "loaded" | "provider" | "published" | "user" | null;
+}
+
 export interface ModelCatalog {
   slots: SlotInfo[];
   models: ModelOption[];

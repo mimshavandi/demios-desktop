@@ -4,4 +4,4 @@ import type { Capability } from "./Capability";
 /**
  * Something the UI can offer the user to fix an error.
  */
-export type RecoveryAction = { "action": "download_model", capability: Capability, } | { "action": "add_provider_key" } | { "action": "choose_model_for_slot", agent_id: string, slot_id: string, } | { "action": "reconnect_server", server_id: string, } | { "action": "retry", after_seconds: number | null, };
+export type RecoveryAction = { "action": "download_model", capability: Capability, } | { "action": "add_provider_key" } | { "action": "choose_model_for_slot", agent_id: string, slot_id: string, } | { "action": "reconnect_server", server_id: string, } | { "action": "retry", after_seconds: number | null, } | { "action": "set_context_size", model_ref: string, };

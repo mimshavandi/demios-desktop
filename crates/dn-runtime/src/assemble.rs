@@ -99,8 +99,9 @@ impl From<AssembleError> for CoreError {
                      fit this chat to it."
                 ),
                 developer_message: format!("{model}: context size unknown"),
-                // The "Set context size" action comes with its screens (R1 PR 4).
-                recovery: vec![],
+                recovery: vec![dn_core::RecoveryAction::SetContextSize {
+                    model_ref: model.clone(),
+                }],
             },
             AssembleError::TooLong {
                 model,

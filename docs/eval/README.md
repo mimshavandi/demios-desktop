@@ -150,9 +150,28 @@ dn eval judge <answers.json> --judge evals/judge/judge.yaml --set evals/golden \
 ```
 
 Each folder in `--references` is a source (`claude/`, `chatgpt/`), holding `<case id>.md`
-and, optionally, a `meta.json` saying which model wrote them and when (copied into the report).
-How the references are made is #407. `judge.yaml` then needs a `pairwise_prompt`
+and the `meta.json` that `dn eval references` writes (copied into the report). A reference
+whose case has changed since it was made is refused, with the cases to make again.
+`judge.yaml` then needs a `pairwise_prompt`
 ([pairwise-v1.md](../../evals/judge/pairwise-v1.md)).
+
+The references come from Claude and ChatGPT through their APIs (ADR-0020 Q5), under the
+owner's keys:
+
+```bash
+ANTHROPIC_API_KEY=… dn eval references --set evals/golden --source claude \
+  --model <exact model id> --out evals/golden/references
+OPENAI_API_KEY=… dn eval references --set evals/golden --source chatgpt \
+  --model <exact model id> --out evals/golden/references
+```
+
+Each case is answered exactly as `dn eval parity` answers it: the same prompt, files and mock
+tools. This is the only command besides `judge` that sends anything, and only to that
+provider. `meta.json` records the model, the settings and each case's hash as answered. A
+case that fails, or answers nothing, writes no file and removes an older one; it's listed in
+`meta.json`, and the command ends with an error naming it, to run again with `--only`.
+References from two models never share a folder. For a holdout, pass `--holdout` and an `--out`
+outside any git work tree.
 
 For every case and source, the judge sees the case and the two answers as A and B, twice: once
 with Demios's answer first, once with the reference first. It's a **win** or a **loss** only
@@ -220,7 +239,6 @@ data (`dn.speed.v1`), so new ones are added to a file.
 These are tracked as issues:
 
 - the labelled pairs for calibration (#355);
-- generating the reference answers (#407);
 - earlier sessions in memory cases (with memory, R3);
 - embeddings in LongMemEval's retrieval mode (keyword search only for now);
 - the app's own system prompt in `dn eval parity` (it moves into the shared runtime in R1);

@@ -1,5 +1,5 @@
 import { Blocks, Boxes, Cpu, ExternalLink, KeyRound, Server, SlidersHorizontal, Sparkles, Trash2, Wrench } from "lucide-react";
-import { Fragment, useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { Api } from "../ipc/commands";
 import {
   errorMessage,
@@ -37,6 +37,7 @@ import { SkillsCard } from "./Skills";
 import { NodeSettings } from "./NodeSettings";
 import { Updates } from "./Updates";
 import { LocalModelsCard, formatBytes } from "./LocalModels";
+import { ContextSize, ContextSizeTarget } from "./ContextSize";
 import { DefaultsContext, SetDefault, type Defaults } from "./SetDefault";
 import { NODE_TEXT, NODE_TITLE, PROJECT_INSTRUCTIONS_SENT } from "./privacyText";
 import { useToast } from "./toast";
@@ -48,6 +49,8 @@ export type ModelsTab = "device" | "servers" | "providers";
 export interface SettingsRoute {
   section: SettingsSection;
   tab?: ModelsTab;
+  /** A model whose context size field to focus (a chat's "Set context size"). */
+  focus?: string;
 }
 
 const SECTIONS: { id: SettingsSection; label: string; icon: typeof Cpu }[] = [
@@ -106,6 +109,8 @@ interface Props {
   onAddLinkClosed?: () => void;
   /** A newer version the launch check found (#95), shown in About › Updates. */
   launchUpdate?: UpdateCheck | null;
+  /** A model's context size was saved (a chat waiting on it offers Retry). */
+  onContextSizeSaved?: (modelRef: string) => void;
   /** Bring About › Updates into view (opened from the launch notice). */
   revealUpdates?: boolean;
 }
@@ -128,7 +133,12 @@ export function SettingsView({
   onAddLinkClosed,
   launchUpdate = null,
   revealUpdates = false,
+  onContextSizeSaved,
 }: Props) {
+  const contextTarget = useMemo(
+    () => ({ focus: route.focus ?? null, onSaved: (m: string) => onContextSizeSaved?.(m) }),
+    [route.focus, onContextSizeSaved],
+  );
   const toast = useToast();
   const [load, setLoad] = useState<Load>({ kind: "loading" });
   // Settings › Tools: Connect and Tool servers reload when the other changes the servers.
@@ -246,6 +256,7 @@ export function SettingsView({
   );
 
   return (
+    <ContextSizeTarget.Provider value={contextTarget}>
     <section className="settings" aria-labelledby="settings-h">
       <div className="settings-layout">
         <nav className="settings-nav" aria-label="Settings sections">
@@ -328,6 +339,7 @@ export function SettingsView({
         </div>
       </div>
     </section>
+    </ContextSizeTarget.Provider>
   );
 }
 
@@ -439,7 +451,7 @@ function ModelsPage({
             {catalog.providers.map((p) => (
               <Fragment key={p.id}>
                 <ProviderRow api={api} provider={p} onCatalog={onCatalog} />
-                {p.key === "saved" && <ProviderModels catalog={catalog} provider={p} />}
+                {p.key === "saved" && <ProviderModels api={api} catalog={catalog} provider={p} />}
               </Fragment>
             ))}
           </section>
@@ -605,7 +617,15 @@ function SlotRow({
 }
 
 /** A provider's models, once its key is saved, each with "Set as default" (#219). */
-function ProviderModels({ catalog, provider }: { catalog: ModelCatalog; provider: ProviderInfo }) {
+function ProviderModels({
+  api,
+  catalog,
+  provider,
+}: {
+  api: Api;
+  catalog: ModelCatalog;
+  provider: ProviderInfo;
+}) {
   const models = catalog.models.filter((m) => m.model_ref.startsWith(`byok:${provider.id}:`));
   if (models.length === 0) return null;
   return (
@@ -617,6 +637,7 @@ function ProviderModels({ catalog, provider }: { catalog: ModelCatalog; provider
             <div className="row-main">
               <span className="row-title">{name}</span>
               {!m.available && <span className="dn-help">{m.note ?? "Not in this build yet"}</span>}
+              {m.available && <ContextSize api={api} modelRef={m.model_ref} name={name} provider={provider.name} />}
             </div>
             <span className="row-actions">
               <SetDefault modelRef={m.model_ref} name={name} />
