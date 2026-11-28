@@ -1,0 +1,31 @@
+[package]
+name = "dn-sandbox"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Runs skill scripts in a fresh OS sandbox per run (ADR-0021 §2-§3); added with the owner's approval, 2026-11-28 (#435)."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+sysinfo.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1", features = ["process", "fs"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock = "0.4"
+seccompiler = "0.5"
+
+# Not the workspace's `forbid`: the launcher binary needs one `unsafe` call, to close the
+# descriptors it inherited (ADR-0021 §2). `deny` everywhere else; scripts/check-unsafe.py
+# allows `unsafe` only in src/bin/dn-sandbox-launch.rs, in `close_inherited_fds`.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
