@@ -163,12 +163,16 @@ fn render(parts: &Parts, template: &ChatRequest) -> (ChatRequest, usize) {
         let mut m = input.clone();
         let mut content = Vec::new();
         if let Some(r) = section(&parts.retrieved) {
-            content.push(ContentPart::Text { text: r });
+            // Blank lines between the parts: some providers join a message's parts as they
+            // are (OpenAI-compatible), and the input mustn't run into what's around it.
+            content.push(ContentPart::Text {
+                text: format!("{r}\n\n"),
+            });
         }
         content.append(&mut m.content);
         if let Some(recap) = &parts.recap {
             content.push(ContentPart::Text {
-                text: recap.clone(),
+                text: format!("\n\n{recap}"),
             });
         }
         m.content = content;

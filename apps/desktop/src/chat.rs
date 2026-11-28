@@ -1568,7 +1568,9 @@ mod tests {
                 .collect();
             // The input as typed, then the date in the recap (ADR-0020 §2.3).
             assert_eq!(texts[0], "hi");
-            assert!(texts[1].starts_with("Today is "), "{texts:?}");
+            assert!(texts[1].starts_with("\n\nToday is "), "{texts:?}");
+            // Joined as a provider joins them, the input and the recap stay apart.
+            assert!(texts.concat().starts_with("hi\n\nToday is "), "{texts:?}");
         }
         // The stored message keeps only what was typed.
         let db = st.db().unwrap();
