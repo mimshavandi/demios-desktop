@@ -14,12 +14,31 @@ pub enum MemoryError {
     Off,
     #[error("no memory item {0}")]
     NotFound(String),
+    /// Undo after the item's sources were deleted for good.
+    #[error("this memory came from something that has since been deleted")]
+    SourcesGone,
     /// The call breaks a rule (trust, kind, status); the message says which.
     #[error("{0}")]
     Invalid(String),
 }
 
 pub type Result<T> = std::result::Result<T, MemoryError>;
+
+/// Runs `f` as one unit: a savepoint, so it nests inside a caller's transaction or another
+/// memory operation, and nothing is left half done when a step fails.
+fn atomic<T>(conn: &Connection, f: impl FnOnce() -> Result<T>) -> Result<T> {
+    conn.execute_batch("SAVEPOINT memory_op")?;
+    match f() {
+        Ok(v) => {
+            conn.execute_batch("RELEASE memory_op")?;
+            Ok(v)
+        }
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK TO memory_op; RELEASE memory_op");
+            Err(e)
+        }
+    }
+}
 
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
@@ -421,63 +440,67 @@ pub fn add_user(
     text: &str,
     source: Option<Source>,
 ) -> Result<Item> {
-    if !enabled(conn)? {
-        return Err(MemoryError::Off);
-    }
-    let it = new_item(
-        scope,
-        kind,
-        clean("subject", subject)?,
-        clean("text", text)?,
-    );
-    insert(conn, &it, source.as_slice())?;
-    Ok(it)
+    atomic(conn, || {
+        if !enabled(conn)? {
+            return Err(MemoryError::Off);
+        }
+        let it = new_item(
+            scope,
+            kind,
+            clean("subject", subject)?,
+            clean("text", text)?,
+        );
+        insert(conn, &it, source.as_slice())?;
+        Ok(it)
+    })
 }
 
 /// An inferred item. It waits as pending, unless it's from the person's own content in a
 /// scope with "Remember without asking" on. A third-party item is always a pending claim
 /// (trust 0, fact, person or commitment).
 pub fn suggest(conn: &Connection, s: Suggestion) -> Result<Item> {
-    if !enabled(conn)? {
-        return Err(MemoryError::Off);
-    }
-    if s.sources.is_empty() {
-        return Err(MemoryError::Invalid(
-            "an inferred memory needs its sources".into(),
-        ));
-    }
-    if !s.created_by.starts_with("model:") {
-        return Err(MemoryError::Invalid(
-            "an inferred memory names the model that suggested it".into(),
-        ));
-    }
-    if s.third_party && !matches!(s.kind, Kind::Fact | Kind::Person | Kind::Commitment) {
-        return Err(MemoryError::Invalid(format!(
-            "a memory from someone else's content can't be a {}",
-            s.kind.as_str()
-        )));
-    }
-    let mut it = new_item(
-        s.scope.clone(),
-        s.kind,
-        clean("subject", &s.subject)?,
-        clean("text", &s.text)?,
-    );
-    it.third_party = s.third_party;
-    it.trust = if s.third_party {
-        Trust::ThirdParty
-    } else {
-        Trust::OwnContent
-    };
-    it.created_by = s.created_by;
-    let auto = !s.third_party && settings(conn, &s.scope)?.remember_automatically;
-    it.status = if auto {
-        Status::Active
-    } else {
-        Status::Pending
-    };
-    insert(conn, &it, &s.sources)?;
-    Ok(it)
+    atomic(conn, || {
+        if !enabled(conn)? {
+            return Err(MemoryError::Off);
+        }
+        if s.sources.is_empty() {
+            return Err(MemoryError::Invalid(
+                "an inferred memory needs its sources".into(),
+            ));
+        }
+        if !s.created_by.starts_with("model:") {
+            return Err(MemoryError::Invalid(
+                "an inferred memory names the model that suggested it".into(),
+            ));
+        }
+        if s.third_party && !matches!(s.kind, Kind::Fact | Kind::Person | Kind::Commitment) {
+            return Err(MemoryError::Invalid(format!(
+                "a memory from someone else's content can't be a {}",
+                s.kind.as_str()
+            )));
+        }
+        let mut it = new_item(
+            s.scope.clone(),
+            s.kind,
+            clean("subject", &s.subject)?,
+            clean("text", &s.text)?,
+        );
+        it.third_party = s.third_party;
+        it.trust = if s.third_party {
+            Trust::ThirdParty
+        } else {
+            Trust::OwnContent
+        };
+        it.created_by = s.created_by;
+        let auto = !s.third_party && settings(conn, &s.scope)?.remember_automatically;
+        it.status = if auto {
+            Status::Active
+        } else {
+            Status::Pending
+        };
+        insert(conn, &it, &s.sources)?;
+        Ok(it)
+    })
 }
 
 // ---- reading
@@ -620,12 +643,14 @@ fn set_status(conn: &Connection, id: &str, from: Status, to: Status) -> Result<I
 /// Keep a suggestion: active, confirmed by the person (trust 2; a third-party claim stays a
 /// claim).
 pub fn keep(conn: &Connection, id: &str) -> Result<Item> {
-    set_status(conn, id, Status::Pending, Status::Active)?;
-    conn.execute(
-        "UPDATE memory_items SET trust = MAX(trust, 2) WHERE id = ?1",
-        [id],
-    )?;
-    must(conn, id)
+    atomic(conn, || {
+        set_status(conn, id, Status::Pending, Status::Active)?;
+        conn.execute(
+            "UPDATE memory_items SET trust = MAX(trust, 2) WHERE id = ?1",
+            [id],
+        )?;
+        must(conn, id)
+    })
 }
 
 /// Dismiss a suggestion (retracted, so Undo can bring it back).
@@ -640,11 +665,13 @@ pub fn undo_dismiss(conn: &Connection, id: &str) -> Result<Item> {
 
 /// Dismiss every suggestion; returns their ids for Undo.
 pub fn dismiss_all(conn: &Connection) -> Result<Vec<String>> {
-    let ids: Vec<String> = pending(conn)?.into_iter().map(|d| d.item.id).collect();
-    for id in &ids {
-        dismiss(conn, id)?;
-    }
-    Ok(ids)
+    atomic(conn, || {
+        let ids: Vec<String> = pending(conn)?.into_iter().map(|d| d.item.id).collect();
+        for id in &ids {
+            dismiss(conn, id)?;
+        }
+        Ok(ids)
+    })
 }
 
 // ---- editing
@@ -663,21 +690,24 @@ pub struct Edit {
 /// person (trust 3, no longer a third-party claim). Editing a suggestion keeps it (Edit then
 /// Keep in the design).
 pub fn edit(conn: &Connection, id: &str, e: Edit) -> Result<Item> {
-    let old = must(conn, id)?;
-    if matches!(old.status, Status::Superseded | Status::Retracted) {
-        return Err(MemoryError::Invalid(format!(
-            "memory {id} is {}; it can't be edited",
-            old.status.as_str()
-        )));
-    }
-    if matches!(e.scope, Scope::Addon(_)) != matches!(old.scope, Scope::Addon(_)) {
-        return Err(MemoryError::Invalid(
-            "an add-on's memory stays with the add-on".into(),
-        ));
-    }
-    let (text, subject) = (clean("text", &e.text)?, clean("subject", &e.subject)?);
-    let now = now_ms();
-    conn.execute(
+    atomic(conn, || {
+        let old = must(conn, id)?;
+        if matches!(old.status, Status::Superseded | Status::Retracted) {
+            return Err(MemoryError::Invalid(format!(
+                "memory {id} is {}; it can't be edited",
+                old.status.as_str()
+            )));
+        }
+        if (matches!(e.scope, Scope::Addon(_)) || matches!(old.scope, Scope::Addon(_)))
+            && e.scope != old.scope
+        {
+            return Err(MemoryError::Invalid(
+                "an add-on's memory stays with the add-on".into(),
+            ));
+        }
+        let (text, subject) = (clean("text", &e.text)?, clean("subject", &e.subject)?);
+        let now = now_ms();
+        conn.execute(
         "INSERT INTO memory_versions (item_id, text, kind, subject, scope, valid_from, valid_to) \
          VALUES (?1,?2,?3,?4,?5,?6,?7)",
         params![
@@ -690,31 +720,45 @@ pub fn edit(conn: &Connection, id: &str, e: Edit) -> Result<Item> {
             now
         ],
     )?;
-    conn.execute(
+        conn.execute(
         "UPDATE memory_items SET text = ?2, kind = ?3, subject = ?4, scope = ?5, status = 'active', \
          trust = 3, third_party = 0, valid_from = ?6, updated_at = ?6 WHERE id = ?1",
         params![id, text, e.kind.as_str(), subject, e.scope.to_string(), now],
     )?;
-    let it = must(conn, id)?;
-    index(conn, &it)?;
-    Ok(it)
+        // Now the person's: kept when the chat it came from is deleted.
+        conn.execute(
+            "INSERT OR IGNORE INTO memory_sources (item_id, kind, ref_id, conversation_id, title, at) \
+             VALUES (?1, 'settings', ?2, NULL, 'Edited by you', ?3)",
+            params![id, format!("edit:{id}"), now],
+        )?;
+        let it = must(conn, id)?;
+        index(conn, &it)?;
+        Ok(it)
+    })
 }
 
 /// Mark `old` superseded by `new` (the supersede pass, PR 2): it keeps its history.
 pub fn supersede(conn: &Connection, old: &str, new: &str) -> Result<()> {
-    let (o, n) = (must(conn, old)?, must(conn, new)?);
-    if o.status != Status::Active || n.status != Status::Active {
-        return Err(MemoryError::Invalid(
-            "only an active memory supersedes another active one".into(),
-        ));
-    }
-    let now = now_ms();
-    conn.execute(
-        "UPDATE memory_items SET status = 'superseded', valid_to = ?2, superseded_by = ?3, \
+    atomic(conn, || {
+        if old == new {
+            return Err(MemoryError::Invalid(
+                "a memory can't supersede itself".into(),
+            ));
+        }
+        let (o, n) = (must(conn, old)?, must(conn, new)?);
+        if o.status != Status::Active || n.status != Status::Active {
+            return Err(MemoryError::Invalid(
+                "only an active memory supersedes another active one".into(),
+            ));
+        }
+        let now = now_ms();
+        conn.execute(
+            "UPDATE memory_items SET status = 'superseded', valid_to = ?2, superseded_by = ?3, \
          updated_at = ?2 WHERE id = ?1",
-        params![old, now, new],
-    )?;
-    Ok(())
+            params![old, now, new],
+        )?;
+        Ok(())
+    })
 }
 
 // ---- use
@@ -726,21 +770,23 @@ pub fn record_used(
     conversation_title: &str,
     used: &[(String, &str)],
 ) -> Result<()> {
-    let now = now_ms();
-    for (id, how) in used {
-        if !matches!(*how, "retrieved" | "profile" | "saved") {
-            return Err(MemoryError::Invalid(format!("bad use {how:?}")));
+    atomic(conn, || {
+        let now = now_ms();
+        for (id, how) in used {
+            if !matches!(*how, "retrieved" | "profile" | "saved") {
+                return Err(MemoryError::Invalid(format!("bad use {how:?}")));
+            }
+            conn.execute(
+                "INSERT OR REPLACE INTO memory_used (message_id, item_id, how) VALUES (?1,?2,?3)",
+                params![message_id, id, how],
+            )?;
+            conn.execute(
+                "UPDATE memory_items SET last_used_at = ?2, last_used_in = ?3 WHERE id = ?1",
+                params![id, now, conversation_title],
+            )?;
         }
-        conn.execute(
-            "INSERT OR REPLACE INTO memory_used (message_id, item_id, how) VALUES (?1,?2,?3)",
-            params![message_id, id, how],
-        )?;
-        conn.execute(
-            "UPDATE memory_items SET last_used_at = ?2, last_used_in = ?3 WHERE id = ?1",
-            params![id, now, conversation_title],
-        )?;
-    }
-    Ok(())
+        Ok(())
+    })
 }
 
 /// The items a message used, with how.
@@ -777,16 +823,43 @@ fn remove(conn: &Connection, id: &str) -> Result<()> {
 
 /// Delete an item; the returned copy restores it ([`restore`]) during the Undo window.
 pub fn delete(conn: &Connection, id: &str) -> Result<Deleted> {
-    let detail = detail(conn, id)?.ok_or_else(|| MemoryError::NotFound(id.into()))?;
-    remove(conn, id)?;
-    Ok(Deleted { detail })
+    atomic(conn, || {
+        let detail = detail(conn, id)?.ok_or_else(|| MemoryError::NotFound(id.into()))?;
+        remove(conn, id)?;
+        Ok(Deleted { detail })
+    })
 }
 
 /// Undo a delete.
 pub fn restore(conn: &Connection, d: &Deleted) -> Result<()> {
-    insert(conn, &d.detail.item, &d.detail.sources)?;
-    for v in &d.detail.versions {
-        conn.execute(
+    atomic(conn, || {
+        let forgotten = |kind: &str, id: &str| -> Result<bool> {
+            Ok(conn
+                .query_row(
+                    "SELECT 1 FROM memory_forgotten WHERE kind = ?1 AND ref_id = ?2",
+                    params![kind, id],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some())
+        };
+        let mut sources = Vec::new();
+        for s in &d.detail.sources {
+            let gone = forgotten(s.kind.as_str(), &s.ref_id)?
+                || match &s.conversation_id {
+                    Some(c) => forgotten("conversation", c)?,
+                    None => false,
+                };
+            if !gone {
+                sources.push(s.clone());
+            }
+        }
+        if !d.detail.sources.is_empty() && sources.is_empty() {
+            return Err(MemoryError::SourcesGone);
+        }
+        insert(conn, &d.detail.item, &sources)?;
+        for v in &d.detail.versions {
+            conn.execute(
             "INSERT INTO memory_versions (item_id, text, kind, subject, scope, valid_from, valid_to) \
              VALUES (?1,?2,?3,?4,?5,?6,?7)",
             params![
@@ -799,46 +872,54 @@ pub fn restore(conn: &Connection, d: &Deleted) -> Result<()> {
                 v.valid_to
             ],
         )?;
-    }
-    Ok(())
+        }
+        Ok(())
+    })
 }
 
 /// "Delete all memories": account and project memories and the suggestions waiting; add-on
 /// memories stay (each add-on's page deletes its own). Returns copies for Undo.
 pub fn delete_all_memories(conn: &Connection) -> Result<Vec<Deleted>> {
-    let ids: Vec<String> = conn
-        .prepare("SELECT id FROM memory_items WHERE scope NOT LIKE 'addon:%'")?
-        .query_map([], |r| r.get(0))?
-        .collect::<rusqlite::Result<_>>()?;
-    ids.iter().map(|id| delete(conn, id)).collect()
+    atomic(conn, || {
+        let ids: Vec<String> = conn
+            .prepare("SELECT id FROM memory_items WHERE scope NOT LIKE 'addon:%'")?
+            .query_map([], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        ids.iter().map(|id| delete(conn, id)).collect()
+    })
 }
 
 /// An add-on's memories (its page's Delete all, or uninstalling it).
 pub fn delete_addon(conn: &Connection, addon_id: &str) -> Result<usize> {
-    let ids: Vec<String> = conn
-        .prepare("SELECT id FROM memory_items WHERE scope = ?1")?
-        .query_map([Scope::Addon(addon_id.into()).to_string()], |r| r.get(0))?
-        .collect::<rusqlite::Result<_>>()?;
-    for id in &ids {
-        remove(conn, id)?;
-    }
-    Ok(ids.len())
+    atomic(conn, || {
+        let ids: Vec<String> = conn
+            .prepare("SELECT id FROM memory_items WHERE scope = ?1")?
+            .query_map([Scope::Addon(addon_id.into()).to_string()], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        for id in &ids {
+            remove(conn, id)?;
+        }
+        Ok(ids.len())
+    })
 }
 
 /// "Delete all local data": every table emptied, settings back to their defaults.
 pub fn delete_all_local(conn: &Connection) -> Result<()> {
-    for t in [
-        "memory_fts",
-        "memory_used",
-        "memory_sources",
-        "memory_versions",
-        "memory_items",
-        "memory_settings",
-        "memory_tombstones",
-    ] {
-        conn.execute(&format!("DELETE FROM {t}"), [])?;
-    }
-    Ok(())
+    atomic(conn, || {
+        for t in [
+            "memory_fts",
+            "memory_used",
+            "memory_sources",
+            "memory_versions",
+            "memory_items",
+            "memory_settings",
+            "memory_forgotten",
+            "memory_tombstones",
+        ] {
+            conn.execute(&format!("DELETE FROM {t}"), [])?;
+        }
+        Ok(())
+    })
 }
 
 /// What's being forgotten (ADR-0013 §5 purge, #280).
@@ -854,42 +935,54 @@ pub enum Forget<'a> {
 /// person added in Settings has a `settings` source and is never purged this way). Returns
 /// the deleted ids.
 pub fn forget(conn: &Connection, what: Forget<'_>) -> Result<Vec<String>> {
-    let touched: Vec<String> = match what {
-        Forget::Conversation(c) => {
-            let ids = conn
-                .prepare("SELECT DISTINCT item_id FROM memory_sources WHERE conversation_id = ?1")?
-                .query_map([c], |r| r.get(0))?
-                .collect::<rusqlite::Result<_>>()?;
-            conn.execute("DELETE FROM memory_sources WHERE conversation_id = ?1", [c])?;
-            ids
-        }
-        Forget::Source(k, r) => {
-            let ids = conn
+    atomic(conn, || {
+        let touched: Vec<String> = match what {
+            Forget::Conversation(c) => {
+                conn.execute(
+                        "INSERT OR IGNORE INTO memory_forgotten (kind, ref_id) VALUES ('conversation', ?1)",
+                        [c],
+                    )?;
+                let ids = conn
+                    .prepare(
+                        "SELECT DISTINCT item_id FROM memory_sources WHERE conversation_id = ?1",
+                    )?
+                    .query_map([c], |r| r.get(0))?
+                    .collect::<rusqlite::Result<_>>()?;
+                conn.execute("DELETE FROM memory_sources WHERE conversation_id = ?1", [c])?;
+                ids
+            }
+            Forget::Source(k, r) => {
+                conn.execute(
+                    "INSERT OR IGNORE INTO memory_forgotten (kind, ref_id) VALUES (?1, ?2)",
+                    params![k.as_str(), r],
+                )?;
+                let ids = conn
                 .prepare(
                     "SELECT DISTINCT item_id FROM memory_sources WHERE kind = ?1 AND ref_id = ?2",
                 )?
                 .query_map(params![k.as_str(), r], |row| row.get(0))?
                 .collect::<rusqlite::Result<_>>()?;
-            conn.execute(
-                "DELETE FROM memory_sources WHERE kind = ?1 AND ref_id = ?2",
-                params![k.as_str(), r],
+                conn.execute(
+                    "DELETE FROM memory_sources WHERE kind = ?1 AND ref_id = ?2",
+                    params![k.as_str(), r],
+                )?;
+                ids
+            }
+        };
+        let mut gone = Vec::new();
+        for id in touched {
+            let left: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM memory_sources WHERE item_id = ?1",
+                [&id],
+                |r| r.get(0),
             )?;
-            ids
+            if left == 0 {
+                remove(conn, &id)?;
+                gone.push(id);
+            }
         }
-    };
-    let mut gone = Vec::new();
-    for id in touched {
-        let left: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM memory_sources WHERE item_id = ?1",
-            [&id],
-            |r| r.get(0),
-        )?;
-        if left == 0 {
-            remove(conn, &id)?;
-            gone.push(id);
-        }
-    }
-    Ok(gone)
+        Ok(gone)
+    })
 }
 
 /// Every memory with its sources and earlier versions, for Export (`demios-memories.json`).

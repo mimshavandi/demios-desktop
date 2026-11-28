@@ -380,7 +380,8 @@ fn delete_restores_with_undo_and_delete_all_keeps_addon_memories() {
     );
     restore(&c, &d).unwrap();
     let back = detail(&c, &a.id).unwrap().unwrap();
-    assert_eq!((back.sources.len(), back.versions.len()), (1, 1));
+    // The chat message, and the edit that made it the person's.
+    assert_eq!((back.sources.len(), back.versions.len()), (2, 1));
     assert_eq!(
         list(
             &c,
@@ -504,4 +505,73 @@ fn export_holds_every_item_with_sources_and_versions() {
     let e = export(&c).unwrap();
     assert_eq!(e["format"], "demios.memories.v1");
     assert_eq!(e["items"][0]["sources"][0]["title"], "Trip to Lisbon");
+}
+
+#[test]
+fn undo_cant_bring_back_what_a_purge_removed_and_edits_survive_the_purge() {
+    let c = db();
+    let a = suggest(
+        &c,
+        suggestion(Scope::Account, "From chat 1", false, Kind::Fact),
+    )
+    .unwrap();
+    let held = delete(&c, &a.id).unwrap();
+    forget(&c, Forget::Conversation("c1")).unwrap();
+    assert!(matches!(restore(&c, &held), Err(MemoryError::SourcesGone)));
+    assert!(get(&c, &a.id).unwrap().is_none());
+    // An item the person edited is theirs: deleting its chat keeps it.
+    let b = suggest(
+        &c,
+        suggestion(Scope::Account, "Likes tea", false, Kind::Preference),
+    )
+    .unwrap();
+    edit(
+        &c,
+        &b.id,
+        Edit {
+            text: "Likes green tea".into(),
+            kind: Kind::Preference,
+            subject: "you".into(),
+            scope: Scope::Account,
+        },
+    )
+    .unwrap();
+    forget(&c, Forget::Conversation("c1")).unwrap();
+    assert!(get(&c, &b.id).unwrap().is_some());
+}
+
+#[test]
+fn an_item_cant_supersede_itself_or_move_between_add_ons_and_failures_leave_nothing_half_done() {
+    let c = db();
+    let a = add_user(&c, Scope::Account, Kind::Fact, "x", "y", None).unwrap();
+    assert!(supersede(&c, &a.id, &a.id).is_err());
+    let m = add_user(&c, Scope::Addon("mail".into()), Kind::Fact, "x", "y", None).unwrap();
+    assert!(
+        edit(
+            &c,
+            &m.id,
+            Edit {
+                text: "y".into(),
+                kind: Kind::Fact,
+                subject: "x".into(),
+                scope: Scope::Addon("calendar".into())
+            }
+        )
+        .is_err()
+    );
+    // A failed edit (empty text) leaves no version behind.
+    assert!(
+        edit(
+            &c,
+            &a.id,
+            Edit {
+                text: "  ".into(),
+                kind: Kind::Fact,
+                subject: "x".into(),
+                scope: Scope::Account
+            }
+        )
+        .is_err()
+    );
+    assert!(detail(&c, &a.id).unwrap().unwrap().versions.is_empty());
 }

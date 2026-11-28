@@ -8,8 +8,10 @@
 //!
 //! Rules enforced here, not left to callers:
 //! - **Trust.** 3 user-stated, 2 user-confirmed, 1 from the person's own content, 0 from
-//!   third-party content. A third-party item is a claim about its source (`third_party`),
-//!   trust 0, and only a fact, person or commitment.
+//!   third-party content. A third-party item is a claim about its source (`third_party`): it
+//!   starts at trust 0, is only a fact, person or commitment, and stays a claim when the
+//!   person keeps it (trust 2). Readers decide by `third_party`, not trust alone: a claim is
+//!   always quoted, never put in the core profile.
 //! - **Pending.** An inferred item waits for the person's Keep, except one from the person's
 //!   own content in a scope with "Remember without asking" on. Third-party items always wait.
 //! - **Memory off.** With memory off for the account, nothing is added and nothing is read
@@ -17,7 +19,10 @@
 //! - **Scopes.** A project chat reads its project and, with "Use account memory" on, the
 //!   account; with it off, the project neither reads nor adds to the account.
 //! - **Purge.** Forgetting a source deletes every item whose last source it was (ADR-0013 §5,
-//!   #280). Deletes leave tombstones for sync later.
+//!   #280), and an Undo afterwards can't bring that source back. An item the person added or
+//!   edited counts as theirs and isn't purged with its chat. Deletes leave tombstones for
+//!   sync later.
+//! - **Atomic.** Every call that changes data runs as one unit (a savepoint).
 
 mod store;
 
@@ -79,6 +84,12 @@ CREATE TABLE memory_settings (
     use_account            INTEGER NOT NULL
 );
 CREATE VIRTUAL TABLE memory_fts USING fts5(item_id UNINDEXED, subject, text);
+-- Sources forgotten (purged chats, messages, files), so an Undo can't bring them back.
+CREATE TABLE memory_forgotten (
+    kind   TEXT NOT NULL,
+    ref_id TEXT NOT NULL,
+    PRIMARY KEY (kind, ref_id)
+);
 CREATE TABLE memory_tombstones (
     id         TEXT PRIMARY KEY,
     deleted_at INTEGER NOT NULL
