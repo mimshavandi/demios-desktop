@@ -1,6 +1,6 @@
 # ADR-0001: Repo and crate layout
 
-**Status:** Proposed · **Date:** 2026-11-24 (amended 2026-11-26: `dn-jobs`; 2026-11-27: `dn-web`, `dn-licence` (ADR-0014 §9a); 2026-11-28: `dn-runtime`, ADR-0020; `dn-data`; `dn-memory`, ADR-0020 §4) · **Deciders:** project owner
+**Status:** Proposed · **Date:** 2026-11-24 (amended 2026-11-26: `dn-jobs`; 2026-11-27: `dn-web`, `dn-licence` (ADR-0014 §9a); 2026-11-28: `dn-runtime`, ADR-0020; `dn-data`; `dn-memory`, ADR-0020 §4; `dn-sandbox`, ADR-0021) · **Deciders:** project owner
 
 ## Context
 The open-source app and any proprietary add-ons share one base. The app and every shared crate are public; proprietary add-ons live in a separate private repository. Demios suffered from copied helpers across 11 services with no shared package; we want one source of truth per concern from day one.
@@ -28,6 +28,7 @@ Two repos, one Cargo workspace each:
      dn-data        tabular files (CSV, XLSX, XLS, ODS) to a computed fact sheet; the model quotes it and never calculates (#366)
      dn-web         web search providers (the user's own keys or SearXNG) and the local page fetcher: private-network guard, robots.txt, extraction to markdown; no Demios proxy (#369)
      dn-memory      the memory store: items with scope, trust and sources, the pending queue, purge by source (ADR-0020 §4; added with the owner's approval, 2026-11-28)
+     dn-sandbox     runs a skill's script in a fresh OS sandbox per run: the run folder, the launcher, the watchdog and limits, collecting outputs, the self-test probe (ADR-0021; added with the owner's approval, 2026-11-28)
      dn-runtime     the agent runtime around dn-agent's loop: context assembler (token budgets, fixed slots, drop log), compaction; every model call goes through it (ADR-0020)
    apps/
      desktop        Tauri 2 app (Rust backend + web UI in apps/desktop/ui)

@@ -27,6 +27,9 @@ pub struct EmbedArgs {
     /// Report path (default: embed-<model>.json).
     #[arg(long, short)]
     out: Option<PathBuf>,
+    /// Load a model whose check found Warnings. Blocked models are never loaded.
+    #[arg(long)]
+    accept_model_warnings: bool,
 }
 
 #[derive(Deserialize)]
@@ -121,6 +124,7 @@ struct Report {
 pub async fn run(a: EmbedArgs) -> Result<(), String> {
     let set: Set = serde_json::from_str(SET).map_err(|e| format!("embed_set.json: {e}"))?;
     let path = resolve_model(&a.model)?;
+    let checked = crate::check_model(&path, a.accept_model_warnings)?;
     let file = path
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
@@ -131,6 +135,7 @@ pub async fn run(a: EmbedArgs) -> Result<(), String> {
 
     let mem = PeakMem::start(sysinfo::get_current_pid().map_err(|e| e.to_string())?);
     let backend = LlamaCppBackend::new();
+    checked.confirm()?;
     let t0 = Instant::now();
     let h = backend
         .load(
