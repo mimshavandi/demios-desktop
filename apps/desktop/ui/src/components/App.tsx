@@ -27,7 +27,7 @@ import {
 } from "../ipc/types";
 import { markArtifact } from "../artifactMarks";
 import { onHubDownloadFinished } from "../hubDownloads";
-import { chatModel, chatModelReady, describeModel, modelName } from "../models";
+import { chatModel, chatModelReady, describeModel, modelName, providerName } from "../models";
 import { artifactFrameUrl, isMac, mod } from "../platform";
 import { chatReducer, initialChat } from "../state/chat";
 import { AddonConsent } from "./AddonConsent";
@@ -40,6 +40,7 @@ import { Badge, Button, ICON, IconButton, InlineMessage, TooltipProvider } from 
 import { SettingsView, lastSettingsRoute, useKeychainAnswer, type SettingsRoute } from "./SettingsView";
 import { Sidebar, type ListState } from "./Sidebar";
 import { ToastProvider, useToast } from "./toast";
+import { useChatFiles } from "./useChatFiles";
 
 type View =
   | { kind: "chat" }
@@ -867,6 +868,24 @@ function Shell({ api }: { api: Api }) {
     (a) => a.scope.startsWith("conv:") && (view.kind !== "chat" || a.scope !== `conv:${chat.conversationId ?? ""}`),
   );
   const model = chatModel(catalog, devFake);
+  // A chat created by attaching files (#370) opens like one created by its first message.
+  const adoptAttachedChat = useCallback(
+    async (id: Id) => {
+      if (skill !== null) await api.setChatSkill(id, skill);
+      dispatch({ kind: "open", conversationId: id, messages: [] });
+      void refreshConversations();
+    },
+    [api, skill, refreshConversations],
+  );
+  const attachments = useChatFiles({
+    api,
+    conversationId: chat.conversationId,
+    projectId: newChatProject,
+    provider: providerName(model, catalog),
+    toast,
+    onCreated: adoptAttachedChat,
+    focusComposer: () => composerRef.current?.focus(),
+  });
   const openProject =
     view.kind === "project" && view.id !== "new" ? projects.find((p) => p.id === view.id) : undefined;
   const chatTitle = activeConversation?.title ?? "New chat";
@@ -1034,6 +1053,7 @@ function Shell({ api }: { api: Api }) {
             projects={projects}
             projectId={chatProjectId}
             onProject={(pid) => void moveChat(pid)}
+            attachments={attachments}
           />
         ) : view.kind === "project" ? (
           view.id === "new" ? (

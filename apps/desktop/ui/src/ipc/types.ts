@@ -85,6 +85,41 @@ export interface AddedFiles {
   skipped: { name: string; reason: string }[];
 }
 
+/** A data file attached to a chat (#370): a copy kept with the chat, on this computer only. */
+export interface ChatFile {
+  id: Id;
+  conversation_id: Id;
+  /** Display name, plain text; never a path. */
+  name: string;
+  media_type: string;
+  size: number;
+  sha256: string;
+  created_at: number;
+  /** The stored copy is gone: the chip warns, and the file can only be removed. */
+  missing: boolean;
+}
+
+/**
+ * One file's progress after a real pick, in pick order: `copying`, then `attached` or
+ * `skipped` (its reason is in the result's `skipped`). Nothing is sent for a cancel.
+ */
+export interface ChatFilesProgress {
+  /** The chat the file goes into: the new one, when attaching created it. */
+  conversation_id: Id;
+  name: string;
+  state: "copying" | "attached" | "skipped";
+}
+
+export interface AddedChatFiles {
+  /** The file picker was closed without a choice: nothing was created or added. */
+  cancelled: boolean;
+  added: ChatFile[];
+  /** Each with the engine's reason, shown as is. */
+  skipped: { name: string; reason: string }[];
+  /** The chat the files are in: a new one when none was open and something was picked. */
+  conversation_id: Id | null;
+}
+
 /** Limits the backend enforces (apps/desktop/src/projects.rs, dn_store::project). */
 export const PROJECT_NAME_MAX = 100;
 export const PROJECT_INSTRUCTIONS_MAX = 8000;

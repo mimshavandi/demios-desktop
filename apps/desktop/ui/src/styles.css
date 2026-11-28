@@ -340,6 +340,19 @@ pre.code .code-copy { position: absolute; top: var(--dn-space-1); right: var(--d
 .composer-disclosure { margin: 0 auto var(--dn-space-3); width: calc(100% - var(--dn-space-12)); max-width: var(--dn-chat-max-width); text-align: center; font-size: var(--dn-text-xs); line-height: var(--dn-leading-xs); color: var(--dn-color-text-subtle); }
 /* Project and skill pickers in the composer: compact, so the hint keeps its line. */
 .composer-skill { min-width: 0; }
+/* Data files attached to the chat (#370; design: ChatAttachments). Quiet: context, not an action. */
+.chat-files { display: grid; gap: var(--dn-space-1); padding: var(--dn-space-2) var(--dn-space-3) 0; }
+.chat-files-label { margin: 0; font-size: var(--dn-text-xs); line-height: var(--dn-leading-xs); color: var(--dn-color-text-subtle); }
+.chat-files-help { margin: 0; font-size: var(--dn-text-xs); line-height: var(--dn-leading-xs); color: var(--dn-color-text-subtle); }
+.chat-files-list { display: flex; flex-wrap: wrap; gap: var(--dn-space-2); list-style: none; margin: 0; padding: 0; }
+.chat-file { display: inline-flex; align-items: center; gap: var(--dn-space-2); max-width: calc(var(--dn-space-16) * 4); min-height: var(--dn-hit-target); padding: 0 var(--dn-space-1) 0 var(--dn-space-2); border: 1px solid var(--dn-color-border); border-radius: var(--dn-radius-md); background: var(--dn-color-surface-sunken); font-size: var(--dn-text-sm); color: var(--dn-color-text); }
+.chat-file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-file-missing { color: var(--dn-color-warning); flex: none; }
+/* The chip is already on surface-sunken: the bar uses the hairline colour so it shows. */
+.chat-file .dn-skeleton { width: var(--dn-space-8); background: var(--dn-color-border-strong); }
+.chat-file-size { color: var(--dn-color-text-muted); white-space: nowrap; }
+.chat-files-notice { margin: 0 auto var(--dn-space-2); width: calc(100% - var(--dn-space-12)); max-width: var(--dn-chat-max-width); }
+.chat-files-skipped { margin: var(--dn-space-1) 0 0; padding-left: var(--dn-space-4); display: grid; gap: var(--dn-space-1); }
 .composer-skill .dn-select { width: auto; min-width: calc(var(--dn-space-16) * 2); max-width: calc(var(--dn-space-16) * 3); }
 .composer-skill .dn-select > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .composer-skill-missing { font-size: var(--dn-text-xs); line-height: var(--dn-leading-xs); color: var(--dn-color-warning); }

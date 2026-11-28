@@ -35,6 +35,7 @@ import type {
   HubRepoView,
   HubSearchPage,
   Project,
+  ChatFile,
   ProjectFile,
 } from "./types";
 
@@ -82,6 +83,7 @@ export function createMockApi(): Api {
   const convs: Conversation[] = [];
   const projects: (Project & { deleted_at: number | null })[] = [];
   const projectFiles: (ProjectFile & { deleted: boolean })[] = [];
+  const chatFiles: (ChatFile & { deleted: boolean })[] = [];
   const liveProject = (pid: string) => {
     const p = projects.find((x) => x.id === pid && x.deleted_at === null);
     if (p === undefined) throw { code: "not_found", message: "This project was deleted." };
@@ -732,6 +734,65 @@ export function createMockApi(): Api {
     removeProjectFile: async (pid, fid) => {
       const f = projectFiles.find((x) => x.id === fid && x.project_id === pid);
       if (f !== undefined) f.deleted = true;
+      return null;
+    },
+    listChatFiles: async (cid) =>
+      chatFiles.filter((f) => f.conversation_id === cid && !f.deleted).map(({ deleted: _d, ...f }) => f),
+    // The mock has no file picker: each call "picks" two tables and a PDF.
+    addChatFiles: async (cid, projectId, onProgress) => {
+      let conversationId = cid;
+      if (conversationId === null) {
+        if (projectId !== null) liveProject(projectId);
+        const c = { id: id(), title: "New chat", model: null, project_id: projectId, created_at: now(), updated_at: now() };
+        convs.push(c);
+        msgs.set(c.id, []);
+        conversationId = c.id;
+      }
+      const here = chatFiles.filter((f) => f.conversation_id === conversationId && !f.deleted);
+      const picked = [
+        { name: "orders.csv", size: 676 },
+        { name: "budget-2026.xlsx", size: 2_458 },
+        { name: "notes.pdf", size: 81_920 },
+      ];
+      const added: ChatFile[] = [];
+      const skipped: { name: string; reason: string }[] = [];
+      for (const x of picked) {
+        onProgress({ conversation_id: conversationId, name: x.name, state: "copying" });
+        await new Promise((r) => setTimeout(r, 400));
+        const refused = x.name.endsWith(".pdf") || here.some((f) => f.name === x.name);
+        onProgress({ conversation_id: conversationId, name: x.name, state: refused ? "skipped" : "attached" });
+        if (x.name.endsWith(".pdf")) {
+          skipped.push({ name: x.name, reason: "only tables (CSV, TSV, TXT) and spreadsheets can be attached for now." });
+        } else if (here.some((f) => f.name === x.name)) {
+          skipped.push({
+            name: x.name,
+            reason: "a file with this name is already attached. Remove it first, or rename the new one.",
+          });
+        } else {
+          const f = {
+            id: id(),
+            conversation_id: conversationId,
+            name: x.name,
+            media_type: x.name.endsWith(".csv") ? "text/csv" : "application/vnd.ms-excel",
+            size: x.size,
+            sha256: "0".repeat(64),
+            created_at: now(),
+            missing: false,
+          };
+          chatFiles.push({ ...f, deleted: false });
+          added.push(f);
+        }
+      }
+      return { cancelled: false, added, skipped, conversation_id: conversationId };
+    },
+    removeChatFile: async (cid, fid) => {
+      const f = chatFiles.find((x) => x.id === fid && x.conversation_id === cid);
+      if (f !== undefined) f.deleted = true;
+      return null;
+    },
+    restoreChatFile: async (cid, fid) => {
+      const f = chatFiles.find((x) => x.id === fid && x.conversation_id === cid);
+      if (f !== undefined) f.deleted = false;
       return null;
     },
     restoreProjectFile: async (pid, fid) => {

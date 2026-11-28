@@ -11,6 +11,7 @@ import type {
   Conversation,
   ModelCatalog,
   Project,
+  ChatFile,
   ProjectFile,
   Settings,
   StoredMessage,
@@ -120,6 +121,15 @@ function fakeApi() {
   const files: ProjectFile[] = [];
   const removedFiles: ProjectFile[] = [];
   const created: (string | null)[] = [];
+  /** Chat files (#370): what the next pick returns, and the soft-deleted ones. */
+  const chat = {
+    files: [] as (ChatFile & { removed: boolean })[],
+    pick: [] as { name: string; size: number }[],
+    skipped: [] as { name: string; reason: string }[],
+    addCalls: [] as [string | null, string | null][],
+    /** When set, the copy waits for it after the picked names are reported. */
+    gate: null as Promise<void> | null,
+  };
   const project = {
     failList: false,
     pick: [] as { name: string; size: number }[],
@@ -353,6 +363,50 @@ function fakeApi() {
       if (f) files.push(f);
       return null;
     },
+    listChatFiles: async (cid) =>
+      chat.files.filter((f) => f.conversation_id === cid && !f.removed).map(({ removed: _r, ...f }) => f),
+    addChatFiles: async (cid, projectId, onProgress) => {
+      chat.addCalls.push([cid, projectId]);
+      if (chat.pick.length === 0 && chat.skipped.length === 0) {
+        return { cancelled: true, added: [], skipped: [], conversation_id: null };
+      }
+      let conversationId = cid;
+      if (conversationId === null) {
+        const c = { id: id(), title: "New chat", model: null, project_id: projectId, created_at: n, updated_at: n };
+        convs.unshift(c);
+        msgs.set(c.id, []);
+        conversationId = c.id;
+      }
+      for (const x of chat.pick) onProgress({ conversation_id: conversationId, name: x.name, state: "copying" });
+      for (const x of chat.skipped) {
+        onProgress({ conversation_id: conversationId, name: x.name, state: "copying" });
+        onProgress({ conversation_id: conversationId, name: x.name, state: "skipped" });
+      }
+      if (chat.gate !== null) await chat.gate;
+      for (const x of chat.pick) onProgress({ conversation_id: conversationId, name: x.name, state: "attached" });
+      const added = chat.pick.map((x) => ({
+        id: id(),
+        conversation_id: conversationId,
+        name: x.name,
+        media_type: "text/csv",
+        size: x.size,
+        sha256: "0".repeat(64),
+        created_at: n,
+        missing: false,
+      }));
+      chat.files.push(...added.map((f) => ({ ...f, removed: false })));
+      return { cancelled: false, added, skipped: chat.skipped, conversation_id: conversationId };
+    },
+    removeChatFile: async (_cid, fid) => {
+      const f = chat.files.find((x) => x.id === fid);
+      if (f) f.removed = true;
+      return null;
+    },
+    restoreChatFile: async (_cid, fid) => {
+      const f = chat.files.find((x) => x.id === fid);
+      if (f) f.removed = false;
+      return null;
+    },
     deleteConversation: async (cid) => {
       const i = convs.findIndex((c) => c.id === cid);
       const [c] = convs.splice(i, 1);
@@ -468,6 +522,7 @@ function fakeApi() {
   return {
     api,
     launch,
+    chat,
     project,
     projects,
     files,
@@ -1356,6 +1411,97 @@ describe("App", () => {
     act(() => f.local({ type: "changed", row: { ...base, state: { state: "ready" } } }));
     expect(await screen.findByText("On this device", { selector: ".dn-badge" })).toBeTruthy();
     expect(await screen.findByText("Tiny Model downloaded")).toBeTruthy();
+  });
+});
+
+describe("Data files attached to a chat (#370)", () => {
+  it("a new chat is created only after a real pick, and cancelling creates nothing", async () => {
+    const { api, chat, convs } = fakeApi();
+    render(<App api={api} />);
+    const attach = await screen.findByRole("button", { name: "Attach a data file" });
+    // The picker was closed: no chat, no files.
+    fireEvent.click(attach);
+    await waitFor(() => expect(chat.addCalls).toEqual([[null, null]]));
+    expect(convs).toHaveLength(0);
+    expect(screen.queryByText("Files in this chat")).toBeNull();
+
+    chat.pick = [{ name: "orders.csv", size: 676 }];
+    fireEvent.click(attach);
+    expect(await screen.findByText("orders.csv")).toBeTruthy();
+    expect(convs).toHaveLength(1);
+    expect(screen.getByText("Files in this chat")).toBeTruthy();
+    expect(screen.getByText(/Demios keeps a copy in this chat/)).toBeTruthy();
+    expect(screen.getByText("676 B")).toBeTruthy();
+    expect(screen.getByTestId("attach-status").textContent).toBe("orders.csv attached");
+    expect(screen.queryByText("676 B")?.closest("li")?.getAttribute("aria-busy")).toBeNull();
+    // The files belong to the chat: the next attach goes into it.
+    chat.pick = [{ name: "budget.xlsx", size: 2_458 }];
+    fireEvent.click(attach);
+    expect(await screen.findByText("budget.xlsx")).toBeTruthy();
+    expect(chat.addCalls[2]?.[0]).toBe(convs[0]?.id);
+    expect(screen.getByText("orders.csv")).toBeTruthy();
+  });
+
+  it("each picked file shows as a chip while it's copied, then as attached", async () => {
+    const { api, chat } = fakeApi();
+    render(<App api={api} />);
+    let release = () => {};
+    chat.gate = new Promise<void>((r) => {
+      release = r;
+    });
+    chat.pick = [
+      { name: "orders.csv", size: 676 },
+      { name: "budget.xlsx", size: 2_458 },
+    ];
+    // A refused file's chip goes as soon as it's skipped; its reason comes with the result.
+    chat.skipped = [{ name: "notes.pdf", reason: "only tables (CSV, TSV, TXT) and spreadsheets can be attached for now." }];
+    fireEvent.click(await screen.findByRole("button", { name: "Attach a data file" }));
+    const copying = await screen.findByText("orders.csv");
+    expect(screen.queryByText("notes.pdf")).toBeNull();
+    expect(copying.closest("li")?.getAttribute("aria-busy")).toBe("true");
+    expect(screen.getByText("budget.xlsx").closest("li")?.getAttribute("aria-busy")).toBe("true");
+    expect(screen.getByTestId("attach-status").textContent).toBe("Adding budget.xlsx");
+    expect(screen.queryByText("676 B")).toBeNull();
+    release();
+    expect(await screen.findByText("676 B")).toBeTruthy();
+    expect(screen.getByText("orders.csv").closest("li")?.getAttribute("aria-busy")).toBeNull();
+    expect(screen.getByTestId("attach-status").textContent).toBe("2 files attached");
+  });
+
+  it("says why files weren't attached: one sentence, or a list for several", async () => {
+    const { api, chat } = fakeApi();
+    render(<App api={api} />);
+    const attach = await screen.findByRole("button", { name: "Attach a data file" });
+    chat.skipped = [{ name: "notes.pdf", reason: "only tables (CSV, TSV, TXT) and spreadsheets can be attached for now." }];
+    fireEvent.click(attach);
+    expect(
+      await screen.findByText("notes.pdf wasn't attached: only tables (CSV, TSV, TXT) and spreadsheets can be attached for now."),
+    ).toBeTruthy();
+    chat.skipped = [
+      { name: "notes.pdf", reason: "only tables (CSV, TSV, TXT) and spreadsheets can be attached for now." },
+      { name: "big.xlsx", reason: "it's larger than 50 MB." },
+    ];
+    fireEvent.click(attach);
+    expect(await screen.findByText("These files weren't attached:")).toBeTruthy();
+    expect(screen.getByText("big.xlsx: it's larger than 50 MB.")).toBeTruthy();
+    fireEvent.click(within(screen.getByTestId("not-attached")).getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByTestId("not-attached")).toBeNull();
+  });
+
+  it("removing takes the chip away at once, with Undo and no confirmation", async () => {
+    const { api, chat } = fakeApi();
+    render(<App api={api} />);
+    const attach = await screen.findByRole("button", { name: "Attach a data file" });
+    chat.pick = [{ name: "orders.csv", size: 676 }];
+    fireEvent.click(attach);
+    fireEvent.click(await screen.findByRole("button", { name: "Remove orders.csv" }));
+    await waitFor(() => expect(screen.queryByText("Files in this chat")).toBeNull());
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(await screen.findByText("orders.csv removed")).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(attach));
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    expect(await screen.findByRole("button", { name: "Remove orders.csv" })).toBeTruthy();
+    expect(chat.files[0]?.removed).toBe(false);
   });
 });
 
