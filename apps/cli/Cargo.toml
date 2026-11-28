@@ -31,6 +31,8 @@ serde_json.workspace = true
 serde_yaml_ng.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util", "net", "signal"] }
 sysinfo.workspace = true
+sha2.workspace = true
+url = "2"
 
 [dev-dependencies]
 futures-core.workspace = true

@@ -11,7 +11,7 @@
 //!   re-embeds the stored chunks (no file is read again). Without one, search is **keyword only**, and the sources under
 //!   each answer say so and how to get better results (no silent degradation).
 //! - **Retrieval.** For a chat in a project, the question's best excerpts go into the system
-//!   prompt as quoted, cited, untrusted data ([`dn_knowledge::context_block`]), and what the
+//!   prompt as quoted, cited, untrusted data (items the assembler renders), and what the
 //!   answer was given is recorded ([`dn_knowledge::record_sources`]) for the UI.
 //! - **Delete all** removes the index with the rest (`state.rs`).
 
@@ -346,17 +346,19 @@ fn embedder(state: &AppState) -> Result<Option<LocalEmbedder>, String> {
     }))
 }
 
-/// For a chat in a project: the question's excerpts as a system-prompt section, recording
-/// what the answer `message_id` was given. `None` for chats outside a project. Blocking.
+/// For a chat in a project: the question's excerpts, as untrusted items for the turn's
+/// retrieved slot (ADR-0020 §2), best first, with ids `S1`, `S2`, … that the answer cites.
+/// Records what the answer `message_id` was given. Empty for chats outside a project.
+/// Blocking.
 pub fn context_for(
     state: &AppState,
     db: &Connection,
     conversation_id: Id,
     message_id: Id,
     question: &str,
-) -> IpcResult<Option<String>> {
+) -> IpcResult<Vec<dn_runtime::Item>> {
     let Some(project_id) = dn_store::chat::get_conversation(db, conversation_id)?.project_id else {
-        return Ok(None);
+        return Ok(Vec::new());
     };
     let fail = |e: String| {
         tracing::warn!("knowledge search: {e}");
@@ -386,7 +388,18 @@ pub fn context_for(
             query_vector.as_ref(),
         )
         .map_err(|e| fail(e.to_string()))?;
-    let (block, citations) = dn_knowledge::context_block(&hits);
+    // The citations, labelled as the items are; the assembler fits the items to the model.
+    let (_, citations) = dn_knowledge::context_block(&hits);
+    let items = hits
+        .iter()
+        .zip(&citations)
+        .map(|(h, c)| dn_runtime::Item {
+            source: dn_core::untrusted::SourceRef::new(c.label.clone())
+                .attr("file", h.display_path.clone())
+                .attr("lines", format!("{}-{}", h.start_line, h.end_line)),
+            text: h.text.clone(),
+        })
+        .collect();
     let mode = if emb.is_some() {
         SearchMode::Hybrid
     } else {
@@ -399,7 +412,7 @@ pub fn context_for(
         &Sources { mode, citations },
     )
     .map_err(|e| fail(e.to_string()))?;
-    Ok((!block.is_empty()).then_some(block))
+    Ok(items)
 }
 
 // ---- the embedding-model offer (#171): never bundled, offered once when it helps.
@@ -897,11 +910,16 @@ mod tests {
             )
             .unwrap();
         let msg = Id::new();
-        let block = context_for(&st, &db, conv.id, msg, "when is the launch?")
-            .unwrap()
-            .expect("a project chat gets excerpts");
-        assert!(block.contains("file=\"plan.md\""));
-        assert!(block.contains("untrusted data"));
+        let items = context_for(&st, &db, conv.id, msg, "when is the launch?").unwrap();
+        assert_eq!(items.len(), 1, "a project chat gets excerpts");
+        assert_eq!(items[0].source.id, "S1");
+        assert!(
+            items[0]
+                .source
+                .attrs
+                .contains(&("file".into(), "plan.md".into()))
+        );
+        assert!(items[0].text.contains("14th of May"));
         let s = dn_knowledge::sources_for(&db, &msg.to_string())
             .unwrap()
             .unwrap();
@@ -913,7 +931,7 @@ mod tests {
         assert!(
             context_for(&st, &db, other.id, m2, "when is the launch?")
                 .unwrap()
-                .is_none()
+                .is_empty()
         );
         assert!(
             dn_knowledge::sources_for(&db, &m2.to_string())

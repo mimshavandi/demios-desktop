@@ -1,3 +1,5 @@
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Api } from "../ipc/commands";
@@ -20,6 +22,7 @@ import type {
   UpdateMode,
 } from "../ipc/types";
 import { App } from "./App";
+import { NODE_TEXT, NODE_TITLE, PROJECT_INSTRUCTIONS_SENT } from "./privacyText";
 import { KEYCHAIN_SLOW_MS, KeychainNotice } from "./SettingsView";
 import { ToastProvider } from "./toast";
 
@@ -964,6 +967,30 @@ describe("App", () => {
     expect(await screen.findByText(/Demios collects no usage data/)).toBeTruthy();
     expect(screen.queryByRole("switch")).toBeNull();
     expect(screen.getByText("Where your data goes")).toBeTruthy();
+  });
+
+  it("Privacy says what docs/user/privacy.md says (#402)", async () => {
+    // The repository's privacy.md, found from wherever the tests run.
+    let dir = process.cwd();
+    while (!existsSync(join(dir, "docs/user/privacy.md")) && dirname(dir) !== dir) dir = dirname(dir);
+    const policy = readFileSync(join(dir, "docs/user/privacy.md"), "utf8");
+    // The sentences Settings copies must still be in the policy, word for word.
+    for (const line of [PROJECT_INSTRUCTIONS_SENT, NODE_TEXT]) expect(policy).toContain(line);
+    // Every "Where your data goes" section of the policy has a row in Settings.
+    const section = policy.split("## Where your data goes")[1]?.split("\n## ")[0] ?? "";
+    expect(section).not.toBe("");
+    const titles = [...section.matchAll(/^- \*\*(.+?)\.\*\*/gm)].map((m) => m[1]);
+    expect(titles).toContain(NODE_TITLE);
+
+    const { api, launch } = fakeApi();
+    launch.mode = "self_update"; // the GitHub row shows only in a build that updates itself
+    render(<App api={api} />);
+    await openSettings("General");
+    const list = await screen.findByRole("list", { name: "Where your data goes" });
+    const rows = [...list.querySelectorAll(".row-title")].map((t) => t.textContent);
+    expect(rows).toEqual(titles);
+    expect(list.textContent).toContain(PROJECT_INSTRUCTIONS_SENT);
+    expect(within(list).getByText(NODE_TEXT)).toBeTruthy();
   });
 
   it("deletes all local data only after a confirm, and cancel changes nothing", async () => {

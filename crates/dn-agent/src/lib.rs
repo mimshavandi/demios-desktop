@@ -21,7 +21,10 @@ pub mod prompt;
 pub mod schema;
 pub mod tool;
 
-pub use agent_loop::{AgentEvent, LoopConfig, RunOutcome, observe_event, run_loop};
+pub use agent_loop::{
+    AgentEvent, Built, LoopConfig, PassThrough, RequestBuilder, RunOutcome, observe_event,
+    run_loop, run_loop_with,
+};
 pub use cancel::CancelToken;
 pub use chat_skill::ChatSkill;
 pub use dn_core::run::{RunMeter, RunResult, StopReason};

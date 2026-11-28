@@ -26,6 +26,10 @@ pub struct Policy {
     /// never dropped: the system prompt, tools, the new input and the recap.
     pub droppable: Vec<Slot>,
     pub overflow: Overflow,
+    /// The surface can have sources, so its system slot carries the shared answer and
+    /// citation rules (`answer.rules`, #364) on every turn. Others (add-ons, memory) read
+    /// this rather than keeping their own list of surfaces.
+    pub answer_rules: bool,
 }
 
 impl Policy {
@@ -44,6 +48,7 @@ impl Policy {
                 Slot::Skills,
             ],
             overflow: Overflow::Fail,
+            answer_rules: true,
         }
     }
 
@@ -56,6 +61,7 @@ impl Policy {
             output_reserve: 0,
             droppable: Vec::new(),
             overflow: Overflow::Fail,
+            answer_rules: false,
         }
     }
 
@@ -110,5 +116,11 @@ mod tests {
             assert_eq!(p.drop_rank(s), None, "{s:?}");
         }
         assert!(p.drop_rank(Slot::Retrieved) < p.drop_rank(Slot::Knowledge));
+    }
+
+    #[test]
+    fn chat_carries_the_answer_rules_and_raw_doesnt() {
+        assert!(Policy::chat().answer_rules);
+        assert!(!Policy::raw().answer_rules);
     }
 }

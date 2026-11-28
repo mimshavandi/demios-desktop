@@ -10,9 +10,16 @@
 //! - `speed`: time to first token, tokens per second, p50/p95, cold and warm, from a list of
 //!   cases (format `dn.speed.v1`).
 //!
-//! Every run writes one JSON report (schema `dn.eval.v1`), never anything else, and sends
-//! nothing anywhere: the model is a local GGUF or the endpoint you name.
+//! - `judge`: scores a parity answers report with the fixed judge named in `judge.yaml`
+//!   (#355); a separate step, and the only one that sends anything (to the judge).
+//! - `calibrate`: the pairwise judge's agreement with people (Cohen's κ) over labelled pairs.
+//!
+//! Every answering run writes one JSON report (schema `dn.eval.v1`), never anything else, and
+//! sends nothing anywhere: the model is a local GGUF or the endpoint you name.
 
+mod calibrate;
+mod judge;
+mod judge_memory;
 mod longmemeval;
 mod parity;
 mod speed;
@@ -45,6 +52,12 @@ enum Suite {
     Longmemeval(longmemeval::LongMemEvalArgs),
     /// Time to first token and tokens per second, p50/p95, cold and warm.
     Speed(speed::SpeedArgs),
+    /// Judge a parity or LongMemEval report with the fixed judge (`judge.yaml`). The only
+    /// step that sends anything, to the judge's endpoint.
+    Judge(judge::JudgeArgs),
+    /// How far the pairwise judge agrees with people: agreement and Cohen's κ over a
+    /// labels file of answer pairs (dn.labels.v1).
+    Calibrate(calibrate::CalibrateArgs),
 }
 
 pub async fn run(a: EvalArgs) -> Result<(), String> {
@@ -52,6 +65,8 @@ pub async fn run(a: EvalArgs) -> Result<(), String> {
         Suite::Parity(a) => parity::run(a).await,
         Suite::Longmemeval(a) => longmemeval::run(a).await,
         Suite::Speed(a) => speed::run(a).await,
+        Suite::Judge(a) => judge::run(a).await,
+        Suite::Calibrate(a) => calibrate::run(a).await,
     }
 }
 

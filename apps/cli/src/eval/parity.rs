@@ -22,7 +22,7 @@
 //! - no earlier sessions: a memory case is answered without them and reported `memory: none`.
 //!
 //! `tool_calls.required` / `forbidden` are checked here; `expect.must` / `must_not` are for
-//! the judge, which isn't part of R0.
+//! the judge (`dn eval judge`, a separate step).
 
 use super::{ModelArgs, Report, Turn, eval_config, in_git_work_tree, turn_with};
 use clap::Args;
@@ -695,7 +695,7 @@ impl Set {
 
 /// A sample file's path under `<dir>/files/`, checked: relative, no `..`, at most
 /// [`MAX_FILE_BYTES`].
-fn sample_file(dir: &Path, rel: &str) -> Result<PathBuf, String> {
+pub fn sample_file(dir: &Path, rel: &str) -> Result<PathBuf, String> {
     let p = Path::new(rel);
     if !p.components().all(|c| matches!(c, Component::Normal(_))) {
         return Err(format!("file `{rel}` must be a plain path under files/"));
@@ -711,7 +711,7 @@ fn sample_file(dir: &Path, rel: &str) -> Result<PathBuf, String> {
 // ---- running a case
 
 /// One tool call the model made, as the mock answered it.
-#[derive(Clone, Debug, Serialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct CallRecord {
     pub name: String,
     pub arguments: serde_json::Value,
@@ -1473,7 +1473,7 @@ mod tests {
     #[tokio::test]
     async fn a_data_case_runs_the_real_tool_with_the_skill_and_checks_the_numbers() {
         let (t, check, reqs) = run_data_case(
-            "project-data-001",
+            "project-054",
             "The total is 1537.00 [F48]; one order has no amount, so it isn't counted.",
         )
         .await;
@@ -1499,14 +1499,14 @@ mod tests {
     #[tokio::test]
     async fn an_invented_number_or_a_missing_known_answer_fails_the_check() {
         let (_, check, _) = run_data_case(
-            "project-data-001",
+            "project-054",
             "The total is about 1600, roughly 1537.00 before the refund of 63.",
         )
         .await;
         let check = check.unwrap();
         assert!(!check.passed);
         assert_eq!(check.untraced, ["1600", "63"]);
-        let (_, check, _) = run_data_case("project-data-001", "The total is in the sheet.").await;
+        let (_, check, _) = run_data_case("project-054", "The total is in the sheet.").await;
         assert_eq!(check.unwrap().missing_numbers, ["1537.00"]);
     }
 
