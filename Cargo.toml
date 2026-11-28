@@ -34,6 +34,10 @@ tracing = { version = "0.1", default-features = false, features = ["std"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "std"] }
 # Maintained fork of the archived serde_yaml (the approved dependency set allows "serde_yaml or a maintained successor").
 serde_yaml_ng = "0.10"
+# Spreadsheet reading for dn-data (#366): XLSX, XLS, XLSB, ODS; owner approved 2026-11-27.
+calamine = { version = "0.38", default-features = false }
+# Text encodings for CSV files that aren't UTF-8 (Windows-1252); already in the tree.
+encoding_rs = "0.8"
 # No remote/file $ref resolution: schemas are bundled.
 jsonschema = { version = "0.63", default-features = false }
 # Pure-Rust backends only (no libdbus/openssl): Keychain, Credential Manager, Secret Service via zbus.

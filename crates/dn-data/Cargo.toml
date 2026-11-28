@@ -1,0 +1,19 @@
+[package]
+name = "dn-data"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Tabular files (CSV, XLSX, XLS, ODS) to a computed fact sheet that a model quotes and never calculates (#366)."
+
+[dependencies]
+calamine.workspace = true
+encoding_rs.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
