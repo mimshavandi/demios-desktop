@@ -1,0 +1,14 @@
+data: {"id":"chatcmpl-REDACTED","object":"chat.completion.chunk","created":1764000000,"model":"gpt-4o-mini-2024-07-18","choices":[{"index":0,"delta":{"role":"assistant","content":"","refusal":null},"logprobs":null,"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-REDACTED","object":"chat.completion.chunk","created":1764000000,"model":"gpt-4o-mini-2024-07-18","choices":[{"index":0,"delta":{"content":"Hello"},"logprobs":null,"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-REDACTED","object":"chat.completion.chunk","created":1764000000,"model":"gpt-4o-mini-2024-07-18","choices":[{"index":0,"delta":{"content":" from"},"logprobs":null,"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-REDACTED","object":"chat.completion.chunk","created":1764000000,"model":"gpt-4o-mini-2024-07-18","choices":[{"index":0,"delta":{"content":" OpenAI."},"logprobs":null,"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-REDACTED","object":"chat.completion.chunk","created":1764000000,"model":"gpt-4o-mini-2024-07-18","choices":[{"index":0,"delta":{},"logprobs":null,"finish_reason":"stop"}],"usage":null}
+
+data: {"id":"chatcmpl-REDACTED","object":"chat.completion.chunk","created":1764000000,"model":"gpt-4o-mini-2024-07-18","choices":[],"usage":{"prompt_tokens":2048,"completion_tokens":4,"total_tokens":2052,"prompt_tokens_details":{"cached_tokens":1920,"audio_tokens":0},"completion_tokens_details":{"reasoning_tokens":0,"audio_tokens":0,"accepted_prediction_tokens":0,"rejected_prediction_tokens":0}}}
+
+data: [DONE]
+

@@ -160,10 +160,14 @@ async fn run(inner: Arc<Inner>, req: ChatRequest, tx: Emit) {
             match v["type"].as_str().unwrap_or(ev.event.as_str()) {
                 "message_start" => {
                     let u = &v["message"]["usage"];
-                    usage.input_tokens = (u["input_tokens"].as_u64().unwrap_or(0)
-                        + u["cache_read_input_tokens"].as_u64().unwrap_or(0)
-                        + u["cache_creation_input_tokens"].as_u64().unwrap_or(0))
-                        as u32;
+                    // `input_tokens` is the whole prompt; the cached and written parts are
+                    // also reported on their own (ADR-0020 §8).
+                    let read = u["cache_read_input_tokens"].as_u64().unwrap_or(0);
+                    let write = u["cache_creation_input_tokens"].as_u64().unwrap_or(0);
+                    usage.input_tokens =
+                        (u["input_tokens"].as_u64().unwrap_or(0) + read + write) as u32;
+                    usage.cached_input_tokens = read as u32;
+                    usage.cache_write_tokens = write as u32;
                     usage.output_tokens = u["output_tokens"].as_u64().unwrap_or(0) as u32;
                 }
                 "content_block_start" => {

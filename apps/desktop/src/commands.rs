@@ -30,7 +30,7 @@ pub(crate) async fn blocking<T: Send + 'static>(
     tauri::async_runtime::spawn_blocking(move || f(&st))
         .await
         .map_err(|e| {
-            eprintln!("blocking task failed: {e}");
+            tracing::warn!("blocking task failed: {e}");
             IpcError::new("internal", "Something went wrong. Try again.")
         })?
 }
@@ -100,7 +100,7 @@ pub async fn report_problem(
         model.as_ref(),
     );
     app.opener().open_url(url, None::<&str>).map_err(|e| {
-        eprintln!("could not open the browser: {e}");
+        tracing::warn!("could not open the browser: {e}");
         IpcError::new(
             "unavailable",
             "Couldn't open your browser. Report at github.com/mimshavandi/demios-desktop/issues.",
@@ -134,7 +134,7 @@ pub async fn local_data_summary(state: AppStateRef<'_>) -> IpcResult<LocalDataSu
                 .counts()
                 .map(|(a, _)| a)
                 .map_err(|e| {
-                    eprintln!("could not count artifacts: {e}");
+                    tracing::warn!("could not count artifacts: {e}");
                     IpcError::new("storage", "Could not read local data.")
                 })?;
             (n, p, a)
@@ -163,7 +163,7 @@ pub async fn delete_all_local_data(
 ) -> IpcResult<()> {
     let mut failed = state.delete_all_local_data().await;
     if let Err(e) = webview.clear_all_browsing_data() {
-        eprintln!("could not clear webview storage: {e}");
+        tracing::warn!("could not clear webview storage: {e}");
         failed.push("window storage");
     }
     if failed.is_empty() {
@@ -249,13 +249,13 @@ pub async fn open_skills_folder(app: tauri::AppHandle, state: AppStateRef<'_>) -
         .map(Path::to_path_buf)
         .ok_or_else(|| IpcError::new("unavailable", "There is no skills folder in this build."))?;
     std::fs::create_dir_all(&dir).map_err(|e| {
-        eprintln!("could not create the skills folder: {e}");
+        tracing::warn!("could not create the skills folder: {e}");
         IpcError::new("unavailable", "Couldn't create the skills folder.")
     })?;
     app.opener()
         .open_path(dir.to_string_lossy(), None::<&str>)
         .map_err(|e| {
-            eprintln!("could not open the skills folder: {e}");
+            tracing::warn!("could not open the skills folder: {e}");
             IpcError::new("unavailable", "Couldn't open the skills folder.")
         })
 }
@@ -644,7 +644,7 @@ pub async fn resolve_unknown_outcome(
             && conversation_purged(s, conv)
             && let Err(e) = exec.forget_call(&key)
         {
-            eprintln!("could not clear a resolved tool call: {e}");
+            tracing::warn!("could not clear a resolved tool call: {e}");
         }
         Ok(())
     })
@@ -831,7 +831,7 @@ pub(crate) async fn finish_local_removal(st: &Arc<AppState>, model_id: &str, tok
         Some(Err(_)) => {
             let slots = st.take_local_removal(model_id);
             if let Err(e) = restore_slots(st, slots) {
-                eprintln!(
+                tracing::warn!(
                     "remove {model_id}: could not restore its tasks: {}",
                     e.message
                 );
@@ -1029,7 +1029,7 @@ pub async fn sign_in_mcp_server(
     );
     let result = async {
         let redirect = dn_tools::LoopbackRedirect::bind().await.map_err(|e| {
-            eprintln!("oauth loopback: {e}");
+            tracing::warn!("oauth loopback: {e}");
             IpcError::new("unavailable", "Couldn't start sign-in. Try again.")
         })?;
         let oauth = dn_tools::OAuthManager::new(st.mcp_secret_store());
@@ -1037,7 +1037,7 @@ pub async fn sign_in_mcp_server(
             .begin(&cfg, redirect.redirect_uri())
             .await
             .map_err(|e| {
-                eprintln!("oauth begin for `{}`: {e}", cfg.id);
+                tracing::warn!("oauth begin for `{}`: {e}", cfg.id);
                 IpcError::new(
                     "sign_in",
                     "The server didn't offer a way to sign in. Check its address, then try again.",
@@ -1045,14 +1045,14 @@ pub async fn sign_in_mcp_server(
             })?;
         let url = pending.authorize_url().to_owned();
         if !crate::mcp::safe_sign_in_url(&url) {
-            eprintln!("refusing to open a non-https sign-in URL for `{}`", cfg.id);
+            tracing::warn!("refusing to open a non-https sign-in URL for `{}`", cfg.id);
             return Err(IpcError::new(
                 "sign_in",
                 "The server's sign-in page isn't a secure (https) address, so Demios didn't open it.",
             ));
         }
         app.opener().open_url(url, None::<&str>).map_err(|e| {
-            eprintln!("could not open the browser: {e}");
+            tracing::warn!("could not open the browser: {e}");
             IpcError::new("unavailable", "Couldn't open your browser.")
         })?;
         let callback = redirect
@@ -1060,7 +1060,7 @@ pub async fn sign_in_mcp_server(
             .await
             .map_err(|_| IpcError::new("timeout", "Sign-in took too long. Try again."))?;
         pending.complete(&callback).await.map_err(|e| {
-            eprintln!("oauth complete for `{}`: {e}", cfg.id);
+            tracing::warn!("oauth complete for `{}`: {e}", cfg.id);
             IpcError::new("sign_in", "Sign-in didn't finish. Try again.")
         })?;
         // The token is for the server as it was when sign-in started. If it was removed or
@@ -1171,7 +1171,7 @@ pub async fn open_link(app: tauri::AppHandle, url: String) -> IpcResult<bool> {
     app.opener()
         .open_url(u.as_str(), None::<&str>)
         .map_err(|e| {
-            eprintln!("could not open the browser: {e}");
+            tracing::warn!("could not open the browser: {e}");
             IpcError::new("unavailable", "Couldn't open your browser.")
         })?;
     Ok(true)

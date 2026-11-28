@@ -151,7 +151,7 @@ impl Library {
             // problem instead of the skill just missing.
             let (skills, errors) = dn_agent::chat_skill::load_dir(dir);
             for e in &errors {
-                eprintln!("could not load a built-in skill: {e}");
+                tracing::warn!("could not load a built-in skill: {e}");
             }
             out.problems
                 .extend(errors.iter().map(|e| problem(dir, e, SkillSource::Builtin)));

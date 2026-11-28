@@ -1,0 +1,43 @@
+[package]
+name = "dn-mobile"
+description = "The iPhone app's Rust core: pairing with a Node and reading what's waiting, for Swift through UniFFI (ADR-0019)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+# `staticlib` for the XCFramework (apps/ios/build-xcframework.sh); `lib` for tests.
+crate-type = ["lib", "staticlib"]
+
+[features]
+# The `uniffi-bindgen` tool that writes the Swift bindings; a build tool, not in the app.
+bindgen = ["uniffi/cli"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["bindgen"]
+
+[dependencies]
+dn-secrets.workspace = true
+dn-store.workspace = true
+dn-sync.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["net", "rt-multi-thread", "sync", "time"] }
+uniffi = { workspace = true, features = ["tokio"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread"] }
+
+# ADR-0009 / ADR-0019 §2: the one crate besides dn-inference that isn't under the workspace's
+# `forbid(unsafe_code)`, because UniFFI's generated scaffolding uses `unsafe`. Hand-written
+# `unsafe` is still refused: scripts/check-unsafe.py fails CI on any in src/.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
