@@ -140,7 +140,11 @@ fn the_slots_go_in_their_fixed_order() {
     let last = texts(&m[3]);
     assert!(last[0].starts_with(dn_core::untrusted::NOTICE) && last[0].contains("<<<SOURCE S2"));
     assert_eq!(last[1], "And the budget?");
-    assert_eq!(last[2], "Today is 2027-03-10.");
+    assert_eq!(last[2], "\n\nToday is 2027-03-10.");
+    assert!(
+        last[0].ends_with("\n\n"),
+        "the retrieved section ends with a blank line"
+    );
     assert_eq!(m[3].role, Role::User);
     // Tools sorted by name; the other fields from the template.
     let names: Vec<_> = a.request.tools.iter().map(|t| t.name.as_str()).collect();

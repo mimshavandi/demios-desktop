@@ -58,7 +58,11 @@ fn example_agent_and_prompts_load_and_render() {
         .render(&HashMap::from([("user_name", "Ada")]))
         .unwrap();
     // v2: no date in the prompt; the runtime puts it in each turn's recap (ADR-0020 §2.3).
-    assert!(text.starts_with("You are a helpful assistant running on Ada's computer.\n"));
+    // (Line endings depend on the checkout: compare the first line only.)
+    assert_eq!(
+        text.lines().next(),
+        Some("You are a helpful assistant running on Ada's computer.")
+    );
     assert!(!text.contains("Today is"));
     // The shared answer rules load and have no variables.
     let rules = prompts.load_prompt("answer.rules").unwrap();
