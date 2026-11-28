@@ -131,10 +131,14 @@ fn section(items: &[Item]) -> Option<String> {
 /// The request for `parts` as they stand, and its stable boundary.
 fn render(parts: &Parts, template: &ChatRequest) -> (ChatRequest, usize) {
     let mut messages = Vec::new();
+    // With tools, results come back as untrusted blocks: say what they are once, up front,
+    // whatever the system parts hold (the answer rules may not have loaded).
+    let tools_notice = (!parts.tools.is_empty()).then(|| untrusted::NOTICE.to_owned());
     let system: Vec<String> = parts
         .system
         .iter()
         .cloned()
+        .chain(tools_notice)
         .chain(parts.skills.clone())
         .chain(parts.profile.clone())
         .chain(section(&parts.knowledge))
