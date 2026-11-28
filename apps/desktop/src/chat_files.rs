@@ -260,12 +260,6 @@ pub fn add_with(
     for p in paths {
         settle(&mut current, &out);
         let name = display_name(p);
-        on_progress(Progress {
-            conversation_id,
-            name: name.clone(),
-            state: FileState::Copying,
-        });
-        current = Some((name.clone(), out.added.len()));
         let skip = |reason: &str| SkippedFile {
             name: name.clone(),
             reason: reason.into(),
@@ -291,6 +285,14 @@ pub fn add_with(
             continue;
         }
         let dir = chat_dir(&root, conversation_id);
+        // Only a file that passed the checks above is reported, so a refused one never shows
+        // as copying.
+        on_progress(Progress {
+            conversation_id,
+            name: name.clone(),
+            state: FileState::Copying,
+        });
+        current = Some((name.clone(), out.added.len()));
         match copy_in(&dir, p) {
             Ok((id, size, sha256)) => {
                 let copy = dir.join(id.to_string());
@@ -820,6 +822,26 @@ mod tests {
         assert_eq!(out.added.len(), 1);
         let conv = dn_store::chat::get_conversation(&st.db().unwrap(), c).unwrap();
         assert_eq!(conv.project_id, Some(p.id));
+        // An unknown (or deleted) project is refused, and no chat is left behind.
+        let before = dn_store::chat::list_conversations(&st.db().unwrap())
+            .unwrap()
+            .len();
+        assert!(
+            add_to(
+                &st,
+                None,
+                Some(Id::new()),
+                &[src(&dir, "c.csv", b"x\n1\n")],
+                &|_| {}
+            )
+            .is_err()
+        );
+        assert_eq!(
+            dn_store::chat::list_conversations(&st.db().unwrap())
+                .unwrap()
+                .len(),
+            before
+        );
         // An existing chat is used as given.
         let again = add_to(
             &st,
@@ -846,6 +868,7 @@ mod tests {
                 src(&dir, "a.csv", b"x\n1\n"),
                 src(&dir, "b.csv", b"y\n2\n"),
                 src(&dir, "notes.pdf", b"%PDF"),
+                src(&dir, "empty.csv", b""),
             ],
             &|a| heard.borrow_mut().push(a),
         )
@@ -860,9 +883,10 @@ mod tests {
                 (n("a.csv"), FileState::Attached),
                 (n("b.csv"), FileState::Copying),
                 (n("b.csv"), FileState::Attached),
-                (n("notes.pdf"), FileState::Copying),
-                (n("notes.pdf"), FileState::Skipped),
-            ]
+                (n("empty.csv"), FileState::Copying),
+                (n("empty.csv"), FileState::Skipped),
+            ],
+            "notes.pdf is refused by type before copying, so it sends no progress"
         );
         let root = st.chat_files_root().unwrap().to_path_buf();
         std::fs::remove_file(file_path(&root, &out.added[0])).unwrap();
