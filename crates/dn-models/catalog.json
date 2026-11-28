@@ -30,7 +30,8 @@
       "license": "llama3.2",
       "recommended": {"memory_gb": 8},
       "notes": "Good default for 8 GB machines.",
-      "tool_support": "supported"
+      "tool_support": "supported",
+      "effective_context": {"tokens": 131072, "measured": "2026-11-28", "source": "dn eval context, retrieval (#350)"}
     },
     {
       "id": "qwen3-4b-q4_k_m",
@@ -90,7 +91,8 @@
       "capabilities": ["chat"],
       "license": "llama3.1",
       "notes": "Well-known 8B baseline for benchmarks.",
-      "tool_support": "supported"
+      "tool_support": "supported",
+      "effective_context": {"tokens": 131072, "measured": "2026-11-28", "source": "dn eval context, retrieval (#350)"}
     },
     {
       "id": "qwen3-8b-q4_k_m",
@@ -106,7 +108,8 @@
       "license": "apache-2.0",
       "recommended": {"memory_gb": 16},
       "notes": "Default for 16 GB machines.",
-      "tool_support": "supported"
+      "tool_support": "supported",
+      "effective_context": {"tokens": 40960, "measured": "2026-11-28", "source": "dn eval context, retrieval (#350)"}
     },
     {
       "id": "gpt-oss-20b-q4_k_m",
@@ -136,7 +139,8 @@
       "capabilities": ["chat"],
       "license": "apache-2.0",
       "notes": "Dense; 32 GB machines.",
-      "tool_support": "unknown"
+      "tool_support": "unknown",
+      "effective_context": {"tokens": 32768, "measured": "2026-11-28", "source": "dn eval context, retrieval (#350)"}
     },
     {
       "id": "gemma-4-26b-a4b-it-q4_k_m",
