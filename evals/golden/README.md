@@ -28,6 +28,7 @@ The categories are `chat`, `writing`, `summarise`, `project`, `tools`, `multiste
   attach: []                    # optional: files attached to the message
   tools: []                     # optional: mock tools offered, by name
   approve: []                   # optional: write tools the user allows in this case
+  skill: write-email            # optional: the chat skill turned on, from skills/library/
   max_steps: 8                  # optional: the most model steps (default 8)
   sessions: []                  # optional: earlier chats, oldest first, alternating user and assistant turns
   turns:                        # this chat; the last turn is the user's and is judged
@@ -56,7 +57,7 @@ Paths in `files` and `attach` are relative to `files/`.
     - default: No weather data for that place.
 ```
 
-`calculator` has no canned results: the runner works out the expression itself (`+ - * /`, `%`, parentheses and decimals).
+`calculator` and `contrast_check` have no canned results. The runner works them out itself: the arithmetic (`+ - * /`, `%`, parentheses and decimals), and the WCAG contrast ratio of two colours with its AA and AAA results.
 
 Read tools always run. A write tool runs only if the case lists it under `approve`; otherwise the model is told the user declined. A case approves a write tool only when the user's last turn plainly asks for that exact action, and lists write tools the answer must not call under `tool_calls.forbidden`. Tool calls are checked against `required` and `forbidden` from the run's record, not by the judge.
 
