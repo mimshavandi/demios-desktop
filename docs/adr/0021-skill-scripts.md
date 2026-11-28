@@ -1,6 +1,6 @@
 # ADR-0021: Running skill scripts: an OS sandbox per run, managed runtimes, no silent fallback
 
-**Status:** Proposed · **Date:** 2026-11-28 · **Deciders:** project owner, lead · **Extends:** [ADR-0006](0006-tools-mcp-capabilities.md), [ADR-0009](0009-security-baseline.md), [ADR-0013](0013-plugin-api.md), [ADR-0014](0014-demios-node.md), [ADR-0020](0020-agent-runtime.md) (§7, R4) · **Issue:** #367
+**Status:** Accepted (owner, 2026-11-28) · **Date:** 2026-11-28 · **Deciders:** project owner, lead · **Extends:** [ADR-0006](0006-tools-mcp-capabilities.md), [ADR-0009](0009-security-baseline.md), [ADR-0013](0013-plugin-api.md), [ADR-0014](0014-demios-node.md), [ADR-0020](0020-agent-runtime.md) (§7, R4) · **Issue:** #367
 
 ## Context
 
@@ -149,7 +149,7 @@ A **self-test** runs at start and is shown in Settings › Skills. It's an extra
 
 ### 6. Which skills may have scripts
 - **Bundled skills** (`skills/library`): scripts allowed after review, like the code that ships with the app.
-- **User-added skills** (the person's skills folder): scripts allowed only after the person turns them on for that skill.
+- **User-added skills** (the person's skills folder): **not in the first version** (Q4). When they come, scripts are allowed only after the person turns them on for that skill:
   - The page shows the scripts, the runtime they need and the package bundle, and says what the sandbox allows.
   - A hash of the **whole skill folder** and its bundle is recorded. Any change turns scripts off again until they're re-approved, since scripts can import any file in the folder.
 - **Add-ons** (ADR-0013) keep their own model; their skills follow these rules.
@@ -196,13 +196,16 @@ A **self-test** runs at start and is shown in Settings › Skills. It's an extra
 5. **The first script skill** (slides with PPTX export) behind a setting, measured by `dn eval` (ADR-0020 §8).
 6. **A Design System proposal** for the Settings › Skills scripts, runtimes and sandbox-status UI.
 
-## Questions for the owner
-- **Q1** Managed runtimes and prebuilt package bundles downloaded on first use (§4), instead of requiring an installed Python or Node: yes?
-- **Q2** LibreOffice detected only (with a minimum version, an isolated profile and not in Flatpak), and the steps that need it unavailable and labelled when it's missing: yes?
-- **Q3** Network always off for scripts in this first version, with no per-skill allow-list: yes? (A later change could add per-run approved hosts.)
-- **Q4** User-added skills may have scripts once the person turns them on per skill (§6), or bundled skills only at first?
-- **Q5** No unsandboxed mode at all, so script skills are unavailable where the sandbox can't be set up (§5): yes?
-- **Q6** Is a Mac App Store build planned? Script skills couldn't run in it under this design.
-- **Q7** Minimum Linux kernel for script skills: 6.2 (Landlock ABI 3) as required here, or 6.12 (ABI 6, with abstract-socket scoping, which seccomp otherwise covers)?
-- **Q8** Outputs only as artifacts and new project files (§3), never saved to folders the person chooses outside the app, in this first version: yes?
-- **Q9** Does one Node ever serve several people? If so, runs need per-person separation beyond §2.
+## The owner's answers (2026-11-28)
+
+The owner accepted the recommended answers:
+
+- **Q1** Yes: managed runtimes and prebuilt package bundles, pinned in the signed app and downloaded on first use (§4). An installed Python or Node isn't required or used.
+- **Q2** Yes: LibreOffice is detected only, with a minimum version, an isolated profile and not in Flatpak. When it's missing, the steps that need it are unavailable and say so.
+- **Q3** Yes: network is always off for scripts in this first version, with no per-skill allow-list. Per-run approved hosts can come in a later change.
+- **Q4** Bundled skills only at first. User-added skills with scripts come later, turned on per skill (§6).
+- **Q5** Yes: there is no unsandboxed mode. Script skills are unavailable where the sandbox can't be set up (§5).
+- **Q6** No Mac App Store build is planned.
+- **Q7** Linux 6.2 or newer (Landlock ABI 3), with seccomp covering abstract sockets.
+- **Q8** Yes: outputs come back only as artifacts and new project files (§3), never saved to folders outside the app, in this first version.
+- **Q9** One person per Node. Teams use the team server, so §2 needs no per-person separation on a Node.
