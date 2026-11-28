@@ -1337,6 +1337,7 @@ mod tests {
     fn chat_entry(id: &str) -> dn_models::CatalogEntry {
         dn_models::CatalogEntry {
             recommended: None,
+            effective_context: None,
             id: id.into(),
             name: format!("Model {id}"),
             repo: "o/r".into(),

@@ -31,6 +31,20 @@ pub struct CatalogEntry {
     /// [`Catalog::recommended_for`] picks it for.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recommended: Option<Recommendation>,
+    /// How much of its context the model was measured to use well (#350, `dn eval context`:
+    /// retrieval at at least 0.85 at every tested length). The chat input budget uses up to
+    /// this much of the loaded context instead of the 60% default; `None`: not measured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_context: Option<EffectiveContext>,
+}
+
+/// A measured effective context, with where it comes from.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EffectiveContext {
+    pub tokens: u32,
+    /// When it was measured (YYYY-MM-DD).
+    pub measured: String,
+    pub source: String,
 }
 
 /// For which machines a catalogue model is recommended.
@@ -114,6 +128,37 @@ impl Catalog {
 
 #[cfg(test)]
 mod tests {
+
+    /// #350 (owner decision, 2026-11-28): the four measured models get their full trained
+    /// window, with the measurement's source; nothing else is measured.
+    #[test]
+    fn the_measured_effective_contexts_are_the_four_trained_windows() {
+        let c = Catalog::builtin();
+        let measured: Vec<(&str, u32)> = c
+            .models
+            .iter()
+            .filter_map(|m| {
+                m.effective_context
+                    .as_ref()
+                    .map(|e| (m.id.as_str(), e.tokens))
+            })
+            .collect();
+        assert_eq!(
+            measured,
+            [
+                ("llama-3.2-3b-instruct-q4_k_m", 131_072),
+                ("llama-3.1-8b-instruct-q4_k_m", 131_072),
+                ("qwen3-8b-q4_k_m", 40_960),
+                ("mistral-small-24b-instruct-2501-q4_k_m", 32_768),
+            ]
+        );
+        for m in &c.models {
+            if let Some(e) = &m.effective_context {
+                assert!(e.source.contains("#350"), "{}", m.id);
+                assert_eq!(e.measured.len(), 10, "{}", m.id);
+            }
+        }
+    }
     use super::*;
     use std::collections::HashSet;
 
