@@ -59,6 +59,11 @@ pub struct ModelUse<'a> {
 }
 
 impl ModelUse<'_> {
+    /// Whether the model runs on this computer (someone else's content goes only there).
+    pub fn is_local(&self) -> bool {
+        matches!(self.model_ref, ModelRef::Local { .. })
+    }
+
     fn id(&self) -> &str {
         match &self.model_ref {
             ModelRef::Local { model_id }
@@ -110,6 +115,9 @@ pub enum ExtractError {
     Reply(String),
     #[error("the memory model failed: {0}")]
     Model(String),
+    /// Someone else's content was about to go to a model that isn't on this computer.
+    #[error("someone else's content is only read for memory by a model on this computer")]
+    NotLocal,
 }
 
 #[derive(Debug, Deserialize)]
@@ -289,6 +297,10 @@ pub async fn extract(
         .iter()
         .any(|e| matches!(e.who, Who::ThirdParty { .. }));
     let has_own = excerpts.iter().any(|e| e.who == Who::User);
+    // Checked before anything is sent: someone else's content goes only to this computer.
+    if has_third && local.is_some_and(|l| !l.is_local()) {
+        return Err(ExtractError::NotLocal);
+    }
     if !has_own && !has_third {
         report.skipped.push(Skipped::NothingToRead);
         return Ok(report);
@@ -404,7 +416,8 @@ async fn run_part(
             report.dropped.push(drop(reason));
             continue;
         }
-        sources.dedup_by(|a, b| a.ref_id == b.ref_id);
+        let mut seen = std::collections::HashSet::new();
+        sources.retain(|s| seen.insert(s.ref_id.clone()));
         let s = Suggestion {
             scope: scope.clone(),
             kind,
@@ -430,8 +443,9 @@ struct SupersedeReply {
 }
 
 /// After `item_id` became active: asks which older active items on the same subject, in the
-/// same scope, it replaces, and marks those superseded. A third-party claim is only
-/// compared on a local model (`model` must then be local; the caller routes it). Returns the
+/// same scope, it replaces, and marks those superseded. Someone else's content is only sent
+/// to a local model, enforced here: a claim as the new item needs one ([`ExtractError::NotLocal`]
+/// otherwise), and with another model older claims are left out of the comparison. Returns the
 /// ids replaced. Ids the model makes up are ignored.
 pub async fn supersede_for(
     conn: &Connection,
@@ -442,6 +456,12 @@ pub async fn supersede_for(
     if item.status != Status::Active {
         return Ok(Vec::new());
     }
+    // Someone else's content goes only to a model on this computer, enforced here: a claim as
+    // the new item needs a local model, and with any other model older claims are left out.
+    let local = model.is_local();
+    if item.third_party && !local {
+        return Err(ExtractError::NotLocal);
+    }
     let older: Vec<Item> = store::list(
         conn,
         &store::Filter {
@@ -451,7 +471,7 @@ pub async fn supersede_for(
         },
     )?
     .into_iter()
-    .filter(|o| o.id != item.id && o.created_at <= item.created_at)
+    .filter(|o| o.id != item.id && o.created_at <= item.created_at && (local || !o.third_party))
     .take(5)
     .collect();
     if older.is_empty() {
@@ -472,14 +492,28 @@ pub async fn supersede_for(
         input.push('\n');
     }
     let r: SupersedeReply = ask_json(model, "memory.supersede", SUPERSEDE_PROMPT, &input).await?;
-    let mut done = Vec::new();
-    for id in r.replaced {
-        if older.iter().any(|o| o.id == id) && !done.contains(&id) {
-            store::supersede(conn, &id, &item.id)?;
-            done.push(id);
+    // All or nothing: a savepoint around the marks.
+    let ids: Vec<String> = r
+        .replaced
+        .into_iter()
+        .filter(|id| older.iter().any(|o| &o.id == id))
+        .fold(Vec::new(), |mut v, id| {
+            if !v.contains(&id) {
+                v.push(id);
+            }
+            v
+        });
+    conn.execute_batch("SAVEPOINT memory_supersede")
+        .map_err(MemoryError::from)?;
+    for id in &ids {
+        if let Err(e) = store::supersede(conn, id, &item.id) {
+            let _ = conn.execute_batch("ROLLBACK TO memory_supersede; RELEASE memory_supersede");
+            return Err(e.into());
         }
     }
-    Ok(done)
+    conn.execute_batch("RELEASE memory_supersede")
+        .map_err(MemoryError::from)?;
+    Ok(ids)
 }
 
 #[cfg(test)]
@@ -832,5 +866,71 @@ mod tests {
                 .is_empty()
         );
         assert!(m.seen().is_empty());
+    }
+
+    #[tokio::test]
+    async fn someone_elses_content_never_reaches_a_cloud_model_through_supersede() {
+        let c = db();
+        let claim = store::suggest(
+            &c,
+            Suggestion {
+                scope: Scope::Account,
+                kind: Kind::Commitment,
+                subject: "Review".into(),
+                text: "Alice says the review moved to Friday".into(),
+                third_party: true,
+                created_by: "model:qwen@memory-extract-v1".into(),
+                sources: vec![Source {
+                    kind: SourceKind::Message,
+                    ref_id: "m1".into(),
+                    conversation_id: Some("c1".into()),
+                    title: "Mail".into(),
+                    at: 1,
+                }],
+            },
+        )
+        .unwrap();
+        store::keep(&c, &claim.id).unwrap();
+        let mine = store::add_user(
+            &c,
+            Scope::Account,
+            Kind::Commitment,
+            "Review",
+            "The review is on Monday",
+            None,
+        )
+        .unwrap();
+        // The person's own new memory on a cloud model: the kept claim isn't sent, so no call.
+        let cloud = Scripted::new(&[]);
+        assert!(
+            supersede_for(&c, &mine.id, &uses(&cloud, "claude-x", false))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(cloud.seen().is_empty());
+        // On a local model it's compared.
+        let local = Scripted::new(&[r#"{"replaced":[]}"#]);
+        supersede_for(&c, &mine.id, &uses(&local, "qwen", true))
+            .await
+            .unwrap();
+        assert!(local.seen()[0].contains("Alice says"));
+        // A claim as the new item is refused on a cloud model.
+        assert!(matches!(
+            supersede_for(&c, &claim.id, &uses(&cloud, "claude-x", false)).await,
+            Err(ExtractError::NotLocal)
+        ));
+        // And extract refuses a "local" model that isn't one.
+        let fake_local = Scripted::new(&[]);
+        let e = extract(
+            &c,
+            &chat(false),
+            &own_and_mail(),
+            &uses(&cloud, "a", false),
+            Some(&uses(&fake_local, "b", false)),
+        )
+        .await;
+        assert!(matches!(e, Err(ExtractError::NotLocal)), "{e:?}");
+        assert!(fake_local.seen().is_empty());
     }
 }
