@@ -44,12 +44,16 @@ pub mod window_state;
 use std::path::PathBuf;
 
 /// Where the app keeps its database. `DEMIOS_DATA_DIR` overrides the per-OS default
-/// (useful for a throwaway profile while developing).
+/// (useful for a throwaway profile while developing). In tests there is no default: the
+/// person's real data folder is never used (#448).
 pub fn data_dir() -> Option<PathBuf> {
-    std::env::var_os("DEMIOS_DATA_DIR")
+    let set = std::env::var_os("DEMIOS_DATA_DIR")
         .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| dn_store::paths::app_data_dir(dn_store::paths::APP_ID))
+        .map(PathBuf::from);
+    if cfg!(test) {
+        return set;
+    }
+    set.or_else(|| dn_store::paths::app_data_dir(dn_store::paths::APP_ID))
 }
 
 /// Whether the app window may load `url`: only the app's own origin (and the Vite dev

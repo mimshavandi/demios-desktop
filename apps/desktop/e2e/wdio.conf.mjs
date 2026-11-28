@@ -26,6 +26,9 @@ const tauriDriver =
 // inherits this environment through tauri-driver and the native driver.
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "demios-e2e-"));
 process.env.DEMIOS_DATA_DIR = dataDir;
+// Models too (#448): the default is the person's real models folder, which a spec that
+// deletes models or all local data would empty.
+process.env.DN_MODELS_DIR = path.join(dataDir, "models");
 // Slow the dev fake model down so Stop lands mid-answer.
 process.env.DEMIOS_FAKE_DELAY_MS ??= "80";
 
