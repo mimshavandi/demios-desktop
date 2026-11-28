@@ -3,9 +3,9 @@
 //! sends one tiny request with one tool to the local model, never to a provider, and the
 //! answer is stored as "checked" in the app's data folder (`tool-probes.json`).
 
-use dn_core::CoreError;
 use dn_core::chat::{ChatMessage, ChatModel, ChatRequest, Reasoning, Role, StreamEvent, ToolSpec};
 use dn_core::model::ModelRef;
+use dn_core::{CoreError, Id};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -39,14 +39,46 @@ pub fn request(model: ModelRef) -> ChatRequest {
 /// Whether `model` calls the tool when asked to. An error (or a timeout) is not an answer.
 pub async fn probe(model: &dyn ChatModel, model_ref: ModelRef) -> Result<bool, CoreError> {
     let run = async {
-        let mut s = model.chat(request(model_ref));
+        let req = request(model_ref.clone());
+        let mut meter = dn_core::run::RunMeter::start(Id::new(), req.caller.clone(), model_ref);
+        meter.step();
+        let mut s = model.chat(req);
         let mut called = false;
+        let mut failed = None;
         while let Some(ev) = dn_inference::next_event(&mut s).await {
-            if let StreamEvent::ToolCall { call } = ev? {
-                called |= call.name == TOOL;
+            match ev {
+                Ok(ev) => {
+                    meter.observe(&ev);
+                    if let StreamEvent::ToolCall { call } = ev {
+                        called |= call.name == TOOL;
+                    }
+                }
+                Err(e) => {
+                    failed = Some(e);
+                    break;
+                }
             }
         }
-        Ok(called)
+        let stop = if failed.is_some() {
+            dn_core::run::StopReason::Failed
+        } else {
+            dn_core::run::StopReason::Completed
+        };
+        let r = meter.finish(stop);
+        tracing::info!(
+            caller = %r.caller,
+            model = %r.model,
+            stop = ?r.stop,
+            input_tokens = r.usage.input_tokens,
+            output_tokens = r.usage.output_tokens,
+            wall_ms = r.wall_ms,
+            called,
+            "tool check finished"
+        );
+        match failed {
+            Some(e) => Err(e),
+            None => Ok(called),
+        }
     };
     tokio::time::timeout(TIMEOUT, run)
         .await
@@ -168,6 +200,7 @@ mod tests {
                 usage: Usage {
                     input_tokens: 10,
                     output_tokens: 5,
+                    ..Default::default()
                 },
             });
             Box::pin(Events(ev))

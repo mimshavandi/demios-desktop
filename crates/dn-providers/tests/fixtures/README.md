@@ -6,6 +6,9 @@ no keys.
 
 - `*.sse`: streaming chat responses (`text/event-stream`), one file per scenario.
 - `*.json`: non-streaming responses (`/models`, error bodies).
+- `cached.sse` (OpenAI, Anthropic): `text.sse` with the documented prompt-cache usage fields
+  filled in (`prompt_tokens_details.cached_tokens`; `cache_read_input_tokens`,
+  `cache_creation_input_tokens`), for the cache counts in `Usage` (ADR-0020 §8).
 
 **Provenance: doc-derived, not captured.** These files were written by hand from each
 provider's API documentation. They use real field names, event order and chunking (for

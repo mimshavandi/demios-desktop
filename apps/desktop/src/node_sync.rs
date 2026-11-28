@@ -206,7 +206,7 @@ async fn run_loop(state: Arc<AppState>, generation: u64) {
                 Some(Duration::from_secs(INTERVAL_SECS))
             }
             Err(e) => {
-                eprintln!("sync with the Node failed: {e}");
+                tracing::warn!("sync with the Node failed: {e}");
                 let mut failures = 0;
                 control.set(|s| {
                     s.failures += 1;
@@ -297,19 +297,19 @@ async fn after_purge(state: &Arc<AppState>, report: &Report) {
                 Ok(chat) => {
                     let left = st.forget_purged_chat(chat);
                     if !left.is_empty() {
-                        eprintln!(
+                        tracing::warn!(
                             "sync: chat {id} was deleted on another device; couldn't remove its {}",
                             left.join(", ")
                         );
                     }
                 }
-                Err(e) => eprintln!("sync: a purged chat has a bad id {id:?}: {e}"),
+                Err(e) => tracing::warn!("sync: a purged chat has a bad id {id:?}: {e}"),
             }
         }
     })
     .await;
     if let Err(e) = done {
-        eprintln!("sync: cleaning up after purged chats failed: {e}");
+        tracing::warn!("sync: cleaning up after purged chats failed: {e}");
     }
 }
 

@@ -47,7 +47,7 @@ fn frame_csp() -> &'static FrameCsp {
     static CSP: OnceLock<FrameCsp> = OnceLock::new();
     CSP.get_or_init(|| {
         serde_json::from_str(FRAME_CSP_JSON).unwrap_or_else(|e| {
-            eprintln!("artifact frame CSP is unreadable ({e}); serving a deny-all policy");
+            tracing::warn!("artifact frame CSP is unreadable ({e}); serving a deny-all policy");
             FrameCsp {
                 strict: "default-src 'none'".into(),
                 network: "default-src 'none'".into(),
@@ -170,7 +170,7 @@ fn store_error(e: ArtifactError) -> IpcError {
             IpcError::new("not_found", e.to_string())
         }
         ArtifactError::Db(_) | ArtifactError::Corrupt(_) => {
-            eprintln!("artifact store error: {e}");
+            tracing::warn!("artifact store error: {e}");
             IpcError::new("storage", "Could not read or write local data.")
         }
         // The store's own text is written for the model; the user gets plain words.
@@ -278,6 +278,9 @@ impl ArtifactMode {
 /// Capability id in the agent manifest for an artifact tool name (`artifact_create` →
 /// `artifact.create`).
 pub(crate) fn capability_id(tool: &str) -> Option<String> {
+    if let Some(c) = crate::data_tools::capability_id(tool) {
+        return Some(c.into());
+    }
     tool.strip_prefix("artifact_")
         .map(|op| format!("artifact.{op}"))
 }
@@ -294,11 +297,14 @@ fn changed(message_id: Id, conversation_id: Id, a: &Applied) -> ChatEvent {
 }
 
 /// The run's tools: the manifest-filtered dn-tools executor plus, in [`ArtifactMode::Tools`],
-/// the artifact tools the manifest allows (`artifact.create` / `.update` / `.rewrite`).
+/// the artifact tools the manifest allows (`artifact.create` / `.update` / `.rewrite`) and,
+/// in a project chat, `data_profile` (#366).
 pub struct RunTools {
     pub base: Arc<dyn ToolExecutor>,
     /// `None` in [`ArtifactMode::Unavailable`]: no artifact tools at all.
     pub artifacts: Option<ArtifactTools>,
+    /// `None` outside a project, or for a model without tool calls.
+    pub data: Option<crate::data_tools::DataTools>,
 }
 
 pub struct ArtifactTools {
@@ -327,6 +333,10 @@ impl ToolExecutor for RunTools {
             v.retain(|s| !dn_artifacts::protocol::is_artifact_tool(&s.name));
             v.extend(a.specs());
         }
+        if let Some(d) = &self.data {
+            v.retain(|s| !crate::data_tools::is_data_tool(&s.name));
+            v.extend(d.specs());
+        }
         v
     }
 
@@ -336,6 +346,11 @@ impl ToolExecutor for RunTools {
         ctx: &'a ToolContext,
     ) -> BoxFuture<'a, Result<ToolOutput, CoreError>> {
         Box::pin(async move {
+            if crate::data_tools::is_data_tool(&call.name)
+                && let Some(d) = self.data.as_ref().filter(|d| d.offers(&call.name))
+            {
+                return Ok(d.execute(call).await);
+            }
             if !dn_artifacts::protocol::is_artifact_tool(&call.name) {
                 return self.base.execute(call, ctx).await;
             }
@@ -367,7 +382,7 @@ impl ToolExecutor for RunTools {
             let result = match applied {
                 Ok(r) => r,
                 Err(e) => {
-                    eprintln!("artifact tool failed: {e}");
+                    tracing::warn!("artifact tool failed: {e}");
                     return Ok(ToolOutput::error(
                         "The artifact couldn't be saved. Try again.",
                     ));
@@ -501,5 +516,13 @@ mod tests {
             Some("artifact.rewrite")
         );
         assert_eq!(capability_id("calc"), None);
+        assert_eq!(
+            capability_id("data_profile").as_deref(),
+            Some("data.profile")
+        );
+        assert_eq!(
+            capability_id("data_aggregate").as_deref(),
+            Some("data.aggregate")
+        );
     }
 }

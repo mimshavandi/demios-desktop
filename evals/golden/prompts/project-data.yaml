@@ -1,0 +1,384 @@
+# Data-file cases for analyze-data-file (#366): the answer's numbers must come from the
+# computed fact sheet. Known answers are in expect.numbers (checked mechanically at the
+# precision the answer writes them); every number in the answer must also trace to a
+# fact sheet. The files' answers were computed separately and are pinned in
+# crates/dn-data/tests/known_answers.rs.
+- id: project-data-001
+  category: project
+  lang: en
+  tags: [data, exact-figure, easy]
+  skill: analyze-data-file
+  project:
+    instructions: You help the owner of the Lindenfeld pottery studio with the studio's books.
+    files: [studio-data/orders.csv]
+  tools: [data_profile]
+  turns:
+  - role: user
+    content: What was our total order amount in orders.csv?
+  expect:
+    must:
+    - Gives the total as 1537.00 (euros), from the fact sheet
+    - Mentions that one order has no amount, so the total leaves it out
+    must_not:
+    - Adds up the rows itself or gives a different total
+    tool_calls:
+      required: [data_profile]
+    numbers: ["1537.00"]
+- id: project-data-002
+  category: project
+  lang: en
+  tags: [data, exact-figure]
+  skill: analyze-data-file
+  project:
+    files: [studio-data/orders.csv]
+  tools: [data_profile]
+  turns:
+  - role: user
+    content: Which month had the most orders by amount, and how much was it?
+  expect:
+    must:
+    - Names November 2026 with 874.50
+    must_not:
+    - Names another month as the highest
+    tool_calls:
+      required: [data_profile]
+    numbers: ["874.50"]
+- id: project-data-003
+  category: project
+  lang: en
+  tags: [data, groups]
+  skill: analyze-data-file
+  project:
+    files: [studio-data/orders.csv]
+  tools: [data_profile]
+  turns:
+  - role: user
+    content: Who's our best customer by amount spent? Give the top one and their total.
+  expect:
+    must:
+    - Names Hofmann with 922.00
+    must_not:
+    - Ranks customers by number of orders instead of amount without saying so
+    tool_calls:
+      required: [data_profile]
+    numbers: ["922.00"]
+- id: project-data-004
+  category: project
+  lang: en
+  tags: [data, outlier]
+  skill: analyze-data-file
+  project:
+    files: [studio-data/orders.csv]
+  tools: [data_profile]
+  turns:
+  - role: user
+    content: What's a typical order worth for us?
+  expect:
+    must:
+    - Gives the median, 52.50, as the typical order
+    - Says the mean (96.06) is pulled up by one unusually large order
+    must_not:
+    - Gives only the mean as typical
+    tool_calls:
+      required: [data_profile]
+    numbers: ["52.50", "96.06"]
+- id: project-data-005
+  category: project
+  lang: en
+  tags: [data, quality]
+  skill: analyze-data-file
+  project:
+    files: [studio-data/orders.csv]
+  tools: [data_profile]
+  turns:
+  - role: user
+    content: Before I send this to the accountant, is there anything wrong with the data?
+  expect:
+    must:
+    - Says one row is missing its amount
+    - Says one row is an exact duplicate of another
+    must_not:
+    - Calls the large private-workshop order an error rather than an unusual value
+    tool_calls:
+      required: [data_profile]
+- id: project-data-006
+  category: project
+  lang: en
+  tags: [data, change]
+  skill: analyze-data-file
+  project:
+    files: [studio-data/orders.csv]
+  tools: [data_profile]
+  turns:
+  - role: user
+    content: How much did monthly order amounts grow from September to November, in percent?
+  expect:
+    must:
+    - Gives 176.3% (from 316.50 to 874.50)
+    must_not:
+    - Works out the percentage itself or gives another figure
+    tool_calls:
+      required: [data_profile]
+    numbers: ["176.3%"]
+- id: project-data-007
+  category: project
+  lang: en
+  tags: [data, not-in-source]
+  skill: analyze-data-file
+  project:
+    files: [studio-data/orders.csv]
+  tools: [data_profile]
+  turns:
+  - role: user
+    content: What was our profit margin on pottery classes?
+  expect:
+    must:
+    - Says the file has amounts but no costs, so it can't give a margin
+    must_not:
+    - Invents a margin, cost or percentage
+    tool_calls:
+      required: [data_profile]
+- id: project-data-008
+  category: project
+  lang: en
+  tags: [data, not-in-source, no-arithmetic]
+  skill: analyze-data-file
+  project:
+    files: [studio-data/budget-2026.xlsx]
+  tools: [data_profile]
+  turns:
+  - role: user
+    content: Did we spend more or less than planned this year, and by how much?
+  expect:
+    must:
+    - Gives planned 18800 and actual 18646.55 from the sheet
+    - Says the difference isn't on the fact sheet instead of subtracting, or says actual was below plan without inventing the exact gap
+    must_not:
+    - States a difference figure that isn't on the fact sheet
+    tool_calls:
+      required: [data_profile]
+    numbers: ["18800", "18646.55"]
+- id: project-data-009
+  category: project
+  lang: en
+  tags: [data, xlsx, groups]
+  skill: analyze-data-file
+  project:
+    files: [studio-data/budget-2026.xlsx]
+  tools: [data_profile]
+  turns:
+  - role: user
+    content: Which budget category cost the most, and how much did we spend on tools?
+  expect:
+    must:
+    - Names rent with 9600.00
+    - Gives tools as 1240.00
+    tool_calls:
+      required: [data_profile]
+    numbers: ["9600", "1240"]
+- id: project-data-010
+  category: project
+  lang: en
+  tags: [data, which-file]
+  skill: analyze-data-file
+  project:
+    files: [studio-data/orders.csv, studio-data/budget-2026.xlsx]
+  tools: [data_profile]
+  turns:
+  - role: user
+    content: What's the total?
+  expect:
+    must:
+    - Asks which file (orders.csv or budget-2026.xlsx) and which total is meant, or answers for both and says which is which
+    must_not:
+    - Gives one total without saying which file it's from
+- id: project-data-011
+  category: project
+  lang: de
+  tags: [data, exact-figure, decimal-comma]
+  skill: analyze-data-file
+  project:
+    instructions: Du hilfst der Inhaberin des Töpferstudios Lindenfeld. Antworte auf Deutsch.
+    files: [studio-data/umsatz-filialen.csv]
+  tools: [data_profile]
+  turns:
+  - role: user
+    content: Wie viel Umsatz hat die Filiale Lindenfeld insgesamt gemacht?
+  expect:
+    must:
+    - Nennt 66.751,55 € (oder 66751.55) für Lindenfeld
+    must_not:
+    - Rechnet selbst oder nennt eine andere Summe
+    tool_calls:
+      required: [data_profile]
+    numbers: ["66751.55"]
+- id: project-data-012
+  category: project
+  lang: de
+  tags: [data, missing, trap]
+  skill: analyze-data-file
+  project:
+    instructions: Antworte auf Deutsch.
+    files: [studio-data/umsatz-filialen.csv]
+  tools: [data_profile]
+  turns:
+  - role: user
+    content: In welchem Monat hatten beide Filialen zusammen den höchsten Umsatz?
+  expect:
+    must:
+    - Nennt Oktober 2026 mit 22.755,90 €
+    - Sagt, dass für Bergheim im November ein Wert fehlt, der Novemberwert also unvollständig ist
+    must_not:
+    - Nennt November als stärksten Monat
+    tool_calls:
+      required: [data_profile]
+    numbers: ["22755.90"]
+- id: project-data-013
+  category: project
+  lang: de
+  tags: [data, groups, decimal-comma]
+  skill: analyze-data-file
+  project:
+    instructions: Antworte auf Deutsch.
+    files: [studio-data/umsatz-filialen.csv]
+  tools: [data_profile]
+  turns:
+  - role: user
+    content: Vergleiche die beiden Filialen beim Gesamtumsatz.
+  expect:
+    must:
+    - Nennt Lindenfeld 66.751,55 € und Bergheim 35.983,25 €
+    - Erwähnt den fehlenden Novemberwert von Bergheim
+    must_not:
+    - Berechnet selbst einen Unterschied oder Anteil, der nicht im Faktenblatt steht
+    tool_calls:
+      required: [data_profile]
+    numbers: ["66751.55", "35983.25"]
+- id: project-data-014
+  category: project
+  lang: de
+  tags: [data, mean]
+  skill: analyze-data-file
+  project:
+    instructions: Antworte auf Deutsch.
+    files: [studio-data/umsatz-filialen.csv]
+  tools: [data_profile]
+  turns:
+  - role: user
+    content: Was ist der durchschnittliche Monatsumsatz pro Filiale?
+  expect:
+    must:
+    - Nennt 11.414,98 € als Durchschnitt über die vorhandenen Werte
+    - Sagt, dass ein Wert fehlt und nicht mitgezählt ist
+    tool_calls:
+      required: [data_profile]
+    numbers: ["11414.98"]
+- id: project-data-015
+  category: project
+  lang: en
+  tags: [data, scope]
+  skill: analyze-data-file
+  project:
+    files: [studio-data/orders.csv]
+  tools: [data_profile]
+  turns:
+  - role: user
+    content: How many items did we sell in total, and how many orders are in the file?
+  expect:
+    must:
+    - Gives 34 items (the Qty sum) and 17 rows
+    - Notes that one of the 17 rows is a duplicate
+    tool_calls:
+      required: [data_profile]
+    numbers: ["34", "17"]
+- id: project-data-016
+  category: project
+  lang: en
+  tags: [data, aggregate, filter]
+  skill: analyze-data-file
+  project:
+    files: [studio-data/orders.csv]
+  tools: [data_profile, data_aggregate]
+  turns:
+  - role: user
+    content: How much did Krause order in October?
+  expect:
+    must:
+    - Gives 138.00 for Krause in October 2026
+    must_not:
+    - Adds the rows up itself instead of using the tool
+    tool_calls:
+      required: [data_aggregate]
+    numbers: ["138.00"]
+- id: project-data-017
+  category: project
+  lang: en
+  tags: [data, aggregate, mean]
+  skill: analyze-data-file
+  project:
+    files: [studio-data/orders.csv]
+  tools: [data_profile, data_aggregate]
+  turns:
+  - role: user
+    content: What's the average amount of a pottery class order?
+  expect:
+    must:
+    - Gives 90.00 as the average over the 5 pottery class orders
+    tool_calls:
+      required: [data_aggregate]
+    numbers: ["90.00"]
+- id: project-data-018
+  category: project
+  lang: en
+  tags: [data, aggregate, count]
+  skill: analyze-data-file
+  project:
+    files: [studio-data/orders.csv]
+  tools: [data_profile, data_aggregate]
+  turns:
+  - role: user
+    content: How many orders were over 100 euros?
+  expect:
+    must:
+    - Says 2 orders (the 135.00 class and the 640.00 private workshop)
+    must_not:
+    - Counts orders of exactly 100 or less
+    tool_calls:
+      required: [data_aggregate]
+    numbers: ["2"]
+- id: project-data-019
+  category: project
+  lang: en
+  tags: [data, aggregate, missing, trap]
+  skill: analyze-data-file
+  project:
+    files: [studio-data/orders.csv]
+  tools: [data_profile, data_aggregate]
+  turns:
+  - role: user
+    content: How much did Weber spend in October?
+  expect:
+    must:
+    - Says Weber's only October order (clay, 25 October) has no amount in the file, so there's no figure
+    must_not:
+    - Gives 0 or any amount as Weber's October spend
+    tool_calls:
+      required: [data_aggregate]
+- id: project-data-020
+  category: project
+  lang: de
+  tags: [data, aggregate, decimal-comma]
+  skill: analyze-data-file
+  project:
+    instructions: Antworte auf Deutsch.
+    files: [studio-data/umsatz-filialen.csv]
+  tools: [data_profile, data_aggregate]
+  turns:
+  - role: user
+    content: Wie hoch war der Umsatz der Filiale Bergheim im September?
+  expect:
+    must:
+    - Nennt 9.002,40 €
+    tool_calls:
+      required: [data_aggregate]
+    numbers: ["9002.40"]
