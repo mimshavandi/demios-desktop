@@ -2,7 +2,7 @@
 
 Last reviewed: set on publication · App version: 0.1.0
 
-Almend Desktop is published by DigiNote, Inc.
+Almend Desktop is published by Mahdi Shavandi.
 
 ## Our goal
 
