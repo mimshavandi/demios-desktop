@@ -19,7 +19,8 @@ If a pull request misses its line, a maintainer adds it in a follow-up pull requ
 2. In `CHANGELOG.md`, rename **Unreleased** to the version and date, for example `## [0.2.0] - 2027-01-15`, and add a new empty **Unreleased** section above it. This pull request, and any later correction to a released section, needs the label `changelog: edit released`, or the `changelog` check fails. The same check fails when a pull request removes more than half of `CHANGELOG.md`.
 3. Update the links at the bottom of the file: the new version compares against the previous tag, and **Unreleased** compares the new tag against `main`.
 4. Set the same version in the workspace `Cargo.toml`, `apps/desktop/tauri.conf.json` and `apps/desktop/package.json`. Add a `<release>` for it at the top of `packaging/flatpak/io.demios.app.metainfo.xml` (`type="stable"`, same date, a short summary of the CHANGELOG section).
-5. **Sign the Connect catalogue (owner).** If `apps/desktop/connect/catalogue.json` changed since it was last signed, sign it on your own computer with your catalogue key, in the release pull request:
+5. **Check the published context sizes.** Run `cargo test -p dn-providers --lib published_sizes_are_recent -- --ignored`. It fails, naming them, for entries of the table of model context sizes (`crates/dn-providers/src/limits.rs`, `PUBLISHED`) last checked more than six months ago. For each one, open its `source`, correct the size if the page says otherwise, and set `checked` to today. Add a new model only from the page that states its size, never by analogy with a sibling: a model that isn't in the table stays unknown, and the app asks the person for its size.
+6. **Sign the Connect catalogue (owner).** If `apps/desktop/connect/catalogue.json` changed since it was last signed, sign it on your own computer with your catalogue key, in the release pull request:
 
    ```sh
    node scripts/connect/sign-catalogue.mjs ~/path/to/demios-catalogue-key.pem
@@ -27,8 +28,8 @@ If a pull request misses its line, a maintainer adds it in a follow-up pull requ
    ```
 
    The script checks that the key matches `apps/desktop/connect/catalogue.pub`. The release workflows run `node scripts/connect/check-signature.mjs` first and stop the release if the signature is missing, stale or made with another key; no secret is involved. While `catalogue.pub` is empty, releases go ahead and show Connect as not available (see [Connect catalogue key](#connect-catalogue-key-owner)).
-6. Merge that pull request, then tag the merge commit `v<version>` and push the tag. The release workflow builds, signs and tests the installers and creates a **draft** release (see [Signed releases](#signed-releases)).
-7. Check the draft: the assets, the "-unsigned" labels if any, and the notes. Its notes are the version's section of `CHANGELOG.md`, copied as written. Then select **Publish release**. Publishing makes it the latest release, and installed apps that check for updates are offered it.
+7. Merge that pull request, then tag the merge commit `v<version>` and push the tag. The release workflow builds, signs and tests the installers and creates a **draft** release (see [Signed releases](#signed-releases)).
+8. Check the draft: the assets, the "-unsigned" labels if any, and the notes. Its notes are the version's section of `CHANGELOG.md`, copied as written. Then select **Publish release**. Publishing makes it the latest release, and installed apps that check for updates are offered it.
 
 ## Connect catalogue key (owner)
 
@@ -38,7 +39,7 @@ The Connect list (ADR-0018) is used only if the catalogue is signed with the own
 node scripts/connect/new-key.mjs ~/path/outside/the/repo/demios-catalogue-key.pem
 ```
 
-It writes the private key where you say (it refuses a path inside the repository) and the public key to `apps/desktop/connect/catalogue.pub`, which you commit; release builds compile it in. Then sign the catalogue (step 5 above). Anyone who edits the catalogue signs it again with the test key (`node scripts/connect/sign-catalogue.mjs --test`) so debug builds with the `connect-test-key` feature can read it; a test fails until they do.
+It writes the private key where you say (it refuses a path inside the repository) and the public key to `apps/desktop/connect/catalogue.pub`, which you commit; release builds compile it in. Then sign the catalogue (step 6 above). Anyone who edits the catalogue signs it again with the test key (`node scripts/connect/sign-catalogue.mjs --test`) so debug builds with the `connect-test-key` feature can read it; a test fails until they do.
 
 ## Signed releases
 
