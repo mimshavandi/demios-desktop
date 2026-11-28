@@ -1499,6 +1499,7 @@ dependencies = [
  "dn-secrets",
  "dn-store",
  "dn-sync",
+ "dn-tools",
  "futures-core",
  "serde",
  "serde_json",

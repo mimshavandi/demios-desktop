@@ -72,6 +72,10 @@ pub struct ParityArgs {
     /// The chat skills a case can turn on with `skill:` (the app's library).
     #[arg(long, default_value = "skills/library")]
     skills: PathBuf,
+    /// Use a skill's `SKILL.local.md` where it has one (the version for models running on
+    /// this computer, #365), instead of `SKILL.md`. Recorded in the report.
+    #[arg(long)]
+    local_skills: bool,
     /// Report path (default: eval-parity-<time>.json; required with --holdout, outside any
     /// git work tree).
     #[arg(long, short)]
@@ -179,6 +183,14 @@ impl MockTool {
     /// A read tool named `calculator` with no canned results: the runner does the arithmetic.
     pub fn is_builtin_calculator(&self) -> bool {
         self.name == "calculator" && self.effect == Effect::Read && self.results.is_empty()
+    }
+
+    /// A read tool named `contrast_check` with no canned results: the runner computes the
+    /// WCAG contrast with the app's own function (dn-tools), so cases score it fairly.
+    pub fn is_builtin_contrast(&self) -> bool {
+        self.name == dn_tools::contrast::TOOL_NAME
+            && self.effect == Effect::Read
+            && self.results.is_empty()
     }
 }
 
@@ -312,7 +324,12 @@ pub struct Set {
     pub today: Option<Today>,
     /// The chat skills cases can turn on, by name.
     pub skills: HashMap<String, dn_agent::ChatSkill>,
+    /// The skills read from `SKILL.local.md` (with `--local-skills`).
+    pub local_skills: HashSet<String>,
 }
+
+/// `SKILL.local.md`: a skill's version for local models (#365).
+pub const LOCAL_SKILL_FILE: &str = "SKILL.local.md";
 
 /// The tools the runner itself provides (a case lists them in `tools` like mock tools).
 pub const BUILTIN_TOOLS: &[&str] = &[dn_data::tool::TOOL_NAME, dn_data::tool::AGGREGATE_TOOL_NAME];
@@ -452,12 +469,18 @@ fn yaml<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, String> {
 impl Set {
     /// Reads `set` and, if given, `holdout`, and checks every rule. `skills` is the chat
     /// skill library (read only if a case names a skill).
-    pub fn read(set: &Path, holdout: Option<&Path>, skills: &Path) -> Result<Self, String> {
+    pub fn read(
+        set: &Path,
+        holdout: Option<&Path>,
+        skills: &Path,
+        local_skills: bool,
+    ) -> Result<Self, String> {
         let mut out = Set {
             cases: Vec::new(),
             tools: HashMap::new(),
             today: None,
             skills: HashMap::new(),
+            local_skills: HashSet::new(),
         };
         out.add(set, false)?;
         if let Some(h) = holdout {
@@ -469,9 +492,48 @@ impl Set {
                 return Err(format!("{}: {e}", skills.display()));
             }
             out.skills = found.into_iter().map(|s| (s.name.clone(), s)).collect();
+            if local_skills {
+                out.use_local_skills(skills)?;
+            }
         }
         out.check()?;
         Ok(out)
+    }
+
+    /// Replaces each skill that has a `SKILL.local.md` with it. Per #365 a local version is
+    /// parsed like `SKILL.md`, and its `allowed-tools` must be the same.
+    fn use_local_skills(&mut self, library: &Path) -> Result<(), String> {
+        let names: Vec<String> = self.skills.keys().cloned().collect();
+        for name in names {
+            let file = library.join(&name).join(LOCAL_SKILL_FILE);
+            if !file.is_file() {
+                continue;
+            }
+            // The same size limit as SKILL.md.
+            let len = std::fs::metadata(&file)
+                .map_err(|e| format!("{}: {e}", file.display()))?
+                .len();
+            if len > dn_agent::chat_skill::MAX_FILE_BYTES {
+                return Err(format!(
+                    "{}: larger than {} bytes",
+                    file.display(),
+                    dn_agent::chat_skill::MAX_FILE_BYTES
+                ));
+            }
+            let text =
+                std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
+            let local = dn_agent::chat_skill::parse(&file, &text, Some(&name))
+                .map_err(|e| format!("{}: {e}", file.display()))?;
+            if local.allowed_tools != self.skills[&name].allowed_tools {
+                return Err(format!(
+                    "{}: allowed-tools must be the same as SKILL.md's",
+                    file.display()
+                ));
+            }
+            self.skills.insert(name.clone(), local);
+            self.local_skills.insert(name);
+        }
+        Ok(())
     }
 
     fn add(&mut self, dir: &Path, holdout: bool) -> Result<(), String> {
@@ -794,6 +856,12 @@ impl MockTools {
         if t.effect == Effect::Write && !self.approve.contains(&t.name) {
             return (true, DECLINED.into(), true);
         }
+        if t.is_builtin_contrast() {
+            return match dn_tools::contrast::call(&call.arguments) {
+                Ok(json) => (false, json, false),
+                Err(e) => (false, format!("ERROR: {e}"), true),
+            };
+        }
         if t.is_builtin_calculator() {
             let expr = call.arguments["expression"].as_str().unwrap_or_default();
             return match calculate(expr) {
@@ -1030,6 +1098,9 @@ struct Item {
     memory: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     skill: Option<String>,
+    /// Which file the skill came from (`SKILL.md` or, with `--local-skills`, `SKILL.local.md`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    skill_file: Option<&'static str>,
     tool_calls: Vec<CallRecord>,
     tool_check: ToolCheck,
     /// Numbers: traced to the fact sheets, and the known ones stated.
@@ -1059,7 +1130,7 @@ pub async fn run(a: ParityArgs) -> Result<(), String> {
             }
         }
     }
-    let set = Set::read(&a.set, a.holdout.as_deref(), &a.skills)?;
+    let set = Set::read(&a.set, a.holdout.as_deref(), &a.skills, a.local_skills)?;
     let cases: Vec<&(Case, SetRoot)> = set
         .cases
         .iter()
@@ -1096,6 +1167,13 @@ pub async fn run(a: ParityArgs) -> Result<(), String> {
             tags: case.tags.clone(),
             memory: (!case.sessions.is_empty()).then_some("none"),
             skill: case.skill.clone(),
+            skill_file: case.skill.as_ref().map(|n| {
+                if set.local_skills.contains(n) {
+                    LOCAL_SKILL_FILE
+                } else {
+                    "SKILL.md"
+                }
+            }),
             tool_calls: calls,
             tool_check: check,
             data_check,
@@ -1117,6 +1195,7 @@ pub async fn run(a: ParityArgs) -> Result<(), String> {
         "set": a.set.file_name().map(|s| s.to_string_lossy()),
         "holdout": a.holdout.is_some(),
         "system": "stand-in",
+        "skills": if a.local_skills { "local where available" } else { "standard" },
         "cases": items.len(),
         "failed": failed,
         "tool_checks_failed": tool_failed,
@@ -1156,7 +1235,7 @@ mod tests {
 
     #[test]
     fn the_example_set_reads_and_renders_files_as_quoted_excerpts() {
-        let set = Set::read(&example(), None, &library()).unwrap();
+        let set = Set::read(&example(), None, &library(), false).unwrap();
         let (case, root) = set
             .cases
             .iter()
@@ -1177,7 +1256,7 @@ mod tests {
 
     #[test]
     fn mock_tools_match_arguments_and_decline_unapproved_writes() {
-        let set = Set::read(&example(), None, &library()).unwrap();
+        let set = Set::read(&example(), None, &library(), false).unwrap();
         let (case, root) = set.cases.iter().find(|(c, _)| c.id == "tools-001").unwrap();
         let tools = MockTools::new(&set, case, root);
         assert_eq!(tools.tools().len(), 2);
@@ -1273,7 +1352,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_case_runs_through_the_loop_with_mock_tools_and_records_its_calls() {
-        let set = Set::read(&example(), None, &library()).unwrap();
+        let set = Set::read(&example(), None, &library(), false).unwrap();
         let (case, root) = set.cases.iter().find(|(c, _)| c.id == "tools-001").unwrap();
         let model = Scripted(Mutex::new(0));
         let model_ref = dn_core::model::ModelRef::Local {
@@ -1320,7 +1399,7 @@ mod tests {
         );
         assert!(Today::parse("2026-02-29").is_err());
         assert!(Today::parse("7.12.2026").is_err());
-        let set = Set::read(&example(), None, &library()).unwrap();
+        let set = Set::read(&example(), None, &library(), false).unwrap();
         assert_eq!(set.today, Some(t));
         let (case, root) = &set.cases[0];
         let h = history(&set, root, case).unwrap();
@@ -1372,7 +1451,7 @@ mod tests {
         answer: &'static str,
     ) -> (Turn, Option<DataCheck>, Vec<dn_core::chat::ChatRequest>) {
         let golden = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../evals/golden");
-        let set = Set::read(&golden, None, &library()).unwrap();
+        let set = Set::read(&golden, None, &library(), false).unwrap();
         let (case, root) = set.cases.iter().find(|(c, _)| c.id == id).unwrap();
         let model = DataAnalyst {
             answer,
@@ -1446,14 +1525,14 @@ mod tests {
         write(
             "- {id: c, category: chat, lang: en, skill: summarize, tools: [send_email, data_profile], turns: [{role: user, content: hi}]}",
         );
-        let set = Set::read(&dir, None, &library()).unwrap();
+        let set = Set::read(&dir, None, &library(), false).unwrap();
         let (case, root) = &set.cases[0];
         assert!(MockTools::new(&set, case, root).tools().is_empty());
         write(
             "- {id: c, category: chat, lang: en, skill: no-such-skill, turns: [{role: user, content: hi}]}",
         );
         assert!(
-            Set::read(&dir, None, &library())
+            Set::read(&dir, None, &library(), false)
                 .unwrap_err()
                 .contains("no skill called")
         );
@@ -1461,7 +1540,7 @@ mod tests {
             "- {id: c, category: chat, lang: en, skill: summarize, tools: [send_email], turns: [{role: user, content: hi}], expect: {tool_calls: {required: [send_email]}}}",
         );
         assert!(
-            Set::read(&dir, None, &library())
+            Set::read(&dir, None, &library(), false)
                 .unwrap_err()
                 .contains("doesn't allow")
         );
@@ -1469,11 +1548,88 @@ mod tests {
             "- {id: c, category: chat, lang: en, turns: [{role: user, content: hi}], expect: {numbers: [twelve]}}",
         );
         assert!(
-            Set::read(&dir, None, &library())
+            Set::read(&dir, None, &library(), false)
                 .unwrap_err()
                 .contains("isn't a number")
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn contrast_check_is_computed_with_the_apps_function() {
+        let dir = std::env::temp_dir().join(format!("dn-parity-contrast-{}", dn_core::Id::new()));
+        std::fs::create_dir_all(dir.join("prompts")).unwrap();
+        std::fs::create_dir_all(dir.join("files")).unwrap();
+        std::fs::write(
+            dir.join("tools.yaml"),
+            "- {name: contrast_check, description: Contrast., input_schema: {type: object}, effect: read, capability: contrast.check}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("prompts/chat.yaml"),
+            "- {id: c, category: chat, lang: en, tools: [contrast_check], turns: [{role: user, content: hi}]}",
+        )
+        .unwrap();
+        let set = Set::read(&dir, None, &library(), false).unwrap();
+        let (case, root) = &set.cases[0];
+        let tools = MockTools::new(&set, case, root);
+        let (declined, text, is_error) = tools.answer(&call(
+            "contrast_check",
+            serde_json::json!({"foreground": "#777777", "background": "#ffffff"}),
+        ));
+        assert!(!declined && !is_error, "{text}");
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(v["ratio"], serde_json::json!(4.47));
+        assert_eq!(v["aa_normal_text"], serde_json::json!(false));
+        let (_, text, is_error) = tools.answer(&call(
+            "contrast_check",
+            serde_json::json!({"foreground": "red"}),
+        ));
+        assert!(is_error && text.starts_with("ERROR:"), "{text}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn local_skills_replace_skill_md_only_with_the_same_tools() {
+        let tmp = std::env::temp_dir().join(format!("dn-parity-local-{}", dn_core::Id::new()));
+        let lib = tmp.join("library/tidy");
+        std::fs::create_dir_all(&lib).unwrap();
+        std::fs::write(
+            lib.join("SKILL.md"),
+            "---\nname: tidy\ndescription: Tidy.\nallowed-tools: []\n---\nLong version.\n",
+        )
+        .unwrap();
+        std::fs::write(
+            lib.join("SKILL.local.md"),
+            "---\nname: tidy\ndescription: Tidy.\nallowed-tools: []\n---\nShort version.\n",
+        )
+        .unwrap();
+        let set_dir = tmp.join("set");
+        std::fs::create_dir_all(set_dir.join("prompts")).unwrap();
+        std::fs::create_dir_all(set_dir.join("files")).unwrap();
+        std::fs::write(
+            set_dir.join("prompts/chat.yaml"),
+            "- {id: c, category: chat, lang: en, skill: tidy, turns: [{role: user, content: hi}]}",
+        )
+        .unwrap();
+        let library = tmp.join("library");
+        let standard = Set::read(&set_dir, None, &library, false).unwrap();
+        assert_eq!(standard.skills["tidy"].instructions.trim(), "Long version.");
+        assert!(standard.local_skills.is_empty());
+        let local = Set::read(&set_dir, None, &library, true).unwrap();
+        assert_eq!(local.skills["tidy"].instructions.trim(), "Short version.");
+        assert!(local.local_skills.contains("tidy"));
+        std::fs::write(
+            lib.join("SKILL.local.md"),
+            "---\nname: tidy\ndescription: Tidy.\nallowed-tools: [artifact.*]\n---\nShort.\n",
+        )
+        .unwrap();
+        assert!(
+            Set::read(&set_dir, None, &library, true)
+                .unwrap_err()
+                .contains("must be the same as SKILL.md")
+        );
+        let _ = std::fs::remove_dir_all(tmp);
     }
 
     #[test]
@@ -1482,10 +1638,10 @@ mod tests {
         std::fs::create_dir_all(dir.join("prompts")).unwrap();
         std::fs::create_dir_all(dir.join("files")).unwrap();
         let write = |yaml: &str| std::fs::write(dir.join("prompts/chat.yaml"), yaml).unwrap();
-        let err = || Set::read(&dir, None, &library()).unwrap_err();
+        let err = || Set::read(&dir, None, &library(), false).unwrap_err();
         let ok = "- {id: chat-001, category: chat, lang: en, turns: [{role: user, content: hi}]}";
         write(ok);
-        assert!(Set::read(&dir, None, &library()).is_ok());
+        assert!(Set::read(&dir, None, &library(), false).is_ok());
         write(&format!("{ok}\n{ok}"));
         assert!(err().contains("appears twice"));
         write("- {id: h-001, category: chat, lang: en, turns: [{role: user, content: hi}]}");
