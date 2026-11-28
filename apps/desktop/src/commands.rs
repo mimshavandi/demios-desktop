@@ -1524,6 +1524,10 @@ pub async fn set_model_context_size(
         ));
     }
     blocking(&state, move |s| {
+        // Only for a provider or server that's set up: nothing is stored for one that isn't.
+        s.models
+            .get(&model, &s.keys)
+            .map_err(crate::agent::model_error)?;
         let mut settings = s.settings()?;
         match tokens {
             Some(n) => settings.context_sizes.insert(model.to_string(), n),
