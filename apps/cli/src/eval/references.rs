@@ -89,9 +89,14 @@ pub struct ReferencesArgs {
 }
 
 /// A case as it was answered: its hash, for spotting a reference whose case has changed.
-pub fn case_sha256(case: &Case) -> String {
-    sha256_hex(serde_json::to_string(case).unwrap_or_default().as_bytes())
+pub fn case_sha256(case: &Case) -> Result<String, String> {
+    serde_json::to_string(case)
+        .map(|s| sha256_hex(s.as_bytes()))
+        .map_err(|e| format!("case {}: {e}", case.id))
 }
+
+/// The fields of `meta.json` that must match for references to share a folder.
+const SAME: &[&str] = &["schema", "source", "model", "system", "settings", "holdout"];
 
 /// What one run did per case.
 #[derive(Debug, PartialEq, Serialize)]
@@ -102,7 +107,8 @@ pub struct Outcome {
 }
 
 /// Answers `cases` with `model` and writes the references under `dir` (`<out>/<source>`),
-/// updating its `meta.json`. A `meta.json` from another model is refused.
+/// updating its `meta.json` after every case. A folder whose `meta.json` differs in model,
+/// source, settings or holdout is refused, so references are never mixed.
 pub async fn write_references(
     model: &dyn ChatModel,
     model_ref: &ModelRef,
@@ -118,11 +124,13 @@ pub async fn write_references(
         Ok(s) => {
             let v: serde_json::Value =
                 serde_json::from_str(&s).map_err(|e| format!("{}: {e}", meta_path.display()))?;
-            if v["model"] != meta_head["model"] {
+            if let Some(k) = SAME.iter().find(|k| v[**k] != meta_head[**k]) {
                 return Err(format!(
-                    "{} holds references from {}; pass another --out or remove them first",
+                    "{} holds references made with another {k} ({} there, {} now); pass another \
+                     --out or remove them first",
                     dir.display(),
-                    v["model"]
+                    v[*k],
+                    meta_head[*k]
                 ));
             }
             v
@@ -135,12 +143,17 @@ pub async fn write_references(
             m.insert(k.clone(), v.clone());
         }
     }
-    let n = cases.len();
-    let mut outcomes = Vec::with_capacity(n);
-    for (i, (case, root)) in cases.iter().map(|c| (&c.0, &c.1)).enumerate() {
+    // Everything that can be checked is, before the first call.
+    let mut hashes = Vec::with_capacity(cases.len());
+    for (case, _) in cases.iter().map(|c| (&c.0, &c.1)) {
         if !plain_name(&case.id) {
             return Err(format!("case id {:?} can't name a reference file", case.id));
         }
+        hashes.push(case_sha256(case)?);
+    }
+    let n = cases.len();
+    let mut outcomes = Vec::with_capacity(n);
+    for (i, ((case, root), hash)) in cases.iter().map(|c| (&c.0, &c.1)).zip(hashes).enumerate() {
         let file = dir.join(format!("{}.md", case.id));
         let (t, tools) = answer_case(
             model,
@@ -168,7 +181,7 @@ pub async fn write_references(
             },
         }
         let entry = serde_json::json!({
-            "case_sha256": case_sha256(case),
+            "case_sha256": hash,
             "failed": error.is_some(),
             "error": error,
             "stop": t.result.stop,
@@ -176,6 +189,10 @@ pub async fn write_references(
             "tool_calls": tools.calls().len(),
         });
         meta["cases"][case.id.as_str()] = entry;
+        // After every case, so a run that stops early leaves a meta.json that matches the files.
+        let text = serde_json::to_string_pretty(&meta).map_err(|e| e.to_string())?;
+        std::fs::write(&meta_path, text + "\n")
+            .map_err(|e| format!("{}: {e}", meta_path.display()))?;
         eprintln!(
             "[eval references] {}/{n} {}: {}",
             i + 1,
@@ -187,8 +204,6 @@ pub async fn write_references(
             error,
         });
     }
-    let text = serde_json::to_string_pretty(&meta).map_err(|e| e.to_string())?;
-    std::fs::write(&meta_path, text + "\n").map_err(|e| format!("{}: {e}", meta_path.display()))?;
     Ok(outcomes)
 }
 
@@ -284,7 +299,8 @@ pub fn stale(meta: &serde_json::Value, cases: &BTreeMap<&str, &Case>, ids: &[&st
             let Some(case) = cases.get(*id) else {
                 return false;
             };
-            meta["cases"][**id]["case_sha256"].as_str() != Some(case_sha256(case).as_str())
+            // A case that can't be hashed counts as stale: it's refused, never trusted.
+            meta["cases"][**id]["case_sha256"].as_str() != case_sha256(case).ok().as_deref()
         })
         .map(|id| id.to_string())
         .collect()
@@ -380,7 +396,7 @@ mod tests {
         assert_eq!(meta["cases"][b.as_str()]["failed"], true);
         assert_eq!(
             meta["cases"][a.as_str()]["case_sha256"],
-            case_sha256(&cases[0].0)
+            case_sha256(&cases[0].0).unwrap()
         );
 
         // Another model's references in the same folder are refused, not mixed.
@@ -389,6 +405,15 @@ mod tests {
             .await
             .unwrap_err();
         assert!(e.contains("m-1"), "{e}");
+
+        // So is the same model with other settings or holdout status.
+        let mut other = head("m-1");
+        other["holdout"] = serde_json::json!(true);
+        let m = Scripted(Mutex::new(["x"].map(String::from).into()));
+        let e = write_references(&m, &model_ref(), &set, &cases[..1], &dir, other, 256)
+            .await
+            .unwrap_err();
+        assert!(e.contains("holdout"), "{e}");
 
         // An empty answer is a failure too.
         let m = Scripted(Mutex::new([""].map(String::from).into()));
@@ -405,7 +430,7 @@ mod tests {
         let (case, _) = &set.cases[0];
         let mut changed = case.clone();
         changed.turns[0].content.push_str(" (edited)");
-        let meta = serde_json::json!({ "cases": { case.id.as_str(): { "case_sha256": case_sha256(case) } } });
+        let meta = serde_json::json!({ "cases": { case.id.as_str(): { "case_sha256": case_sha256(case).unwrap() } } });
         let ids = [case.id.as_str()];
         let same: BTreeMap<&str, &Case> = [(case.id.as_str(), case)].into();
         assert!(stale(&meta, &same, &ids).is_empty());
