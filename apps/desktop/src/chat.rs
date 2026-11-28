@@ -1057,6 +1057,18 @@ mod tests {
             .unwrap()
             .expect("a run record");
         assert_eq!(run.stop, StopReason::Cancelled);
+        // The Done event is sent after the row is stored and the busy flag is released, so
+        // wait for it rather than assume it's there (flaky on CI otherwise).
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|e| matches!(e, ChatEvent::Done { .. }))
+        {
+            assert!(std::time::Instant::now() < deadline, "no Done event");
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
         assert!(matches!(
             events.lock().unwrap().last(),
             Some(ChatEvent::Done {
