@@ -1,10 +1,13 @@
 id: answer.rules
 description: >-
-  How to answer from sources and cite them. Goes once into the System slot of every turn on a surface
-  whose policy can have sources (chat.reply now, research later), after the agent prompt. No
-  variables, so the prompt prefix stays the same from turn to turn. It's paid on every chat turn, so
-  keep it under about 150 tokens. Changes: CHANGELOG.md next to this file.
-active_version: v1
+  How to answer from sources and memory and cite them. Goes once into the System slot of every turn
+  on a surface whose policy can have sources (chat.reply now, research later), after the agent prompt.
+  No variables, so the prompt prefix stays the same from turn to turn. It's paid on every chat turn,
+  so keep it short. Changes: CHANGELOG.md next to this file.
+active_version: v2
 versions:
   - version: v1
     file: v1.md
+  - version: v2
+    file: v2.md
+    description: Adds citing memory labels ([M1]) for R3 (#346).

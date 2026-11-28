@@ -4,6 +4,7 @@ import type { Dropped } from "./Dropped";
 import type { Id } from "./Id";
 import type { StopReason } from "./StopReason";
 import type { Usage } from "./Usage";
+import type { UsedMemory } from "./UsedMemory";
 
 /**
  * The typed result of a run (ADR-0020 §8).
@@ -37,4 +38,9 @@ dropped: Array<Dropped>,
 /**
  * How the context was used; `None` for a call that didn't go through the assembler.
  */
-context: ContextUse | null, };
+context: ContextUse | null, 
+/**
+ * The memory items the answer used. The meter leaves it empty; the host fills it after
+ * the run from what it put in the context and the answer's citations (ADR-0020 §4.1).
+ */
+memories: Array<UsedMemory>, };
