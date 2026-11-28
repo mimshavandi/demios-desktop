@@ -13,6 +13,8 @@
 //! - `judge`: scores a parity answers report with the fixed judge named in `judge.yaml`
 //!   (#355); a separate step, and the only one that sends anything (to the judge).
 //! - `calibrate`: the pairwise judge's agreement with people (Cohen's κ) over labelled pairs.
+//! - `references`: reference answers from Claude or ChatGPT (#407), sent to that provider
+//!   with the owner's key, only when run.
 //!
 //! Every answering run writes one JSON report (schema `dn.eval.v1`), never anything else, and
 //! sends nothing anywhere: the model is a local GGUF or the endpoint you name.
@@ -22,6 +24,7 @@ mod judge;
 mod judge_memory;
 mod longmemeval;
 mod parity;
+mod references;
 mod speed;
 
 use crate::LoadArgs;
@@ -58,6 +61,9 @@ enum Suite {
     /// How far the pairwise judge agrees with people: agreement and Cohen's κ over a
     /// labels file of answer pairs (dn.labels.v1).
     Calibrate(calibrate::CalibrateArgs),
+    /// Reference answers for pairwise judging, from Claude or ChatGPT through their APIs
+    /// (the owner's keys): each case answered as parity answers it.
+    References(references::ReferencesArgs),
 }
 
 pub async fn run(a: EvalArgs) -> Result<(), String> {
@@ -67,6 +73,7 @@ pub async fn run(a: EvalArgs) -> Result<(), String> {
         Suite::Speed(a) => speed::run(a).await,
         Suite::Judge(a) => judge::run(a).await,
         Suite::Calibrate(a) => calibrate::run(a).await,
+        Suite::References(a) => references::run(a).await,
     }
 }
 

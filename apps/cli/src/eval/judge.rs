@@ -914,6 +914,7 @@ struct JudgeReport<'a> {
 }
 
 /// The reference answers, read before the first judge call.
+#[derive(Debug)]
 pub struct References {
     /// Source name → case id → reference text.
     pub sources: BTreeMap<String, BTreeMap<String, String>>,
@@ -922,7 +923,7 @@ pub struct References {
 }
 
 /// A name that is safe as one path component (`claude`, `chat-001`, `h-007`).
-fn plain_name(s: &str) -> bool {
+pub(crate) fn plain_name(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 128
         && s.chars()
@@ -977,7 +978,13 @@ impl References {
             let m = sdir.join("meta.json");
             let mv = match std::fs::read_to_string(&m) {
                 Ok(s) => serde_json::from_str(&s).map_err(|e| format!("{}: {e}", m.display()))?,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => serde_json::Value::Null,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    return Err(format!(
+                        "{}: no meta.json; references are made with dn eval references, which \
+                         records the model and each case as answered",
+                        sdir.display()
+                    ));
+                }
                 Err(e) => return Err(format!("{}: {e}", m.display())),
             };
             meta.insert(name.clone(), mv);
@@ -1059,6 +1066,20 @@ pub async fn run(a: JudgeArgs) -> Result<(), String> {
     let set = Set::read(set_dir, a.holdout.as_deref(), &a.skills, false)?;
     let by_id: BTreeMap<&str, &(Case, SetRoot)> =
         set.cases.iter().map(|c| (c.0.id.as_str(), c)).collect();
+    if let Some(r) = &refs {
+        let cases: BTreeMap<&str, &Case> = by_id.iter().map(|(k, v)| (*k, &v.0)).collect();
+        for (source, by_case) in &r.sources {
+            let ids: Vec<&str> = by_case.keys().map(String::as_str).collect();
+            let stale = super::references::stale(&r.meta[source.as_str()], &cases, &ids);
+            if !stale.is_empty() {
+                return Err(format!(
+                    "{source}: the references for {} were made from an earlier version of the \
+                     case; make them again with dn eval references --only",
+                    stale.join(", ")
+                ));
+            }
+        }
+    }
     let mut inputs = Vec::with_capacity(answers.items.len());
     let mut contexts = Vec::with_capacity(answers.items.len());
     for ans in &answers.items {
@@ -1567,6 +1588,20 @@ mod tests {
         std::fs::create_dir_all(dir.join("chatgpt")).unwrap();
         std::fs::write(dir.join("claude/chat-001.md"), "ref c").unwrap();
         std::fs::write(dir.join("claude/meta.json"), r#"{"model":"x"}"#).unwrap();
+        let no_meta = References::read(
+            &dir,
+            &Answers {
+                schema: "dn.eval.v1".into(),
+                suite: "parity".into(),
+                summary: serde_json::json!({}),
+                items: vec![answer(&[], &[], "x")],
+            },
+        );
+        assert!(
+            no_meta.unwrap_err().contains("meta.json"),
+            "chatgpt has none"
+        );
+        std::fs::write(dir.join("chatgpt/meta.json"), r#"{"model":"y"}"#).unwrap();
         let answers = Answers {
             schema: "dn.eval.v1".into(),
             suite: "parity".into(),
@@ -1578,7 +1613,7 @@ mod tests {
         assert_eq!(r.sources["claude"]["chat-001"], "ref c");
         assert!(r.sources["chatgpt"].is_empty());
         assert_eq!(r.meta["claude"]["model"], "x");
-        assert!(r.meta["chatgpt"].is_null());
+        assert_eq!(r.meta["chatgpt"]["model"], "y");
 
         let mut bad = answers;
         bad.items[0].id = "../x".into();
