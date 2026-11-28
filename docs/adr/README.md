@@ -24,3 +24,4 @@ Format: Context → Decision → Options (table) → Trade-offs → Consequences
 | [0018](0018-connect-catalogue.md) | Connect: a curated catalogue of tool servers, with no connector code to maintain | Accepted |
 | [0019](0019-iphone-app.md) | The iPhone app: a companion for approvals and add-on views, paired with a Node | Accepted |
 | [0020](0020-agent-runtime.md) | One agent runtime: harness, context and memory for every surface | Accepted |
+| [0021](0021-skill-scripts.md) | Running skill scripts: an OS sandbox per run, managed runtimes, no silent fallback | Proposed |
