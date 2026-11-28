@@ -4,23 +4,15 @@ Information under § 5 of the German Digital Services Act (Digitale-Dienste-Gese
 
 ## Provider
 
-DigiNote, Inc.
-A corporation under the laws of the State of Delaware, USA (Delaware C Corporation)
+Mahdi Shavandi
 Niederkasseler Kirchweg 85
 40547 Düsseldorf
 Germany
-
-Represented by: Mahdi Shavandi
 
 ## Contact
 
 Email: hello@almend.ai. We reply within 72 hours.
 A telephone or postal contact is available on request.
-
-## Register
-
-Delaware Department of State, Division of Corporations
-File number: 7278083
 
 ## Consumer dispute resolution
 

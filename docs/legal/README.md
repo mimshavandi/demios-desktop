@@ -8,4 +8,4 @@ Each document is published at a stable URL and linked from the app and from alme
 | [Accessibility statement](accessibility.md) | https://almend.ai/accessibility | Final text |
 | [Legal notice (Impressum)](impressum.md) | https://almend.ai/impressum | Final text, pending the owner's approval |
 
-Publisher and controller: DigiNote, Inc., Niederkasseler Kirchweg 85, 40547 Düsseldorf, Germany. Contact: hello@almend.ai.
+Publisher and controller: Mahdi Shavandi, Niederkasseler Kirchweg 85, 40547 Düsseldorf, Germany. Contact: hello@almend.ai.

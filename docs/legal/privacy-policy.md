@@ -4,9 +4,9 @@ Last updated: set on publication
 
 ## Who we are
 
-Almend Desktop ("the app") is a source-available desktop app licensed under the PolyForm Shield License 1.0.0 (earlier versions under Apache-2.0). It is published by **DigiNote, Inc.**, which is responsible for this policy and is the controller for the processing described in [Data protection (GDPR)](#data-protection-gdpr). DigiNote, Inc. is also the provider of the app under the EU AI Act. App id: `io.demios.app`.
+Almend Desktop ("the app") is a source-available desktop app licensed under the PolyForm Shield License 1.0.0 (earlier versions under Apache-2.0). It is published by **Mahdi Shavandi**, who is responsible for this policy and is the controller for the processing described in [Data protection (GDPR)](#data-protection-gdpr). Mahdi Shavandi is also the provider of the app under the EU AI Act. App id: `io.demios.app`.
 
-DigiNote, Inc.
+Mahdi Shavandi
 Niederkasseler Kirchweg 85
 40547 Düsseldorf
 Germany
@@ -139,7 +139,7 @@ This section gives the information required by Articles 13 and 14 of the EU Gene
 
 ### Controller
 
-DigiNote, Inc., at the address in [Who we are](#who-we-are). Email: hello@almend.ai. No data protection officer is designated. None is required: fewer than 20 people regularly process personal data for us (§ 38(1) BDSG), and our core activities don't involve large-scale monitoring or special categories of data (Art. 37(1) GDPR). For data protection questions, write to hello@almend.ai.
+Mahdi Shavandi, at the address in [Who we are](#who-we-are). Email: hello@almend.ai. No data protection officer is designated. None is required: fewer than 20 people regularly process personal data for us (§ 38(1) BDSG), and our core activities don't involve large-scale monitoring or special categories of data (Art. 37(1) GDPR). For data protection questions, write to hello@almend.ai.
 
 ### What we process, why, and on what legal basis
 
@@ -222,7 +222,7 @@ If the app starts sending any data to us (for example optional crash reports), w
 
 ## Contact
 
-DigiNote, Inc. · Niederkasseler Kirchweg 85, 40547 Düsseldorf, Germany · hello@almend.ai · [GitHub issues](https://github.com/mimshavandi/almend-desktop/issues)
+Mahdi Shavandi · Niederkasseler Kirchweg 85, 40547 Düsseldorf, Germany · hello@almend.ai · [GitHub issues](https://github.com/mimshavandi/almend-desktop/issues)
 
 Legal notice (Impressum): https://almend.ai/impressum
 
