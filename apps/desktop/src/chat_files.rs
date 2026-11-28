@@ -173,6 +173,9 @@ pub struct AddedFiles {
     pub cancelled: bool,
     pub added: Vec<ChatFile>,
     pub skipped: Vec<SkippedFile>,
+    /// The chat the files are in: the one given, or the one created for them (a new chat has
+    /// no conversation until something is in it). `None` when cancelled without a chat.
+    pub conversation_id: Option<Id>,
 }
 
 fn root(state: &AppState) -> IpcResult<PathBuf> {
@@ -180,6 +183,22 @@ fn root(state: &AppState) -> IpcResult<PathBuf> {
         .chat_files_root()
         .map(Path::to_path_buf)
         .ok_or_else(|| IpcError::new("unavailable", "Chat files aren't available here."))
+}
+
+/// [`add`] into `conversation_id`, or into a new chat (in `project_id`, if given) created for
+/// the picked files. The new chat stays even if every file was refused: the person picked
+/// something, and the reasons show in it.
+pub fn add_to(
+    state: &AppState,
+    conversation_id: Option<Id>,
+    project_id: Option<Id>,
+    paths: &[PathBuf],
+) -> IpcResult<AddedFiles> {
+    let c = match conversation_id {
+        Some(c) => c,
+        None => state.create_conversation_in(project_id)?.id,
+    };
+    add(state, c, paths)
 }
 
 /// Copies picked files into the chat, in order; files that aren't data files or are past
@@ -192,6 +211,7 @@ pub fn add(state: &AppState, conversation_id: Id, paths: &[PathBuf]) -> IpcResul
         cancelled: false,
         added: vec![],
         skipped: vec![],
+        conversation_id: Some(conversation_id),
     };
     for p in paths {
         let name = display_name(p);
@@ -431,15 +451,20 @@ pub async fn add_chat_files(
     app: tauri::AppHandle,
     window: tauri::Window,
     state: AppStateRef<'_>,
-    conversation_id: Id,
+    conversation_id: Option<Id>,
+    project_id: Option<Id>,
 ) -> IpcResult<AddedFiles> {
     use tauri_plugin_dialog::DialogExt;
-    crate::commands::blocking(&state, move |s| {
-        dn_store::chat::get_conversation(&*s.db()?, conversation_id)
-            .map(|_| ())
-            .map_err(Into::into)
-    })
-    .await?;
+    // A given chat must exist; a new one is only created once something was picked, so a
+    // cancelled picker leaves no empty chat behind.
+    if let Some(c) = conversation_id {
+        crate::commands::blocking(&state, move |s| {
+            dn_store::chat::get_conversation(&*s.db()?, c)
+                .map(|_| ())
+                .map_err(Into::into)
+        })
+        .await?;
+    }
     let (tx, rx) = tokio::sync::oneshot::channel();
     app.dialog()
         .file()
@@ -452,38 +477,53 @@ pub async fn add_chat_files(
             let _ = tx.send(picked);
         });
     let picked = rx.await.ok().flatten();
+    let picked = picked.filter(|p| !p.is_empty());
     let Some(picked) = picked else {
         return Ok(AddedFiles {
             cancelled: true,
             added: vec![],
             skipped: vec![],
+            conversation_id,
         });
     };
     let paths: Vec<PathBuf> = picked
         .into_iter()
         .filter_map(|p| p.into_path().ok())
         .collect();
-    crate::commands::blocking(&state, move |s| add(s, conversation_id, &paths)).await
+    crate::commands::blocking(&state, move |s| {
+        add_to(s, conversation_id, project_id, &paths)
+    })
+    .await
 }
 
-/// Removes a file (Undo with `restore_chat_file` for [`UNDO_MS`]).
+/// Removes a file (Undo with `restore_chat_file` for [`UNDO_MS`]). The same shape as
+/// `remove_project_file`; a file that isn't there is "not found".
 #[tauri::command]
 pub async fn remove_chat_file(
     state: AppStateRef<'_>,
     conversation_id: Id,
     file_id: Id,
-) -> IpcResult<Option<RemovedFile>> {
-    crate::commands::blocking(&state, move |s| remove(s, conversation_id, file_id)).await
+) -> IpcResult<()> {
+    crate::commands::blocking(&state, move |s| {
+        match remove(s, conversation_id, file_id)? {
+            Some(_) => Ok(()),
+            None => Err(IpcError::new("not_found", "This file isn't in this chat.")),
+        }
+    })
+    .await
 }
 
-/// Undo of `remove_chat_file`.
+/// Undo of `remove_chat_file` (like `restore_project_file`).
 #[tauri::command]
 pub async fn restore_chat_file(
     state: AppStateRef<'_>,
     conversation_id: Id,
     file_id: Id,
-) -> IpcResult<ChatFile> {
-    crate::commands::blocking(&state, move |s| restore(s, conversation_id, file_id)).await
+) -> IpcResult<()> {
+    crate::commands::blocking(&state, move |s| {
+        restore(s, conversation_id, file_id).map(|_| ())
+    })
+    .await
 }
 
 #[cfg(test)]
@@ -687,6 +727,21 @@ mod tests {
             .map(|d| d.count())
             .unwrap_or(0);
         assert_eq!(left, 0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn files_picked_in_a_new_chat_create_it_in_its_project() {
+        let (st, dir) = state();
+        let p = dn_store::project::create_project(&st.db().unwrap(), "Trips").unwrap();
+        let out = add_to(&st, None, Some(p.id), &[src(&dir, "a.csv", b"x\n1\n")]).unwrap();
+        let c = out.conversation_id.unwrap();
+        assert_eq!(out.added.len(), 1);
+        let conv = dn_store::chat::get_conversation(&st.db().unwrap(), c).unwrap();
+        assert_eq!(conv.project_id, Some(p.id));
+        // An existing chat is used as given.
+        let again = add_to(&st, Some(c), None, &[src(&dir, "b.csv", b"x\n1\n")]).unwrap();
+        assert_eq!(again.conversation_id, Some(c));
         let _ = std::fs::remove_dir_all(dir);
     }
 }
