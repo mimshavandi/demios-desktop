@@ -1,11 +1,15 @@
 {
   "format": "dn.speed.v1",
-  "about": "Built-in cases for `dn eval speed` (ADR-0020 §8). Cold: every rep a different prompt, so nothing can be reused. Warm: the same prompt again after a priming request, so a backend that reuses prefixes can. prompt_tokens are approximate; reports carry the real counts.",
+  "about": "Built-in cases for `dn eval speed` (ADR-0020 §8). Cold: every rep a different prompt, so nothing can be reused. Warm: the same prompt again after a priming request, so a backend that reuses prefixes can. next_turn times a chat's second turn and switch_back the return to a chat after another one; cold or warm is the model's --prompt-cache setting, so run the suite with and without it. prompt_tokens are approximate; reports carry the real counts.",
   "cases": [
     { "name": "first-after-load", "kind": "after_load", "prompt_tokens": 64, "gen_tokens": 128 },
     { "name": "short-cold", "prompt_tokens": 64, "gen_tokens": 128, "cache": "cold", "reps": 5 },
     { "name": "short-warm", "prompt_tokens": 64, "gen_tokens": 128, "cache": "warm", "reps": 5 },
     { "name": "prefix-2k-cold", "prompt_tokens": 2048, "gen_tokens": 128, "cache": "cold", "reps": 5 },
-    { "name": "prefix-2k-warm", "prompt_tokens": 2048, "gen_tokens": 128, "cache": "warm", "reps": 5 }
+    { "name": "prefix-2k-warm", "prompt_tokens": 2048, "gen_tokens": 128, "cache": "warm", "reps": 5 },
+    { "name": "next-turn-2k", "kind": "next_turn", "prompt_tokens": 2048, "gen_tokens": 128, "reps": 3 },
+    { "name": "next-turn-8k", "kind": "next_turn", "prompt_tokens": 8192, "gen_tokens": 128, "reps": 3 },
+    { "name": "next-turn-16k", "kind": "next_turn", "prompt_tokens": 16384, "gen_tokens": 128, "reps": 3 },
+    { "name": "switch-back-2k", "kind": "switch_back", "prompt_tokens": 2048, "gen_tokens": 128, "reps": 3 }
   ]
 }
