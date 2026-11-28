@@ -1,6 +1,7 @@
 import { Blocks, Boxes, Cpu, ExternalLink, KeyRound, Server, SlidersHorizontal, Sparkles, Trash2, Wrench } from "lucide-react";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { Api } from "../ipc/commands";
+import { AlmendLockup } from "./AlmendLogo";
 import {
   errorMessage,
   type AddModelLink,
@@ -829,7 +830,10 @@ function GeneralPage({
         <h2 id="about-h">About</h2>
         <div className="row">
           <div className="row-main">
-            <span className="row-title">Almend Desktop {info?.version ?? ""}</span>
+            <span className="row-title about-brand">
+              <AlmendLockup height="var(--dn-space-6)" />
+              <span>Desktop {info?.version ?? ""}</span>
+            </span>
             {(info?.channel != null || info?.commit != null) && (
               <span className="dn-help">
                 {[info.channel === "preview" ? "Preview build (unsigned)" : info.channel, info.commit && `commit ${info.commit}`]

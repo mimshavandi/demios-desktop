@@ -16,6 +16,7 @@ import { AI_DISCLOSURE, AI_FIRST_RUN_NOTICE } from "../ai";
 import { chatModelsAvailable, describeModel } from "../models";
 import { mod } from "../platform";
 import { canRegenerate, type ChatState, type LiveToolCall } from "../state/chat";
+import { AlmendMark } from "./AlmendLogo";
 import { ArtifactCard } from "./ArtifactPane";
 import { Sources } from "./Sources";
 import { Markdown } from "./Markdown";
@@ -223,6 +224,7 @@ export function ChatView(p: Props) {
           )}
           {empty && (
             <div className="welcome">
+              <AlmendMark size="var(--dn-space-12)" className="welcome-mark" />
               <h1>What can I help with?</h1>
               <div className="welcome-model">
                 <ModelBadge info={p.ready ? describeModel(p.model, p.catalog) : null} />
