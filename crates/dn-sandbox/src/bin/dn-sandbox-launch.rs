@@ -11,6 +11,10 @@ fn refuse(reason: impl std::fmt::Display) -> ! {
 }
 
 fn main() {
+    #[cfg(unix)]
+    if let Err(e) = close_inherited_fds() {
+        refuse(format!("closing inherited file descriptors: {e}"));
+    }
     let arg = std::env::args().nth(1).unwrap_or_default();
     if arg == "--check" {
         check();
@@ -41,10 +45,9 @@ fn check() -> ! {
     std::process::exit(0)
 }
 
-/// Every descriptor above stderr must be closed (the app opens its own with close-on-exec);
-/// one left open would reach the runtime, so the run is refused instead.
+/// The descriptors above stderr that are open in this process, other than the listing's own.
 #[cfg(unix)]
-fn no_inherited_fds() -> Result<(), String> {
+fn open_fds() -> Result<Vec<i32>, String> {
     use rustix::fs::{Dir, Mode, OFlags, open};
     use std::os::fd::AsRawFd;
     let list = if cfg!(target_os = "linux") {
@@ -59,17 +62,47 @@ fn no_inherited_fds() -> Result<(), String> {
     )
     .map_err(|e| format!("{list}: {e}"))?;
     let own = fd.as_raw_fd();
+    let mut found = Vec::new();
+    // The listing's descriptor is closed when `dir` is dropped, at the end of this function.
     let dir = Dir::new(fd).map_err(|e| format!("{list}: {e}"))?;
     for entry in dir {
         let entry = entry.map_err(|e| format!("{list}: {e}"))?;
-        let Ok(n) = entry.file_name().to_string_lossy().parse::<i32>() else {
-            continue;
-        };
-        if n > 2 && n != own {
-            return Err(format!("file descriptor {n} would be inherited"));
+        if let Ok(n) = entry.file_name().to_string_lossy().parse::<i32>()
+            && n > 2
+            && n != own
+        {
+            found.push(n);
         }
     }
+    Ok(found)
+}
+
+/// Closes every descriptor above stderr this process inherited without close-on-exec (a
+/// leaky parent, a CI runner, cargo's jobserver), so none reaches the runtime (ADR-0021 §2).
+/// It runs first in `main`, before this process opens anything of its own.
+#[cfg(unix)]
+#[allow(unsafe_code)]
+fn close_inherited_fds() -> Result<(), String> {
+    for n in open_fds()? {
+        // SAFETY: closing a raw descriptor is only unsound if something in this process
+        // still owns it (an `OwnedFd`, `File` or the like would later use or close a reused
+        // number). Nothing does: this runs first in `main`, std opens no descriptor before
+        // `main`, and `open_fds` has already closed its own listing. Every number here was
+        // inherited across `exec` and is unknown to this program. An already-closed number
+        // only gives EBADF, which `close` ignores.
+        unsafe { rustix::io::close(n) };
+    }
     Ok(())
+}
+
+/// Every descriptor above stderr must be closed by now; one still open would reach the
+/// runtime, so the run is refused instead (the check after [`close_inherited_fds`]).
+#[cfg(unix)]
+fn no_inherited_fds() -> Result<(), String> {
+    match open_fds()?.first() {
+        Some(n) => Err(format!("file descriptor {n} would be inherited")),
+        None => Ok(()),
+    }
 }
 
 #[cfg(unix)]
