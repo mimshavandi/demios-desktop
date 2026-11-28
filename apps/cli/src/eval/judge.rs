@@ -4,13 +4,21 @@
 //!
 //! This first step checks each case's `expect.must` / `expect.must_not` (the criteria check):
 //! one judge call per case, with strict JSON out. Tool checks and `expect.numbers` stay
-//! mechanical in the answers report. Pairwise judging against reference answers comes next.
+//! mechanical in the answers report.
+//!
+//! With `--references`, each answer is also compared with each reference source's answer
+//! (`<dir>/<source>/<id>.md`), in both orders: a win or a loss needs both orders to agree,
+//! anything else is a tie. The report gives the win rate (ties half, a failed answer a loss)
+//! and a length-controlled win rate (logistic regression on the length difference, read at
+//! equal length), or says why there isn't one.
 //!
 //! Nothing falls back silently:
 //! - there is no default judge: `--judge` names a `judge.yaml`, and a key variable it names
 //!   must be set;
 //! - a reply that isn't the expected JSON is retried once with the same input; if it fails
 //!   again the case is `judge_error`, with the raw reply, never a pass or a fail;
+//! - a case without a reference is `no_reference` for that source, never a tie;
+//! - a plain-http endpoint off this machine is refused when a key would go to it;
 //! - any `judge_error` makes the report `"judged": "incomplete"` and the command exit with an
 //!   error, after writing the report.
 
@@ -45,6 +53,10 @@ pub struct JudgeArgs {
     /// The private holdout the answers came from, if any (outside any git work tree).
     #[arg(long)]
     holdout: Option<PathBuf>,
+    /// Reference answers for pairwise judging: `<dir>/<source>/<case id>.md`, one folder per
+    /// source (`claude`, `chatgpt`). Needs `pairwise_prompt` in `judge.yaml`.
+    #[arg(long)]
+    references: Option<PathBuf>,
     /// The chat skill library (only read if a case names a skill).
     #[arg(long, default_value = "skills/library")]
     skills: PathBuf,
@@ -65,8 +77,11 @@ pub struct JudgeFile {
     /// The environment variable holding the endpoint's key (the key is never in the file).
     #[serde(default)]
     pub api_key_env: Option<String>,
-    /// The judge's prompt, a versioned file next to `judge.yaml`.
+    /// The judge's prompt for the criteria check, a versioned file next to `judge.yaml`.
     pub prompt: String,
+    /// The prompt for pairwise judging against references (needed with `--references`).
+    #[serde(default)]
+    pub pairwise_prompt: Option<String>,
 }
 
 /// The judge, loaded: its settings, its prompt and the prompt's SHA-256.
@@ -74,6 +89,48 @@ pub struct Judge {
     pub file: JudgeFile,
     pub prompt: String,
     pub prompt_sha256: String,
+    /// The pairwise prompt and its SHA-256, when `judge.yaml` names one.
+    pub pairwise: Option<(String, String)>,
+}
+
+/// A prompt file named in `judge.yaml`: a plain file name next to it, not empty.
+fn read_prompt(judge_yaml: &Path, name: &str) -> Result<(String, String), String> {
+    let rel = Path::new(name);
+    if rel.is_absolute()
+        || rel
+            .components()
+            .any(|c| !matches!(c, std::path::Component::Normal(_)))
+    {
+        return Err(format!(
+            "{}: a prompt must be a file name next to judge.yaml",
+            judge_yaml.display()
+        ));
+    }
+    let p = judge_yaml.parent().unwrap_or(Path::new(".")).join(rel);
+    let text = std::fs::read_to_string(&p).map_err(|e| format!("{}: {e}", p.display()))?;
+    if text.trim().is_empty() {
+        return Err(format!("{}: the prompt is empty", p.display()));
+    }
+    let sha = sha256_hex(text.as_bytes());
+    Ok((text, sha))
+}
+
+/// Whether a plain-`http` endpoint's host is this machine (`localhost`, `127.x`, `::1`).
+fn loopback_http(endpoint: &str) -> bool {
+    let rest = endpoint.get(7..).unwrap_or("");
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host_port = authority.rsplit('@').next().unwrap_or("");
+    let host = if let Some(v6) = host_port.strip_prefix('[') {
+        v6.split(']').next().unwrap_or("")
+    } else {
+        host_port.split(':').next().unwrap_or("")
+    };
+    let host = host.to_ascii_lowercase();
+    host == "localhost"
+        || host == "::1"
+        || host
+            .parse::<std::net::Ipv4Addr>()
+            .is_ok_and(|a| a.is_loopback())
 }
 
 impl Judge {
@@ -88,27 +145,29 @@ impl Judge {
                 path.display()
             ));
         }
-        let rel = Path::new(&file.prompt);
-        if rel.is_absolute()
-            || rel
-                .components()
-                .any(|c| !matches!(c, std::path::Component::Normal(_)))
+        let ep = file.endpoint.trim();
+        if file.api_key_env.is_some()
+            && ep
+                .get(..7)
+                .is_some_and(|p| p.eq_ignore_ascii_case("http://"))
+            && !loopback_http(ep)
         {
             return Err(format!(
-                "{}: prompt must be a file name next to judge.yaml",
+                "{}: the endpoint is plain http and not on this machine; the key and the cases \
+                 would go out unencrypted: use https",
                 path.display()
             ));
         }
-        let p = path.parent().unwrap_or(Path::new(".")).join(rel);
-        let prompt = std::fs::read_to_string(&p).map_err(|e| format!("{}: {e}", p.display()))?;
-        if prompt.trim().is_empty() {
-            return Err(format!("{}: the judge prompt is empty", p.display()));
-        }
-        let prompt_sha256 = sha256_hex(prompt.as_bytes());
+        let (prompt, prompt_sha256) = read_prompt(path, &file.prompt)?;
+        let pairwise = match &file.pairwise_prompt {
+            Some(n) => Some(read_prompt(path, n)?),
+            None => None,
+        };
         Ok(Self {
             file,
             prompt,
             prompt_sha256,
+            pairwise,
         })
     }
 
@@ -184,9 +243,67 @@ impl Answers {
 /// the tool calls and the answer, each as an untrusted block; then the numbered criteria
 /// (written by us) and the reply format.
 pub fn render(case: &Case, root: &SetRoot, answer: &Answer) -> Result<String, String> {
+    let mut out = context(case, root)?;
+    if !answer.tool_calls.is_empty() {
+        out.push_str("\nTool calls the assistant made, with their results:\n");
+        for c in &answer.tool_calls {
+            let mut s = SourceRef::new(format!("tool:{}", c.name))
+                .attr("arguments", c.arguments.to_string());
+            if c.declined {
+                s = s.attr("declined", "true");
+            }
+            out.push_str(&block(&s, &c.result));
+            out.push('\n');
+        }
+    }
+    out.push_str("\nThe answer to judge:\n");
+    out.push_str(&block(&SourceRef::new("answer"), &answer.text));
+    out.push_str("\n\nCriteria. The answer must:\n");
+    for (i, m) in answer.expect.must.iter().enumerate() {
+        out.push_str(&format!("{}. {m}\n", i + 1));
+    }
+    if answer.expect.must.is_empty() {
+        out.push_str("(none)\n");
+    }
+    out.push_str("\nThe answer must not:\n");
+    for (i, m) in answer.expect.must_not.iter().enumerate() {
+        out.push_str(&format!("{}. {m}\n", i + 1));
+    }
+    if answer.expect.must_not.is_empty() {
+        out.push_str("(none)\n");
+    }
+    out.push_str(&format!(
+        "\nReply with one JSON object and nothing else: {{\"must\": [{{\"i\": 1, \"met\": true, \
+         \"why\": \"…\"}}], \"must_not\": [{{\"i\": 1, \"broken\": false, \"why\": \"…\"}}]}}, \
+         with exactly one entry for each numbered criterion ({} under must, {} under must_not).\n",
+        answer.expect.must.len(),
+        answer.expect.must_not.len()
+    ));
+    Ok(out)
+}
+
+/// The pairwise input: the case, then two answers as `A` and `B`, and the reply format. The
+/// tool calls aren't shown: only Demios's are recorded, and showing them for one side only
+/// would favour it.
+pub fn render_pair(context: &str, a: &str, b: &str) -> String {
+    let mut out = context.to_owned();
+    out.push_str("\nAnswer A:\n");
+    out.push_str(&block(&SourceRef::new("answer_a"), a));
+    out.push_str("\n\nAnswer B:\n");
+    out.push_str(&block(&SourceRef::new("answer_b"), b));
+    out.push_str(
+        "\n\nReply with one JSON object and nothing else: {\"better\": \"A\" or \"B\" or \
+         \"tie\", \"why\": \"…\"}\n",
+    );
+    out
+}
+
+/// What both checks show of the case: the user's language, the project's instructions and
+/// files, and the conversation, each as an untrusted block.
+pub fn context(case: &Case, root: &SetRoot) -> Result<String, String> {
     let mut out = format!(
         "Case {} (the user's language: {}).\n\n{NOTICE}\n",
-        answer.id, case.lang
+        case.id, case.lang
     );
     if let Some(i) = case.project.as_ref().and_then(|p| p.instructions.as_ref()) {
         out.push_str("\nThe project's instructions:\n");
@@ -223,41 +340,6 @@ pub fn render(case: &Case, root: &SetRoot, answer: &Answer) -> Result<String, St
         ));
         out.push('\n');
     }
-    if !answer.tool_calls.is_empty() {
-        out.push_str("\nTool calls the assistant made, with their results:\n");
-        for c in &answer.tool_calls {
-            let mut s = SourceRef::new(format!("tool:{}", c.name))
-                .attr("arguments", c.arguments.to_string());
-            if c.declined {
-                s = s.attr("declined", "true");
-            }
-            out.push_str(&block(&s, &c.result));
-            out.push('\n');
-        }
-    }
-    out.push_str("\nThe answer to judge:\n");
-    out.push_str(&block(&SourceRef::new("answer"), &answer.text));
-    out.push_str("\n\nCriteria. The answer must:\n");
-    for (i, m) in answer.expect.must.iter().enumerate() {
-        out.push_str(&format!("{}. {m}\n", i + 1));
-    }
-    if answer.expect.must.is_empty() {
-        out.push_str("(none)\n");
-    }
-    out.push_str("\nThe answer must not:\n");
-    for (i, m) in answer.expect.must_not.iter().enumerate() {
-        out.push_str(&format!("{}. {m}\n", i + 1));
-    }
-    if answer.expect.must_not.is_empty() {
-        out.push_str("(none)\n");
-    }
-    out.push_str(&format!(
-        "\nReply with one JSON object and nothing else: {{\"must\": [{{\"i\": 1, \"met\": true, \
-         \"why\": \"…\"}}], \"must_not\": [{{\"i\": 1, \"broken\": false, \"why\": \"…\"}}]}}, \
-         with exactly one entry for each numbered criterion ({} under must, {} under must_not).\n",
-        answer.expect.must.len(),
-        answer.expect.must_not.len()
-    ));
     Ok(out)
 }
 
@@ -302,14 +384,8 @@ pub fn parse_reply(
     must: &[String],
     must_not: &[String],
 ) -> Result<(Vec<Verdict>, Vec<Verdict>), String> {
-    let t = reply.trim();
-    let t = t
-        .strip_prefix("```json")
-        .or_else(|| t.strip_prefix("```"))
-        .and_then(|s| s.strip_suffix("```"))
-        .map(str::trim)
-        .unwrap_or(t);
-    let r: Reply = serde_json::from_str(t).map_err(|e| format!("not the expected JSON: {e}"))?;
+    let r: Reply =
+        serde_json::from_str(unfenced(reply)).map_err(|e| format!("not the expected JSON: {e}"))?;
     let must_v = ordered(
         "must",
         must,
@@ -324,6 +400,16 @@ pub fn parse_reply(
             .collect(),
     )?;
     Ok((must_v, must_not_v))
+}
+
+/// The reply without a ```json fence around it.
+fn unfenced(reply: &str) -> &str {
+    let t = reply.trim();
+    t.strip_prefix("```json")
+        .or_else(|| t.strip_prefix("```"))
+        .and_then(|s| s.strip_suffix("```"))
+        .map(str::trim)
+        .unwrap_or(t)
 }
 
 fn ordered(
@@ -379,6 +465,9 @@ pub struct Judged {
     pub raw_reply: Option<String>,
     /// The judge's runs (usage, timings), one per attempt.
     pub judge_runs: Vec<dn_core::run::RunResult>,
+    /// Pairwise against each reference source (with `--references`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub pairwise: Vec<Pairwise>,
 }
 
 /// Judges one case: no call when there's no answer or no criteria; otherwise up to
@@ -400,6 +489,7 @@ pub async fn judge_case(
         judge_error: None,
         raw_reply: None,
         judge_runs: Vec::new(),
+        pairwise: Vec::new(),
     };
     if answer.error.is_some() {
         j.status = Status::NoAnswer;
@@ -453,11 +543,305 @@ pub async fn judge_case(
     j
 }
 
+// ---- pairwise against references
+
+/// Which answer the judge preferred.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub enum Better {
+    A,
+    B,
+    #[serde(rename = "tie")]
+    Tie,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PairReply {
+    better: Better,
+    why: String,
+}
+
+/// A pairwise reply: `{"better": "A" | "B" | "tie", "why": "…"}` and nothing else.
+pub fn parse_pair(reply: &str) -> Result<(Better, String), String> {
+    let r: PairReply =
+        serde_json::from_str(unfenced(reply)).map_err(|e| format!("not the expected JSON: {e}"))?;
+    Ok((r.better, r.why))
+}
+
+/// How Demios's answer did against one reference, over both orders.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Outcome {
+    /// Preferred in both orders.
+    Win,
+    /// The reference preferred in both orders.
+    Loss,
+    /// A tie, or the two orders disagreed.
+    Tie,
+    /// There's no reference for this case from this source.
+    NoReference,
+    /// The answer run failed: counted as a loss in the win rate.
+    NoAnswer,
+    /// An order's reply wasn't usable twice.
+    JudgeError,
+}
+
+/// One order of a comparison.
+#[derive(Debug, Serialize)]
+pub struct Order {
+    /// Which answer was shown as A: `answer` (Demios's) or `reference`.
+    pub a: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub better: Option<Better>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub judge_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw_reply: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct Pairwise {
+    pub source: String,
+    pub outcome: Outcome,
+    /// The two orders gave different verdicts: a sign of position bias.
+    pub orders_disagree: bool,
+    pub answer_chars: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reference_chars: Option<usize>,
+    pub orders: Vec<Order>,
+    pub judge_runs: Vec<dn_core::run::RunResult>,
+}
+
+/// One order: up to [`ATTEMPTS`] calls with the same input.
+async fn ask_pair(
+    model: &dyn ChatModel,
+    judge_ref: &ModelRef,
+    system: &str,
+    input: &str,
+    a: &'static str,
+    runs: &mut Vec<dn_core::run::RunResult>,
+) -> Order {
+    let cfg = eval_config("eval.judge.pairwise", judge_ref, Some(JUDGE_MAX_TOKENS));
+    let mut o = Order {
+        a,
+        better: None,
+        why: None,
+        judge_error: None,
+        raw_reply: None,
+    };
+    for _ in 0..ATTEMPTS {
+        let history = vec![
+            ChatMessage::text(Role::System, system.to_owned()),
+            ChatMessage::text(Role::User, input.to_owned()),
+        ];
+        let Turn {
+            text,
+            result,
+            error,
+        } = turn(model, &cfg, history).await;
+        runs.push(result);
+        if let Some(e) = error {
+            o.judge_error = Some(format!("the judge call failed: {e}"));
+            o.raw_reply = None;
+            continue;
+        }
+        match parse_pair(&text) {
+            Ok((better, why)) => {
+                o.better = Some(better);
+                o.why = Some(why);
+                o.judge_error = None;
+                o.raw_reply = None;
+                return o;
+            }
+            Err(e) => {
+                o.judge_error = Some(e);
+                o.raw_reply = Some(text);
+            }
+        }
+    }
+    o
+}
+
+/// Demios's answer against one reference, in both orders (answer first, then reference
+/// first). A win or a loss needs both orders to agree; anything else is a tie.
+pub async fn judge_pair(
+    model: &dyn ChatModel,
+    judge_ref: &ModelRef,
+    system: &str,
+    context: &str,
+    answer: &Answer,
+    source: &str,
+    reference: Option<&str>,
+) -> Pairwise {
+    let mut p = Pairwise {
+        source: source.to_owned(),
+        outcome: Outcome::NoReference,
+        orders_disagree: false,
+        answer_chars: answer.text.chars().count(),
+        reference_chars: reference.map(|r| r.chars().count()),
+        orders: Vec::new(),
+        judge_runs: Vec::new(),
+    };
+    let Some(reference) = reference else {
+        return p;
+    };
+    if answer.error.is_some() {
+        p.outcome = Outcome::NoAnswer;
+        return p;
+    }
+    let first = render_pair(context, &answer.text, reference);
+    let second = render_pair(context, reference, &answer.text);
+    let o1 = ask_pair(
+        model,
+        judge_ref,
+        system,
+        &first,
+        "answer",
+        &mut p.judge_runs,
+    )
+    .await;
+    let o2 = ask_pair(
+        model,
+        judge_ref,
+        system,
+        &second,
+        "reference",
+        &mut p.judge_runs,
+    )
+    .await;
+    // Whom each order preferred: Some(true) Demios, Some(false) the reference, None a tie.
+    let side = |o: &Order, demios_is_a: bool| {
+        o.better.map(|b| match b {
+            Better::A => Some(demios_is_a),
+            Better::B => Some(!demios_is_a),
+            Better::Tie => None,
+        })
+    };
+    p.outcome = match (side(&o1, true), side(&o2, false)) {
+        (Some(x), Some(y)) => {
+            p.orders_disagree = x != y;
+            match (x, y) {
+                (Some(true), Some(true)) => Outcome::Win,
+                (Some(false), Some(false)) => Outcome::Loss,
+                _ => Outcome::Tie,
+            }
+        }
+        _ => Outcome::JudgeError,
+    };
+    p.orders = vec![o1, o2];
+    p
+}
+
+/// The win rate at equal length (as AlpacaEval's length-controlled win rate): a logistic
+/// regression of the outcome (win 1, tie ½, loss 0) on the normalised length difference
+/// `(answer − reference) / (answer + reference)`, read at a difference of 0. `Err` says why
+/// there's no figure (too few comparisons, or the fit didn't converge).
+pub fn length_controlled(points: &[(f64, f64)]) -> Result<f64, String> {
+    const MIN: usize = 10;
+    if points.len() < MIN {
+        return Err(format!(
+            "too few comparisons ({}; at least {MIN})",
+            points.len()
+        ));
+    }
+    let sigmoid = |z: f64| 1.0 / (1.0 + (-z).exp());
+    let (mut b0, mut b1) = (0.0_f64, 0.0_f64);
+    for _ in 0..100 {
+        // Newton's method on the (fractional) logistic log-likelihood, with a small ridge on
+        // the slope so a perfectly separating length doesn't run off to infinity.
+        let (mut g0, mut g1, mut h00, mut h01, mut h11) = (0.0, -1e-3 * b1, 0.0, 0.0, 1e-3);
+        for &(x, y) in points {
+            let p = sigmoid(b0 + b1 * x);
+            let w = p * (1.0 - p);
+            g0 += y - p;
+            g1 += (y - p) * x;
+            h00 += w;
+            h01 += w * x;
+            h11 += w * x * x;
+        }
+        let det = h00 * h11 - h01 * h01;
+        if !det.is_finite() || det.abs() < 1e-12 {
+            return Err("the fit didn't converge (all comparisons alike)".into());
+        }
+        let d0 = (h11 * g0 - h01 * g1) / det;
+        let d1 = (h00 * g1 - h01 * g0) / det;
+        b0 += d0;
+        b1 += d1;
+        if !b0.is_finite() || !b1.is_finite() {
+            return Err("the fit didn't converge".into());
+        }
+        if d0.abs() < 1e-10 && d1.abs() < 1e-10 {
+            return Ok(sigmoid(b0));
+        }
+    }
+    Err("the fit didn't converge in 100 steps".into())
+}
+
+/// Per reference source: the outcomes, the win rate (ties count half, a failed answer counts
+/// as a loss) and the length-controlled win rate over the judged comparisons.
+fn pairwise_summary(items: &[Judged]) -> serde_json::Value {
+    let mut by_source = BTreeMap::<&str, Vec<&Pairwise>>::new();
+    for p in items.iter().flat_map(|i| &i.pairwise) {
+        by_source.entry(p.source.as_str()).or_default().push(p);
+    }
+    let mut out = serde_json::Map::new();
+    for (source, ps) in by_source {
+        let count = |o: Outcome| ps.iter().filter(|p| p.outcome == o).count();
+        let (w, l, t, na) = (
+            count(Outcome::Win),
+            count(Outcome::Loss),
+            count(Outcome::Tie),
+            count(Outcome::NoAnswer),
+        );
+        let n = w + l + t + na;
+        let win_rate = (n > 0).then(|| (w as f64 + 0.5 * t as f64) / n as f64);
+        let points: Vec<(f64, f64)> = ps
+            .iter()
+            .filter_map(|p| {
+                let y = match p.outcome {
+                    Outcome::Win => 1.0,
+                    Outcome::Tie => 0.5,
+                    Outcome::Loss => 0.0,
+                    _ => return None,
+                };
+                let (a, r) = (p.answer_chars as f64, p.reference_chars? as f64);
+                let x = if a + r > 0.0 { (a - r) / (a + r) } else { 0.0 };
+                Some((x, y))
+            })
+            .collect();
+        let lc = length_controlled(&points);
+        out.insert(
+            source.to_owned(),
+            serde_json::json!({
+                "compared": n,
+                "wins": w,
+                "losses": l,
+                "ties": t,
+                "no_answer": na,
+                "no_reference": count(Outcome::NoReference),
+                "judge_errors": count(Outcome::JudgeError),
+                "orders_disagree": ps.iter().filter(|p| p.orders_disagree).count(),
+                "win_rate": win_rate,
+                "length_controlled_win_rate": lc.as_ref().ok(),
+                "length_controlled_note": lc.err(),
+            }),
+        );
+    }
+    serde_json::Value::Object(out)
+}
+
 /// The report's totals: counts per status and per category, and whether every case was
 /// judged (`true`) or not (`"incomplete"`).
 pub fn summary(items: &[Judged]) -> serde_json::Value {
     let count = |s: Status| items.iter().filter(|i| i.status == s).count();
-    let errors = count(Status::JudgeError);
+    let pair_errors = items
+        .iter()
+        .flat_map(|i| &i.pairwise)
+        .filter(|p| p.outcome == Outcome::JudgeError)
+        .count();
+    let errors = count(Status::JudgeError) + pair_errors;
     let mut by_category = BTreeMap::<&str, BTreeMap<&str, usize>>::new();
     for i in items {
         let e = by_category.entry(i.category.as_str()).or_default();
@@ -474,6 +858,7 @@ pub fn summary(items: &[Judged]) -> serde_json::Value {
         "no_criteria": count(Status::NoCriteria),
         "judge_errors": errors,
         "by_category": by_category,
+        "pairwise": pairwise_summary(items),
         "judged": if errors == 0 { serde_json::json!(true) } else { serde_json::json!("incomplete") },
     })
 }
@@ -486,8 +871,88 @@ struct JudgeReport<'a> {
     /// The answers report judged, by path and SHA-256.
     answers: serde_json::Value,
     judge: serde_json::Value,
+    /// The reference sources used, with each source's `meta.json` if it has one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    references: Option<serde_json::Value>,
     summary: serde_json::Value,
     items: &'a [Judged],
+}
+
+/// The reference answers, read before the first judge call.
+pub struct References {
+    /// Source name → case id → reference text.
+    pub sources: BTreeMap<String, BTreeMap<String, String>>,
+    /// Per source: its `meta.json` (which model wrote it, when), or null.
+    pub meta: serde_json::Value,
+}
+
+/// A name that is safe as one path component (`claude`, `chat-001`, `h-007`).
+fn plain_name(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 128
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+impl References {
+    /// Every folder in `dir` is a source; a case's reference is `<source>/<id>.md`. A case
+    /// without one is judged `no_reference` for that source.
+    pub fn read(dir: &Path, answers: &Answers) -> Result<Self, String> {
+        let mut names = Vec::new();
+        for e in std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))? {
+            let e = e.map_err(|e| format!("{}: {e}", dir.display()))?;
+            if e.file_type().map_err(|e| e.to_string())?.is_dir() {
+                let name = e.file_name().to_string_lossy().into_owned();
+                if !plain_name(&name) {
+                    return Err(format!(
+                        "{}: source folder names are letters, digits, - and _",
+                        e.path().display()
+                    ));
+                }
+                names.push(name);
+            }
+        }
+        names.sort();
+        if names.is_empty() {
+            return Err(format!(
+                "{}: no source folders (claude/, chatgpt/, …)",
+                dir.display()
+            ));
+        }
+        let mut sources = BTreeMap::new();
+        let mut meta = serde_json::Map::new();
+        for name in names {
+            let sdir = dir.join(&name);
+            let mut by_id = BTreeMap::new();
+            for ans in &answers.items {
+                if !plain_name(&ans.id) {
+                    return Err(format!("case id {:?} can't name a reference file", ans.id));
+                }
+                let f = sdir.join(format!("{}.md", ans.id));
+                match std::fs::read(&f) {
+                    Ok(b) => {
+                        let text = String::from_utf8(b)
+                            .map_err(|_| format!("{}: not UTF-8 text", f.display()))?;
+                        by_id.insert(ans.id.clone(), text);
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(format!("{}: {e}", f.display())),
+                }
+            }
+            let m = sdir.join("meta.json");
+            let mv = match std::fs::read_to_string(&m) {
+                Ok(s) => serde_json::from_str(&s).map_err(|e| format!("{}: {e}", m.display()))?,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => serde_json::Value::Null,
+                Err(e) => return Err(format!("{}: {e}", m.display())),
+            };
+            meta.insert(name.clone(), mv);
+            sources.insert(name, by_id);
+        }
+        Ok(Self {
+            sources,
+            meta: serde_json::Value::Object(meta),
+        })
+    }
 }
 
 pub async fn run(a: JudgeArgs) -> Result<(), String> {
@@ -520,10 +985,30 @@ pub async fn run(a: JudgeArgs) -> Result<(), String> {
             h.display()
         ));
     }
+    let refs = match &a.references {
+        Some(dir) => {
+            if judge.pairwise.is_none() {
+                return Err(format!(
+                    "{}: --references needs pairwise_prompt in judge.yaml",
+                    a.judge.display()
+                ));
+            }
+            if answers.holdout() && in_git_work_tree(dir) {
+                return Err(format!(
+                    "the references {} are inside a git work tree: a holdout's references stay \
+                     outside any repository",
+                    dir.display()
+                ));
+            }
+            Some(References::read(dir, &answers)?)
+        }
+        None => None,
+    };
     let set = Set::read(&a.set, a.holdout.as_deref(), &a.skills, false)?;
     let by_id: BTreeMap<&str, &(Case, SetRoot)> =
         set.cases.iter().map(|c| (c.0.id.as_str(), c)).collect();
     let mut inputs = Vec::with_capacity(answers.items.len());
+    let mut contexts = Vec::with_capacity(answers.items.len());
     for ans in &answers.items {
         let Some((case, root)) = by_id.get(ans.id.as_str()) else {
             return Err(format!("case {} isn't in the set", ans.id));
@@ -536,6 +1021,7 @@ pub async fn run(a: JudgeArgs) -> Result<(), String> {
             ));
         }
         inputs.push(render(case, root, ans)?);
+        contexts.push(context(case, root)?);
     }
 
     let model = LoadedModel::load(
@@ -548,9 +1034,35 @@ pub async fn run(a: JudgeArgs) -> Result<(), String> {
     let judge_ref = judge.model_ref();
     let n = answers.items.len();
     let mut items = Vec::with_capacity(n);
-    for (i, (ans, input)) in answers.items.iter().zip(inputs).enumerate() {
-        let j = judge_case(&model, &judge_ref, &judge.prompt, Some(input), ans).await;
-        eprintln!("[eval judge] {}/{n} {}: {:?}", i + 1, j.id, j.status);
+    for (i, ((ans, input), ctx)) in answers.items.iter().zip(inputs).zip(&contexts).enumerate() {
+        let mut j = judge_case(&model, &judge_ref, &judge.prompt, Some(input), ans).await;
+        if let (Some(r), Some((pairwise_prompt, _))) = (&refs, &judge.pairwise) {
+            for (source, by_id) in &r.sources {
+                let reference = by_id.get(&ans.id).map(String::as_str);
+                j.pairwise.push(
+                    judge_pair(
+                        &model,
+                        &judge_ref,
+                        pairwise_prompt,
+                        ctx,
+                        ans,
+                        source,
+                        reference,
+                    )
+                    .await,
+                );
+            }
+        }
+        eprintln!(
+            "[eval judge] {}/{n} {}: {:?}{}",
+            i + 1,
+            j.id,
+            j.status,
+            j.pairwise
+                .iter()
+                .map(|p| format!(", {} {:?}", p.source, p.outcome))
+                .collect::<String>()
+        );
         items.push(j);
     }
     model.unload().await.map_err(|e| e.to_string())?;
@@ -571,8 +1083,11 @@ pub async fn run(a: JudgeArgs) -> Result<(), String> {
             "endpoint": judge.file.endpoint,
             "prompt": judge.file.prompt,
             "prompt_sha256": judge.prompt_sha256,
-            "check": "criteria",
+            "pairwise_prompt": refs.as_ref().and(judge.file.pairwise_prompt.as_ref()),
+            "pairwise_prompt_sha256": refs.as_ref().and(judge.pairwise.as_ref().map(|p| &p.1)),
+            "checks": if refs.is_some() { vec!["criteria", "pairwise"] } else { vec!["criteria"] },
         }),
+        references: refs.as_ref().map(|r| r.meta.clone()),
         summary: summary.clone(),
         items: &items,
     };
@@ -591,6 +1106,21 @@ pub async fn run(a: JudgeArgs) -> Result<(), String> {
         summary["judge_errors"],
         out.display()
     );
+    if let Some(by_source) = summary["pairwise"].as_object() {
+        for (source, v) in by_source {
+            println!(
+                "pairwise vs {source}: {} wins, {} losses, {} ties, {} without an answer, {} \
+                 without a reference · win rate {} · length-controlled {}",
+                v["wins"],
+                v["losses"],
+                v["ties"],
+                v["no_answer"],
+                v["no_reference"],
+                v["win_rate"],
+                v["length_controlled_win_rate"]
+            );
+        }
+    }
     if summary["judge_errors"].as_u64().unwrap_or(0) > 0 {
         return Err(format!(
             "{} cases couldn't be judged; the report says \"judged\": \"incomplete\"",
@@ -824,5 +1354,171 @@ mod tests {
         .unwrap();
         assert!(a.holdout());
         assert_eq!(a.items[0].expect.must, ["A"]);
+    }
+
+    #[test]
+    fn a_key_never_goes_to_a_plain_http_endpoint_off_this_machine() {
+        let dir = std::env::temp_dir().join(format!("dn-judge-http-{}", dn_core::Id::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("p.md"), "Judge.").unwrap();
+        let read = |endpoint: &str, key: bool| {
+            let k = if key { "api_key_env: K\n" } else { "" };
+            std::fs::write(
+                dir.join("judge.yaml"),
+                format!("model: m\nendpoint: {endpoint}\nprompt: p.md\n{k}"),
+            )
+            .unwrap();
+            Judge::read(&dir.join("judge.yaml"))
+        };
+        assert!(read("http://judge.example.test/v1", true).is_err());
+        assert!(read("HTTP://10.0.0.5:8080/v1", true).is_err());
+        assert!(read("http://localhost.evil.test/v1", true).is_err());
+        assert!(read("http://127.0.0.1@evil.test/v1", true).is_err());
+        assert!(read("https://judge.example.test/v1", true).is_ok());
+        assert!(read("http://localhost:8080/v1", true).is_ok());
+        assert!(read("http://127.0.0.1:8080/v1", true).is_ok());
+        assert!(read("http://[::1]:8080/v1", true).is_ok());
+        assert!(
+            read("http://judge.example.test/v1", false).is_ok(),
+            "no key to leak"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_pairwise_reply_is_a_or_b_or_tie_and_nothing_else() {
+        assert_eq!(
+            parse_pair(r#"{"better":"A","why":"x"}"#).unwrap().0,
+            Better::A
+        );
+        assert_eq!(
+            parse_pair("```json\n{\"better\":\"tie\",\"why\":\"x\"}\n```")
+                .unwrap()
+                .0,
+            Better::Tie
+        );
+        for bad in [
+            r#"{"better":"a","why":"x"}"#,
+            r#"{"better":"C","why":"x"}"#,
+            r#"{"better":"A","why":"x","score":3}"#,
+            "A is better",
+        ] {
+            assert!(parse_pair(bad).is_err(), "{bad}");
+        }
+    }
+
+    const A: &str = r#"{"better":"A","why":"a"}"#;
+    const B: &str = r#"{"better":"B","why":"b"}"#;
+    const TIE: &str = r#"{"better":"tie","why":"t"}"#;
+
+    async fn pair(replies: &[&str], reference: Option<&str>, failed: bool) -> (Pairwise, usize) {
+        let m = Scripted::new(replies);
+        let mut a = answer(&[], &[], "Demios's answer");
+        if failed {
+            a.error = Some("failed".into());
+        }
+        let p = judge_pair(&m, &judge_ref(), "sys", "ctx", &a, "claude", reference).await;
+        (p, m.calls())
+    }
+
+    #[tokio::test]
+    async fn a_win_or_loss_needs_both_orders_to_agree() {
+        // Answer first: A is Demios. Reference first: B is Demios.
+        let (p, calls) = pair(&[A, B], Some("ref"), false).await;
+        assert_eq!(
+            (p.outcome, p.orders_disagree, calls),
+            (Outcome::Win, false, 2)
+        );
+        let (p, _) = pair(&[B, A], Some("ref"), false).await;
+        assert_eq!(p.outcome, Outcome::Loss);
+        // The judge picks whatever is shown first: position bias, a tie.
+        let (p, _) = pair(&[A, A], Some("ref"), false).await;
+        assert_eq!((p.outcome, p.orders_disagree), (Outcome::Tie, true));
+        let (p, _) = pair(&[TIE, TIE], Some("ref"), false).await;
+        assert_eq!((p.outcome, p.orders_disagree), (Outcome::Tie, false));
+        assert_eq!(p.answer_chars, "Demios's answer".chars().count());
+        assert_eq!(p.reference_chars, Some(3));
+    }
+
+    #[tokio::test]
+    async fn missing_references_failed_answers_and_bad_replies_are_named() {
+        let (p, calls) = pair(&[], None, false).await;
+        assert_eq!((p.outcome, calls), (Outcome::NoReference, 0));
+        let (p, calls) = pair(&[], Some("ref"), true).await;
+        assert_eq!((p.outcome, calls), (Outcome::NoAnswer, 0));
+        let (p, calls) = pair(&[A, "?", "??"], Some("ref"), false).await;
+        assert_eq!((p.outcome, calls), (Outcome::JudgeError, 3));
+        assert_eq!(p.orders[1].raw_reply.as_deref(), Some("??"));
+        let mut j = judge_case(
+            &Scripted::new(&[]),
+            &judge_ref(),
+            "sys",
+            None,
+            &answer(&[], &[], "x"),
+        )
+        .await;
+        j.pairwise.push(p);
+        let s = summary(&[j]);
+        assert_eq!(s["judged"], "incomplete");
+        assert_eq!(s["pairwise"]["claude"]["judge_errors"], 1);
+    }
+
+    #[test]
+    fn the_length_controlled_rate_discounts_wins_that_come_from_length() {
+        // Wins unrelated to length: the controlled rate is the raw one.
+        let even: Vec<(f64, f64)> = (0..40)
+            .map(|i| {
+                let x = if i % 2 == 0 { 0.4 } else { -0.4 };
+                let y = if i % 4 < 2 { 1.0 } else { 0.0 };
+                (x, y)
+            })
+            .collect();
+        let lc = length_controlled(&even).unwrap();
+        assert!((lc - 0.5).abs() < 0.01, "{lc}");
+        // Longer answers win more often: at equal length the rate is lower than the raw 0.6.
+        let mut biased = Vec::new();
+        for i in 0..50 {
+            let long = i % 2 == 0;
+            let x = if long { 0.5 } else { 0.0 };
+            let y = if long {
+                (i % 10 < 8) as u8 as f64
+            } else {
+                (i % 10 < 4) as u8 as f64
+            };
+            biased.push((x, y));
+        }
+        let raw = biased.iter().map(|p| p.1).sum::<f64>() / biased.len() as f64;
+        let lc = length_controlled(&biased).unwrap();
+        assert!(lc < raw - 0.1, "lc {lc}, raw {raw}");
+        assert!(length_controlled(&even[..5]).is_err(), "too few");
+    }
+
+    #[test]
+    fn references_are_read_per_source_folder_by_case_id() {
+        let dir = std::env::temp_dir().join(format!("dn-refs-{}", dn_core::Id::new()));
+        std::fs::create_dir_all(dir.join("claude")).unwrap();
+        std::fs::create_dir_all(dir.join("chatgpt")).unwrap();
+        std::fs::write(dir.join("claude/chat-001.md"), "ref c").unwrap();
+        std::fs::write(dir.join("claude/meta.json"), r#"{"model":"x"}"#).unwrap();
+        let answers = Answers {
+            schema: "dn.eval.v1".into(),
+            suite: "parity".into(),
+            summary: serde_json::json!({}),
+            items: vec![answer(&[], &[], "x")],
+        };
+        let r = References::read(&dir, &answers).unwrap();
+        assert_eq!(r.sources.keys().collect::<Vec<_>>(), ["chatgpt", "claude"]);
+        assert_eq!(r.sources["claude"]["chat-001"], "ref c");
+        assert!(r.sources["chatgpt"].is_empty());
+        assert_eq!(r.meta["claude"]["model"], "x");
+        assert!(r.meta["chatgpt"].is_null());
+
+        let mut bad = answers;
+        bad.items[0].id = "../x".into();
+        assert!(References::read(&dir, &bad).is_err());
+        std::fs::create_dir_all(dir.join("bad name")).unwrap();
+        bad.items[0].id = "chat-001".into();
+        assert!(References::read(&dir, &bad).is_err());
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

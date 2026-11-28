@@ -122,6 +122,39 @@ from different judges aren't mistaken for each other. The set's `must` / `must_n
 match the answers report's.
 
 For a holdout's answers, pass the same `--holdout`, and `--out` outside any git work tree.
+When `judge.yaml` names a key variable, the endpoint must be `https` (or plain `http` on this
+machine), so the key and the cases never go out unencrypted.
+
+### Pairwise against reference answers
+
+```bash
+dn eval judge <answers.json> --judge evals/judge/judge.yaml --set evals/golden \
+  --references evals/golden/references
+```
+
+Each folder in `--references` is a source (`claude/`, `chatgpt/`), holding `<case id>.md`
+and, optionally, a `meta.json` saying which model wrote them and when (copied into the report).
+How the references are made is #407. `judge.yaml` then needs a `pairwise_prompt`
+([pairwise-v1.md](../../evals/judge/pairwise-v1.md)).
+
+For every case and source, the judge sees the case and the two answers as A and B, twice: once
+with Demios's answer first, once with the reference first. It's a **win** or a **loss** only
+when both orders agree; otherwise it's a **tie**, and `orders_disagree` counts how often the
+order changed the verdict (position bias). The tool calls aren't shown here, because only
+Demios's are recorded.
+
+Per source, the report gives:
+
+- wins, losses and ties;
+- `no_answer` (the answer run failed: counted as a loss);
+- `no_reference` (left out, never a tie);
+- the **win rate** (ties count half);
+- the **length-controlled win rate**: a logistic regression of the outcome on the normalised
+  length difference, read at equal length, so an answer doesn't win by being longer. With
+  fewer than 10 comparisons, or when the fit doesn't converge, there's no figure, and
+  `length_controlled_note` says why.
+
+A reference for a holdout's case must also stay outside any git work tree.
 
 ## Speed
 
@@ -140,8 +173,8 @@ data (`dn.speed.v1`), so new ones are added to a file.
 
 These are tracked as issues:
 
-- pairwise judging against reference answers (order swapped, length controlled), the judge's
-  calibration on human-labelled pairs, and judging LongMemEval answers (#355);
+- the judge's calibration on human-labelled pairs, and judging LongMemEval answers (#355);
+- generating the reference answers (#407);
 - earlier sessions in memory cases (with memory, R3);
 - embeddings in LongMemEval's retrieval mode (keyword search only for now);
 - the app's own system prompt in `dn eval parity` (it moves into the shared runtime in R1);
