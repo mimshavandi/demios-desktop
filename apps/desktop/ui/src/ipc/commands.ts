@@ -28,6 +28,7 @@ import type {
   ProjectFile,
   ProjectSummary,
   ModelCatalog,
+  ModelContext,
   RemoteServerStatus,
   Settings,
   StoredMessage,
@@ -135,6 +136,8 @@ interface Commands {
   stop_generation: { args: { conversationId: Id }; ret: boolean };
   get_settings: { args: Record<string, never>; ret: Settings };
   update_settings: { args: { settings: Settings }; ret: Settings };
+  model_context: { args: { modelRef: string }; ret: ModelContext };
+  set_model_context_size: { args: { modelRef: string; tokens: number | null }; ret: ModelContext };
   list_models: { args: Record<string, never>; ret: ModelCatalog };
   check_keys: { args: Record<string, never>; ret: ModelCatalog };
   node_overview: { args: Record<string, never>; ret: NodeOverview };
@@ -326,6 +329,9 @@ export const api = {
   stopGeneration: (conversationId: Id) => call("stop_generation", { conversationId }),
   getSettings: () => call("get_settings", {}),
   updateSettings: (settings: Settings) => call("update_settings", { settings }),
+  modelContext: (modelRef: string) => call("model_context", { modelRef }),
+  setModelContextSize: (modelRef: string, tokens: number | null) =>
+    call("set_model_context_size", { modelRef, tokens }),
   listModels: () => call("list_models", {}),
   /** The catalog once the keychain has answered, however long that takes (an unlock prompt). */
   checkKeys: () => call("check_keys", {}),

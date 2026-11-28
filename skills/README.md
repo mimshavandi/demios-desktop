@@ -28,7 +28,7 @@ These are prompt blocks the runtime adds on its own, not skills the user picks. 
 
 | Prompt | Used for |
 |---|---|
-| `answer.rules` | Every turn on a surface that can have sources (chats, research). It covers leading with the answer, citing with block ids such as `[S1]`, and handling missing or conflicting sources. Kept under about 150 tokens, because every chat turn pays for it. |
+| `answer.rules` | Every turn on a surface that can have sources (chats, research). It covers leading with the answer, citing with block ids such as `[S1]` and memory labels such as `[M2]`, and handling missing or conflicting sources. Kept under about 150 tokens, because every chat turn pays for it. |
 
 ## Chat skills (`library/`)
 
@@ -61,3 +61,13 @@ The front matter follows the Agent Skills `SKILL.md` layout, with one difference
 **Shorter versions for local models.** A skill can have a `SKILL.local.md` next to its `SKILL.md`. It has the same front matter, and the same rules said more briefly, for models that run on this computer. Keep the two in step. The app doesn't use `SKILL.local.md` yet; until it does, every model gets `SKILL.md`.
 
 The skill texts are written for this project (Apache-2.0); no wording is copied from elsewhere. `design-review`'s WCAG thresholds are adapted from an MIT-licensed project; see its `NOTICE.md`. `cargo test -p demios-desktop skills::` checks that every file here loads.
+
+## Scripts in skills (coming, ADR-0021)
+
+Skills can't run scripts yet. When they can, [ADR-0021](../docs/adr/0021-skill-scripts.md) sets the rules, and these are the ones an author has to write for:
+- **Bundled skills only** at first. A skill in your own folder can't run scripts until that's turned on per skill in a later version.
+- **Python or Node**, in the runtime Demios manages (pinned and downloaded on first use). Never a Python or Node installed on the computer.
+- **No network, ever.** No internet, DNS, localhost or local sockets.
+- **Inputs and outputs:** inputs arrive as copies in `in/`. A script writes only to `out/` and `tmp/`. Outputs become artifacts or new project files, checked by type, never files elsewhere on the computer.
+- **No subprocesses.** A script can't start another program, and on macOS it can't fork at all, because a forked child could outlive its run (#431). Do the work in the runtime itself. LibreOffice, where a skill needs it, is started by Demios as a separate sandboxed step, never by the script.
+- **Limits:** 60 s by default (the manifest can ask for up to 5 min), memory, 100 MB for `tmp/` and `out/`, and 1 MB of stdout and stderr. A run that hits a limit is stopped and says which limit.

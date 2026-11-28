@@ -9,11 +9,25 @@ use serde::{Deserialize, Serialize};
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum RecoveryAction {
-    DownloadModel { capability: Capability },
+    DownloadModel {
+        capability: Capability,
+    },
     AddProviderKey,
-    ChooseModelForSlot { agent_id: String, slot_id: String },
-    ReconnectServer { server_id: String },
-    Retry { after_seconds: Option<u32> },
+    ChooseModelForSlot {
+        agent_id: String,
+        slot_id: String,
+    },
+    ReconnectServer {
+        server_id: String,
+    },
+    Retry {
+        after_seconds: Option<u32>,
+    },
+    /// Nobody knows how much `model_ref` reads at once; the person sets it in Settings ›
+    /// Models (ADR-0020 §2.1, design ContextSize). Never guessed.
+    SetContextSize {
+        model_ref: String,
+    },
 }
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Serialize, Deserialize)]

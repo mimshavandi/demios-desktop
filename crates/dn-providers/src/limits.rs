@@ -8,7 +8,10 @@
 //!   - llama.cpp `llama-server`: `GET /props`;
 //!   - LM Studio: `GET /api/v0/models/{id}`, `loaded_context_length`;
 //!   - vLLM: `GET /v1/models`, `max_model_len`;
-//!   - Ollama: `GET /api/ps` for a loaded model (before the first load it's unknown, #360).
+//!   - Ollama: `GET /api/ps` for a loaded model; before the first load, the `num_ctx` its
+//!     Modelfile sets (`POST /api/show`), which the OpenAI-compatible endpoint loads it with,
+//!     capped at the trained context (`model_info`) as Ollama caps it at load (#360). Without one it's unknown: the server default isn't exposed, and `/v1` can't
+//!     set `num_ctx`, so nothing is sent to force it.
 //!
 //!   A model's *maximum* isn't used: a server silently cuts what doesn't fit the context it
 //!   loaded.
@@ -48,6 +51,62 @@ pub const MAX_AGE_DAYS: i64 = 183;
 /// states its size, never by analogy with a sibling. Then run the release check:
 /// `cargo test -p dn-providers --lib published_sizes_are_recent -- --ignored`.
 pub const PUBLISHED: &[Published] = &[
+    Published {
+        kind: ProviderKind::Anthropic,
+        id: "claude-fable-5-2",
+        tokens: 1_000_000,
+        source: "https://platform.claude.com/docs/en/about-claude/models/overview",
+        checked: "2026-11-28",
+    },
+    Published {
+        kind: ProviderKind::Anthropic,
+        id: "claude-opus-5-5",
+        tokens: 1_000_000,
+        source: "https://platform.claude.com/docs/en/about-claude/models/overview",
+        checked: "2026-11-28",
+    },
+    Published {
+        kind: ProviderKind::Anthropic,
+        id: "claude-sonnet-5-5",
+        tokens: 1_000_000,
+        source: "https://platform.claude.com/docs/en/about-claude/models/overview",
+        checked: "2026-11-28",
+    },
+    Published {
+        kind: ProviderKind::Anthropic,
+        id: "claude-haiku-5-5",
+        tokens: 1_000_000,
+        source: "https://platform.claude.com/docs/en/about-claude/models/overview",
+        checked: "2026-11-28",
+    },
+    Published {
+        kind: ProviderKind::OpenAi,
+        id: "gpt-6.2-astra",
+        tokens: 1_050_000,
+        source: "https://developers.openai.com/api/docs/models/gpt-6.2-astra",
+        checked: "2026-11-28",
+    },
+    Published {
+        kind: ProviderKind::OpenAi,
+        id: "gpt-6.2-sol",
+        tokens: 1_050_000,
+        source: "https://developers.openai.com/api/docs/models/gpt-6.2-sol",
+        checked: "2026-11-28",
+    },
+    Published {
+        kind: ProviderKind::OpenAi,
+        id: "gpt-6.1-terra",
+        tokens: 1_050_000,
+        source: "https://developers.openai.com/api/docs/models/gpt-6.1-terra",
+        checked: "2026-11-28",
+    },
+    Published {
+        kind: ProviderKind::OpenAi,
+        id: "gpt-6-luna",
+        tokens: 1_050_000,
+        source: "https://developers.openai.com/api/docs/models/gpt-6-luna",
+        checked: "2026-11-28",
+    },
     Published {
         kind: ProviderKind::Anthropic,
         id: "claude-opus-4-1",
@@ -263,15 +322,61 @@ async fn server(inner: &Inner, model_id: &str) -> Option<ModelLimits> {
                 .as_u64()?
         }
         ServerFamily::Ollama => {
-            let v = json(get(url(&root, &["api", "ps"])?)).await?;
-            v["models"].as_array()?.iter().find(|m| {
-                m["name"].as_str() == Some(model_id) || m["model"].as_str() == Some(model_id)
-            })?["context_length"]
-                .as_u64()?
+            // Loaded: the context it was loaded with.
+            let ps = json(get(url(&root, &["api", "ps"])?)).await;
+            let loaded = ps.as_ref().and_then(|v| {
+                v["models"].as_array()?.iter().find(|m| {
+                    m["name"].as_str() == Some(model_id) || m["model"].as_str() == Some(model_id)
+                })?["context_length"]
+                    .as_u64()
+            });
+            match loaded {
+                Some(n) => n,
+                // Not loaded yet: the `num_ctx` its Modelfile sets, which is what the
+                // OpenAI-compatible endpoint loads it with (#360). Without one the size is
+                // unknown: Ollama's server default isn't exposed, and the model's maximum
+                // (`model_info`) isn't what it loads with, so neither is used.
+                None => {
+                    let mut rb = inner
+                        .client
+                        .post(url(&root, &["api", "show"])?)
+                        .header("content-type", "application/json")
+                        .body(serde_json::json!({ "model": model_id }).to_string());
+                    if let Some(k) = inner.key() {
+                        rb = rb.bearer_auth(k);
+                    }
+                    let v = json(rb).await?;
+                    let set = ollama_num_ctx(v["parameters"].as_str()?)?;
+                    // Ollama caps a num_ctx above the trained context at load
+                    // (llm/server.go), so never report more than the model takes.
+                    match ollama_trained_ctx(&v["model_info"]) {
+                        Some(trained) => set.min(trained),
+                        None => set,
+                    }
+                }
+            }
         }
         ServerFamily::Unknown => return None,
     };
     provider(n)
+}
+
+/// The `num_ctx` in an Ollama model's `parameters` (one `name value` pair per line), if set.
+pub(crate) fn ollama_num_ctx(parameters: &str) -> Option<u64> {
+    parameters.lines().find_map(|l| {
+        let mut it = l.split_whitespace();
+        (it.next()? == "num_ctx").then(|| it.next()?.parse().ok())?
+    })
+}
+
+/// The trained context in an Ollama model's `model_info` (`<arch>.context_length`), if any.
+pub(crate) fn ollama_trained_ctx(model_info: &Value) -> Option<u64> {
+    model_info
+        .as_object()?
+        .iter()
+        .find(|(k, _)| k.ends_with(".context_length"))?
+        .1
+        .as_u64()
 }
 
 /// `base` with `segments` appended, each escaped as one path segment (a model id can hold
@@ -300,6 +405,26 @@ async fn json(rb: reqwest::RequestBuilder) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ollama_num_ctx_comes_only_from_its_own_line() {
+        let p = "num_keep                       24\nnum_ctx                        8192\nstop                           \"<|im_end|>\"";
+        assert_eq!(ollama_num_ctx(p), Some(8192));
+        assert_eq!(ollama_num_ctx("num_keep 24\nstop \"x\""), None);
+        assert_eq!(ollama_num_ctx("num_ctx_extra 9\nnum_ctx big"), None);
+        assert_eq!(ollama_num_ctx(""), None);
+    }
+
+    #[test]
+    fn ollama_trained_ctx_reads_the_arch_key() {
+        let v = serde_json::json!({"general.architecture": "qwen3", "qwen3.context_length": 40960});
+        assert_eq!(ollama_trained_ctx(&v), Some(40960));
+        assert_eq!(
+            ollama_trained_ctx(&serde_json::json!({"general.architecture": "x"})),
+            None
+        );
+        assert_eq!(ollama_trained_ctx(&serde_json::Value::Null), None);
+    }
 
     #[test]
     fn a_model_id_is_one_escaped_path_segment() {
@@ -335,6 +460,9 @@ mod tests {
         assert_eq!(published(o, "gpt-4.1-2025-04-14"), Some(1_047_576));
         assert_eq!(published(o, "gpt-4.1-mini"), Some(1_047_576));
         assert_eq!(published(o, "gpt-4o-mini"), Some(128_000));
+        assert_eq!(published(a, "claude-opus-5-5"), Some(1_000_000));
+        assert_eq!(published(o, "gpt-6.2-sol"), Some(1_050_000));
+        assert_eq!(published(o, "gpt-6-luna"), Some(1_050_000));
         // Not a version of an entry: unknown, never the nearest match.
         for id in [
             "gpt-4o-audio-preview",

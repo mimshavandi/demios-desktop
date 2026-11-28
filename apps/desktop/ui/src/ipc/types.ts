@@ -43,6 +43,8 @@ export interface Conversation {
   model: string | null;
   /** The project this chat belongs to, if any. */
   project_id: Id | null;
+  /** Incognito (#346): set at creation, never changed; no memory, search, index or sync. */
+  incognito: boolean;
   created_at: number;
   updated_at: number;
 }
@@ -470,6 +472,12 @@ export interface RemoteServerView {
   base_url: string;
   key: KeyState;
   models: RemoteModelView[];
+}
+
+/** How much a model reads at once, and who said so (ADR-0020 §2.1, design ContextSize). */
+export interface ModelContext {
+  tokens: number | null;
+  source: "loaded" | "provider" | "published" | "user" | null;
 }
 
 export interface ModelCatalog {

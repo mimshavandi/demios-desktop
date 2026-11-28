@@ -106,6 +106,14 @@ function Shell({ api }: { api: Api }) {
   const [chat, dispatch] = useReducer(chatReducer, initialChat);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Answers that failed because nobody knows the model's context size (design ContextSize):
+  // message id → model ref; and the models whose size was saved since.
+  const [contextNeeded, setContextNeeded] = useState<Record<Id, string>>({});
+  const [contextSaved, setContextSaved] = useState<string[]>([]);
+  const contextSizeSaved = useCallback(
+    (ref: string) => setContextSaved((s) => (s.includes(ref) ? s : [...s, ref])),
+    [],
+  );
   const [announce, setAnnounce] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(() => readPref("dn.sidebar", true));
   const [artifactsOpen, setArtifactsOpen] = useState(artifactPaneAtLaunch);
@@ -496,6 +504,13 @@ function Shell({ api }: { api: Api }) {
         return;
       }
       dispatch({ kind: "event", event });
+      if (event.type === "error") {
+        const need = event.recovery.find((r) => r.action === "set_context_size");
+        if (need !== undefined && need.action === "set_context_size") {
+          setContextNeeded((m) => ({ ...m, [event.message_id]: need.model_ref }));
+          setContextSaved((s) => s.filter((r) => r !== need.model_ref));
+        }
+      }
       if (event.type === "done" || event.type === "error") {
         const msg =
           event.type === "error"
@@ -1013,6 +1028,15 @@ function Shell({ api }: { api: Api }) {
             onSend={send}
             onStop={() => void stop()}
             onRegenerate={() => void regenerate()}
+            contextNeeded={contextNeeded}
+            contextSaved={contextSaved}
+            onSetContextSize={(ref) =>
+              goSettings({
+                section: "models",
+                tab: ref.startsWith("remote:") ? "servers" : "providers",
+                focus: ref,
+              })
+            }
             onConnect={() => goSettings({ section: "models", tab: "device" })}
             onKeychain={() => goSettings({ section: "models", tab: "providers" })}
             approvals={approvals.filter((a) => a.scope === `conv:${chat.conversationId ?? ""}`)}
@@ -1091,6 +1115,7 @@ function Shell({ api }: { api: Api }) {
             onAddLinkClosed={closeAddLink}
             launchUpdate={launchUpdate}
             revealUpdates={revealUpdates}
+            onContextSizeSaved={contextSizeSaved}
           />
         )}
       </main>

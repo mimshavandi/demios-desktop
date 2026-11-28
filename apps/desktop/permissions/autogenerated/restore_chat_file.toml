@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-restore-chat-file"
+description = "Enables the restore_chat_file command without any pre-configured scope."
+commands.allow = ["restore_chat_file"]
+
+[[permission]]
+identifier = "deny-restore-chat-file"
+description = "Denies the restore_chat_file command without any pre-configured scope."
+commands.deny = ["restore_chat_file"]

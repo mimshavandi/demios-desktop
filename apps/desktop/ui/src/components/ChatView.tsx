@@ -39,6 +39,12 @@ interface Props {
   onSend: (text: string) => Promise<boolean>;
   onStop: () => void;
   onRegenerate: () => void;
+  /** Failed answers whose model has no known context size: message id → model ref. */
+  contextNeeded?: Record<Id, string>;
+  /** Models whose context size was saved since (their failed answer offers Retry). */
+  contextSaved?: string[];
+  /** Opens Settings › Models at the model's context size field. */
+  onSetContextSize?: (modelRef: string) => void;
   onConnect: () => void;
   /** Settings › Models › Providers, where the keychain problem is explained (#200). */
   onKeychain: () => void;
@@ -249,6 +255,9 @@ export function ChatView(p: Props) {
                   isLast={m.id === lastId}
                   canRetry={canRegenerate(p.state)}
                   onRetry={p.onRegenerate}
+                  needsSize={p.contextNeeded?.[m.id]}
+                  sizeSaved={p.contextSaved ?? []}
+                  onSetContextSize={p.onSetContextSize}
                   onReport={p.onReportAnswer}
                   onOpenLink={p.onOpenLink}
                   live={p.state.tools[m.id] ?? []}
@@ -434,6 +443,9 @@ function Message({
   isLast,
   canRetry,
   onRetry,
+  needsSize,
+  sizeSaved,
+  onSetContextSize,
   onReport,
   onOpenLink,
   live,
@@ -450,6 +462,10 @@ function Message({
   isLast: boolean;
   canRetry: boolean;
   onRetry: () => void;
+  /** This failed answer's model has no known context size (design ContextSize). */
+  needsSize?: string | undefined;
+  sizeSaved: string[];
+  onSetContextSize?: ((modelRef: string) => void) | undefined;
   onReport?: ((messageId: Id) => void) | undefined;
   onOpenLink?: ((href: string) => void) | undefined;
   live: LiveToolCall[];
@@ -536,7 +552,18 @@ function Message({
           Stopped
         </InlineMessage>
       )}
-      {m.status === "error" && (
+      {m.status === "error" && needsSize !== undefined && (
+        <ContextSizeWarning
+          modelRef={needsSize}
+          name={catalog?.models.find((x) => x.model_ref === needsSize)?.label ?? needsSize}
+          message={m.error ?? "The answer failed."}
+          saved={sizeSaved.includes(needsSize)}
+          retry={retry}
+          onRetry={onRetry}
+          onSet={onSetContextSize}
+        />
+      )}
+      {m.status === "error" && needsSize === undefined && (
         <InlineMessage
           tone="error"
           action={
@@ -582,5 +609,60 @@ function Message({
         </footer>
       )}
     </article>
+  );
+}
+
+/** A turn that couldn't start because nobody knows the model's context size (design
+ * ContextSize): the message is kept, and once the size is saved, Retry. */
+export function ContextSizeWarning({
+  modelRef,
+  name,
+  message,
+  saved,
+  retry,
+  onRetry,
+  onSet,
+}: {
+  modelRef: string;
+  name: string;
+  message: string;
+  saved: boolean;
+  retry: boolean;
+  onRetry: () => void;
+  onSet?: ((modelRef: string) => void) | undefined;
+}) {
+  if (saved) {
+    return (
+      <InlineMessage
+        tone="info"
+        action={
+          retry ? (
+            <Button size="sm" icon={<RotateCcw {...ICON} aria-hidden="true" />} onClick={onRetry}>
+              Retry
+            </Button>
+          ) : undefined
+        }
+      >
+        Context size saved for {name}.
+      </InlineMessage>
+    );
+  }
+  return (
+    <InlineMessage
+      tone="warning"
+      action={
+        onSet ? (
+          <Button
+            size="sm"
+            aria-label={`Set context size for ${name} in Settings`}
+            onClick={() => onSet(modelRef)}
+          >
+            Set context size
+          </Button>
+        ) : undefined
+      }
+    >
+      {message}
+    </InlineMessage>
   );
 }

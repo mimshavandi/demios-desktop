@@ -22,7 +22,7 @@ import type {
   UpdateMode,
 } from "../ipc/types";
 import { App } from "./App";
-import { NODE_TEXT, NODE_TITLE, PROJECT_INSTRUCTIONS_SENT } from "./privacyText";
+import { DATA_FILES_SENT, NODE_TEXT, NODE_TITLE, PROJECT_INSTRUCTIONS_SENT } from "./privacyText";
 import { KEYCHAIN_SLOW_MS, KeychainNotice } from "./SettingsView";
 import { ToastProvider } from "./toast";
 
@@ -264,7 +264,7 @@ function fakeApi() {
     listConversations: async () => [...convs],
     createConversation: async (projectId = null) => {
       created.push(projectId);
-      const c = { id: id(), title: "New chat", model: null, project_id: projectId, created_at: n, updated_at: n };
+      const c = { id: id(), title: "New chat", model: null, project_id: projectId, incognito: false, created_at: n, updated_at: n };
       convs.unshift(c);
       msgs.set(c.id, []);
       return c;
@@ -414,6 +414,9 @@ function fakeApi() {
     removeRemoteServer: async () => catalog(),
     restoreRemoteServer: async () => catalog(),
     checkRemoteServer: async () => ({ state: "connected", models: 0 }) as const,
+    modelContext: async () => ({ tokens: 200000, source: "published" }) as const,
+    setModelContextSize: async (_ref: string, tokens: number | null) =>
+      ({ tokens, source: tokens === null ? null : "user" }) as const,
     setRemoteModelTools: async () => catalog(),
     deleteProviderKey: async () => catalog(),
     restoreProviderKey: async () => catalog(),
@@ -975,7 +978,7 @@ describe("App", () => {
     while (!existsSync(join(dir, "docs/user/privacy.md")) && dirname(dir) !== dir) dir = dirname(dir);
     const policy = readFileSync(join(dir, "docs/user/privacy.md"), "utf8");
     // The sentences Settings copies must still be in the policy, word for word.
-    for (const line of [PROJECT_INSTRUCTIONS_SENT, NODE_TEXT]) expect(policy).toContain(line);
+    for (const line of [PROJECT_INSTRUCTIONS_SENT, DATA_FILES_SENT, NODE_TEXT]) expect(policy).toContain(line);
     // Every "Where your data goes" section of the policy has a row in Settings.
     const section = policy.split("## Where your data goes")[1]?.split("\n## ")[0] ?? "";
     expect(section).not.toBe("");
@@ -990,6 +993,7 @@ describe("App", () => {
     const rows = [...list.querySelectorAll(".row-title")].map((t) => t.textContent);
     expect(rows).toEqual(titles);
     expect(list.textContent).toContain(PROJECT_INSTRUCTIONS_SENT);
+    expect(list.textContent).toContain(DATA_FILES_SENT);
     expect(within(list).getByText(NODE_TEXT)).toBeTruthy();
   });
 
@@ -1409,7 +1413,7 @@ describe("Projects", () => {
   it("shows the chat list's error, not a guessed list, if reloading after a project delete fails", async () => {
     const { api, projects, convs } = fakeApi();
     projects.push({ id: "p1", name: "Thesis", instructions: "", created_at: 0, updated_at: 0 });
-    convs.push({ id: "c1", title: "In project", model: null, project_id: "p1", created_at: 0, updated_at: 0 });
+    convs.push({ id: "c1", title: "In project", model: null, project_id: "p1", incognito: false, created_at: 0, updated_at: 0 });
     render(<App api={api} />);
     fireEvent.click(await screen.findByRole("button", { name: "Thesis" }));
     api.listConversations = async () => {
@@ -1516,8 +1520,8 @@ describe("Projects", () => {
   it("deletes a project with its chats and brings both back with Undo", async () => {
     const { api, projects, convs } = fakeApi();
     projects.push({ id: "p1", name: "Thesis", instructions: "", created_at: 0, updated_at: 0 });
-    convs.push({ id: "c1", title: "In project", model: null, project_id: "p1", created_at: 0, updated_at: 0 });
-    convs.push({ id: "c2", title: "Loose", model: null, project_id: null, created_at: 0, updated_at: 0 });
+    convs.push({ id: "c1", title: "In project", model: null, project_id: "p1", incognito: false, created_at: 0, updated_at: 0 });
+    convs.push({ id: "c2", title: "Loose", model: null, project_id: null, incognito: false, created_at: 0, updated_at: 0 });
     render(<App api={api} />);
     expect(await screen.findByRole("button", { name: "In project" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Thesis" }));
@@ -1571,7 +1575,7 @@ describe("Move a chat into or out of a project (#136)", () => {
     const f = fakeApi();
     f.projects.push({ id: "p1", name: "Thesis", instructions: "", created_at: 0, updated_at: 0 });
     f.projects.push({ id: "p2", name: "Work", instructions: "", created_at: 0, updated_at: 0 });
-    f.convs.push({ id: "c1", title: "Loose chat", model: null, project_id: null, created_at: 0, updated_at: 0 });
+    f.convs.push({ id: "c1", title: "Loose chat", model: null, project_id: null, incognito: false, created_at: 0, updated_at: 0 });
     return f;
   };
   const pick = async (name: string) => {
@@ -1637,7 +1641,7 @@ describe("Sidebar chat menu (#166)", () => {
   const setup = () => {
     const f = fakeApi();
     f.projects.push({ id: "p1", name: "Thesis", instructions: "", created_at: 0, updated_at: 0 });
-    f.convs.push({ id: "c1", title: "Draft", model: null, project_id: null, created_at: 0, updated_at: 0 });
+    f.convs.push({ id: "c1", title: "Draft", model: null, project_id: null, incognito: false, created_at: 0, updated_at: 0 });
     return f;
   };
 
@@ -1720,7 +1724,7 @@ describe("Sidebar chat menu (#166)", () => {
 
   it("has no Move to project entry when there are no projects", async () => {
     const { api, convs } = fakeApi();
-    convs.push({ id: "c1", title: "Draft", model: null, project_id: null, created_at: 0, updated_at: 0 });
+    convs.push({ id: "c1", title: "Draft", model: null, project_id: null, incognito: false, created_at: 0, updated_at: 0 });
     render(<App api={api} />);
     await chatMenu("Draft");
     expect(screen.getAllByRole("menuitem").map((i) => i.textContent)).toEqual(["Rename", "Delete"]);
@@ -1745,8 +1749,8 @@ describe("No silent fallbacks (#141)", () => {
 
   it("shows the list's error, not a guessed list, if reloading after deleting a chat fails", async () => {
     const { api, convs } = fakeApi();
-    convs.push({ id: "c1", title: "Gone", model: null, project_id: null, created_at: 0, updated_at: 0 });
-    convs.push({ id: "c2", title: "Kept", model: null, project_id: null, created_at: 0, updated_at: 0 });
+    convs.push({ id: "c1", title: "Gone", model: null, project_id: null, incognito: false, created_at: 0, updated_at: 0 });
+    convs.push({ id: "c2", title: "Kept", model: null, project_id: null, incognito: false, created_at: 0, updated_at: 0 });
     render(<App api={api} />);
     await chatMenu("Gone");
     api.listConversations = async () => fail();

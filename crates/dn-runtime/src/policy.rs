@@ -26,6 +26,10 @@ pub struct Policy {
     /// never dropped: the system prompt, tools, the new input and the recap.
     pub droppable: Vec<Slot>,
     pub overflow: Overflow,
+    /// The surface can have sources, so its system slot carries the shared answer and
+    /// citation rules (`answer.rules`, #364) on every turn. Others (add-ons, memory) read
+    /// this rather than keeping their own list of surfaces.
+    pub answer_rules: bool,
 }
 
 impl Policy {
@@ -44,6 +48,7 @@ impl Policy {
                 Slot::Skills,
             ],
             overflow: Overflow::Fail,
+            answer_rules: true,
         }
     }
 
@@ -56,6 +61,7 @@ impl Policy {
             output_reserve: 0,
             droppable: Vec::new(),
             overflow: Overflow::Fail,
+            answer_rules: false,
         }
     }
 
@@ -70,6 +76,18 @@ impl Policy {
                 room.min(share)
             }
             LimitSource::Provider | LimitSource::Published | LimitSource::User => room,
+        }
+    }
+
+    /// The most the core profile (memory, ADR-0020 §4.1) may take, in
+    /// [`crate::estimate::units`]: a measure that's the same for every model, so switching
+    /// models doesn't rebuild the profile and break the cached prefix. The memory store
+    /// builds the profile to fit, whole items only; the assembler's real budget check still
+    /// drops it whole when the prompt doesn't fit. Units, not tokens.
+    pub fn profile_cap(&self) -> f64 {
+        match self.surface {
+            "chat.reply" => 1_500.0,
+            _ => 0.0,
         }
     }
 
@@ -110,5 +128,22 @@ mod tests {
             assert_eq!(p.drop_rank(s), None, "{s:?}");
         }
         assert!(p.drop_rank(Slot::Retrieved) < p.drop_rank(Slot::Knowledge));
+    }
+
+    #[test]
+    fn chat_carries_the_answer_rules_and_raw_doesnt() {
+        assert!(Policy::chat().answer_rules);
+        assert!(!Policy::raw().answer_rules);
+    }
+}
+
+#[cfg(test)]
+mod profile_cap_tests {
+    use super::Policy;
+
+    #[test]
+    fn chat_has_a_profile_budget_and_raw_none() {
+        assert_eq!(Policy::chat().profile_cap(), 1_500.0);
+        assert_eq!(Policy::raw().profile_cap(), 0.0);
     }
 }

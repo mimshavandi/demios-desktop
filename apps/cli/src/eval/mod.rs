@@ -12,14 +12,20 @@
 //!
 //! - `judge`: scores a parity answers report with the fixed judge named in `judge.yaml`
 //!   (#355); a separate step, and the only one that sends anything (to the judge).
+//! - `calibrate`: the pairwise judge's agreement with people (Cohen's κ) over labelled pairs.
+//! - `references`: reference answers from Claude or ChatGPT (#407), sent to that provider
+//!   with the owner's key, only when run.
 //!
 //! Every answering run writes one JSON report (schema `dn.eval.v1`), never anything else, and
 //! sends nothing anywhere: the model is a local GGUF or the endpoint you name.
 
+mod calibrate;
 mod context;
 mod judge;
+mod judge_memory;
 mod longmemeval;
 mod parity;
+mod references;
 mod speed;
 
 use crate::LoadArgs;
@@ -50,11 +56,17 @@ enum Suite {
     Longmemeval(longmemeval::LongMemEvalArgs),
     /// Time to first token and tokens per second, p50/p95, cold and warm.
     Speed(speed::SpeedArgs),
-    /// Judge a parity answers report with the fixed judge (`judge.yaml`): checks each
-    /// case's must / must_not. The only step that sends anything, to the judge's endpoint.
+    /// Judge a parity or LongMemEval report with the fixed judge (`judge.yaml`). The only
+    /// step that sends anything, to the judge's endpoint.
     Judge(judge::JudgeArgs),
-    /// How much of its context a local model uses well: needle, multikey and multihop recall
-    /// at growing lengths (#350).
+    /// How far the pairwise judge agrees with people: agreement and Cohen's κ over a
+    /// labels file of answer pairs (dn.labels.v1).
+    Calibrate(calibrate::CalibrateArgs),
+    /// Reference answers for pairwise judging, from Claude or ChatGPT through their APIs
+    /// (the owner's keys): each case answered as parity answers it.
+    References(references::ReferencesArgs),
+    /// How much of its context a local model uses well: retrieval (needle, multikey) and
+    /// combining facts (multihop, count) at growing lengths (#350).
     Context(context::ContextArgs),
 }
 
@@ -64,6 +76,8 @@ pub async fn run(a: EvalArgs) -> Result<(), String> {
         Suite::Longmemeval(a) => longmemeval::run(a).await,
         Suite::Speed(a) => speed::run(a).await,
         Suite::Judge(a) => judge::run(a).await,
+        Suite::Calibrate(a) => calibrate::run(a).await,
+        Suite::References(a) => references::run(a).await,
         Suite::Context(a) => context::run(a).await,
     }
 }

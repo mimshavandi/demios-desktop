@@ -44,12 +44,16 @@ pub mod window_state;
 use std::path::PathBuf;
 
 /// Where the app keeps its database. `DEMIOS_DATA_DIR` overrides the per-OS default
-/// (useful for a throwaway profile while developing).
+/// (useful for a throwaway profile while developing). In tests there is no default: the
+/// person's real data folder is never used (#448).
 pub fn data_dir() -> Option<PathBuf> {
-    std::env::var_os("DEMIOS_DATA_DIR")
+    let set = std::env::var_os("DEMIOS_DATA_DIR")
         .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| dn_store::paths::app_data_dir(dn_store::paths::APP_ID))
+        .map(PathBuf::from);
+    if cfg!(test) {
+        return set;
+    }
+    set.or_else(|| dn_store::paths::app_data_dir(dn_store::paths::APP_ID))
 }
 
 /// Whether the app window may load `url`: only the app's own origin (and the Vite dev
@@ -321,6 +325,8 @@ pub fn run_with_addons(addons: Vec<std::sync::Arc<dyn dn_plugin_api::Plugin>>) {
             commands::stop_generation,
             commands::get_settings,
             commands::update_settings,
+            commands::model_context,
+            commands::set_model_context_size,
             commands::list_models,
             commands::check_keys,
             commands::node_overview,
@@ -353,6 +359,7 @@ pub fn run_with_addons(addons: Vec<std::sync::Arc<dyn dn_plugin_api::Plugin>>) {
             chat_files::list_chat_files,
             chat_files::add_chat_files,
             chat_files::remove_chat_file,
+            chat_files::restore_chat_file,
             knowledge::knowledge_status,
             knowledge::knowledge_offer,
             artifact_child::artifact_child_open,

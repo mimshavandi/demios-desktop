@@ -9,6 +9,7 @@ rust-version.workspace = true
 description = "The agent runtime around dn-agent's loop: the context assembler that every model call goes through (ADR-0020)"
 
 [dependencies]
+dn-agent.workspace = true
 dn-core.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

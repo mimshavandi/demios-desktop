@@ -87,6 +87,23 @@ pub struct Gguf {
     pub metadata: BTreeMap<String, MetaValue>,
     pub tensors: Vec<TensorInfo>,
     pub file_size: u64,
+    /// How the header was laid out, for the model check ([`crate::check`]).
+    #[serde(default, skip)]
+    pub layout: Layout,
+}
+
+/// Facts about the header that [`MetaValue`] doesn't keep: where it ends, each key's value
+/// type as written, and which strings weren't valid UTF-8 (they're read lossily).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Layout {
+    /// Bytes from the start of the file to the end of the tensor table.
+    pub header_len: u64,
+    /// Key → (value type, array item type), as the GGUF spec numbers them.
+    pub key_types: BTreeMap<String, (u32, Option<u32>)>,
+    /// Keys whose name or string value, and tensors whose name, weren't valid UTF-8.
+    pub bad_utf8: Vec<String>,
+    /// Key → bytes its value takes in the header.
+    pub value_bytes: BTreeMap<String, u64>,
 }
 
 const MAX_STR: u64 = 16 << 20;
@@ -101,6 +118,10 @@ pub const MAX_HEADER_BYTES: u64 = 64 << 20;
 struct R<T> {
     inner: T,
     pos: u64,
+    /// The item type of the last array read.
+    last_item: Option<u32>,
+    /// A string since the last reset wasn't valid UTF-8.
+    bad_utf8: bool,
 }
 
 impl<T: Read> R<T> {
@@ -132,7 +153,13 @@ impl<T: Read> R<T> {
         let mut b = vec![0u8; n as usize];
         self.inner.read_exact(&mut b)?;
         self.pos += n;
-        Ok(String::from_utf8_lossy(&b).into_owned())
+        match String::from_utf8(b) {
+            Ok(s) => Ok(s),
+            Err(e) => {
+                self.bad_utf8 = true;
+                Ok(String::from_utf8_lossy(e.as_bytes()).into_owned())
+            }
+        }
     }
 
     fn scalar(&mut self, ty: u32) -> Result<MetaValue, GgufError> {
@@ -158,6 +185,7 @@ impl<T: Read> R<T> {
             return self.scalar(ty);
         }
         let ity = self.u32()?;
+        self.last_item = Some(ity);
         let n = self.u64()?;
         if n > MAX_ITEMS {
             return Err(GgufError::Malformed(format!("array of {n} items")));
@@ -221,7 +249,13 @@ impl Gguf {
 
     pub fn read<T: Read + Seek>(mut inner: T, file_size: u64) -> Result<Self, GgufError> {
         inner.seek(SeekFrom::Start(0))?;
-        let mut r = R { inner, pos: 0 };
+        let mut r = R {
+            inner,
+            pos: 0,
+            last_item: None,
+            bad_utf8: false,
+        };
+        let mut layout = Layout::default();
         if &r.bytes::<4>()? != b"GGUF" {
             return Err(GgufError::BadMagic);
         }
@@ -248,16 +282,28 @@ impl Gguf {
         };
         let mut metadata = BTreeMap::new();
         for _ in 0..n_kv {
+            r.bad_utf8 = false;
+            r.last_item = None;
             let key = r.string()?;
             let ty = r.u32()?;
+            let at = r.pos;
             let v = r.value(ty)?;
+            layout.value_bytes.insert(key.clone(), r.pos - at);
+            if r.bad_utf8 {
+                layout.bad_utf8.push(key.clone());
+            }
+            layout.key_types.insert(key.clone(), (ty, r.last_item));
             metadata.insert(key, v);
             budget(r.pos)?;
         }
         // The count comes from the file: cap the pre-allocation, let real entries grow it.
         let mut tensors = Vec::with_capacity((n_tensors as usize).min(4096));
         for _ in 0..n_tensors {
+            r.bad_utf8 = false;
             let name = r.string()?;
+            if r.bad_utf8 {
+                layout.bad_utf8.push(name.clone());
+            }
             let nd = r.u32()?;
             if nd > 8 {
                 return Err(GgufError::Malformed(format!("{name}: {nd} dims")));
@@ -274,6 +320,7 @@ impl Gguf {
             });
             budget(r.pos)?;
         }
+        layout.header_len = r.pos;
         let align = metadata
             .get("general.alignment")
             .and_then(MetaValue::as_u64)
@@ -295,6 +342,7 @@ impl Gguf {
             metadata,
             tensors,
             file_size,
+            layout,
         })
     }
 

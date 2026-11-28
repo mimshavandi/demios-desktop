@@ -195,6 +195,9 @@ pub struct AppState {
     pub skills: crate::skills::Library,
     /// What the agent loop may call (the manifest-filtered dn-tools executor in the app).
     pub tools: Arc<dyn ToolExecutor>,
+    /// Token estimates for models that can't count, calibrated per provider for the app's
+    /// lifetime (ADR-0020 §2.1).
+    pub estimator: Arc<dn_runtime::Estimator>,
     /// The dn-tools executor itself, for outcome-unknown resolution. `None` in tests.
     pub executor: Option<Arc<dn_tools::Executor>>,
     approvals: Mutex<HashMap<Id, ApprovalRequest>>,
@@ -332,6 +335,7 @@ impl AppState {
             agent: Agent::empty(),
             skills: Default::default(),
             tools: Arc::new(NoTools),
+            estimator: Default::default(),
             executor: None,
             approvals: Mutex::new(HashMap::new()),
             approval_sink: Mutex::new(None),
@@ -411,6 +415,10 @@ impl AppState {
         if let Some(root) = &project_files {
             crate::projects::purge_on_start(&conn, root)?;
         }
+        // Copies of chat files removed in an earlier session (their Undo is long over).
+        if let Some(root) = &chat_files {
+            crate::chat_files::expire_removed(&conn, root, dn_store::now_ms())?;
+        }
         // Every purged chat, including ones purged by older builds that kept ledger rows.
         let tombstones = store::list_tombstones(&conn)?;
 
@@ -437,7 +445,14 @@ impl AppState {
             settling: Arc::clone(&settling),
         });
         let mut models = ModelRegistry::with_builtin();
-        models.local = Some(crate::local::LocalModels::open());
+        // Tests get a models folder of their own, never the person's (#448).
+        #[cfg(not(test))]
+        let local = crate::local::LocalModels::open();
+        #[cfg(test)]
+        let local = crate::local::LocalModels::for_tests(
+            path.parent().unwrap_or_else(|| std::path::Path::new(".")),
+        );
+        models.local = Some(local);
         let mut state = Self::new(conn, models, keys);
         state.agent = agent;
         // The user's own skills sit next to the database, in the app's data directory.
@@ -1804,6 +1819,22 @@ mod tests {
         assert!(!keys.has(&server.key_id()).unwrap());
         assert!(st.take_removed_server("box").is_none());
         assert!(st.settings().unwrap().remote_servers.is_empty());
+    }
+
+    /// #448: a test's app state never points at the person's data. A test ran "Delete all
+    /// local data" on `open_for_tests` and removed the real models folder.
+    #[test]
+    fn open_for_tests_keeps_models_and_data_in_the_test_folder() {
+        let dir = std::env::temp_dir().join(format!("dn-app-real-paths-{}", Id::new()));
+        let st = AppState::open_for_tests(&dir.join("db.sqlite3")).unwrap();
+        let local = st.models.local.clone().expect("a local models instance");
+        assert!(local.dir().starts_with(&dir), "{}", local.dir().display());
+        assert_ne!(local.dir(), dn_models::download::default_models_dir());
+        if std::env::var_os("DEMIOS_DATA_DIR").is_none() {
+            assert_eq!(crate::data_dir(), None, "no default data folder in tests");
+        }
+        drop(st);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
